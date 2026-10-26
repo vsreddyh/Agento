@@ -561,9 +561,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun appendPending(text: String) {
         if (text.isBlank()) return
         val cur = _state.value.pending
-        _state.value = _state.value.copy(
-            pending = if (cur.isBlank()) text else joinPending(cur, text),
-        )
+        // Funnel through the shared trigger path (#372 review): voice and
+        // typing set pending the same way, so a dictated `/trigger` fetches
+        // and filters exactly like a typed one instead of stranding the
+        // card on "No matching skills" with a stale dismiss lock.
+        onPending(if (cur.isBlank()) text else joinPending(cur, text))
     }
 
     /** Toast-host notice: appended to the queue, so a repeated identical notice
@@ -1043,6 +1045,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val hadStagedNew = _state.value.pendingAttachments.wiredPhotoCount() > 0
         _state.value = _state.value.copy(
             messages = emptyList(), error = "", streaming = false, pending = parked,
+            // Fresh composer, fresh picker (#372 review): the dismiss lock
+            // keys on exact text from the old thread, which dies here.
+            slash = SlashPickerState(), slashDismissedAt = null,
             // Staged photos die with the draft like every other thread change: a
             // New with a parked photo must not fire it into the fresh thread.
             pendingAttachments = emptyList(),
@@ -1128,6 +1133,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(next.messages),
                 threadId = next.id, error = "", streaming = false, pending = kept,
+                // Same dismiss-lock drop as every other thread change
+                // (#372 review): the lock keys on the old thread's text.
+                slash = SlashPickerState(), slashDismissedAt = null,
                 // Same staged-photos-die-with-the-draft rule as the other thread changes.
                 pendingAttachments = emptyList(),
                 notices = retainedNotices(),
@@ -1331,6 +1339,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 livePending.isBlank() -> queued
                 else -> joinPending(livePending, queued)
             },
+            // The handed-back text is new composer state (#372 review): a
+            // stale dismiss lock or warm rows would linger until the next
+            // keystroke, so both reset with the text.
+            slash = SlashPickerState(), slashDismissedAt = null,
         )
         // Persist the stopped partial so the interrupted flag (and the
         // text/trace so far) survives a thread switch or restart.
@@ -1539,6 +1551,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             } else {
                                 curPending
                             },
+                            // The stripped remainder is new composer state
+                            // (#372 review): reset the picker with it.
+                            slash = SlashPickerState(), slashDismissedAt = null,
                         )
                         // Parked-photos voice lives here, not pre-launch: the
                         // Conflict branch calls send(), which voices its own notice.
