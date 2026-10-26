@@ -1,5 +1,7 @@
 package com.vishnu.agento
 
+import java.util.Locale
+
 /** Parsed `/skill:<name> [args]` user turn (#372). */
 data class SkillInvocation(
     val name: String,
@@ -61,10 +63,12 @@ fun slashQuery(text: String): String? {
     val token = text.substring(1).takeWhile { !it.isWhitespace() }
     if (token.isEmpty()) return ""
     // Case-folded for the prefix test only: the query itself flows through
-    // unlowered so the case-insensitive matcher does the folding. Lengths
-    // are case-fold-invariant here (ASCII command alphabet), so slicing the
-    // unfolded token by the folded prefix length is exact.
-    val folded = token.lowercase()
+    // unlowered so the case-insensitive matcher does the folding.
+    // Locale.ROOT, not the default locale: the length-invariance the slice
+    // below relies on is true by construction only without locale folding
+    // (`İ`.lowercase() grows under tr). Command alphabet is ASCII anyway,
+    // so this is belt-and-braces, not a live fix.
+    val folded = token.lowercase(Locale.ROOT)
     if (COMMAND_TOKEN.matches(folded)) return null
     if (folded.startsWith(SKILL_PREFIX)) {
         // Bare prefix (`/skill:`) lists everything — but only spelled

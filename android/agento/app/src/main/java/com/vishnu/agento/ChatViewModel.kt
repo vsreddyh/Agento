@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Collections
+import java.util.Locale
 
 /** Lightweight row for the conversation switcher (no message bodies). */
 data class ThreadSummary(
@@ -3372,7 +3373,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             )
         }
         // Composer text typed after queueing survives the flush: the fired
-        // turn carries only the queued text.
+        // turn carries only the queued text. The picker is deliberately
+        // left alone here, unlike every other resend path: `pending` is
+        // unchanged, so the query/rows still describe the live composer —
+        // a "consistency" reset would clear a valid picker.
         _state.value = _state.value.copy(messages = history, streaming = true, error = "")
         doSend(history, path, provider, model, effort)
     }

@@ -123,16 +123,16 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
                 }
                 // Never silent (#384): a tap that ran out of broadcast budget
                 // used to vanish, leaving an alert that looked handled. The
-                // timeout cancels whatever was in flight (a cancelled
-                // mutation keeps the alert, so the next tap retries; if the
-                // refresh was already running it continues without the wake
-                // lock).
+                // timeout cancels whatever was in flight: a cancelled
+                // mutation keeps the alert so the next tap retries, while a
+                // refresh already running continues without the wake lock.
                 if (finished == null) {
                     Log.w(
                         "TaskNotif",
                         "notification $target for $id timed out after " +
-                            "${MUTATION_TIMEOUT_MS}ms; the mutation was cancelled " +
-                            "and any running refresh continues without the wake lock",
+                            "${MUTATION_TIMEOUT_MS}ms; mutation cancelled " +
+                            "(alert kept, next tap retries), running refresh " +
+                            "if any continues without the wake lock",
                     )
                 }
             } finally {
