@@ -220,6 +220,15 @@ func (s *Server) handleExtensionUI(lr *liveRun, rec pi.Record) {
 		s.respondCancelled(lr, req.ID)
 		return
 	}
+	if conversation == "" {
+		// No conversation to address the card to: the app keys the card
+		// off conversation_id and drops blank ones, so holding would
+		// wedge the turn on a question nobody can answer. Fail fast like
+		// the unattended case; the tool error lets the turn continue.
+		s.cfg.Logf("gateway: cancelling %s question %s with no conversation", req.Method, req.ID)
+		s.respondCancelled(lr, req.ID)
+		return
+	}
 	q := &pendingQuestion{
 		id:             req.ID,
 		profile:        profile,

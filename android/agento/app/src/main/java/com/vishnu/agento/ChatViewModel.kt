@@ -650,9 +650,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         // The owner POST settled: its sending flag clears no matter which
         // card is held — nothing else can be in flight (the send gate
         // allows one POST at a time), so leaving it set would wedge the
-        // newer card's buttons.
+        // newer card's buttons. The in-flight id clears only for its own
+        // generation: a newer question's POST (overwrite path) owns the
+        // field now, and the old failure must not blank it.
         _state.value = _state.value.copy(questionSending = false)
-        questionSendingId = null
+        if (questionSendingId == q.id) questionSendingId = null
         // Restore the card only when there is something to restore onto: a
         // 404 means the turn (and its gateway slot) is gone and a 409 means
         // the question was already answered elsewhere — restoring either
@@ -2691,11 +2693,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                             // A POST for a previous card may still be in
                             // flight (optimistic clear): keep its draft —
                             // blanking on a same-id re-emit would lose the
-                            // value a failing POST is about to restore.
-                            // A genuinely new id still starts clean, so a
-                            // half-typed answer never carries into the next
-                            // question's field.
-                            val keepDraft = _state.value.questionSending ||
+                            // value a failing POST is about to restore. A
+                            // genuinely new id still starts clean, even
+                            // mid-flight: the in-flight id pins whose draft
+                            // is kept, so a new question never inherits it.
+                            val keepDraft = q.id == questionSendingId ||
                                 q.id == _state.value.pendingQuestion?.id
                             _state.value = _state.value.copy(
                                 pendingQuestion = q,

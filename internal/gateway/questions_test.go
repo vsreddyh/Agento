@@ -323,7 +323,14 @@ func TestQuestionFramePublished(t *testing.T) {
 	}
 	srv := newTestServer(t, agent, Config{})
 
-	rec := post(t, srv, "/v1/chat/completions", "test-token", validBody)
+	// Production-faithful: the app always sends its thread id, and the
+	// relay keys the card off it — a blank conversation fails fast.
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(validBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("X-Hermes-Session-Id", "conv-1")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("chat: got %d, want 200. body=%s", rec.Code, rec.Body)
 	}
@@ -495,6 +502,27 @@ func TestQuestionUnattendedCancels(t *testing.T) {
 	}
 	if qw, ok := srv.pendingFor("chat", "conv-u"); ok {
 		t.Fatalf("unattended question held: %+v", qw)
+	}
+}
+
+// A subscribed turn with no conversation id fails fast too: the app keys
+// the card off conversation_id and drops blank ones, so holding would
+// wedge the turn on a question nobody can answer.
+func TestQuestionBlankConversationCancels(t *testing.T) {
+	agent := newFakeAgent()
+	srv := newTestServer(t, agent, Config{})
+	lr := srv.runs.begin(newRunForTest("chat", ""), agent, "c", "", time.Now())
+	defer srv.runs.finish(lr, time.Now())
+	_, unsub := lr.subscribe()
+	defer unsub()
+	srv.handleExtensionUI(lr, uiRecord(t, "q-b", "input", map[string]any{
+		"title": "What?",
+	}))
+	if len(agent.responds) != 1 || agent.responds[0].payload["cancelled"] != true {
+		t.Fatalf("responds = %+v, want one cancelled write", agent.responds)
+	}
+	if qw, ok := srv.pendingFor("chat", ""); ok {
+		t.Fatalf("blank-conversation question held: %+v", qw)
 	}
 }
 
