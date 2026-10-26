@@ -204,14 +204,29 @@ object UpdateCheck {
         }
     }
 
+    /**
+     * Creates the per-release nudge channel, quietly (#383): one notification
+     * per release is a nudge, not an interruption, so it is IMPORTANCE_LOW —
+     * no sound, no heads-up — where DEFAULT would make it one.
+     */
     fun ensureChannel(ctx: Context) {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+        val existing = nm.getNotificationChannel(CHANNEL_ID)
+        // Importance is fixed at creation, so an install that already has the
+        // channel keeps whatever it was born with. Recreate it only when the
+        // user has never touched importance: deleting a channel the user
+        // muted would re-arm it and undo their choice, which matters more
+        // than the quieter default.
+        val quieten = existing != null &&
+            !existing.hasUserSetImportance() &&
+            existing.importance != NotificationManager.IMPORTANCE_LOW
+        if (existing == null || quieten) {
+            if (existing != null) nm.deleteNotificationChannel(CHANNEL_ID)
             nm.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
                     "App updates",
-                    NotificationManager.IMPORTANCE_DEFAULT,
+                    NotificationManager.IMPORTANCE_LOW,
                 ).apply {
                     description = "Posted when a newer Agento release is published"
                 },
@@ -234,7 +249,7 @@ object UpdateCheck {
             .setContentText("Tap to open App updates.")
             .setContentIntent(open)
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIFICATION_ID, notification)

@@ -12,6 +12,14 @@ private val SKILL_COMMAND = Regex("""^/skill:([A-Za-z0-9_-]+)(?:\s+([\s\S]*))?$"
 /** First-token shape of an already-complete hand-typed command. */
 private val COMMAND_TOKEN = Regex("""^skill:[A-Za-z0-9_-]+$""")
 
+/** Prefix every skill command carries, lower-case only (see [slashQuery]). */
+private const val SKILL_PREFIX = "skill:"
+
+/** Name-shaped query after the prefix: exactly the characters [SKILL_COMMAND]
+ * accepts as a name, so a query can never promise a row the send path would
+ * refuse to chip. */
+private val QUERY_CHARS = Regex("""^[A-Za-z0-9_-]*$""")
+
 /**
  * Parses a sent user turn as a skill command. Syntax-only, no inventory
  * lookup: the render path must never depend on the network, and a
@@ -39,13 +47,28 @@ fun parseSkillCommand(content: String): SkillInvocation? {
  * Deliberate: only the short form filters. A `/skill:<prefix>` token is
  * final syntax, not a query — typing the command by hand sends it as-is,
  * and discovery happens through `/` plus the Skills tab.
+ *
+ * Two shapes close the picker rather than filter it, because the send path
+ * rejects both as plain text: an uppercase prefix (`/SKILL:notes` — the
+ * prefix match is case-folded here while [SKILL_COMMAND] is lower-case
+ * only, so documenting uppercase as plain text beats offering a row that
+ * never chips, #395), and a token carrying characters outside
+ * `[A-Za-z0-9_-]` (`/skill:na!me`, which would otherwise read as the
+ * promise "no matching skills", #396).
  */
 fun slashQuery(text: String): String? {
     if (!text.startsWith("/")) return null
     val token = text.substring(1).takeWhile { !it.isWhitespace() }
     if (token.isEmpty()) return ""
-    if (COMMAND_TOKEN.matches(token)) return null
-    return token.removePrefix("skill:")
+    val folded = token.lowercase()
+    if (COMMAND_TOKEN.matches(folded)) return null
+    val query = if (folded.startsWith(SKILL_PREFIX)) {
+        token.substring(SKILL_PREFIX.length)
+    } else {
+        token
+    }
+    if (!QUERY_CHARS.matches(query)) return null
+    return query
 }
 
 /**
@@ -53,6 +76,12 @@ fun slashQuery(text: String): String? {
  * becomes `/skill:<name> ` (trailing space) and anything already typed
  * after it is kept as the skill's argument text. Precondition: [current]
  * starts with `/` (callers only invoke it off an active trigger).
+ *
+ * Single-line environment by construction: the composer is one field, so a
+ * newline (or any run of whitespace) between the token and the arguments
+ * collapses into the one separating space — `/no\narg` becomes
+ * `/skill:<name> arg`, pinned by `SkillCommandTest`. A multi-line composer
+ * would have to revisit this join deliberately rather than inherit it.
  */
 fun insertSkillCommand(current: String, name: String): String {
     val afterToken = current.dropWhile { !it.isWhitespace() }

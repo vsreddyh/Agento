@@ -63,6 +63,32 @@ class SkillCommandTest {
         assertNull(slashQuery("/skill:not "))
     }
 
+    @Test
+    fun `uppercase prefix is plain text, not a query`() {
+        // The send path's SKILL_COMMAND is lower-case only, so `/SKILL:notes`
+        // reaches the server as literal text. The picker must close instead
+        // of offering a row that would never chip (#395).
+        assertNull(slashQuery("/SKILL:notes"))
+        assertEquals("", slashQuery("/Skill:"))
+        assertNull(slashQuery("/SKILL:not "))
+        // Short form is untouched: the query still flows through unlowered
+        // so the case-insensitive matcher does the folding.
+        assertEquals("Notes", slashQuery("/Notes"))
+    }
+
+    @Test
+    fun `invalid query characters close the picker`() {
+        // COMMAND_TOKEN/SKILL_COMMAND reject these, so the send path sends
+        // plain text — a picker saying "no matching skills" would promise a
+        // command that cannot exist (#396).
+        assertNull(slashQuery("/skill:na!me"))
+        assertNull(slashQuery("/skill:notes!"))
+        assertNull(slashQuery("/notes!"))
+        assertNull(slashQuery("/na!me"))
+        // Still-valid name characters keep filtering.
+        assertEquals("my-skill_2", slashQuery("/my-skill_2"))
+    }
+
     // ── Chip parse ───────────────────────────────────────────────────────
 
     @Test
@@ -109,6 +135,16 @@ class SkillCommandTest {
             "/skill:notes summarise today",
             insertSkillCommand("/no summarise today", "notes"),
         )
+    }
+
+    @Test
+    fun `insert collapses a newline in the token boundary`() {
+        // Single-line composer by construction: the whitespace that ends the
+        // slash token becomes the one-space separator, so a pasted newline
+        // never survives into the command (#411). Pinned so a future
+        // multi-line composer has to revisit the join deliberately.
+        assertEquals("/skill:notes arg", insertSkillCommand("/no\narg", "notes"))
+        assertEquals("/skill:notes arg", insertSkillCommand("/no \n arg", "notes"))
     }
 
     // ── Taught exclusion ─────────────────────────────────────────────────

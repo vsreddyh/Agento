@@ -32,11 +32,13 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
@@ -3680,7 +3682,9 @@ internal fun catalogPath(api: ChatApi): String =
  * reach the list — see [invocableSkills]); tapping inserts
  * `/skill:<name> ` and closes. A failed fetch banners above the stale
  * list rather than replacing it — hand-typed commands still work, and
- * the card never blocks the composer.
+ * the card never blocks the composer. The row area is height-capped and
+ * scrolls, so a full inventory can never push the composer off a small
+ * screen (#397).
  */
 @Composable
 internal fun SlashPickerCard(
@@ -3705,15 +3709,23 @@ internal fun SlashPickerCard(
                 )
                 TextButton(onClick = onDismiss) { Text("Close") }
             }
-            if (state.loading && rows.isEmpty()) {
+            // Shown whenever a fetch runs, rows or not (#394): a >60 s TTL
+            // refresh over a cached list used to swap silently, so the one
+            // moment the list can change looked like nothing happening.
+            if (state.loading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
             // A failed refresh keeps the stale list AND says so: the error
             // is a banner above the rows, never a replacement that hides
-            // the still-usable cached list.
+            // the still-usable cached list. With no rows there is no cached
+            // list to show, so the copy stops promising one (#391).
             if (state.error.isNotEmpty()) {
                 Text(
-                    "Couldn't load skills — showing cached list. Type the command by hand if it's missing.",
+                    if (rows.isEmpty()) {
+                        "Couldn't load skills. Type the command by hand if you know it."
+                    } else {
+                        "Couldn't load skills — showing cached list. Type the command by hand if it's missing."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -3733,35 +3745,45 @@ internal fun SlashPickerCard(
                 // query never silently swallows half the inventory.
                 val shown = rows.take(8)
                 val hidden = rows.size - shown.size
-                if (hidden > 0) {
-                    Text(
-                        "…and $hidden more — keep typing to narrow.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
-                shown.forEach { s ->
-                    Surface(
-                        onClick = { onPick(s.name) },
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surface,
-                    ) {
-                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            Text(
-                                "/skill:${s.name}",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            if (s.description.isNotEmpty()) {
+                // Height-capped + scrollable (#397): the header, banner and
+                // eight two-line rows could otherwise push the composer off
+                // a small screen. The overflow count sits BELOW the rows —
+                // it describes what the list is hiding, not a preamble.
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    shown.forEach { s ->
+                        Surface(
+                            onClick = { onPick(s.name) },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surface,
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                                 Text(
-                                    s.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
+                                    "/skill:${s.name}",
+                                    style = MaterialTheme.typography.bodyMedium,
                                 )
+                                if (s.description.isNotEmpty()) {
+                                    Text(
+                                        s.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
+                    }
+                    if (hidden > 0) {
+                        Text(
+                            "…and $hidden more — keep typing to narrow.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
                     }
                 }
             }

@@ -33,6 +33,12 @@ class BootReceiver : BroadcastReceiver() {
                 // no schedule at all — re-asserting is idempotent either way.
                 AgentoApp.scheduleTaskSync(context)
                 // Same for the update poll (#366): re-asserted, never doubled.
+                // Deliberately only the PERIODIC poll (#409): the startup
+                // one-shot is enqueued by AgentoApp.onCreate on the next cold
+                // start, which an app update guarantees. Re-arming it here as
+                // well would fire a second check for one upgrade, and the
+                // debounce would not stop it (the replaced package has just
+                // checked nothing). Asymmetry is the fix, not the oversight.
                 AgentoApp.scheduleUpdateChecks(context)
                 val pending = goAsync()
                 scope.launch {

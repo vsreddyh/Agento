@@ -211,6 +211,23 @@ func (s *Server) handleExtensionUI(lr *liveRun, rec pi.Record) {
 		s.respondCancelled(lr, req.ID)
 		return
 	}
+	title := titleOf(req)
+	if title == "" {
+		// ask_user always sends a prompt, so an empty title is version skew.
+		// Holding it would card the app's generic "A question from the
+		// agent" line — a question nobody wrote, blocking a turn on an
+		// answer to nothing. Cancel instead and let the tool fail fast, the
+		// same way an unrenderable method does (#399).
+		s.cfg.Logf("gateway: cancelling %s question %s with no title", req.Method, req.ID)
+		s.respondCancelled(lr, req.ID)
+		return
+	}
+	// Three separate locked reads, NOT one atomic snapshot (#405): profile
+	// and conversation are immutable after begin, so only the subscriber
+	// count can drift — a client disconnecting between this check and the
+	// publish below holds a question nobody is attached to. The re-emit on
+	// reattach (streamRun's subscribe path) covers exactly that case: the
+	// card waits for the next subscribe instead of wedging the turn.
 	profile, conversation := lr.runProfile(), lr.runConversation()
 	if lr.subscriberCount() == 0 {
 		// No stream attached: nobody can see the card, so blocking would
@@ -234,10 +251,12 @@ func (s *Server) handleExtensionUI(lr *liveRun, rec pi.Record) {
 		profile:        profile,
 		conversationID: conversation,
 		method:         req.Method,
-		title:          titleOf(req),
+		title:          title,
 		options:        append([]string(nil), req.Options...),
-		placeholder:    strings.TrimSpace(req.Placeholder),
-		createdAt:      time.Now().UnixMilli(),
+		// Already trimmed once at decode (#407): re-trimming here hid the
+		// fact that decode is the single normalization point.
+		placeholder: req.Placeholder,
+		createdAt:   time.Now().UnixMilli(),
 	}
 	// One slot per profile: the lock serialises turns, so a second
 	// registration means the previous turn leaked (or a future Pi asks
@@ -419,9 +438,14 @@ func (s *Server) handleQuestions(w http.ResponseWriter, r *http.Request, rest, p
 	}
 	cancelled := req.Cancelled != nil && *req.Cancelled
 	value := strings.TrimSpace(req.Value)
+	// A client-side ask_user is always answered from the card, so an empty
+	// value means a caller bug rather than a message to the user — keep the
+	// wire keyword out of the app's error row (#406). "cancelled:true" is
+	// transport, not something the person reading "Couldn't send — … Try
+	// again." can act on; the card has its own Cancel button.
 	if !cancelled && value == "" {
 		apiError(w, http.StatusBadRequest, "invalid_request_error", "value",
-			"value is required (or cancelled:true)")
+			"an answer is required")
 		return
 	}
 	if cancelled && value != "" {

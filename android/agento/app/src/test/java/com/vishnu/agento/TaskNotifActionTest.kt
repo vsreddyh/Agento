@@ -36,6 +36,15 @@ class TaskNotifActionTest {
     }
 
     @Test
+    fun `each action reads its own extra key`() {
+        // One key per action lives on the target (#386), so the read in
+        // onReceive cannot be wired to the wrong key: the posted intents
+        // (TaskReminders) put the task id under these exact extras.
+        assertEquals(TaskWidget.EXTRA_COMPLETE_ID, NotifAction.COMPLETE.extraKey)
+        assertEquals(TaskNotifActionReceiver.EXTRA_SKIP_ID, NotifAction.SKIP.extraKey)
+    }
+
+    @Test
     fun `wire strings are pinned`() {
         // Posted notifications outlive the update that changes this code:
         // renaming an action or extra silently orphans their taps.

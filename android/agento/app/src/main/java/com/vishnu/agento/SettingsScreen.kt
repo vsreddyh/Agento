@@ -1170,6 +1170,11 @@ internal fun AppUpdateSection() {
     // resume (never mid-check — `busy` guards the in-flight case).
     // Keyed on tick only, not checkSeq: our own completion bumps
     // checkSeq without touching tick, so our fresh result survives.
+    // `busy` is deliberately NOT a key (#382): keying it would re-run this
+    // effect when an in-flight check flips it false, which is precisely the
+    // manual result the line above says must survive. The read is a
+    // one-shot snapshot of "was a check running when we resumed", not a
+    // subscription, so the stale-closure form is the intended one.
     LaunchedEffect(tick) {
         if (!busy) {
             status = ""

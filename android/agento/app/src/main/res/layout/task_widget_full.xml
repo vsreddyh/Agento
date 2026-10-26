@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Task widget, plain-rows mode (no scrollable list). Structure is the one
      the #137 bisect proved renders on the affected launcher: header text +
-     refresh, then the task rows, the empty-state line, and the view toggle.
-     Deliberately NO 1dp divider View — that single element made the
+     refresh, then the task rows, the empty-state line, and the view label
+     (which opens the Task Manager per the #370 contract, it is not a
+     toggle). Deliberately NO 1dp divider View — that single element made the
      launcher reject the whole RemoteViews. The scrolling variant is
      task_widget_list.xml, same chrome with a ListView. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
