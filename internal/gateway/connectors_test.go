@@ -203,6 +203,20 @@ func oauthServer(t *testing.T, cfg *connectors.OAuthConfig) *Server {
 	return newTestServer(t, &fakeAgent{}, Config{ConnectorStore: connectors.NewMemoryStore(), ConnectorOAuth: cfg})
 }
 
+func TestConnectorsConnectRejectsBadRedirectConfig(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	// Hand-built cfg with a misshapen redirect: connect must fail fast
+	// with a 502 config error, not store a row the store would 400 as
+	// bad state input.
+	cfg.RedirectURL = "not-a-url"
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("bad-redirect connect: %d, want 502 (%s)", rec.Code, rec.Body)
+	}
+}
+
 func TestConnectorsConnectReturnsAuthURL(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()

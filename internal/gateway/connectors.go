@@ -173,15 +173,19 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 // profile branch left to mirror.)
 const callbackStateReject = "that connect attempt expired or was already used; start over from connect"
 
-// mustCanonicalRedirect canonicalises the configured redirect for pinning
-// at mint time. FromEnv already enforces canonical shape, so the fallback
-// is unreachable in prod — but a hand-built test cfg could carry a raw
-// value, and the store's shape check fails that closed anyway.
-func mustCanonicalRedirect(raw string) string {
-	if canonical, err := connectors.CanonicalRedirectURL(raw); err == nil {
-		return canonical
+// canonicalRedirectForMint canonicalises the configured redirect for
+// pinning at mint time. FromEnv already enforces canonical shape, so an
+// error here means a hand-built cfg — fail fast with a 502 config error
+// instead of storing raw and letting the store 400 it as bad state input.
+func canonicalRedirectForMint(cfg *connectors.OAuthConfig, logf func(string, ...any)) (string, error) {
+	canonical, err := connectors.CanonicalRedirectURL(cfg.RedirectURL)
+	if err != nil {
+		if logf != nil {
+			logf("connectors: connect redirect invalid: %v", err)
+		}
+		return "", err
 	}
-	return raw
+	return canonical, nil
 }
 
 // callbackDeadAttempt answers a dead OAuth attempt (unknown, consumed, or
@@ -191,6 +195,11 @@ func mustCanonicalRedirect(raw string) string {
 // and needs guidance, not JSON); API clients get the existing JSON shape
 // unchanged. no-store is already set at the top of the handler.
 func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
+	// Single ownership: every answer on this path carries a single-use
+	// capability URL, so the helpers set no-store themselves instead of
+	// relying on each caller (the 405 branch bypasses the handler's
+	// first-line header).
+	w.Header().Set("Cache-Control", "no-store")
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -212,6 +221,10 @@ func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
 // every caller passes a static string or a scrubbed domain-mapped one,
 // and the escape keeps that contract even if a caller slips.
 func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg string) {
+	// Single ownership like callbackDeadAttempt: no-store lives here, not
+	// at each call site, so the next branch added beside the 405 check
+	// cannot miss it.
+	w.Header().Set("Cache-Control", "no-store")
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -435,6 +448,17 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// is sequential — ~5s of delete plus a 502d insert if Atlas is that
 	// slow — and a failed create mints nothing, so re-tap is a clean
 	// retry (same idempotency story as every other verb here).
+	//
+	// Fail fast on a misshapen configured redirect: storing raw and letting
+	// the store 400 it would misread a server config error as bad state
+	// input. FromEnv enforces canonical shape, so this fires only for a
+	// hand-built cfg — exactly when triage needs the discriminant.
+	pinnedRedirect, err := canonicalRedirectForMint(s.cfg.ConnectorOAuth, s.cfg.Logf)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"connect is not configured correctly on this server")
+		return
+	}
 	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
 		State:     state,
 		Connector: id,
@@ -444,7 +468,7 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// Canonicalised here (not raw cfg) so stored == sent == logged
 		// by construction — CreateState re-checks shape, but the
 		// canonical form is what both helpers send.
-		RedirectURI: mustCanonicalRedirect(s.cfg.ConnectorOAuth.RedirectURL),
+		RedirectURI: pinnedRedirect,
 	}); err != nil {
 		// Same timeout/client-gone split as list/disconnect and every
 		// callback store call: the domain mapper below never sees a

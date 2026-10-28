@@ -283,12 +283,9 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	id = NormalizedID(id)
 	state = strings.TrimSpace(state)
 	verifier = strings.TrimSpace(verifier)
-	if !Known(id) {
-		if logf != nil {
-			logf("connectors: auth URL build failed: unknown connector %q", id)
-		}
-		return ""
-	}
+	// Empty → length → Known, matching Exchange/CreateState/ConsumeState/
+	// SetTokens: an oversized input for an unknown id 400s on length, so
+	// the unknown-id path cannot be told apart by which error fires first.
 	if state == "" || verifier == "" {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %s: empty state or verifier", id)
@@ -298,6 +295,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	if len(state) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %s: oversized state or verifier", id)
+		}
+		return ""
+	}
+	if !Known(id) {
+		if logf != nil {
+			logf("connectors: auth URL build failed: unknown connector %q", id)
 		}
 		return ""
 	}
