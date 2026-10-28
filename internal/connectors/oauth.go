@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"net"
 )
 
 // OAuth exchange for the first connectors (#316, second layer).
@@ -97,6 +98,15 @@ func canonicalRedirectURL(raw string) (string, error) {
 	// mixed-case registration compares equal to what Google
 	// exact-matches against (ports are unaffected by lowercasing).
 	parsed.Host = strings.ToLower(parsed.Host)
+	// Strip default ports: the console registration is canonically
+	// port-less, while an operator-supplied URL may name :443/:80
+	// explicitly — and Google exact-matches redirect_uri.
+	if (parsed.Scheme == "https" && strings.HasSuffix(parsed.Host, ":443")) ||
+		(parsed.Scheme == "http" && strings.HasSuffix(parsed.Host, ":80")) {
+		if h, _, err := net.SplitHostPort(parsed.Host); err == nil {
+			parsed.Host = h
+		}
+	}
 	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {
 		// Google only permits http for loopback: a non-localhost http
 		// registration can never complete, and the failure surfaces as
@@ -269,9 +279,15 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	id = NormalizedID(id)
 	state = strings.TrimSpace(state)
 	verifier = strings.TrimSpace(verifier)
-	if !Known(id) || state == "" || verifier == "" {
+	if !Known(id) {
 		if logf != nil {
-			logf("connectors: auth URL build failed: unknown connector or empty state/verifier")
+			logf("connectors: auth URL build failed: unknown connector")
+		}
+		return ""
+	}
+	if state == "" || verifier == "" {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %s: empty state or verifier", id)
 		}
 		return ""
 	}
@@ -326,12 +342,16 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	}
 	// Canonicalise the redirect the same way AuthURL does: the token
 	// endpoint compares redirect_uri exactly, so AuthURL and Exchange
-	// must mint and send the same string.
+	// must mint and send the same string. Trimmed like every other
+	// input: padded client fields are a caller bug, and the checked
+	// values must match what is sent.
 	redirect, err := canonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
 		return nil, NewStoreError("oauth client redirect URL is invalid", false)
 	}
 	cc := *cfg
+	cc.ClientID = strings.TrimSpace(cc.ClientID)
+	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
 	cc.RedirectURL = redirect
 	tok, err := cc.oauth2(GoogleScopes(id)).Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifier))

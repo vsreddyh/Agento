@@ -845,6 +845,12 @@ func TestAuthURLLogsReason(t *testing.T) {
 	if got := AuthURL(cfg, "slack", "s", "v", logf); got != "" || !strings.Contains(logged, "unknown") {
 		t.Errorf("got %q, logged %q; want empty with unknown-connector reason", got, logged)
 	}
+	// Empty state vs unknown id are distinct log lines: triage must not
+	// guess which guard fired.
+	logged = ""
+	if got := AuthURL(cfg, "gmail", "", "v", logf); got != "" || !strings.Contains(logged, "empty state") {
+		t.Errorf("got %q, logged %q; want empty-state reason", got, logged)
+	}
 }
 
 // Verifier-less attempts fail at creation, not after user consent.

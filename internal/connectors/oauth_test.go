@@ -163,6 +163,23 @@ func TestOAuthConfigRejectsNonLocalhostHTTP(t *testing.T) {
 	}
 }
 
+// Explicit default ports canonicalise away: the console registration is
+// port-less, and Google exact-matches redirect_uri.
+func TestOAuthConfigStripsDefaultPort(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host:443/p/api/connectors/callback")
+	cfg, err := OAuthConfigFromEnv()
+	if err != nil {
+		t.Fatalf("explicit default port should canonicalise, not fail: %v", err)
+	}
+	if cfg.RedirectURL != "https://host/p/api/connectors/callback" {
+		t.Errorf("RedirectURL = %q, want canonical no-port form", cfg.RedirectURL)
+	}
+}
+
 // The validated shape and the sent shape must be the same string: Google
 // exact-matches redirect_uri, so a stored trailing slash against a
 // no-slash registration (or vice versa) dies with redirect_uri_mismatch.

@@ -588,7 +588,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	var expiry int64
-	if !tok.Expiry.IsZero() {
+	if accessToken != "" && !tok.Expiry.IsZero() {
 		expiry = tok.Expiry.UnixMilli()
 	}
 	if err := s.connectors.SetTokens(ctx, id, connectors.TokenRow{
