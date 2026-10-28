@@ -14,8 +14,8 @@ import (
 // this shape); the Mongo backend keeps refresh tokens in a separate field
 // that no read method selects into Connector.
 type Store interface {
-	// List returns the three v1 rows, synthesising disconnected rows for
-	// ids with no document yet (a fresh deploy lists three disconnected
+	// List returns the two v1 rows, synthesising disconnected rows for
+	// ids with no document yet (a fresh deploy lists two disconnected
 	// connectors, not an empty list).
 	List(ctx context.Context) ([]Connector, error)
 	// Get returns one row, or NotFound for an unknown id.
@@ -25,12 +25,13 @@ type Store interface {
 	// connected and disconnected rows carry none. ConnectedAt is
 	// first-connect: re-marking connected preserves it.
 	//
-	// OAuth follow-up note: nothing sets connected in v1 (connect 501s), and
-	// when it does it must write tokens + status in ONE UpdateOne — a
-	// connected-with-no-tokens row would otherwise be servable between two
-	// writes. That needs a NEW builder (e.g. connectUpdateDoc carrying
-	// tokens+status); do not extend statusUpdateDoc, which is status-only by
-	// contract and pinned as such.
+	// Ordering contract (landed, see the callback in
+	// internal/gateway/connectors.go): tokens land BEFORE the status
+	// flips — SetTokens first, SetStatus(connected) second — so a
+	// connected-with-no-tokens row is never servable. Two writes, not
+	// one UpdateOne: the token write and the status write are separate
+	// store verbs, and the crash window between them reads as
+	// still-disconnected (never as connected-without-tokens).
 	SetStatus(ctx context.Context, id string, st Status, lastError string) (Connector, error)
 	// Disconnect stops future access for one id: status disconnected and
 	// the token fields cleared server-side (see store_mongo.go). Unknown

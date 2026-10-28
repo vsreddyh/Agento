@@ -497,8 +497,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// shape — same 400 meaning either way.
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.Upstream {
-			code, typ, msg := connectorsErrorMapped(err)
-			callbackError(w, r, code, typ, msg)
+			status, typ, msg := connectorsErrorMapped(err)
+			callbackError(w, r, status, typ, msg)
 			return
 		}
 		callbackDeadAttempt(w, r)
@@ -507,13 +507,15 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	id := st.Connector
 	tok, err := connectors.Exchange(ctx, s.cfg.ConnectorOAuth, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {
-		// Same timeout/client-gone split as ConsumeState above: a
-		// deadline mid-exchange answers 502 with the timeout wording, a
-		// gone browser logs without writing to a dead conn. Only then
-		// the domain map below.
+		// Same timeout/client-gone split as ConsumeState above, but the
+		// deadline wording names the exchange, not the store: the 30s
+		// budget expired during the Google token round-trip
+		// (oauth2.Exchange), not a FindOneAndDelete/SetTokens store
+		// call. A gone browser logs without writing to a dead conn.
+		// Only then the domain map below.
 		if ctx.Err() == context.DeadlineExceeded {
 			callbackError(w, r, http.StatusBadGateway, "upstream_error",
-				"the connector store did not answer in time")
+				"the grant exchange did not answer in time")
 			return
 		}
 		if ctx.Err() != nil {
@@ -529,8 +531,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			callbackDeadAttempt(w, r)
 			return
 		}
-		code, typ, msg := connectorsErrorMapped(err)
-		callbackError(w, r, code, typ, msg)
+		status, typ, msg := connectorsErrorMapped(err)
+		callbackError(w, r, status, typ, msg)
 		return
 	}
 	cfg := s.cfg.ConnectorOAuth

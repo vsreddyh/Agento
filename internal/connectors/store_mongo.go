@@ -690,7 +690,15 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	// tap with a duplicate-key error would be worse than an extra row the
 	// next tap supersedes. And if the insert itself fails after the delete,
 	// the old tab is dead too — re-tap is the recovery, not the old code.
-	if _, serr := s.states.DeleteMany(ctx, bson.D{{Key: "connector", Value: st.Connector}}); serr != nil {
+	// The supersede runs on its own detached budget — same quickCtx
+	// rationale as the Disconnect scrub: a slow Atlas delete must not
+	// consume the verb budget and turn the insert into a 502 that reads
+	// as "connect failed". Advisory either way: the next tap supersedes,
+	// the TTL reaps, and a failed delete only logs.
+	supCtx, supCancel := quickCtx()
+	_, serr := s.states.DeleteMany(supCtx, bson.D{{Key: "connector", Value: st.Connector}})
+	supCancel()
+	if serr != nil {
 		s.logf("connectors: state supersede %s failed: %v", st.Connector, serr)
 		return NewStoreError("oauth state create failed", true)
 	}

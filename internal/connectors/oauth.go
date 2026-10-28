@@ -189,17 +189,24 @@ const MaxStateFieldLen = 2048
 // and a reconnect that yields no refresh token would silently downgrade the
 // row to access-token-only with no renewal path.
 //
-// Fail-closed builder: nil cfg, unknown id, or empty/overlong inputs
-// return "" — cheaper than a panic and cheaper than a consent URL that can
-// only die later at ConsumeState. cfg itself must come from
-// OAuthConfigFromEnv, which is the single place that validates the
-// redirect shape (absolute http(s), no userinfo/query/fragment, correct
-// path suffix); a hand-built cfg with a non-matching redirect mints a URL
-// Google will reject at consent time. The gateway route, CreateState, and
-// Exchange all re-check inputs (defense in depth for direct callers), but
-// this helper needs no trusted caller.
+// Fail-closed builder: nil cfg, unknown id, empty/overlong inputs, or
+// empty endpoints return "" — cheaper than a panic and cheaper than a
+// consent URL that can only die later at ConsumeState. cfg itself must
+// come from OAuthConfigFromEnv, which is the single place that validates
+// the redirect shape (absolute http(s), no userinfo/query/fragment,
+// correct path suffix) and sets both Google endpoints; a hand-built cfg
+// with a non-matching redirect mints a URL Google will reject at consent
+// time. The gateway route, CreateState, and Exchange all re-check inputs
+// (defense in depth for direct callers), but this helper needs no
+// trusted caller.
 func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
+		return ""
+	}
+	if strings.TrimSpace(cfg.AuthURL) == "" || strings.TrimSpace(cfg.TokenURL) == "" {
+		// A hand-built cfg with no endpoints mints a consent URL Google
+		// can only 400. OAuthConfigFromEnv always sets both to the
+		// Google endpoints, so this guards direct callers only.
 		return ""
 	}
 	// Folded and trimmed like every store verb — unknown or empty inputs

@@ -807,6 +807,13 @@ func TestAuthURLUnknownIDFailsClosed(t *testing.T) {
 	if got := AuthURL(nil, "gmail", "s", "v"); got != "" {
 		t.Errorf("nil cfg auth URL = %q, want empty", got)
 	}
+	// Hand-built cfgs without endpoints fail closed too: nothing but
+	// OAuthConfigFromEnv sets them, and a consent URL against an empty
+	// endpoint can only 400 at Google.
+	bare := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb"}
+	if got := AuthURL(bare, "gmail", "s", "v"); got != "" {
+		t.Errorf("endpoint-less auth URL = %q, want empty", got)
+	}
 }
 
 // Verifier-less attempts fail at creation, not after user consent.
