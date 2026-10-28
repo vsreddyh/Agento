@@ -213,17 +213,24 @@ const MaxStateFieldLen = 2048
 // validates the redirect shape and sets both Google endpoints), but a
 // hand-built cfg with a non-matching redirect is rejected here too via
 // the same canonicalRedirectURL check — shape is helper-enforced, not just
-// caller-promised. The gateway route, CreateState, and Exchange all
+// caller-promised. logf (may be nil) names which guard fired for
+// server-side triage; the app never sees it. The gateway route, CreateState, and Exchange all
 // re-check inputs (defense in depth for direct callers), but this
 // helper needs no trusted caller.
-func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
+func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...any)) string {
 	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
+		if logf != nil {
+			logf("connectors: auth URL build failed: unconfigured client (%s)", id)
+		}
 		return ""
 	}
 	if strings.TrimSpace(cfg.AuthURL) == "" || strings.TrimSpace(cfg.TokenURL) == "" {
 		// A hand-built cfg with no endpoints mints a consent URL Google
 		// can only 400. OAuthConfigFromEnv always sets both to the
 		// Google endpoints, so this guards direct callers only.
+		if logf != nil {
+			logf("connectors: auth URL build failed for %s: missing endpoint", id)
+		}
 		return ""
 	}
 	canonical, err := canonicalRedirectURL(cfg.RedirectURL)
@@ -231,6 +238,9 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 		// Same shape gate as the env path: a hand-built redirect that
 		// would never match a registration fails here, not in the
 		// browser with redirect_uri_mismatch.
+		if logf != nil {
+			logf("connectors: auth URL build failed for %s: %v", id, err)
+		}
 		return ""
 	}
 	// Build from the canonicalised shape, not cfg.RedirectURL verbatim,
@@ -247,9 +257,15 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	state = strings.TrimSpace(state)
 	verifier = strings.TrimSpace(verifier)
 	if !Known(id) || state == "" || verifier == "" {
+		if logf != nil {
+			logf("connectors: auth URL build failed: unknown connector or empty state/verifier")
+		}
 		return ""
 	}
 	if len(state) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %s: oversized state or verifier", id)
+		}
 		return ""
 	}
 	sum := sha256.Sum256([]byte(verifier))

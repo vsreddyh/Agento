@@ -440,7 +440,7 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// id — both pre-checked above, so this is defense in depth, not a live
 	// branch). Never hand the app a 200 with an empty auth_url it would
 	// open as nothing with no error to triage.
-	authURL := connectors.AuthURL(s.cfg.ConnectorOAuth, id, state, verifier)
+	authURL := connectors.AuthURL(s.cfg.ConnectorOAuth, id, state, verifier, s.cfg.Logf)
 	if authURL == "" {
 		s.cfg.Logf("connectors: auth URL build failed for %s", id)
 		apiError(w, http.StatusBadGateway, "upstream_error", "",

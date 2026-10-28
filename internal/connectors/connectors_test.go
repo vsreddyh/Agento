@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -668,7 +669,7 @@ func TestTokenGrantLifecycle(t *testing.T) {
 // Auth URL carries the connector scopes, PKCE challenge, and offline access.
 func TestAuthURLShape(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	u := AuthURL(cfg, Gmail, "STATE", "verifier-value")
+	u := AuthURL(cfg, Gmail, "STATE", "verifier-value", nil)
 	for _, want := range []string{"client_id=cid", "state=STATE", "code_challenge=", "code_challenge_method=S256", "access_type=offline", "prompt=consent", "gmail.readonly", "gmail.compose"} {
 		if !strings.Contains(u, want) {
 			t.Errorf("auth URL missing %q:\n%s", want, u)
@@ -760,7 +761,7 @@ func TestConsumeStateBoundaryTick(t *testing.T) {
 // Exchange, AuthURL, and the stores — same logical id, same answer.
 func TestOAuthHelpersFoldIDs(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	u := AuthURL(cfg, " GMail ", "s", "v")
+	u := AuthURL(cfg, " GMail ", "s", "v", nil)
 	if !strings.Contains(u, "gmail.readonly") {
 		t.Errorf("unfolded id lost scopes:\n%s", u)
 	}
@@ -810,28 +811,39 @@ func TestEncryptTokenRefusesPadded(t *testing.T) {
 // Unknown ids fail closed at the helper, not just the gateway.
 func TestAuthURLUnknownIDFailsClosed(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if got := AuthURL(cfg, "slack", "s", "v"); got != "" {
+	if got := AuthURL(cfg, "slack", "s", "v", nil); got != "" {
 		t.Errorf("unknown id auth URL = %q, want empty", got)
 	}
-	if got := AuthURL(nil, "gmail", "s", "v"); got != "" {
+	if got := AuthURL(nil, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("nil cfg auth URL = %q, want empty", got)
 	}
 	// Hand-built cfgs without endpoints fail closed too: nothing but
 	// OAuthConfigFromEnv sets them, and a consent URL against an empty
 	// endpoint can only 400 at Google.
 	bare := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback"}
-	if got := AuthURL(bare, "gmail", "s", "v"); got != "" {
+	if got := AuthURL(bare, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("endpoint-less auth URL = %q, want empty", got)
 	}
 	// Hand-built cfgs with a non-matching redirect fail closed too, via
 	// the same shape check the env path runs.
 	evil := &OAuthConfig{ClientID: "cid", RedirectURL: "https://evil.example/x", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if got := AuthURL(evil, "gmail", "s", "v"); got != "" {
+	if got := AuthURL(evil, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("wrong-host auth URL = %q, want empty", got)
 	}
 	barePath := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/other", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if got := AuthURL(barePath, "gmail", "s", "v"); got != "" {
+	if got := AuthURL(barePath, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("wrong-path auth URL = %q, want empty", got)
+	}
+}
+
+// The logf reason names the guard that fired, so triage reads the log,
+// not the code, to tell a misconfigured client from a bad redirect.
+func TestAuthURLLogsReason(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	var logged string
+	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
+	if got := AuthURL(cfg, "slack", "s", "v", logf); got != "" || !strings.Contains(logged, "unknown") {
+		t.Errorf("got %q, logged %q; want empty with unknown-connector reason", got, logged)
 	}
 }
 
@@ -860,10 +872,10 @@ func TestDurableContract(t *testing.T) {
 // way could only die later at ConsumeState, after user consent.
 func TestAuthURLRejectsEmptyParts(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if got := AuthURL(cfg, "gmail", "", "v"); got != "" {
+	if got := AuthURL(cfg, "gmail", "", "v", nil); got != "" {
 		t.Errorf("empty state URL = %q, want empty", got)
 	}
-	if got := AuthURL(cfg, "gmail", "s", ""); got != "" {
+	if got := AuthURL(cfg, "gmail", "s", "", nil); got != "" {
 		t.Errorf("empty verifier URL = %q, want empty", got)
 	}
 }
@@ -897,7 +909,7 @@ func TestSetStatusDisconnectedClearsTokens(t *testing.T) {
 // params, so stored/built values must match the trimmed form.
 func TestAuthURLTrimsInputs(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	got := AuthURL(cfg, " GMail ", " s ", " v ")
+	got := AuthURL(cfg, " GMail ", " s ", " v ", nil)
 	if got == "" {
 		t.Fatal("padded known id should build")
 	}
@@ -991,12 +1003,12 @@ func TestConsumeStateRejectsOversized(t *testing.T) {
 // overlong ones fail closed.
 func TestAuthURLTrimsAndCaps(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if got := AuthURL(cfg, "gmail", " s ", " v "); got == "" {
+	if got := AuthURL(cfg, "gmail", " s ", " v ", nil); got == "" {
 		t.Fatal("padded inputs should build")
 	} else if strings.Contains(got, " ") {
 		t.Errorf("URL contains a space:\n%s", got)
 	}
-	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v"); got != "" {
+	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v", nil); got != "" {
 		t.Fatal("oversized state should fail closed")
 	}
 }
@@ -1004,10 +1016,10 @@ func TestAuthURLTrimsAndCaps(t *testing.T) {
 // AuthURL needs a usable client, not just a non-nil one: empty client id or
 // redirect builds no URL.
 func TestAuthURLRejectsEmptyClient(t *testing.T) {
-	if got := AuthURL(&OAuthConfig{ClientID: "", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}, "gmail", "s", "v"); got != "" {
+	if got := AuthURL(&OAuthConfig{ClientID: "", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("empty client id URL = %q, want empty", got)
 	}
-	if got := AuthURL(&OAuthConfig{ClientID: "cid", RedirectURL: "", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}, "gmail", "s", "v"); got != "" {
+	if got := AuthURL(&OAuthConfig{ClientID: "cid", RedirectURL: "", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("empty redirect URL = %q, want empty", got)
 	}
 }
@@ -1108,7 +1120,7 @@ func TestSetStatusNoOpClearsAccessOnlyGrant(t *testing.T) {
 // Google would 414.
 func TestAuthURLRejectsOversizedState(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v"); got != "" {
+	if got := AuthURL(cfg, "gmail", strings.Repeat("s", MaxStateFieldLen+1), "v", nil); got != "" {
 		t.Errorf("oversized state URL = %q, want empty", got[:60])
 	}
 }
