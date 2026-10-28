@@ -46,7 +46,10 @@ func ListIDs() []string {
 
 // DisplayName names a connector for the app. Unknown ids echo back: the
 // gateway 404s them first, so this is a display fallback, not a lookup.
+// Folds like every store verb and OAuth helper: same logical id, same
+// answer, wherever the caller normalised.
 func DisplayName(id string) string {
+	id = NormalizedID(id)
 	switch id {
 	case Gmail:
 		return "Gmail"
@@ -57,11 +60,12 @@ func DisplayName(id string) string {
 	}
 }
 
-// ScopesFor names the explicit scopes a connector requests. Read vs
-// draft/write is the point: the app shows these at connect time, and
-// disconnect revokes them together.
+// ScopesFor names the explicit scopes a connector requests — app-display
+// vocabulary, not Google scope strings. Read vs draft/write is the point:
+// the app shows these at connect time, and disconnect revokes them
+// together. Folds like every store verb: same logical id, same answer.
 func ScopesFor(id string) []string {
-	switch id {
+	switch NormalizedID(id) {
 	case Gmail:
 		return []string{"gmail.read", "gmail.draft"}
 	case Calendar:

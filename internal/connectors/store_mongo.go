@@ -576,10 +576,12 @@ func backfillDisplay(c Connector, id string) Connector {
 // request ctx).
 //
 // Budget composition, stated so the follow-up doesn't copy the stacking:
-// worst case per verb is 5s pre-read + 5s write (verb ctx) + 5s readBack,
-// sequential (~15s) with no overall gateway deadline. All three are cheap
-// indexed reads/writes at two rows; heavier OAuth writes and the real token
-// exchange need one verb-level bound instead of stacked per-call budgets.
+// worst case per verb is 5s pre-read + 5s scrub + 5s write (verb ctx) +
+// 5s readBack, sequential (~15-20s wall) with no overall gateway deadline.
+// Each step is cheap indexed reads/writes at two rows; heavier OAuth writes
+// and the real token exchange need one verb-level bound instead of stacked
+// per-call budgets. The verb ctx still bounds the write itself — only the
+// advisory pre-work runs detached.
 func quickCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }

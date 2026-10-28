@@ -362,6 +362,11 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"unknown connector "+bounded(approvals.ScrubError(norm)))
 		return
 	}
+	// no-store across the whole member surface (disconnect/connect/405/404):
+	// the `connect` handler sets it first-line and the list helper sets its
+	// own, but this branch answers too — one place here so the next verb
+	// cannot miss it the way the callback 405 once did.
+	w.Header().Set("Cache-Control", "no-store")
 
 	switch action {
 	case "disconnect":
@@ -425,6 +430,17 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			"unknown connector "+bounded(approvals.ScrubError(id)))
 		return
 	}
+	// Config shape before randomness or deadlines: a misconfigured server
+	// 502s before minting anything or opening a verb budget. FromEnv
+	// enforces canonical shape, so this fires only for a hand-built cfg —
+	// exactly when triage needs the discriminant. Ordering rationale in
+	// the file's own terms: config fails fast with no dead attempt minted.
+	pinnedRedirect, err := canonicalRedirectForMint(s.cfg.ConnectorOAuth, s.cfg.Logf)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"connect is not configured correctly on this server")
+		return
+	}
 	state, verifier, err := connectors.NewState()
 	if err != nil {
 		// Logged like every other server-side failure on this path:
@@ -454,17 +470,6 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// verb deadline on this path at all. A verb-deadline 502 after a
 	// landed insert recovers via re-tap supersede, and a failed create
 	// mints nothing, so re-tap stays a clean retry.
-	//
-	// Fail fast on a misshapen configured redirect: storing raw and letting
-	// the store 400 it would misread a server config error as bad state
-	// input. FromEnv enforces canonical shape, so this fires only for a
-	// hand-built cfg — exactly when triage needs the discriminant.
-	pinnedRedirect, err := canonicalRedirectForMint(s.cfg.ConnectorOAuth, s.cfg.Logf)
-	if err != nil {
-		apiError(w, http.StatusBadGateway, "upstream_error", "",
-			"connect is not configured correctly on this server")
-		return
-	}
 	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
 		State:     state,
 		Connector: id,

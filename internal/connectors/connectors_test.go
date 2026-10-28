@@ -1141,6 +1141,17 @@ func TestAuthURLRejectsEmptyClient(t *testing.T) {
 // that updates one table without the other ships a consent screen that
 // misstates the grant (or a grant the UI never disclosed).
 func TestDisplayScopesMatchGrantedScopes(t *testing.T) {
+	// Helpers fold like the store verbs: padded/cased ids answer the same
+	// as canonical ones, so direct callers cannot tell them apart.
+	if DisplayName(" GMail ") != "Gmail" {
+		t.Errorf("DisplayName(padded) = %q, want Gmail", DisplayName(" GMail "))
+	}
+	if got := ScopesFor(" CALENDAR "); len(got) == 0 || got[0] != "calendar.read" {
+		t.Errorf("ScopesFor(padded) = %v, want calendar scopes", got)
+	}
+	if got := GoogleScopes(" GMail "); len(got) == 0 {
+		t.Error("GoogleScopes(padded) should grant like canonical")
+	}
 	// gmail.read displayed => readonly granted; gmail.draft displayed =>
 	// compose granted (draft-only: create drafts, never send).
 	has := func(hay []string, needle string) bool {

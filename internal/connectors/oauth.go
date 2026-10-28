@@ -58,8 +58,10 @@ const (
 //
 // Follow-up sync obligation (same class as IsDraftOnlySend): if a wired MCP
 // server needs a broader scope, BOTH this table and the tool policy move
-// together, and the ADR records why.
+// together, and the ADR records why. Folds like every store verb: same
+// logical id, same answer.
 func GoogleScopes(id string) []string {
+	id = NormalizedID(id)
 	switch id {
 	case Gmail:
 		return []string{
