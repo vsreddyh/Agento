@@ -988,6 +988,13 @@ func TestCreateStateRejectsControlBytes(t *testing.T) {
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("control verifier should be a deterministic 400, got %v", err)
 	}
+	// Invalid UTF-8 fails the same gate: overlong sequences decode as
+	// RuneError (not control), so the control check alone would miss them.
+	if err := s.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: "v\xc0\x80"}); err == nil {
+		t.Fatal("invalid-utf8 verifier should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("invalid utf8 should be a deterministic 400, got %v", err)
+	}
 }
 
 // Durability contract: memory is not durable (OAuth stays off), Mongo is
@@ -1331,6 +1338,12 @@ func TestAuthURLRejectsControlBytes(t *testing.T) {
 	var logged string
 	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
 	if got := AuthURL(cfg, "gmail", "s", "v\x00x", logf); got != "" || !strings.Contains(logged, "invalid") {
+		t.Errorf("got %q, logged %q; want empty with invalid-input reason", got, logged)
+	}
+	// Invalid UTF-8 fails the same gate: overlong sequences decode as
+	// RuneError (not control), so the control check alone would miss them.
+	logged = ""
+	if got := AuthURL(cfg, "gmail", "s", "v\xc0\x80x", logf); got != "" || !strings.Contains(logged, "invalid") {
 		t.Errorf("got %q, logged %q; want empty with invalid-input reason", got, logged)
 	}
 }
