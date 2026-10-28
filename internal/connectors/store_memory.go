@@ -77,7 +77,10 @@ type MemoryStore struct {
 }
 
 // timeNow resolves the store clock. Tests pin the exact expiry boundary
-// tick through this (expiresAt==now counts as expired).
+// tick through this (expiresAt==now counts as expired). Only expiry math
+// goes through here: UpdatedAt/ConnectedAt stamps stay on wall-clock
+// deliberately (display-only, never an expiry input), so "injectable"
+// means the lifetime decisions, not every timestamp the store writes.
 func (s *MemoryStore) timeNow() time.Time {
 	if s.now == nil {
 		return time.Now()
@@ -192,7 +195,8 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	hasGrant := func() bool {
 		tok, ok := s.tokens[id]
 		return ok && (strings.TrimSpace(tok.RefreshCipher) != "" ||
-			strings.TrimSpace(tok.AccessCipher) != "")
+			strings.TrimSpace(tok.AccessCipher) != "" ||
+			tok.AccessExpiryUnixMilli != 0)
 	}
 	if ok && c.Status == st && displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, wantErr) &&
 		(st != StatusDisconnected || !hasGrant()) {
@@ -304,6 +308,13 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 // refresh cipher). Tokens die with the process like every other row here.
 func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) error {
 	id = NormalizedID(id)
+	// Length before identity, matching CreateState/ConsumeState/Exchange:
+	// an oversized input 400s the same way whether the id is known or
+	// not, so the unknown-id path cannot be told apart by which error
+	// fires first.
+	if len(tok.RefreshCipher) > MaxStateFieldLen || len(tok.AccessCipher) > MaxStateFieldLen {
+		return NewStoreError("connector grant token too long", false)
+	}
 	if !Known(id) {
 		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
@@ -325,13 +336,6 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	if tok.RefreshCipher != strings.TrimSpace(tok.RefreshCipher) ||
 		(tok.AccessCipher != "" && tok.AccessCipher != strings.TrimSpace(tok.AccessCipher)) {
 		return NewStoreError("connector grant token is padded", false)
-	}
-	// Bounded like every other credential input (code/state/verifier): a
-	// sealed token is a few hundred chars, so anything past the cap is a
-	// garbage or hostile value that must 400 before it becomes an
-	// unbounded stored doc. Same bound the gateway enforces on the way in.
-	if len(tok.RefreshCipher) > MaxStateFieldLen || len(tok.AccessCipher) > MaxStateFieldLen {
-		return NewStoreError("connector grant token too long", false)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

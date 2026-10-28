@@ -60,6 +60,14 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 	if strings.TrimSpace(plaintext) == "" {
 		return "", errors.New("connectors: refusing to seal an empty token; pass through empty instead")
 	}
+	if plaintext != strings.TrimSpace(plaintext) {
+		// Refuse padded plaintext instead of sealing it: a sealed-with-
+		// padding value is valid base64url with no spaces, so the
+		// SetTokens padded-cipher gate cannot see it — but it decrypts
+		// to a value Google rejects. Checked == stored, all the way
+		// down (same contract as the caller-side trim-before-seal).
+		return "", errors.New("connectors: refusing to seal a padded token; trim before sealing")
+	}
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return "", err

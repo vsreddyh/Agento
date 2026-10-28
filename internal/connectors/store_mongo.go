@@ -582,6 +582,13 @@ func (s *MongoStore) readBack(id string) (Connector, error) {
 // strands the row at the first access-token expiry.
 func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) error {
 	id = NormalizedID(id)
+	// Length before identity, matching CreateState/ConsumeState/Exchange:
+	// an oversized input 400s the same way whether the id is known or
+	// not, so the unknown-id path cannot be told apart by which error
+	// fires first. Same order as the memory twin.
+	if len(tok.RefreshCipher) > MaxStateFieldLen || len(tok.AccessCipher) > MaxStateFieldLen {
+		return NewStoreError("connector grant token too long", false)
+	}
 	if !Known(id) {
 		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
@@ -603,12 +610,6 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	if tok.RefreshCipher != strings.TrimSpace(tok.RefreshCipher) ||
 		(tok.AccessCipher != "" && tok.AccessCipher != strings.TrimSpace(tok.AccessCipher)) {
 		return NewStoreError("connector grant token is padded", false)
-	}
-	// Bounded like every other credential input: sealed tokens are a few
-	// hundred chars, so anything past the cap 400s before it becomes an
-	// unbounded Mongo doc (same bound as the memory backend).
-	if len(tok.RefreshCipher) > MaxStateFieldLen || len(tok.AccessCipher) > MaxStateFieldLen {
-		return NewStoreError("connector grant token too long", false)
 	}
 	// Display defaults on insert only: a token write must never invent
 	// status (backfill synthesises disconnected for a status-less doc

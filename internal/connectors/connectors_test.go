@@ -799,6 +799,14 @@ func TestEncryptTokenRefusesEmpty(t *testing.T) {
 	}
 }
 
+// Padded plaintext must fail, not seal-with-padding: the sealed bytes
+// carry no spaces, so the check and the stored value would diverge.
+func TestEncryptTokenRefusesPadded(t *testing.T) {
+	if _, err := EncryptToken([32]byte{1}, " secret "); err == nil {
+		t.Fatal("sealing padded token should fail")
+	}
+}
+
 // Unknown ids fail closed at the helper, not just the gateway.
 func TestAuthURLUnknownIDFailsClosed(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
@@ -922,6 +930,22 @@ func TestSetTokensRejectsPaddedCipher(t *testing.T) {
 	}
 	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: " a "}); err == nil {
 		t.Fatal("padded access cipher should fail")
+	}
+}
+
+// Unknown ids with oversized input 400 on length, not 404 on identity:
+// length is checked before Known so the two inputs are indistinguishable
+// from the known-id oversized path.
+func TestSetTokensOversizedUnknownIDIs400(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	big := strings.Repeat("x", MaxStateFieldLen+1)
+	err := s.SetTokens(ctx, "slack", TokenRow{RefreshCipher: big})
+	if err == nil {
+		t.Fatal("oversized unknown-id should fail")
+	}
+	if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("oversized unknown-id = %+v, want plain 400", err)
 	}
 }
 
