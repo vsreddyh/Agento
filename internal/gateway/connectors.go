@@ -232,11 +232,12 @@ func callbackTimeoutOrGone(w http.ResponseWriter, s *Server, r *http.Request, ct
 // handleConnectors serves /api/connectors. Global like approvals, not
 // per-profile like memory.
 //
-// Budget note for the next writer (OAuth follow-up starts here): verbs fan
-// out to quickCtx-budgeted pre-reads + readBack around one verb-ctx write
-// (~15s worst case, no overall deadline, detached from request cancel by
-// design — see quickCtx). Do NOT copy that stacking for heavier writes or
-// the real token exchange; bind those to one verb-level deadline instead.
+// Budget note: verbs fan out to quickCtx-budgeted pre-reads + readBack
+// around one verb-ctx write (~15s worst case, no overall deadline,
+// detached from request cancel by design — see quickCtx). The callback
+// path is the exception this note warned about: it binds the whole
+// grant pipeline to one verb-level deadline (connectorCallbackCtx, 30s)
+// instead of stacking per-call budgets.
 func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest string) {
 	// Exact match for the collection, prefix-with-slash for members:
 	// "api/connectorsfoo" is an unknown path, not connector "foo" — the

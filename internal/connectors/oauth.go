@@ -227,6 +227,13 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 		// browser with redirect_uri_mismatch.
 		return ""
 	}
+	// Build from a canonicalised copy, not cfg.RedirectURL verbatim:
+	// ValidRedirectURL accepts a trailing slash (.../callback/), but
+	// Google exact-matches the sent string — minting with the slash
+	// would 400 against a canonical registration. Same TrimRight the
+	// env path applies before storing.
+	redirect := *cfg
+	redirect.RedirectURL = strings.TrimRight(strings.TrimSpace(cfg.RedirectURL), "/")
 	// Folded and trimmed like every store verb — unknown or empty inputs
 	// fail closed, and overlong inputs fail closed too (same
 	// MaxStateFieldLen bound the stores enforce): a multi-KB state or
@@ -244,7 +251,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	}
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
-	return cfg.oauth2(GoogleScopes(id)).AuthCodeURL(state,
+	return redirect.oauth2(GoogleScopes(id)).AuthCodeURL(state,
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 		oauth2.SetAuthURLParam("access_type", "offline"),

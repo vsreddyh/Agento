@@ -61,7 +61,7 @@ func FromEnv() (*MongoStore, error) {
 
 // EnsureIndexes creates the states TTL (pending attempts die on their own;
 // the relay-style sweep other stores need does not exist here by design).
-// The connectors collection needs none: three fixed rows keyed by _id.
+// The connectors collection needs none: two fixed rows keyed by _id.
 func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 	_, err := s.states.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
 		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
@@ -112,7 +112,7 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	// Cleanup on its own budget, not the verb's: a slow Atlas read must not
 	// make the cursor close eat the same expired deadline.
 	defer cur.Close(context.Background())
-	byID := make(map[string]Connector, 3)
+	byID := make(map[string]Connector, 2)
 	for cur.Next(ctx) {
 		var c Connector
 		if err := cur.Decode(&c); err != nil {
@@ -571,14 +571,14 @@ func backfillDisplay(c Connector, id string) Connector {
 // quickCtx gives pre-reads and the confirming read their own short budget
 // instead of spending the verb's deadline: a slow read must never starve a
 // would-be-successful write into a 502. Detached from request cancellation
-// deliberately — one cheap idempotent read at 3 rows. Do not copy this for
+// deliberately — one cheap idempotent read at two rows. Do not copy this for
 // non-idempotent work (the OAuth follow-up's token writes stay on the
 // request ctx).
 //
 // Budget composition, stated so the follow-up doesn't copy the stacking:
 // worst case per verb is 5s pre-read + 5s write (verb ctx) + 5s readBack,
 // sequential (~15s) with no overall gateway deadline. All three are cheap
-// indexed reads/writes at 3 rows; heavier OAuth writes and the real token
+// indexed reads/writes at two rows; heavier OAuth writes and the real token
 // exchange need one verb-level bound instead of stacked per-call budgets.
 func quickCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)

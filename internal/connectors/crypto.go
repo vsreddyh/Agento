@@ -93,6 +93,13 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 // (if tok == "" → renew) before decrypting. An early "" → "" return
 // would collapse "missing" into "decrypted to empty" and hide the branch
 // the refresher keys off.
+//
+// Length is bounded here (same MaxStateFieldLen as the write path):
+// this is the read-side enforcement point — GetTokens returns stored
+// rows verbatim, so an oversized artifact from before the cap (or a
+// hand-edit) fails here instead of becoming a large alloc downstream.
+// A multi-MB cipher is never a real grant; it is garbage the store
+// must not serve.
 func DecryptToken(key [32]byte, sealed string) (string, error) {
 	if key == ([32]byte{}) {
 		return "", errors.New("connectors: refusing to open a token under a zero key")

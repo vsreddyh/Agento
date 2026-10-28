@@ -166,7 +166,12 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 		return Connector{}, NewStoreError("unknown connector status", false)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	// No early returns between this Lock and the Unlock below — a future
+	// `return` inserted here deadlocks. Keep the single-exit shape:
+	// compute everything, copy out, unlock once, then backfill outside
+	// the lock. Same copy-out contract as Disconnect (and the reason
+	// List backfills outside its RLock): backfillDisplay runs the
+	// ScrubError regexes, and a write lock must not span them.
 	// Pending attempts die on every disconnecting path, like the tokens
 	// and like Disconnect (and the Mongo twin): a browser completing an
 	// old consent after this verb must fail at ConsumeState, not silently
@@ -209,11 +214,14 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 			strings.TrimSpace(tok.AccessCipher) != "" ||
 			tok.AccessExpiryUnixMilli != 0)
 	}
-	if ok && c.Status == st && displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, wantErr) &&
-		(st != StatusDisconnected || !hasGrant()) {
-		return backfillDisplay(c, id), nil
-	}
-	if ok && c.Status == st {
+	var out Connector
+	switch {
+	case ok && c.Status == st && displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, wantErr) &&
+		(st != StatusDisconnected || !hasGrant()):
+		// Pure no-op: display fresh, error matches, no grant to clear —
+		// no store touch.
+		out = c
+	case ok && c.Status == st:
 		// Repair-only: heal display + error text, leave every timestamp
 		// (and, for connected, the stamp) exactly where the last
 		// transition put it. Tokens die here too on the disconnecting
@@ -225,32 +233,36 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 			delete(s.tokens, id)
 		}
 		s.rows[id] = c
-		return backfillDisplay(c, id), nil
+		out = c
+	default:
+		// Same self-heal as the Mongo backend: display fields rewrite from
+		// the current constants on every write (transition and no-op
+		// alike), so a future scope/name change cannot leave stale values
+		// on existing rows. Reads repair per response via backfillDisplay
+		// without storing — GETs stay read-only; the next write persists
+		// the repair.
+		c.DisplayName = DisplayName(id)
+		c.Scopes = ScopesFor(id)
+		c.Status = st
+		c.LastError = wantErr
+		c.UpdatedAt = now
+		// Tokens die on the disconnecting path here too, not just in
+		// Disconnect: SetStatus(disconnected) is the belt-and-braces
+		// off-ramp, and leaving a grant behind would keep serving access
+		// the audit calls disconnected.
+		if st == StatusDisconnected {
+			delete(s.tokens, id)
+		}
+		// First-ever connect, shared with Mongo via resolveConnectedAt
+		// (same helper, same semantic on both backends).
+		if st == StatusConnected {
+			c.ConnectedAt = resolveConnectedAt(c.ConnectedAt, now)
+		}
+		s.rows[id] = c
+		out = c
 	}
-	// Same self-heal as the Mongo backend: display fields rewrite from the
-	// current constants on every write (transition and no-op alike), so a
-	// future scope/name change cannot leave stale values on existing rows.
-	// Reads repair per response via backfillDisplay without storing — GETs
-	// stay read-only; the next write persists the repair.
-	c.DisplayName = DisplayName(id)
-	c.Scopes = ScopesFor(id)
-	c.Status = st
-	c.LastError = wantErr
-	c.UpdatedAt = now
-	// Tokens die on the disconnecting path here too, not just in
-	// Disconnect: SetStatus(disconnected) is the belt-and-braces off-ramp,
-	// and leaving a grant behind would keep serving access the audit calls
-	// disconnected.
-	if st == StatusDisconnected {
-		delete(s.tokens, id)
-	}
-	// First-ever connect, shared with Mongo via resolveConnectedAt (same
-	// helper, same semantic on both backends).
-	if st == StatusConnected {
-		c.ConnectedAt = resolveConnectedAt(c.ConnectedAt, now)
-	}
-	s.rows[id] = c
-	return backfillDisplay(c, id), nil
+	s.mu.Unlock()
+	return backfillDisplay(out, id), nil
 }
 
 func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error) {
@@ -447,8 +459,9 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 }
 
 // ConsumeState returns and deletes a pending attempt. Unknown and expired
-// states are the same NotFound: expiry is lazy (no sweeper at 3 rows/hour),
-// and the caller message is "try connect again" either way.
+// states are the same NotFound: expiry is lazy (no sweeper, and only two
+// connectors mint states), and the caller message is "try connect again"
+// either way.
 func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState, error) {
 	// Trimmed like the write path and the gateway: padded input resolves
 	// instead of 404ing on whitespace no writer could have stored.
