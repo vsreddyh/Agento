@@ -446,7 +446,7 @@ func run() error {
 			// The connector list derives from the package source of truth,
 			// not a literal, so this triage line cannot drift the next time
 			// an id lands or drops.
-			logger.Printf("connectors: OAuth configured for %s (callback %s)", strings.Join(connectors.ListIDs(), ", "), cfg.RedirectURL)
+			logger.Printf("connectors: OAuth configured for %q (callback %q)", strings.Join(connectors.ListIDs(), ", "), cfg.RedirectURL)
 		}
 	} else {
 		logger.Printf("connectors: OAuth unavailable (no durable store); connect answers 501")

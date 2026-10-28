@@ -789,7 +789,12 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	// as "connect failed". Advisory either way, like that scrub: log and
 	// continue on failure (TTL is the backstop, and a leftover old row
 	// stays a valid attempt for its own browser tab), never fail the
-	// create over a cleanup write.
+	// create over a cleanup write. Note the consequence: the gateway's
+	// verb-ctx timeout split (storeTimeoutOrGone) cannot see these
+	// detached IO timeouts — a fired insCtx with a live verb ctx surfaces
+	// as generic 502, not the timeout wording. Both clocks are 5s from a
+	// near-simultaneous start, so the mistriage window is milliseconds,
+	// and re-tap is the recovery either way.
 	supCtx, supCancel := quickCtx()
 	_, serr := s.states.DeleteMany(supCtx, bson.D{{Key: "connector", Value: st.Connector}})
 	supCancel()
@@ -838,10 +843,14 @@ func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState
 		s.logf("connectors: state consume failed: %v", err)
 		return OAuthState{}, NewStoreError("oauth state consume failed", true)
 	}
-	if !st.ExpiresAt.IsZero() && !time.Now().Before(st.ExpiresAt) {
-		// Boundary == now counts as expired, matching the memory side —
-		// pinned there by the injectable-clock test (memory pinned,
-		// Mongo wall-clock by design; DB tests need Atlas anyway).
+	// Zero counts as expired, matching the memory side (no IsZero carve-out
+	// on either backend): no API writer can mint one, so a zero row is a
+	// hand-edit — fail closed. The TTL reaps such rows eventually; this
+	// refuses to serve one as live meanwhile. Boundary == now counts as
+	// expired too, matching the memory side — pinned there by the
+	// injectable-clock test (memory pinned, Mongo wall-clock by design;
+	// DB tests need Atlas anyway).
+	if st.ExpiresAt.IsZero() || !time.Now().Before(st.ExpiresAt) {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	return st, nil
