@@ -608,7 +608,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// store sees — stored == logged == sent by construction.
 	// Verifier gated like code/state above: server-minted base64url in
 	// prod, but a hand-inserted row could carry controls into an outbound
-	// request and a log line. Same dead-attempt shape, no oracle.
+	// request and a log line. Same dead-attempt shape, no oracle. The row
+	// is already consumed at this point (verifier lives inside it, so the
+	// check cannot run first) — burning a hand-inserted row is intended;
+	// prod rows pass CreateState's own control gate and never reach here.
 	if hasControl(st.Verifier) {
 		callbackDeadAttempt(w, r)
 		return

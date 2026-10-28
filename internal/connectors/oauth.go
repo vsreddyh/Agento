@@ -38,6 +38,8 @@ const (
 	// MaxAccessLifetime bounds a stored access-token expiry: provider
 	// expires_in is ~1h, so anything past a day is skew, a stubby test
 	// token, or a hand-edit — all of which must renew soon, not never.
+	// See TokenRow for the stored-side contract; enforced at the gateway
+	// write site and in both SetTokens.
 	MaxAccessLifetime = 24 * time.Hour
 
 	// StatesCollection holds pending connect attempts. Short-lived by TTL;
@@ -323,6 +325,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
+	if hasControl(state) || hasControl(verifier) {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: invalid state or verifier", id)
+		}
+		return ""
+	}
 	if !Known(id) {
 		if logf != nil {
 			logf("connectors: auth URL build failed: unknown connector %q", id)
@@ -451,8 +459,9 @@ type TokenRow struct {
 	// accident of comparison, not by a separate contract: clock skew or
 	// a stubby test token lands here, and the refresher cannot tell it
 	// from a genuinely stale row — nor does it need to. Far-future values
-	// are clamped to now+MaxAccessLifetime at write time (gateway + both
-	// stores), so a stored expiry never reads as "don't renew for decades".
+	// are clamped to now+MaxAccessLifetime at write time — enforced in
+	// three places (gateway connect + both SetTokens), so a stored expiry
+	// never reads as "don't renew for decades".
 	AccessExpiryUnixMilli int64 `bson:"accessExpiry" json:"-"`
 }
 

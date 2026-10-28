@@ -1265,6 +1265,18 @@ func TestAuthURLRejectsOversizedState(t *testing.T) {
 	}
 }
 
+// Control bytes fail closed at mint, matching Exchange/CreateState: a
+// minted consent URL for a control-bearing verifier could only
+// dead-attempt after the user consented.
+func TestAuthURLRejectsControlBytes(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	var logged string
+	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
+	if got := AuthURL(cfg, "gmail", "s", "v\x00x", logf); got != "" || !strings.Contains(logged, "invalid") {
+		t.Errorf("got %q, logged %q; want empty with invalid-input reason", got, logged)
+	}
+}
+
 // DecryptToken("") errors by design: "" is the documented missing-token
 // sentinel and must be checked by the caller before decrypting, not
 // collapsed into a successful empty decrypt.
