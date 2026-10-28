@@ -152,6 +152,26 @@ func TestConnectorsTrailingSlashList(t *testing.T) {
 	}
 }
 
+// Both list spellings carry no-store: the app polls this loop, and a
+// heuristic cache would serve a stale disconnected after the callback
+// flipped to connected.
+func TestConnectorsListSpellingsNoStore(t *testing.T) {
+	srv := connectorsServer(t)
+	plain := do(t, srv, http.MethodGet, "/api/connectors", "")
+	slashed := do(t, srv, http.MethodGet, "/api/connectors/", "")
+	if plain.Code != http.StatusOK || slashed.Code != http.StatusOK {
+		t.Fatalf("list spellings: %d / %d, want 200 / 200", plain.Code, slashed.Code)
+	}
+	for _, rec := range []*httptest.ResponseRecorder{plain, slashed} {
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("list cache-control = %q, want no-store", cc)
+		}
+	}
+	if plain.Body.String() != slashed.Body.String() {
+		t.Errorf("list bodies diverge:\n%s\n%s", plain.Body, slashed.Body)
+	}
+}
+
 func TestConnectorsNoVerbIs405WithAllow(t *testing.T) {
 	srv := connectorsServer(t)
 	// Bare id with no verb: 405 with an Allow header naming POST, not 404.

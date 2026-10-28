@@ -241,7 +241,7 @@ const MaxStateFieldLen = 2048
 func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...any)) string {
 	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
 		if logf != nil {
-			logf("connectors: auth URL build failed: unconfigured client (%s)", id)
+			logf("connectors: auth URL build failed: unconfigured client (%q)", id)
 		}
 		return ""
 	}
@@ -257,7 +257,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		// can only 400. OAuthConfigFromEnv always sets both to the
 		// Google endpoints, so this guards direct callers only.
 		if logf != nil {
-			logf("connectors: auth URL build failed for %s: missing endpoint", id)
+			logf("connectors: auth URL build failed for %q: missing endpoint", id)
 		}
 		return ""
 	}
@@ -267,7 +267,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		// would never match a registration fails here, not in the
 		// browser with redirect_uri_mismatch.
 		if logf != nil {
-			logf("connectors: auth URL build failed for %s: %v", id, err)
+			logf("connectors: auth URL build failed for %q: %v", id, err)
 		}
 		return ""
 	}
@@ -288,13 +288,13 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// the unknown-id path cannot be told apart by which error fires first.
 	if state == "" || verifier == "" {
 		if logf != nil {
-			logf("connectors: auth URL build failed for %s: empty state or verifier", id)
+			logf("connectors: auth URL build failed for %q: empty state or verifier", id)
 		}
 		return ""
 	}
 	if len(state) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
 		if logf != nil {
-			logf("connectors: auth URL build failed for %s: oversized state or verifier", id)
+			logf("connectors: auth URL build failed for %q: oversized state or verifier", id)
 		}
 		return ""
 	}
@@ -372,7 +372,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		oauth2.SetAuthURLParam("code_verifier", verifier))
 	if err != nil {
 		if logf != nil {
-			logf("connectors: grant exchange failed for %s: %v", id, err)
+			logf("connectors: grant exchange failed for %q: %v", id, err)
 		}
 		return nil, NewStoreError("grant exchange failed", true)
 	}

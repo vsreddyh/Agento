@@ -638,7 +638,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		// Logged, not answered in detail: seal failures are server-side
 		// (rand, zero key) and carry nothing the client can act on.
-		s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
+		s.cfg.Logf("connectors: token seal failed for %q: %v", id, err)
 		callbackError(w, r, http.StatusBadGateway, "upstream_error",
 			"could not store the grant")
 		return
@@ -650,7 +650,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	if accessToken != "" {
 		accessSealed, err = connectors.EncryptToken(cfg.Key, accessToken)
 		if err != nil {
-			s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
+			s.cfg.Logf("connectors: token seal failed for %q: %v", id, err)
 			callbackError(w, r, http.StatusBadGateway, "upstream_error",
 				"could not store the grant")
 			return
