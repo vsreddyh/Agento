@@ -256,7 +256,15 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// from ConsumeState and rejects cross-wired states. Checked before the
 	// id/action split below so "callback" can never read as a connector id.
 	if rest == "api/connectors/callback" {
-		if !requireMethod(w, r, http.MethodGet, "/api/connectors/callback") {
+		if r.Method != http.MethodGet {
+			// Method errors on this path answer in both
+			// representations like every other callback branch:
+			// a browser tab that POSTs (prefetch, form replay,
+			// extension) gets the guidance page, not raw JSON.
+			// Allow header preserved from requireMethod's contract.
+			w.Header().Set("Allow", http.MethodGet)
+			callbackError(w, r, http.StatusMethodNotAllowed, "invalid_request_error",
+				"/api/connectors/callback accepts GET")
 			return
 		}
 		s.handleConnectorCallback(w, r)
@@ -403,6 +411,12 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// Mongo TTL-indexed). Passing wall-clock time here would bypass the
 	// injectable default and pin a boundary no test covers — single clock
 	// owner, set at the store.
+	// Budget composition note: the 5s verb budget covers the whole
+	// CreateState call, including the advisory supersede delete (which
+	// runs on its own detached 5s quickCtx inside the store). Worst case
+	// is sequential — ~5s of delete plus a 502d insert if Atlas is that
+	// slow — and a failed create mints nothing, so re-tap is a clean
+	// retry (same idempotency story as every other verb here).
 	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
 		State:     state,
 		Connector: id,

@@ -437,6 +437,22 @@ func TestConnectorsCallbackErrorsServeHTMLToBrowsers(t *testing.T) {
 	if rec2.Code != http.StatusBadRequest || strings.Contains(rec2.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("missing-param json: %d %s (%s)", rec2.Code, rec2.Header().Get("Content-Type"), rec2.Body)
 	}
+	// Wrong method on the single callback endpoint: 405 with the Allow
+	// header (requireMethod contract kept), HTML body for browsers.
+	req := httptest.NewRequest(http.MethodPost, "/api/connectors/callback?code=x&state=y", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Accept", "text/html")
+	rec3 := httptest.NewRecorder()
+	srv.ServeHTTP(rec3, req)
+	if rec3.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post callback: %d, want 405 (%s)", rec3.Code, rec3.Body)
+	}
+	if allow := rec3.Header().Get("Allow"); allow != http.MethodGet {
+		t.Errorf("Allow = %q, want GET", allow)
+	}
+	if body := rec3.Body.String(); !strings.Contains(body, "Close this tab") {
+		t.Errorf("405 html missing guidance: %s", body)
+	}
 }
 
 func TestConnectorsCallbackWhitespaceAccessStaysEmpty(t *testing.T) {

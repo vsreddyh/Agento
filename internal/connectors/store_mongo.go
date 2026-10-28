@@ -693,14 +693,15 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	// The supersede runs on its own detached budget — same quickCtx
 	// rationale as the Disconnect scrub: a slow Atlas delete must not
 	// consume the verb budget and turn the insert into a 502 that reads
-	// as "connect failed". Advisory either way: the next tap supersedes,
-	// the TTL reaps, and a failed delete only logs.
+	// as "connect failed". Advisory either way, like that scrub: log and
+	// continue on failure (TTL is the backstop, and a leftover old row
+	// stays a valid attempt for its own browser tab), never fail the
+	// create over a cleanup write.
 	supCtx, supCancel := quickCtx()
 	_, serr := s.states.DeleteMany(supCtx, bson.D{{Key: "connector", Value: st.Connector}})
 	supCancel()
 	if serr != nil {
 		s.logf("connectors: state supersede %s failed: %v", st.Connector, serr)
-		return NewStoreError("oauth state create failed", true)
 	}
 	_, err := s.states.InsertOne(ctx, st)
 	if err != nil {

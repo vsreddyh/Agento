@@ -381,13 +381,27 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// on the write path that creates them. Keeps an abandoned-connect spam
 	// from growing the map without bound; same lazy-expiry contract as the
 	// Mongo TTL, enforced at write time instead of by the database.
+	//
+	// Single pass, single critical section, by structural necessity — not
+	// performance: the sweep must run before the duplicate check (an
+	// expired row with the same state id is reapable, not a collision),
+	// and the supersede must run after it (reusing a state string must
+	// 400 like the Mongo duplicate-key path, not silently overwrite
+	// after deleting the row it collides with). Collect-then-mutate
+	// keeps that ordering while unlocking only once.
 	now := s.timeNow()
+	var reap, supersede []string
 	for state, existing := range s.states {
 		if !existing.ExpiresAt.IsZero() && !now.Before(existing.ExpiresAt) {
-			delete(s.states, state)
+			reap = append(reap, state)
+		} else if existing.Connector == st.Connector {
+			supersede = append(supersede, state)
 		}
 	}
-	// Duplicate check BEFORE the supersede below: reusing the same state
+	for _, state := range reap {
+		delete(s.states, state)
+	}
+	// Duplicate check AFTER the sweep above: reusing the same state
 	// string for the same connector (caller bug — states are 128-bit rand)
 	// must 400 like the Mongo duplicate-key path, not silently overwrite
 	// after deleting the row it collides with.
@@ -400,10 +414,8 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// hardcoded count, so a fourth connector doesn't invalidate it. The
 	// sweep above only reaps expired rows, so without this a bearer holder
 	// could mint unlimited live states inside the 10-minute window.
-	for state, existing := range s.states {
-		if existing.Connector == st.Connector {
-			delete(s.states, state)
-		}
+	for _, state := range supersede {
+		delete(s.states, state)
 	}
 	s.states[st.State] = st
 	return nil
