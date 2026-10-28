@@ -155,6 +155,12 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// not in the browser with redirect_uri_mismatch.
 		return "", errors.New("connectors: redirect URL must have no query or fragment; register the bare callback URL")
 	}
+	// Inner controls fail closed like every sibling input (state/code/
+	// verifier at every layer): url.Parse/String round-trips them, so a
+	// control-bearing path would pass validation yet mismatch Google.
+	if hasControl(raw) {
+		return "", errors.New("connectors: redirect URL must not contain control characters")
+	}
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
 	if !strings.HasSuffix(parsed.Path, "/api/connectors/callback") {
 		return "", errors.New("connectors: redirect URL path must end in /api/connectors/callback (the single registered endpoint)")
@@ -263,6 +269,10 @@ const MaxStateFieldLen = 2048
 // re-check inputs (defense in depth for direct callers), but this
 // helper needs no trusted caller.
 func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...any)) string {
+	// Folded first, like Exchange and every store verb: the unconfigured
+	// log below must observe the same spelling every downstream branch
+	// logs — stored == logged == sent by construction.
+	id = NormalizedID(id)
 	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
 		if logf != nil {
 			logf("connectors: auth URL build failed: unconfigured client (%q)", id)
@@ -306,8 +316,8 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// MaxStateFieldLen bound the stores enforce): a multi-KB state or
 	// verifier would mint a consent URL Google 414s, with only log spam to
 	// show for it. The gateway mints fixed-size values via NewState, so
-	// this guards direct callers.
-	id = NormalizedID(id)
+	// this guards direct callers. (id already folded at the top; the
+	// state/verifier trims below are the per-call normalisation.)
 	state = strings.TrimSpace(state)
 	verifier = strings.TrimSpace(verifier)
 	// Empty → length → Known, matching Exchange/CreateState/ConsumeState/
@@ -377,15 +387,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if hasControl(code) || hasControl(verifier) {
 		return nil, NewStoreError("oauth code or verifier invalid", false)
 	}
-	// Folded like AuthURL above and every store verb: same logical id,
-	// same answer, wherever the caller normalised.
-	id = NormalizedID(id)
-	if !Known(id) {
-		return nil, &StoreError{Msg: "unknown connector " + id, NotFound: true}
-	}
-	// Canonicalise the redirect the same way AuthURL does: the token
-	// endpoint compares redirect_uri exactly, so AuthURL and Exchange
-	// must mint and send the same string. Trimmed like every other
+	// Config-shape before identity, matching AuthURL: a bad redirect or
+	// blank client fields 400s on shape the same way whether the id is
+	// known or not, so the unknown-id path cannot be told apart by which
+	// guard fires first. Canonicalise the redirect the same way AuthURL
+	// does: the token endpoint compares redirect_uri exactly, so both
+	// helpers must mint and send the same string. Trimmed like every other
 	// input: padded client fields are a caller bug, and the checked
 	// values must match what is sent.
 	redirect, err := CanonicalRedirectURL(cfg.RedirectURL)
@@ -397,11 +404,20 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
 	cc.AuthURL = strings.TrimSpace(cc.AuthURL)
 	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
+	// Length gate above covers the trimmed values copied here — keep the
+	// copy below the gate, or padding could push a real credential over
+	// the cap (the padded-push class fixed for the trim-copy contract).
 	if cc.ClientID == "" || cc.ClientSecret == "" {
 		return nil, NewStoreError("oauth client is not configured", false)
 	}
 	if cc.AuthURL == "" || cc.TokenURL == "" {
 		return nil, NewStoreError("oauth client endpoints are not configured", false)
+	}
+	// Folded like AuthURL above and every store verb: same logical id,
+	// same answer, wherever the caller normalised.
+	id = NormalizedID(id)
+	if !Known(id) {
+		return nil, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	cc.RedirectURL = redirect
 	tok, err := cc.oauth2(GoogleScopes(id)).Exchange(ctx, code,

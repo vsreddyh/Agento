@@ -111,6 +111,17 @@ func TestExchangeRejectsControlBytes(t *testing.T) {
 	}
 }
 
+// Shape before identity in Exchange too: a bad redirect with an unknown
+// id 400s on shape, not 404s on identity — matching AuthURL's order.
+func TestExchangeShapeBeforeIdentity(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://evil.example/x", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if _, err := Exchange(context.Background(), cfg, "slack", "code", "verifier", nil); err == nil {
+		t.Fatal("bad redirect should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("bad-redirect unknown-id should be a deterministic 400, got %v", err)
+	}
+}
+
 // Redirect validation fails closed: typo'd host/scheme or a missing
 // callback suffix must break startup config, not die in the browser.
 func TestOAuthConfigValidatesRedirect(t *testing.T) {
@@ -143,6 +154,14 @@ func TestOAuthConfigValidatesRedirect(t *testing.T) {
 				t.Fatal("invalid redirect accepted")
 			}
 		})
+	}
+}
+
+// A control-bearing redirect fails closed at validation, not in the
+// browser with redirect_uri_mismatch.
+func TestCanonicalRedirectRejectsControlBytes(t *testing.T) {
+	if _, err := CanonicalRedirectURL("https://host/p/api/connectors/callback\x7f"); err == nil {
+		t.Fatal("control-bearing redirect should fail closed")
 	}
 }
 
