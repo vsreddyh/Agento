@@ -120,14 +120,13 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	if !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/api/connectors/callback") {
 		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL path must end in /api/connectors/callback (the single registered endpoint)")
 	}
-	// Canonicalise: store the validated shape with no trailing slash, so
-	// the exact string the gateway sends as redirect_uri (and the operator
-	// compares in the startup log) is the string validated above. Query
-	// and fragment are already rejected, so trimming the string trims the
-	// path. Without this a .../callback/ config passes validation but
-	// Google exact-matches it against a no-slash registration (or vice
-	// versa) and dies with redirect_uri_mismatch in the browser.
-	redirectURL = strings.TrimRight(redirectURL, "/")
+	// Canonicalise on the parsed path, not the raw string: the string
+	// trim is only correct because query/fragment are rejected above,
+	// and a future edit that permits either would silently start
+	// eating query slashes. Trimming parsed.Path keeps the validated
+	// shape and the sent shape the same string by construction.
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	redirectURL = parsed.String()
 	key, err := KeyFromEnv()
 	if err != nil {
 		return nil, err
@@ -178,9 +177,9 @@ func NewState() (state, verifier string, err error) {
 // hundred chars. Anything past 2048 is not a real credential — it is a
 // garbage or hostile input that must 400 before it becomes a DB filter
 // or an outbound token request. Enforced at the gateway (fast path) AND the
-// store (ConsumeState/CreateState): the store is exported for direct
-// callers (future MCP servers), so the gateway cap alone would leave the
-// enforcement to one layer.
+// store (ConsumeState/CreateState) AND Exchange: every layer is exported
+// for direct callers (future MCP servers), so the gateway cap alone would
+// leave the enforcement to one layer.
 const MaxStateFieldLen = 2048
 
 // AuthURL builds the Google consent URL for one connector attempt. Offline
@@ -286,6 +285,13 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		// sides of the store boundary.
 		return nil, NewStoreError("grant exchange returned no refresh token; reconnect and approve offline access", false)
 	}
+	// Normalise before return: the checked strings and the delivered
+	// bytes must be identical, so a future caller that seals
+	// tok.RefreshToken raw cannot seal padding the refresher can't use
+	// (same class as the gateway's trim-before-seal, enforced here so
+	// no caller has to remember it).
+	tok.RefreshToken = strings.TrimSpace(tok.RefreshToken)
+	tok.AccessToken = strings.TrimSpace(tok.AccessToken)
 	return tok, nil
 }
 

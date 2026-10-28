@@ -60,6 +60,25 @@ func TestExchangeAgainstStub(t *testing.T) {
 	}
 }
 
+// The returned token carries the checked (trimmed) values, not the raw
+// provider bytes: a future caller sealing tok.RefreshToken must not seal
+// padding the refresher can't use.
+func TestExchangeTrimsTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"  a1  ","refresh_token":"  r1  ","expires_in":3600,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	tok, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.AccessToken != "a1" || tok.RefreshToken != "r1" {
+		t.Errorf("tokens = %+v, want trimmed", tok)
+	}
+}
+
 // Redirect validation fails closed: typo'd host/scheme or a missing
 // callback suffix must break startup config, not die in the browser.
 func TestOAuthConfigValidatesRedirect(t *testing.T) {

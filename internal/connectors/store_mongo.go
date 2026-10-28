@@ -207,7 +207,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		// disconnected row that somehow still holds tokens must take the
 		// repair write below (which unsets them), never a skipped write
 		// that would keep serving the grant.
-		if displayFresh(cur, id, lastErr) && (st != StatusDisconnected || strings.TrimSpace(cur.Refresh) == "") {
+		if displayFresh(cur, id, lastErr) && (st != StatusDisconnected || grantClear(cur)) {
 			// Pure no-op: nothing to heal, no write at all.
 			return s.readBack(id)
 		}
@@ -302,7 +302,7 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		// somehow still holds tokens takes the repair write below (which
 		// unsets them) instead of a skipped write that would keep serving
 		// the grant.
-		if displayFresh(probe, id, "") && strings.TrimSpace(probe.Refresh) == "" {
+		if displayFresh(probe, id, "") && grantClear(probe) {
 			return s.readBack(id)
 		}
 		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
@@ -344,13 +344,13 @@ func resolveConnectedAt(stamp, now int64) int64 {
 
 // probeProjection selects the transition-decision fields: status (+lastError
 // where compared, +connectedAt where the stamp resolves, +display for the
-// no-op heal-vs-skip, +refresh presence for the token-parity check). A fresh
-// copy per call, like displayProjection: the no-op path decides heal-vs-skip
-// off these keys, so dropping one (e.g. scopes) silently turns every repeat
-// verb into a heal-write. refreshToken is the one deliberate exception to
-// "never the token columns": only its presence is read (never returned),
-// and the no-op paths need it to avoid stranding a grant behind a skipped
-// write.
+// no-op heal-vs-skip, +token-column presence for the token-parity check).
+// A fresh copy per call, like displayProjection: the no-op path decides
+// heal-vs-skip off these keys, so dropping one (e.g. scopes) silently
+// turns every repeat verb into a heal-write. The token columns are the
+// one deliberate exception to "never the token columns": only their
+// presence is read (never returned), and the no-op paths need all three
+// to avoid stranding a partial grant behind a skipped write.
 func probeProjection() bson.D {
 	return bson.D{
 		{Key: "_id", Value: 0},
@@ -359,11 +359,13 @@ func probeProjection() bson.D {
 		{Key: "connectedAt", Value: 1},
 		{Key: "displayName", Value: 1},
 		{Key: "scopes", Value: 1},
-		{Key: "refreshToken", Value: 1},
+		{Key: refreshTokenField, Value: 1},
+		{Key: accessTokenField, Value: 1},
+		{Key: "accessExpiry", Value: 1},
 	}
 }
 
-// probeDoc is the minimal read for transition decisions. refreshToken is
+// probeDoc is the minimal read for transition decisions. Token columns are
 // presence-only (never returned, never logged); see probeProjection.
 type probeDoc struct {
 	Status      Status   `bson:"status"`
@@ -372,6 +374,18 @@ type probeDoc struct {
 	DisplayName string   `bson:"displayName"`
 	Scopes      []string `bson:"scopes"`
 	Refresh     string   `bson:"refreshToken"`
+	Access      string   `bson:"accessToken"`
+	Expiry      int64    `bson:"accessExpiry"`
+}
+
+// grantClear reports whether a probed row holds no grant in any column.
+// Every column counts: a row with an empty refresh but a leftover access
+// cipher (hand-edit, partial clear, future refresher bug) must take the
+// repair write, never the pure no-op that would keep serving it.
+func grantClear(cur probeDoc) bool {
+	return strings.TrimSpace(cur.Refresh) == "" &&
+		strings.TrimSpace(cur.Access) == "" &&
+		cur.Expiry == 0
 }
 
 // displayFresh is the probeDoc-shaped entry to displayFieldsFresh for the
@@ -580,6 +594,15 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// (same gate as refresh) rather than letting it through to storage.
 	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
+	}
+	// Reject padded ciphers instead of trimming-and-storing: the string
+	// the checks see and the bytes the store keeps must be identical,
+	// or a direct caller mints an undecryptable "present" grant (same
+	// class as the state trim-at-write contract, enforced as a reject
+	// here because stored credentials must round-trip byte-exact).
+	if tok.RefreshCipher != strings.TrimSpace(tok.RefreshCipher) ||
+		(tok.AccessCipher != "" && tok.AccessCipher != strings.TrimSpace(tok.AccessCipher)) {
+		return NewStoreError("connector grant token is padded", false)
 	}
 	// Bounded like every other credential input: sealed tokens are a few
 	// hundred chars, so anything past the cap 400s before it becomes an

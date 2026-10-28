@@ -316,6 +316,15 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
 	}
+	// Reject padded ciphers instead of trimming-and-storing: the string
+	// the checks see and the bytes the store keeps must be identical,
+	// or a direct caller mints an undecryptable "present" grant (same
+	// class as the state trim-at-write contract, enforced as a reject
+	// here because stored credentials must round-trip byte-exact).
+	if tok.RefreshCipher != strings.TrimSpace(tok.RefreshCipher) ||
+		(tok.AccessCipher != "" && tok.AccessCipher != strings.TrimSpace(tok.AccessCipher)) {
+		return NewStoreError("connector grant token is padded", false)
+	}
 	// Bounded like every other credential input (code/state/verifier): a
 	// sealed token is a few hundred chars, so anything past the cap is a
 	// garbage or hostile value that must 400 before it becomes an

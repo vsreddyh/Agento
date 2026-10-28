@@ -531,13 +531,14 @@ func TestProbeProjectionShape(t *testing.T) {
 		}
 		seen[e.Key] = true
 	}
-	for _, k := range []string{"status", "lastError", "connectedAt", "displayName", "scopes"} {
+	for _, k := range []string{"status", "lastError", "connectedAt", "displayName", "scopes",
+		refreshTokenField, accessTokenField, "accessExpiry"} {
 		if !seen[k] {
 			t.Errorf("probe projection missing %q", k)
 		}
 	}
-	if len(seen) != 7 {
-		t.Errorf("probe projection has %d keys %v, want exactly 7", len(seen), seen)
+	if len(seen) != 9 {
+		t.Errorf("probe projection has %d keys %v, want exactly 9", len(seen), seen)
 	}
 	for _, e := range probeProjection() {
 		if e.Key == "_id" && e.Value != 0 {
@@ -556,10 +557,10 @@ func TestProbeProjectionWithinDisplay(t *testing.T) {
 		display[e.Key] = true
 	}
 	for _, e := range probeProjection() {
-		// refreshToken is the documented exception: presence-only probe
-		// input for the token-parity check, deliberately absent from the
-		// display shape (see probeProjection).
-		if e.Key == refreshTokenField {
+		// Token columns are the documented exception: presence-only
+		// probe input for the token-parity check, deliberately absent
+		// from the display shape (see probeProjection).
+		if e.Key == refreshTokenField || e.Key == accessTokenField || e.Key == "accessExpiry" {
 			continue
 		}
 		if !display[e.Key] {
@@ -908,6 +909,33 @@ func TestSetTokensRejectsOversizedCipher(t *testing.T) {
 	}
 	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: big}); err == nil {
 		t.Fatal("oversized access cipher should fail")
+	}
+}
+
+// Padded ciphers are rejected, not trimmed-and-stored: the checked string
+// and the stored bytes must round-trip byte-exact.
+func TestSetTokensRejectsPaddedCipher(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: " r "}); err == nil {
+		t.Fatal("padded refresh cipher should fail")
+	}
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: " a "}); err == nil {
+		t.Fatal("padded access cipher should fail")
+	}
+}
+
+// grantClear requires every token column empty: a refresh-less row with a
+// leftover access cipher (or expiry) still holds a servable grant.
+func TestGrantClearNeedsAllColumns(t *testing.T) {
+	if !grantClear(probeDoc{}) {
+		t.Error("empty row should be grant-clear")
+	}
+	if grantClear(probeDoc{Access: " sealed-access "}) {
+		t.Error("access-only row should not be grant-clear")
+	}
+	if grantClear(probeDoc{Expiry: 123}) {
+		t.Error("expiry-only row should not be grant-clear")
 	}
 }
 
