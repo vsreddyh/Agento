@@ -1188,6 +1188,14 @@ func TestConsumeStateRejectsOversized(t *testing.T) {
 	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
 		t.Fatalf("control consume should be NotFound, got %v", err)
 	}
+	// Invalid UTF-8 fails the same way: overlong sequences decode as
+	// RuneError (not control), so the control check alone would miss
+	// them before the map/DB filter.
+	if _, err := s.ConsumeState(ctx, "s\xc0\x801"); err == nil {
+		t.Fatal("invalid-utf8 consume should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("invalid utf8 consume should be NotFound, got %v", err)
+	}
 	if err := s.CreateState(ctx, OAuthState{State: strings.Repeat("y", MaxStateFieldLen+1), Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err == nil {
 		t.Fatal("oversized create should fail")
 	}

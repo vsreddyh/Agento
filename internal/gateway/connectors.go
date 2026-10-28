@@ -479,13 +479,20 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// canonical form is what both helpers send.
 		RedirectURI: pinnedRedirect,
 	}); err != nil {
-		// Same timeout/client-gone split as list/disconnect and every
-		// callback store call — but validation-only on this path: the
-		// verb ctx never reaches IO (delete + insert run detached), so a
-		// detached-IO timeout surfaces as generic 502, never the timeout
-		// wording. Near-simultaneous 5s clocks make that window
-		// milliseconds; re-tap recovers either way.
-		storeTimeoutOrGone(w, s, ctx, err, "connect")
+		// No timeout split here (unlike list/disconnect/callback): the
+		// verb ctx never reaches IO — delete + insert run on detached
+		// budgets, one of which always outlives the 5s verb on slow Atlas.
+		// Branching on the verb deadline would answer the timeout
+		// contract for detached-IO failures the verb clock never
+		// bounded. Detached IO errors already carry their own taxonomy
+		// (upstream 502 via the domain mapper below) — that is the
+		// honest answer. Gone clients still short-circuit: writing on a
+		// dead conn buys only a second log line for a hangup.
+		if ctx.Err() != nil && ctx.Err() != context.DeadlineExceeded {
+			s.cfg.Logf("connectors: connect aborted, client gone: %v", ctx.Err())
+			return
+		}
+		connectorsError(w, err)
 		return
 	}
 	// Fail-closed builder: empty means a helper refused (nil cfg, unknown

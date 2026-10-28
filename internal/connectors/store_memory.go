@@ -555,7 +555,7 @@ func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState,
 	if len(state) > MaxStateFieldLen {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
-	if HasControl(state) {
+	if HasControl(state) || !utf8.ValidString(state) {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	s.mu.Lock()
