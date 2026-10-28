@@ -191,7 +191,8 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// content, not from updated_at.
 	hasGrant := func() bool {
 		tok, ok := s.tokens[id]
-		return ok && strings.TrimSpace(tok.RefreshCipher) != ""
+		return ok && (strings.TrimSpace(tok.RefreshCipher) != "" ||
+			strings.TrimSpace(tok.AccessCipher) != "")
 	}
 	if ok && c.Status == st && displayFieldsFresh(id, c.DisplayName, c.Scopes, c.LastError, wantErr) &&
 		(st != StatusDisconnected || !hasGrant()) {

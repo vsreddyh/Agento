@@ -1045,6 +1045,31 @@ func TestDisconnectNoOpClearsTokens(t *testing.T) {
 	}
 }
 
+// A partial grant (access cipher but no refresh — hand-edit or future code
+// path, since SetTokens itself refuses refresh-less rows) must still die
+// on a disconnected no-op: the pure no-op predicate checks every token
+// column, not just refresh, and the repair path clears them.
+func TestSetStatusNoOpClearsAccessOnlyGrant(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.SetStatus(ctx, "gmail", StatusDisconnected, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Hand-inserted: bypasses SetTokens validation on purpose.
+	s.mu.Lock()
+	s.tokens["gmail"] = TokenRow{AccessCipher: "sealed-access"}
+	s.mu.Unlock()
+	if _, err := s.SetStatus(ctx, "gmail", StatusDisconnected, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.RLock()
+	_, stillThere := s.tokens["gmail"]
+	s.mu.RUnlock()
+	if stillThere {
+		t.Fatal("access-only grant survived a disconnected no-op")
+	}
+}
+
 // AuthURL with an overlong state fails closed instead of minting a URL
 // Google would 414.
 func TestAuthURLRejectsOversizedState(t *testing.T) {
