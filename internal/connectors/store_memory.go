@@ -359,6 +359,12 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	if tok.AccessCipher == "" && tok.AccessExpiryUnixMilli != 0 {
 		return NewStoreError("connector grant expiry without access token", false)
 	}
+	// Clamp absurd futures: a far-future expiry reads as "don't renew for
+	// decades". Capped like the state clamp (row still works, renews
+	// soon). Memory clock is injectable; mongo is wall-clock by design.
+	if max := s.timeNow().Add(MaxAccessLifetime).UnixMilli(); tok.AccessExpiryUnixMilli > max {
+		tok.AccessExpiryUnixMilli = max
+	}
 	// Reject padded ciphers instead of trimming-and-storing: the string
 	// the checks see and the bytes the store keeps must be identical,
 	// or a direct caller mints an undecryptable "present" grant (same
@@ -541,9 +547,12 @@ func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState,
 	}
 	delete(s.states, state)
 	// Boundary: expiresAt itself counts as expired (matches the Mongo TTL,
-	// which reaps at expiry, not after). Clock is injectable so tests pin
-	// this tick without sleeping.
-	if !st.ExpiresAt.IsZero() && !s.timeNow().Before(st.ExpiresAt) {
+	// which reaps at expiry, not after). Zero counts as expired too: no
+	// API writer can mint one (CreateState defaults zero), so a zero row
+	// is a hand-edit — fail closed, matching the Mongo TTL which reaps a
+	// zero date at once. Clock is injectable so tests pin this tick
+	// without sleeping.
+	if !s.timeNow().Before(st.ExpiresAt) {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	return st, nil

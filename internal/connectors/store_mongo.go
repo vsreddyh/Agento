@@ -624,6 +624,13 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	if tok.AccessCipher == "" && tok.AccessExpiryUnixMilli != 0 {
 		return NewStoreError("connector grant expiry without access token", false)
 	}
+	// Clamp absurd futures: a far-future expiry reads as "don't renew for
+	// decades". Capped like the state clamp (row still works, renews
+	// soon). Wall-clock by design; the injectable clock lives on the
+	// memory side, where state-expiry ticks are pinned.
+	if max := time.Now().Add(MaxAccessLifetime).UnixMilli(); tok.AccessExpiryUnixMilli > max {
+		tok.AccessExpiryUnixMilli = max
+	}
 	// Reject padded ciphers instead of trimming-and-storing: the string
 	// the checks see and the bytes the store keeps must be identical,
 	// or a direct caller mints an undecryptable "present" grant (same

@@ -156,6 +156,8 @@ func TestOAuthConfigCanonicalisesNonCanonicalRedirect(t *testing.T) {
 	for _, tc := range []struct{ name, url, want string }{
 		{"double slash", "https://host/p//api/connectors/callback", "https://host/p/api/connectors/callback"},
 		{"dot segment", "https://host/p/./api/connectors/callback", "https://host/p/api/connectors/callback"},
+		{"trailing dot", "https://host./p/api/connectors/callback", "https://host/p/api/connectors/callback"},
+		{"trailing dot with port", "https://host.:8443/p/api/connectors/callback", "https://host:8443/p/api/connectors/callback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)

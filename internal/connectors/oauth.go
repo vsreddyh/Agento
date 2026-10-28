@@ -35,6 +35,11 @@ const (
 	// tapping connect to finishing the Google consent screen.
 	StateTTL = 10 * time.Minute
 
+	// MaxAccessLifetime bounds a stored access-token expiry: provider
+	// expires_in is ~1h, so anything past a day is skew, a stubby test
+	// token, or a hand-edit — all of which must renew soon, not never.
+	MaxAccessLifetime = 24 * time.Hour
+
 	// StatesCollection holds pending connect attempts. Short-lived by TTL;
 	// consumed (deleted) on first use, so a code can never be exchanged twice.
 	StatesCollection = "oauth_states"
@@ -93,24 +98,36 @@ type OAuthConfig struct {
 // dies in the browser with nothing in the server log pointing at it.
 func CanonicalRedirectURL(raw string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+	if err != nil {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
 	}
 	// Hostnames are case-insensitive: fold before validation so a
 	// mixed-case registration compares equal to what Google
 	// exact-matches against (ports are unaffected by lowercasing).
-	parsed.Host = strings.ToLower(parsed.Host)
+	// A trailing-dot FQDN spelling is folded too: the console
+	// registration is canonically dot-less, and the dot would
+	// otherwise pass validation yet mismatch Google exactly.
+	// (Fold before the empty check: a bare "." host must fail as empty,
+	// not validate as dot-less nothing.)
+	parsed.Host = strings.TrimSuffix(strings.ToLower(parsed.Host), ".")
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
+	}
 	// Strip default ports: the console registration is canonically
 	// port-less, while an operator-supplied URL may name :443/:80
-	// explicitly — and Google exact-matches redirect_uri. Brackets go
-	// back on IPv6 literals, or the stripped host stops parsing as a URL.
-	if (parsed.Scheme == "https" && strings.HasSuffix(parsed.Host, ":443")) ||
-		(parsed.Scheme == "http" && strings.HasSuffix(parsed.Host, ":80")) {
-		if h, _, err := net.SplitHostPort(parsed.Host); err == nil {
-			if strings.Contains(h, ":") {
-				h = "[" + h + "]"
-			}
+	// explicitly — and Google exact-matches redirect_uri. The hostname
+	// is re-folded after the split too: "host.:8443" must canonicalise
+	// to "host:8443", not pass validation dotted. Brackets go back on
+	// IPv6 literals, or the stripped host stops parsing as a URL.
+	if h, p, err := net.SplitHostPort(parsed.Host); err == nil {
+		h = strings.TrimSuffix(h, ".")
+		if strings.Contains(h, ":") {
+			h = "[" + h + "]"
+		}
+		if (parsed.Scheme == "https" && p == "443") || (parsed.Scheme == "http" && p == "80") {
 			parsed.Host = h
+		} else {
+			parsed.Host = net.JoinHostPort(h, p)
 		}
 	}
 	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {

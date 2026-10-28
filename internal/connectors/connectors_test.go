@@ -1008,6 +1008,24 @@ func TestSetTokensRejectsWhitespaceAccess(t *testing.T) {
 	}
 }
 
+// A far-future expiry clamps instead of persisting: the refresher must
+// renew soon, not in decades. Pinned on memory (DB tests need Atlas).
+func TestSetTokensClampsFarFutureExpiry(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	far := time.Now().Add(365 * 24 * time.Hour).UnixMilli()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a", AccessExpiryUnixMilli: far}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetTokens(ctx, "gmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if max := time.Now().Add(MaxAccessLifetime + time.Minute).UnixMilli(); got.AccessExpiryUnixMilli > max {
+		t.Errorf("expiry not clamped: %v", got.AccessExpiryUnixMilli)
+	}
+}
+
 // Expiry without access is a second missing representation: the row would
 // read as holding a grant (non-zero expiry) for a token that doesn't
 // exist. Fail closed so the single representation (zero expiry, empty
