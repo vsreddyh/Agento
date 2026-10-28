@@ -217,6 +217,19 @@ func TestOAuthConfigRejectsNonLocalhostHTTP(t *testing.T) {
 	}
 }
 
+// A non-numeric port can never match a console registration: fail closed
+// at config load, not with redirect_uri_mismatch in the browser.
+func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host:abc/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("non-numeric port should fail closed")
+	}
+}
+
 // IPv6 literals keep their brackets through canonicalisation: stripping
 // the default port must not emit an unbracketed (hence invalid) host,
 // or the loopback-http gate that follows misreads it.

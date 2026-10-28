@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,6 +129,14 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		h = strings.TrimRight(h, ".")
 		if strings.Contains(h, ":") {
 			h = "[" + h + "]"
+		}
+		if p != "" {
+			// Ports must be numeric: SplitHostPort doesn't check, and no
+			// console registration can hold :abc — a non-numeric port
+			// passes validation yet mismatches Google exactly.
+			if n, convErr := strconv.Atoi(p); convErr != nil || n < 1 || n > 65535 {
+				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
+			}
 		}
 		if (parsed.Scheme == "https" && p == "443") || (parsed.Scheme == "http" && p == "80") {
 			parsed.Host = h

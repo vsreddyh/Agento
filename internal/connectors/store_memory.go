@@ -540,9 +540,14 @@ func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState,
 	// Trimmed like the write path and the gateway: padded input resolves
 	// instead of 404ing on whitespace no writer could have stored.
 	// Length-gated like the gateway: oversized input answers the same
-	// NotFound as unknown, never reaching the map.
+	// NotFound as unknown, never reaching the map. Control-gated like
+	// CreateState: a control-bearing id must not reach even a map lookup
+	// as anything but NotFound.
 	state = strings.TrimSpace(state)
 	if len(state) > MaxStateFieldLen {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
+	if hasControl(state) {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	s.mu.Lock()

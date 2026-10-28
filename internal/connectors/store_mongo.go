@@ -842,9 +842,13 @@ func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState
 	// Trimmed like the write path and the gateway: padded input resolves
 	// instead of 404ing on whitespace no writer could have stored.
 	// Length-gated like the gateway: oversized input answers the same
-	// NotFound as unknown, never reaching Mongo as a filter.
+	// NotFound as unknown, never reaching Mongo as a filter. Control-gated
+	// like CreateState: a control-bearing id must not reach the filter.
 	state = strings.TrimSpace(state)
 	if len(state) > MaxStateFieldLen {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
+	if hasControl(state) {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	var st OAuthState

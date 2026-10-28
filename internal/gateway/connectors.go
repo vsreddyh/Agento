@@ -443,10 +443,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	}
 	state, verifier, err := connectors.NewState()
 	if err != nil {
-		// Logged like every other server-side failure on this path:
-		// without it a (near-impossible) rand failure is a silent 502
-		// indistinguishable from the AuthURL-empty branch below.
-		s.cfg.Logf("connectors: could not mint connect state: %v", err)
+		// Logged like every other server-side failure on this path, as a
+		// static string: rand carries no discriminant (and no caller
+		// input), so there is nothing to quote or scrub.
+		s.cfg.Logf("connectors: could not mint connect state")
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not start the connect flow")
 		return

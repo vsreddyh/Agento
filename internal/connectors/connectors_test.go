@@ -1123,6 +1123,13 @@ func TestConsumeStateRejectsOversized(t *testing.T) {
 	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
 		t.Fatalf("oversized should be NotFound, got %v", err)
 	}
+	// Control bytes fail closed on consume too, never reaching the map:
+	// unknown, expired, and malformed are the same NotFound.
+	if _, err := s.ConsumeState(ctx, "s\x001"); err == nil {
+		t.Fatal("control-byte consume should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("control consume should be NotFound, got %v", err)
+	}
 	if err := s.CreateState(ctx, OAuthState{State: strings.Repeat("y", MaxStateFieldLen+1), Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err == nil {
 		t.Fatal("oversized create should fail")
 	}
