@@ -268,6 +268,12 @@ func TestOAuthConfigRejectsEncodedControls(t *testing.T) {
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("encoded control should fail closed")
 	}
+	// Invalid UTF-8 fails the same way: bad bytes decode as RuneError
+	// (not control), so the control gate alone would miss them.
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host/p/api/connectors/callback\xff")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("invalid-utf8 redirect should fail closed")
+	}
 	// Encoded controls in host fail the same way: Parse leaves Host
 	// percent-encoded, so the check unescapes before testing.
 	t.Setenv("GOOGLE_REDIRECT_URL", "https://h%00st/p/api/connectors/callback")

@@ -875,6 +875,15 @@ func TestEncryptTokenRefusesPadded(t *testing.T) {
 	}
 }
 
+// Oversized plaintext fails before the seal alloc, not after: the cap
+// fires here so the store never sees a multi-MB cipher from a direct
+// caller. Sealed grants stay well under the bound in prod.
+func TestEncryptTokenRefusesOversized(t *testing.T) {
+	if _, err := EncryptToken([32]byte{1}, strings.Repeat("x", MaxStateFieldLen+1)); err == nil {
+		t.Fatal("sealing oversized token should fail")
+	}
+}
+
 // Unknown ids fail closed at the helper, not just the gateway.
 func TestAuthURLUnknownIDFailsClosed(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}

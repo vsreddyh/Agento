@@ -187,8 +187,8 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// every check verbatim). Unescape failure rejects too — a malformed
 	// host is not a registration.
 	decodedHost, hostErr := url.PathUnescape(parsed.Host)
-	if HasControl(trimmed) || HasControl(parsed.Path) || hostErr != nil || HasControl(decodedHost) {
-		return "", errors.New("connectors: redirect URL must not contain control characters")
+	if HasControl(trimmed) || !utf8.ValidString(trimmed) || HasControl(parsed.Path) || !utf8.ValidString(parsed.Path) || hostErr != nil || HasControl(decodedHost) || !utf8.ValidString(decodedHost) {
+		return "", errors.New("connectors: redirect URL must not contain control characters or invalid UTF-8")
 	}
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
 	if !strings.HasSuffix(parsed.Path, "/api/connectors/callback") {
@@ -209,9 +209,8 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL must all be set for OAuth")
 	}
 	// Credentials fail fast on control bytes and invalid UTF-8 like every
-	// sibling input (redirect below, state/code/verifier at every layer): an
-	// (redirect below, state/code/verifier at every layer): an
-	// operator-pasted control would otherwise embed in the minted
+	// sibling input (redirect below, state/code/verifier at every layer):
+	// an operator-pasted control would otherwise embed in the minted
 	// AuthCodeURL and the token request and fail at Google after consent.
 	if HasControl(clientID) || HasControl(clientSecret) || !utf8.ValidString(clientID) || !utf8.ValidString(clientSecret) {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters")

@@ -71,6 +71,14 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 		// down (same contract as the caller-side trim-before-seal).
 		return "", errors.New("connectors: refusing to seal a padded token; trim before sealing")
 	}
+	// Length-capped before the alloc: gcm.Seal allocates the full output
+	// up front, so an unbounded plaintext buys a large alloc before the
+	// store 400s the resulting cipher. Sealed grants stay well under
+	// 2048 (same bound the stores enforce) — a legitimate token never
+	// trips this.
+	if len(plaintext) > MaxStateFieldLen {
+		return "", errors.New("connectors: refusing to seal an oversized token")
+	}
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return "", err

@@ -621,6 +621,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// is already consumed at this point (verifier lives inside it, so the
 	// check cannot run first) — burning a hand-inserted row is intended;
 	// prod rows pass CreateState's own control gate and never reach here.
+	// Both legs burn: controls and invalid UTF-8 alike (only code/state
+	// fail pre-consume; the verifier can only be checked after the read).
 	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) {
 		callbackDeadAttempt(w, r)
 		return
