@@ -248,9 +248,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		return ""
 	}
 	// Work on a trimmed copy from here on: the checks below and the
-	// built URL must see identical values.
+	// built URL must see identical values. ClientSecret is folded too
+	// even though AuthCodeURL never sends it — the copy contract is
+	// "everything trimmed", so the next edit copies one pattern.
 	trimmed := *cfg
 	trimmed.ClientID = strings.TrimSpace(trimmed.ClientID)
+	trimmed.ClientSecret = strings.TrimSpace(trimmed.ClientSecret)
 	trimmed.RedirectURL = strings.TrimSpace(trimmed.RedirectURL)
 	trimmed.AuthURL = strings.TrimSpace(trimmed.AuthURL)
 	trimmed.TokenURL = strings.TrimSpace(trimmed.TokenURL)
@@ -420,6 +423,10 @@ type TokenRow struct {
 	// refresher renews before this, not after it fails. Zero means unknown
 	// (provider omitted expires_in) — treat as already expired (renew
 	// immediately), never as "never expires". Unknown is fail-closed.
+	// A past timestamp means the same as zero (renew immediately) by
+	// accident of comparison, not by a separate contract: clock skew or
+	// a stubby test token lands here, and the refresher cannot tell it
+	// from a genuinely stale row — nor does it need to.
 	AccessExpiryUnixMilli int64 `bson:"accessExpiry" json:"-"`
 }
 

@@ -495,7 +495,14 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// unreachable live state would otherwise sit until TTL/next tap
 		// — harmless, but the failed build must mint nothing observable.
 		// Same single-use delete the callback uses; failure only logs.
-		if _, cerr := s.connectors.ConsumeState(ctx, state); cerr != nil {
+		// Detached budget, not the verb ctx: CreateState's own delete +
+		// insert run detached, so the verb ctx can be near-deadline at
+		// exactly this point — a fired deadline must not turn the
+		// cleanup into a certain failure.
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, cerr := s.connectors.ConsumeState(cleanCtx, state)
+		cleanCancel()
+		if cerr != nil {
 			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
 		}
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
