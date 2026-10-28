@@ -33,7 +33,7 @@ func TestExchangeAgainstStub(t *testing.T) {
 	defer srv.Close()
 
 	mkcfg := func() *OAuthConfig {
-		return &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+		return &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	}
 	tok, err := Exchange(context.Background(), mkcfg(), Gmail, "code1", "verifier1", nil)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestExchangeTrimsTokens(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"  a1  ","refresh_token":"  r1  ","expires_in":3600,"token_type":"Bearer"}`)
 	}))
 	defer srv.Close()
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	tok, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil)
 	if err != nil {
 		t.Fatal(err)

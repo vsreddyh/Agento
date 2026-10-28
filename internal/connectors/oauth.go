@@ -81,40 +81,43 @@ type OAuthConfig struct {
 	TokenURL string
 }
 
-// ValidRedirectURL is the single redirect-shape validator: absolute
-// http(s), no userinfo/query/fragment, path ending in the one registered
-// callback. Returns the parsed URL for canonicalisation.
-// OAuthConfigFromEnv and AuthURL both funnel through it, so a hand-built
-// cfg gets the same fail-closed shape check as the env path.
-func ValidRedirectURL(raw string) (*url.URL, error) {
+// canonicalRedirectURL validates and canonicalises in one step so every
+// caller sends the exact registered shape: absolute http(s), https unless
+// loopback, no userinfo/query/fragment, path ending in the single
+// registered callback endpoint. path.Clean collapses double slashes and
+// dot segments before the suffix check, so validated-shape == sent-shape
+// by construction — Google exact-matches redirect_uri, and a mismatch
+// dies in the browser with nothing in the server log pointing at it.
+func canonicalRedirectURL(raw string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, errors.New("connectors: redirect URL must be an absolute http(s) URL")
+		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
 	}
 	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {
 		// Google only permits http for loopback; a non-localhost http
 		// registration can never complete. Fail closed with a pointer
 		// at the scheme instead of dying with redirect_uri_mismatch
 		// (or worse, sending a grant over plaintext http).
-		return nil, errors.New("connectors: redirect URL must be https unless localhost")
+		return "", errors.New("connectors: redirect URL must be https unless localhost")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
 		// match Google's exact-redirect comparison — fail closed rather
 		// than storing credentials in the service log.
-		return nil, errors.New("connectors: redirect URL must not contain userinfo (user:pass@)")
+		return "", errors.New("connectors: redirect URL must not contain userinfo (user:pass@)")
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		// Google compares the full redirect_uri exactly: a registered
 		// query or fragment would never match what the gateway sends
 		// (bare path), so fail here with a pointer at the registration,
 		// not in the browser with redirect_uri_mismatch.
-		return nil, errors.New("connectors: redirect URL must have no query or fragment; register the bare callback URL")
+		return "", errors.New("connectors: redirect URL must have no query or fragment; register the bare callback URL")
 	}
-	if !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/api/connectors/callback") {
-		return nil, errors.New("connectors: redirect URL path must end in /api/connectors/callback (the single registered endpoint)")
+	if !strings.HasSuffix(strings.TrimRight(path.Clean(parsed.Path), "/"), "/api/connectors/callback") {
+		return "", errors.New("connectors: redirect URL path must end in /api/connectors/callback (the single registered endpoint)")
 	}
-	return parsed, nil
+	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
+	return parsed.String(), nil
 }
 
 // OAuthConfigFromEnv builds the OAuth client from the environment. ANY
@@ -137,17 +140,11 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	// first: splitProfile Cleans the path server-side, so .../callback/
 	// would serve fine — rejecting it here would 501 a working config
 	// over punctuation.
-	parsed, err := ValidRedirectURL(redirectURL)
+	parsed, err := canonicalRedirectURL(redirectURL)
 	if err != nil {
 		return nil, err
 	}
-	// Canonicalise on the parsed path, not the raw string: Clean
-	// collapses double slashes and dot segments that would otherwise
-	// pass the suffix check yet never match Google's exact comparison
-	// of the sent redirect_uri, and TrimRight drops the tolerated
-	// trailing slash. Validated shape == sent shape by construction.
-	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
-	redirectURL = parsed.String()
+	redirectURL = parsed
 	key, err := KeyFromEnv()
 	if err != nil {
 		return nil, err
@@ -215,7 +212,7 @@ const MaxStateFieldLen = 2048
 // ConsumeState. cfg normally comes from OAuthConfigFromEnv (which also
 // validates the redirect shape and sets both Google endpoints), but a
 // hand-built cfg with a non-matching redirect is rejected here too via
-// the same ValidRedirectURL check — shape is helper-enforced, not just
+// the same canonicalRedirectURL check — shape is helper-enforced, not just
 // caller-promised. The gateway route, CreateState, and Exchange all
 // re-check inputs (defense in depth for direct callers), but this
 // helper needs no trusted caller.
@@ -229,19 +226,17 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 		// Google endpoints, so this guards direct callers only.
 		return ""
 	}
-	if _, err := ValidRedirectURL(cfg.RedirectURL); err != nil {
+	canonical, err := canonicalRedirectURL(cfg.RedirectURL)
+	if err != nil {
 		// Same shape gate as the env path: a hand-built redirect that
 		// would never match a registration fails here, not in the
 		// browser with redirect_uri_mismatch.
 		return ""
 	}
-	// Build from a canonicalised copy, not cfg.RedirectURL verbatim:
-	// ValidRedirectURL accepts a trailing slash (.../callback/), but
-	// Google exact-matches the sent string — minting with the slash
-	// would 400 against a canonical registration. Same TrimRight the
-	// env path applies before storing.
+	// Build from the canonicalised shape, not cfg.RedirectURL verbatim,
+	// so AuthURL and Exchange agree on the exact string.
 	redirect := *cfg
-	redirect.RedirectURL = strings.TrimRight(strings.TrimSpace(cfg.RedirectURL), "/")
+	redirect.RedirectURL = canonical
 	// Folded and trimmed like every store verb — unknown or empty inputs
 	// fail closed, and overlong inputs fail closed too (same
 	// MaxStateFieldLen bound the stores enforce): a multi-KB state or
@@ -300,7 +295,16 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if !Known(id) {
 		return nil, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
-	tok, err := cfg.oauth2(GoogleScopes(id)).Exchange(ctx, code,
+	// Canonicalise the redirect the same way AuthURL does: the token
+	// endpoint compares redirect_uri exactly, so AuthURL and Exchange
+	// must mint and send the same string.
+	redirect, err := canonicalRedirectURL(cfg.RedirectURL)
+	if err != nil {
+		return nil, NewStoreError("oauth client redirect URL is invalid", false)
+	}
+	cc := *cfg
+	cc.RedirectURL = redirect
+	tok, err := cc.oauth2(GoogleScopes(id)).Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifier))
 	if err != nil {
 		if logf != nil {
