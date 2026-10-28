@@ -173,6 +173,17 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 // profile branch left to mirror.)
 const callbackStateReject = "that connect attempt expired or was already used; start over from connect"
 
+// mustCanonicalRedirect canonicalises the configured redirect for pinning
+// at mint time. FromEnv already enforces canonical shape, so the fallback
+// is unreachable in prod — but a hand-built test cfg could carry a raw
+// value, and the store's shape check fails that closed anyway.
+func mustCanonicalRedirect(raw string) string {
+	if canonical, err := connectors.CanonicalRedirectURL(raw); err == nil {
+		return canonical
+	}
+	return raw
+}
+
 // callbackDeadAttempt answers a dead OAuth attempt (unknown, consumed, or
 // expired state) with the same 400 meaning as every other failure on this
 // unauthenticated path — one string, never an oracle on id validity. A
@@ -430,8 +441,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		Verifier:  verifier,
 		// Pin the exact redirect_uri minted for this attempt: a config
 		// rotation mid-consent must not strand it with a mismatch.
-		// cfg.RedirectURL is already canonical (FromEnv enforces it).
-		RedirectURI: s.cfg.ConnectorOAuth.RedirectURL,
+		// Canonicalised here (not raw cfg) so stored == sent == logged
+		// by construction — CreateState re-checks shape, but the
+		// canonical form is what both helpers send.
+		RedirectURI: mustCanonicalRedirect(s.cfg.ConnectorOAuth.RedirectURL),
 	}); err != nil {
 		// Same timeout/client-gone split as list/disconnect and every
 		// callback store call: the domain mapper below never sees a

@@ -380,6 +380,10 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 	if !ok || strings.TrimSpace(tok.RefreshCipher) == "" {
 		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
+	// Returned verbatim by design: size enforcement lives in DecryptToken
+	// (len > MaxStateFieldLen errors there), so an oversized artifact from
+	// before the cap fails at open time with a precise error instead of
+	// being masked as NotFound here.
 	return tok, nil
 }
 
@@ -403,6 +407,19 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	}
 	if len(st.RedirectURI) > MaxStateFieldLen {
 		return NewStoreError("oauth redirect too long", false)
+	}
+	// Shape-checked like AuthURL/Exchange, not just length-capped: a
+	// sub-2048 garbage redirect would otherwise supersede the live
+	// attempt and fail only at Exchange — after the user consented.
+	// Canonicalised and stored, so stored == sent by construction.
+	// Empty means minted before this column existed: allowed, the
+	// callback falls back to the live config.
+	if st.RedirectURI != "" {
+		canonical, err := CanonicalRedirectURL(st.RedirectURI)
+		if err != nil {
+			return NewStoreError("oauth redirect is invalid", false)
+		}
+		st.RedirectURI = canonical
 	}
 	if !Known(st.Connector) {
 		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}

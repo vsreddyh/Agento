@@ -792,6 +792,18 @@ func TestCreateStateRejectsLongRedirect(t *testing.T) {
 	}
 }
 
+// A misshapen redirect fails at creation, not after consent: the row would
+// otherwise supersede the live attempt and die only at Exchange.
+func TestCreateStateRejectsBadRedirect(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", RedirectURI: "not-a-url"}); err == nil {
+		t.Fatal("misshapen redirect should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("bad redirect should be a deterministic 400, got %v", err)
+	}
+}
+
 // Exact-boundary expiry is pinned without sleeping: expiresAt == now
 // counts as expired (matches the Mongo TTL, which reaps at expiry, not
 // after) — on BOTH sides. Creation rejects it, so the consume-side boundary
