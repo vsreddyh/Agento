@@ -786,7 +786,13 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	if serr != nil {
 		s.logf("connectors: state supersede %q failed: %v", st.Connector, serr)
 	}
-	_, err := s.states.InsertOne(ctx, st)
+	// The insert runs detached too: a slow delete above must not eat the
+	// verb budget and turn this write into a 502. Duplicate-key tolerant
+	// (concurrent tap), and a verb-deadline 502 after a landed insert
+	// recovers via re-tap supersede — same idempotency story as ever.
+	insCtx, insCancel := quickCtx()
+	_, err := s.states.InsertOne(insCtx, st)
+	insCancel()
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
 			return NewStoreError("oauth state already exists", false)

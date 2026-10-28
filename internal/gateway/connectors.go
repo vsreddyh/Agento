@@ -439,20 +439,21 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// heuristically cacheable by proxy or browser. Header set at the top
 	// of this handler so every branch carries it.
 	// Persist first, build the URL second: a down store fails fast with no
-	// dead attempt minted, and the empty-auth_url guard below stays the
-	// only post-store branch.
+	// dead attempt minted. The empty-auth_url guard below stays the only
+	// post-store branch, and it best-effort consumes the just-minted row
+	// so a failed build leaves nothing observable behind.
 	ctx, cancel := connectorCtx(r)
 	defer cancel()
 	// No ExpiresAt: the store owns the default (memory injectable clock,
 	// Mongo TTL-indexed). Passing wall-clock time here would bypass the
 	// injectable default and pin a boundary no test covers — single clock
 	// owner, set at the store.
-	// Budget composition note: the 5s verb budget covers the whole
-	// CreateState call, including the advisory supersede delete (which
-	// runs on its own detached 5s quickCtx inside the store). Worst case
-	// is sequential — ~5s of delete plus a 502d insert if Atlas is that
-	// slow — and a failed create mints nothing, so re-tap is a clean
-	// retry (same idempotency story as every other verb here).
+	// Budget composition note: the 5s verb budget covers the CreateState
+	// call, whose delete and insert each run on their own detached 5s
+	// quickCtx inside the store — a slow Atlas no longer turns either
+	// write into a 502 that reads as "connect failed". A verb-deadline
+	// 502 after a landed insert recovers via re-tap supersede, and a
+	// failed create mints nothing, so re-tap stays a clean retry.
 	//
 	// Fail fast on a misshapen configured redirect: storing raw and letting
 	// the store 400 it would misread a server config error as bad state
@@ -490,9 +491,15 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	if authURL == "" {
 		// No log here: the helper already logged which guard fired.
 		// A second line would split triage across two entries for one
-		// failure.
+		// failure. Best-effort cleanup of the just-minted row: an
+		// unreachable live state would otherwise sit until TTL/next tap
+		// — harmless, but the failed build must mint nothing observable.
+		// Same single-use delete the callback uses; failure only logs.
+		if _, cerr := s.connectors.ConsumeState(ctx, state); cerr != nil {
+			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
+		}
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
-			"could not start the connect flow")
+			"connect is not configured correctly on this server")
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{

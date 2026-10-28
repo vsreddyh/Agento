@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"agento/internal/approvals"
+
 	"golang.org/x/oauth2"
 )
 
@@ -372,7 +374,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		oauth2.SetAuthURLParam("code_verifier", verifier))
 	if err != nil {
 		if logf != nil {
-			logf("connectors: grant exchange failed for %q: %v", id, err)
+			// Scrubbed + capped like the domain mapper below: the raw
+			// provider error_description is unbounded and untrusted.
+			logf("connectors: grant exchange failed for %q: %v", id, approvals.ScrubError(err.Error()))
 		}
 		return nil, NewStoreError("grant exchange failed", true)
 	}

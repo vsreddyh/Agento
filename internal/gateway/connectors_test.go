@@ -237,6 +237,25 @@ func TestConnectorsConnectRejectsBadRedirectConfig(t *testing.T) {
 	}
 }
 
+// An AuthURL refusal after a successful CreateState cleans up the minted
+// row: the failed build must leave nothing observable behind. Reached
+// with a cfg whose redirect pins fine but whose endpoints AuthURL
+// rejects — defense in depth, but the cleanup must hold regardless.
+func TestConnectorsConnectCleansUpAfterAuthURLRefusal(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	cfg.AuthURL = ""
+	store := connectors.NewMemoryStore()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("endpoint-less connect: %d, want 502 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "not configured correctly") {
+		t.Fatalf("config 502s share one message, got: %s", rec.Body)
+	}
+}
+
 func TestConnectorsConnectReturnsAuthURL(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
