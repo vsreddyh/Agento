@@ -188,6 +188,7 @@ func TestOAuthConfigCanonicalisesNonCanonicalRedirect(t *testing.T) {
 		{"trailing dot", "https://host./p/api/connectors/callback", "https://host/p/api/connectors/callback"},
 		{"trailing dot with port", "https://host.:8443/p/api/connectors/callback", "https://host:8443/p/api/connectors/callback"},
 		{"double trailing dot", "https://host../p/api/connectors/callback", "https://host/p/api/connectors/callback"},
+		{"ipv6 non-default port", "http://[::1]:8643/api/connectors/callback", "http://[::1]:8643/api/connectors/callback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)
@@ -214,6 +215,19 @@ func TestOAuthConfigRejectsNonLocalhostHTTP(t *testing.T) {
 	t.Setenv("GOOGLE_REDIRECT_URL", "http://localhost:8643/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err != nil {
 		t.Fatalf("loopback http redirect should pass: %v", err)
+	}
+}
+
+// Control bytes in client credentials fail closed at config load, not
+// at Google after consent.
+func TestOAuthConfigRejectsControlClient(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid\x7f")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("control-byte client id should fail closed")
 	}
 }
 

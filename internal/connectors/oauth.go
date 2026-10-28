@@ -127,9 +127,6 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// IPv6 literals, or the stripped host stops parsing as a URL.
 	if h, p, err := net.SplitHostPort(parsed.Host); err == nil {
 		h = strings.TrimRight(h, ".")
-		if strings.Contains(h, ":") {
-			h = "[" + h + "]"
-		}
 		if p != "" {
 			// Ports must be numeric: SplitHostPort doesn't check, and no
 			// console registration can hold :abc — a non-numeric port
@@ -139,8 +136,16 @@ func CanonicalRedirectURL(raw string) (string, error) {
 			}
 		}
 		if (parsed.Scheme == "https" && p == "443") || (parsed.Scheme == "http" && p == "80") {
+			// Stripped: default port dropped. Bracket here (no
+			// JoinHostPort on this branch) so an IPv6 literal stays a
+			// valid host.
+			if strings.Contains(h, ":") {
+				h = "[" + h + "]"
+			}
 			parsed.Host = h
 		} else {
+			// Kept: JoinHostPort brackets IPv6 itself — pass it the bare
+			// host, or [::1]:8643 double-brackets to [[::1]]:8643.
 			parsed.Host = net.JoinHostPort(h, p)
 		}
 	}
@@ -187,6 +192,13 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	redirectURL := strings.TrimSpace(os.Getenv("GOOGLE_REDIRECT_URL"))
 	if clientID == "" || clientSecret == "" || redirectURL == "" {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL must all be set for OAuth")
+	}
+	// Credentials fail fast on control bytes like every sibling input
+	// (redirect below, state/code/verifier at every layer): an
+	// operator-pasted control would otherwise embed in the minted
+	// AuthCodeURL and the token request and fail at Google after consent.
+	if hasControl(clientID) || hasControl(clientSecret) {
+		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters")
 	}
 	// Fail closed on a misregistered redirect: Google matches the callback
 	// URL exactly, so a typo'd host/port/scheme or a missing
@@ -298,6 +310,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	trimmed.RedirectURL = strings.TrimSpace(trimmed.RedirectURL)
 	trimmed.AuthURL = strings.TrimSpace(trimmed.AuthURL)
 	trimmed.TokenURL = strings.TrimSpace(trimmed.TokenURL)
+	if hasControl(trimmed.ClientID) || hasControl(trimmed.ClientSecret) {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: invalid client credential", id)
+		}
+		return ""
+	}
 	if trimmed.AuthURL == "" || trimmed.TokenURL == "" {
 		// A hand-built cfg with no endpoints mints a consent URL Google
 		// can only 400. OAuthConfigFromEnv always sets both to the
@@ -413,6 +431,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
 	cc.AuthURL = strings.TrimSpace(cc.AuthURL)
 	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
+	if hasControl(cc.ClientID) || hasControl(cc.ClientSecret) {
+		return nil, NewStoreError("oauth client credential is invalid", false)
+	}
 	// Length gate above covers the trimmed values copied here — keep the
 	// copy below the gate, or padding could push a real credential over
 	// the cap (the padded-push class fixed for the trim-copy contract).

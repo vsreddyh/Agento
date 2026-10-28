@@ -484,7 +484,12 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// Same timeout/client-gone split as list/disconnect and every
 		// callback store call: the domain mapper below never sees a
 		// deadline, and a gone client never pays for the AuthURL build
-		// + 200 write that follows.
+		// + 200 write that follows. Note the split reads the verb ctx,
+		// which covers validation only on this path — CreateState's
+		// delete + insert run detached, so a detached-IO timeout
+		// surfaces as generic 502 here (see the store-side note).
+		// Near-simultaneous 5s clocks make that mistriage window
+		// milliseconds; re-tap recovers either way.
 		storeTimeoutOrGone(w, s, ctx, err, "connect")
 		return
 	}
