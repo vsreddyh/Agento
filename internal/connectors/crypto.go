@@ -105,7 +105,7 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 // would collapse "missing" into "decrypted to empty" and hide the branch
 // the refresher keys off.
 //
-// Length is bounded here (same MaxStateFieldLen as the write path):
+// Length is bounded here (same MaxCipherLen as the write path):
 // this is the read-side enforcement point — GetTokens returns stored
 // rows verbatim, so an oversized artifact from before the cap (or a
 // hand-edit) fails here instead of becoming a large alloc downstream.
@@ -117,10 +117,10 @@ func DecryptToken(key [32]byte, sealed string) (string, error) {
 	}
 	// Bounded before decoding: base64 decode allocates the full output
 	// up front, so a multi-MB hand-edited column would buy a large alloc
-	// before the nonce-length check ever runs. Same MaxStateFieldLen the
+	// before the nonce-length check ever runs. Same MaxCipherLen the
 	// write path enforces (sealed tokens are a few hundred chars), so a
 	// legitimate grant never trips it.
-	if len(sealed) > MaxStateFieldLen {
+	if len(sealed) > MaxCipherLen {
 		return "", errors.New("connectors: token is too long")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(sealed)

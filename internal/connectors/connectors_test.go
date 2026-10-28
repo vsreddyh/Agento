@@ -884,6 +884,34 @@ func TestEncryptTokenRefusesOversized(t *testing.T) {
 	}
 }
 
+// The bounds round-trip: a max-size plaintext seals to a cipher the store
+// accepts and DecryptToken opens. The cipher bound must clear the
+// plaintext bound plus seal overhead, or a legitimate large token could
+// be minted but never stored.
+func TestTokenBoundsRoundTrip(t *testing.T) {
+	var key [32]byte
+	copy(key[:], "test-envelope-key-0123456789ab")
+	sealed, err := EncryptToken(key, strings.Repeat("x", MaxStateFieldLen))
+	if err != nil {
+		t.Fatalf("max-size plaintext should seal: %v", err)
+	}
+	if len(sealed) > MaxCipherLen {
+		t.Fatalf("sealed max plaintext = %d chars, want <= MaxCipherLen %d", len(sealed), MaxCipherLen)
+	}
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, Gmail, TokenRow{RefreshCipher: sealed}); err != nil {
+		t.Fatalf("sealed max plaintext should store: %v", err)
+	}
+	row, err := s.GetTokens(ctx, Gmail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecryptToken(key, row.RefreshCipher); err != nil {
+		t.Fatalf("stored max cipher should open: %v", err)
+	}
+}
+
 // Unknown ids fail closed at the helper, not just the gateway.
 func TestAuthURLUnknownIDFailsClosed(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
@@ -1080,11 +1108,12 @@ func TestSetTokensRejectsNegativeExpiry(t *testing.T) {
 }
 
 // Oversized ciphers are a deterministic reject at the store, not an
-// unbounded stored doc — same bound as code/state/verifier.
+// unbounded stored doc — MaxCipherLen, sized to clear the plaintext bound
+// plus seal overhead (same number DecryptToken enforces at open).
 func TestSetTokensRejectsOversizedCipher(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	big := strings.Repeat("x", MaxStateFieldLen+1)
+	big := strings.Repeat("x", MaxCipherLen+1)
 	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: big}); err == nil {
 		t.Fatal("oversized refresh cipher should fail")
 	}
@@ -1112,7 +1141,7 @@ func TestSetTokensRejectsPaddedCipher(t *testing.T) {
 func TestSetTokensOversizedUnknownIDIs400(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	big := strings.Repeat("x", MaxStateFieldLen+1)
+	big := strings.Repeat("x", MaxCipherLen+1)
 	err := s.SetTokens(ctx, "slack", TokenRow{RefreshCipher: big})
 	if err == nil {
 		t.Fatal("oversized unknown-id should fail")

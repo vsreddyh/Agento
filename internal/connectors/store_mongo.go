@@ -603,7 +603,7 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// an oversized input 400s the same way whether the id is known or
 	// not, so the unknown-id path cannot be told apart by which error
 	// fires first. Same order as the memory twin.
-	if len(tok.RefreshCipher) > MaxStateFieldLen || len(tok.AccessCipher) > MaxStateFieldLen {
+	if len(tok.RefreshCipher) > MaxCipherLen || len(tok.AccessCipher) > MaxCipherLen {
 		return NewStoreError("connector grant token too long", false)
 	}
 	if !Known(id) {
@@ -707,7 +707,7 @@ func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error)
 		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	// Returned verbatim by design: size enforcement lives in DecryptToken
-	// (len > MaxStateFieldLen errors there), so an oversized artifact from
+	// (len > MaxCipherLen errors there), so an oversized artifact from
 	// before the cap fails at open time with a precise error instead of
 	// being masked as NotFound here.
 	return TokenRow{RefreshCipher: row.Refresh, AccessCipher: row.Access, AccessExpiryUnixMilli: row.Expiry}, nil

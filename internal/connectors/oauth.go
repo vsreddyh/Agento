@@ -103,11 +103,13 @@ type OAuthConfig struct {
 // by construction — Google exact-matches redirect_uri, and a mismatch
 // dies in the browser with nothing in the server log pointing at it.
 func CanonicalRedirectURL(raw string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
+	// Trimmed once, parsed once: every check below sees the same string,
+	// so a future edit cannot split checked-vs-parsed by re-deriving one.
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := url.Parse(trimmed)
 	if err != nil {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
 	}
-	trimmed := strings.TrimSpace(raw)
 	// Inner controls fail closed like every sibling input (state/code/
 	// verifier at every layer): url.Parse/String round-trips them, so a
 	// control-bearing path would pass validation yet mismatch Google.
@@ -126,6 +128,14 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	parsed.Host = strings.TrimRight(strings.ToLower(parsed.Host), ".")
 	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
+	}
+	if strings.Contains(parsed.Host, "%") || !isASCIIHost(parsed.Host) {
+		// No legitimate registration percent-encodes the host (zone IDs
+		// included — a link-local callback is not a real registration):
+		// %00/%2e spellings would otherwise pass every check verbatim
+		// yet mismatch Google exactly. Same for non-ASCII hosts: the
+		// console registration is punycode, never Unicode.
+		return "", errors.New("connectors: redirect URL host must be plain ASCII with no percent-encoding")
 	}
 	// Strip default ports: the console registration is canonically
 	// port-less, while an operator-supplied URL may name :443/:80
@@ -180,14 +190,11 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// Inner controls fail closed like every sibling input (state/code/
 	// verifier at every layer): url.Parse/String round-trips them, so a
 	// control-bearing path would pass validation yet mismatch Google.
-	// All three spellings: raw covers literals, decoded path covers
-	// %00-style encodings that Parse decodes before Clean/String
-	// re-encodes, and the host is unescaped explicitly because Parse
-	// leaves Host percent-encoded (a %00 in host would otherwise pass
-	// every check verbatim). Unescape failure rejects too — a malformed
-	// host is not a registration.
-	decodedHost, hostErr := url.PathUnescape(parsed.Host)
-	if HasControl(trimmed) || !utf8.ValidString(trimmed) || HasControl(parsed.Path) || !utf8.ValidString(parsed.Path) || hostErr != nil || HasControl(decodedHost) || !utf8.ValidString(decodedHost) {
+	// Raw covers literals; the decoded path covers %00-style encodings
+	// that Parse decodes before Clean/String re-encodes. The host needs
+	// no unescape step: % is rejected outright above, so no encoded
+	// sequence survives to decode.
+	if HasControl(trimmed) || !utf8.ValidString(trimmed) || HasControl(parsed.Path) || !utf8.ValidString(parsed.Path) {
 		return "", errors.New("connectors: redirect URL must not contain control characters or invalid UTF-8")
 	}
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
@@ -279,14 +286,22 @@ func NewState() (state, verifier string, err error) {
 // hundred chars. Anything past 2048 is not a real credential — it is a
 // garbage or hostile input that must 400 before it becomes a DB filter
 // or an outbound token request. Enforced at the gateway (fast path) AND the
-// store (ConsumeState/CreateState) AND Exchange AND DecryptToken (the
-// read-side point: oversized sealed rows fail at open, not at GetTokens):
-// every layer is exported for direct callers (future MCP servers), so the
-// gateway cap alone would leave the enforcement to one layer. Sealed tokens
-// reuse the same bound (a stored grant must decrypt to use it, so a
-// multi-MB cipher can never become a servable grant) — raise independently
-// if Google ever lengthens tokens past what this cap allows.
+// store (ConsumeState/CreateState) AND Exchange: every layer is exported
+// for direct callers (future MCP servers), so the gateway cap alone would
+// leave the enforcement to one layer. Plaintext tokens share this bound
+// at seal time (EncryptToken); sealed ciphers use MaxCipherLen below,
+// since base64 expansion means the two ends of the round-trip cannot
+// share one number.
 const MaxStateFieldLen = 2048
+
+// MaxCipherLen bounds sealed tokens at rest and on the wire. A separate
+// bound from MaxStateFieldLen by necessity: a 2048 B plaintext seals to
+// ~2768 chars base64url (12 B nonce + 16 B tag, 4/3 expansion), so one
+// shared bound cannot hold both ends of the round-trip — anything
+// EncryptToken mints must pass the SetTokens/DecryptToken cap. Sealed
+// grants stay far under this in prod; raise only if Google lengthens
+// tokens past what fits here.
+const MaxCipherLen = 4096
 
 // AuthURL builds the Google consent URL for one connector attempt. Offline
 // access (a refresh token) + consent prompt every time: without
