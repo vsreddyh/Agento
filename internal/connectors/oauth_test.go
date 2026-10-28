@@ -125,6 +125,44 @@ func TestOAuthConfigRejectsUserinfo(t *testing.T) {
 	}
 }
 
+func TestOAuthConfigCanonicalisesNonCanonicalRedirect(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	// Cleaned, not rejected: validated shape must equal sent shape.
+	for _, tc := range []struct{ name, url, want string }{
+		{"double slash", "https://host/p//api/connectors/callback", "https://host/p/api/connectors/callback"},
+		{"dot segment", "https://host/p/./api/connectors/callback", "https://host/p/api/connectors/callback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)
+			cfg, err := OAuthConfigFromEnv()
+			if err != nil {
+				t.Fatalf("canonicalisable redirect rejected: %v", err)
+			}
+			if cfg.RedirectURL != tc.want {
+				t.Errorf("RedirectURL = %q, want canonical %q", cfg.RedirectURL, tc.want)
+			}
+		})
+	}
+}
+
+func TestOAuthConfigRejectsNonLocalhostHTTP(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "http://host/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("non-localhost http redirect should fail closed")
+	}
+	t.Setenv("GOOGLE_REDIRECT_URL", "http://localhost:8643/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err != nil {
+		t.Fatalf("loopback http redirect should pass: %v", err)
+	}
+}
+
 // The validated shape and the sent shape must be the same string: Google
 // exact-matches redirect_uri, so a stored trailing slash against a
 // no-slash registration (or vice versa) dies with redirect_uri_mismatch.

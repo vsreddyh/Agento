@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -90,6 +91,13 @@ func ValidRedirectURL(raw string) (*url.URL, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, errors.New("connectors: redirect URL must be an absolute http(s) URL")
 	}
+	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {
+		// Google only permits http for loopback; a non-localhost http
+		// registration can never complete. Fail closed with a pointer
+		// at the scheme instead of dying with redirect_uri_mismatch
+		// (or worse, sending a grant over plaintext http).
+		return nil, errors.New("connectors: redirect URL must be https unless localhost")
+	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
 		// match Google's exact-redirect comparison — fail closed rather
@@ -133,12 +141,12 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Canonicalise on the parsed path, not the raw string: the string
-	// trim is only correct because query/fragment are rejected above,
-	// and a future edit that permits either would silently start
-	// eating query slashes. Trimming parsed.Path keeps the validated
-	// shape and the sent shape the same string by construction.
-	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	// Canonicalise on the parsed path, not the raw string: Clean
+	// collapses double slashes and dot segments that would otherwise
+	// pass the suffix check yet never match Google's exact comparison
+	// of the sent redirect_uri, and TrimRight drops the tolerated
+	// trailing slash. Validated shape == sent shape by construction.
+	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
 	redirectURL = parsed.String()
 	key, err := KeyFromEnv()
 	if err != nil {

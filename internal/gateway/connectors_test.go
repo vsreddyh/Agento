@@ -364,6 +364,23 @@ func TestConnectorsCallbackRejectsOversizedInput(t *testing.T) {
 // A dead attempt in a browser tab answers HTML, not JSON: the operator
 // just consented and needs close-this-tab guidance, not a raw error body.
 // API clients (no text/html Accept) keep the existing JSON shape.
+func TestConnectorsCallbackTrailingSlashMatches(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	// splitProfile Cleans the path before the exact-match bypass, so the
+	// slash spelling must reach the same handler as the canonical one —
+	// never a different status for the same dead state.
+	plain := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", "")
+	slashed := do(t, srv, http.MethodGet, "/api/connectors/callback/?code=x&state=nope", "")
+	if plain.Code != slashed.Code || plain.Body.String() != slashed.Body.String() {
+		t.Fatalf("slash spelling diverges: %d %q vs %d %q", plain.Code, plain.Body, slashed.Code, slashed.Body)
+	}
+}
+
+// A dead attempt in a browser tab answers HTML, not JSON: the operator
+// just consented and needs close-this-tab guidance, not a raw error body.
+// API clients (no text/html Accept) keep the existing JSON shape.
 func TestConnectorsCallbackDeadAttemptServesHTMLToBrowsers(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
