@@ -281,7 +281,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	verifier = strings.TrimSpace(verifier)
 	if !Known(id) {
 		if logf != nil {
-			logf("connectors: auth URL build failed: unknown connector")
+			logf("connectors: auth URL build failed: unknown connector %q", id)
 		}
 		return ""
 	}
@@ -352,6 +352,8 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc := *cfg
 	cc.ClientID = strings.TrimSpace(cc.ClientID)
 	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
+	cc.AuthURL = strings.TrimSpace(cc.AuthURL)
+	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
 	cc.RedirectURL = redirect
 	tok, err := cc.oauth2(GoogleScopes(id)).Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifier))

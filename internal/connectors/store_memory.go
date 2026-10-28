@@ -412,6 +412,12 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	if st.ExpiresAt.IsZero() {
 		st.ExpiresAt = s.timeNow().Add(StateTTL)
 	}
+	// Clamp absurd futures: a one-year oauth_states row is never a
+	// legitimate pending attempt, and the TTL backstop would honour it.
+	// Capped, not rejected — the row still works, just not forever.
+	if exp := s.timeNow().Add(StateTTL); st.ExpiresAt.After(exp) {
+		st.ExpiresAt = exp
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Opportunistic sweep: no TTL thread exists here, so reap expired rows

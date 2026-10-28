@@ -736,6 +736,24 @@ func TestCreateStateNormalisesConnector(t *testing.T) {
 	}
 }
 
+// Absurd expiries clamp to the TTL window instead of persisting: a
+// far-future oauth_states row would otherwise outlive every backstop.
+func TestCreateStateClampsFarFutureExpiry(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	far := time.Now().Add(365 * 24 * time.Hour)
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", ExpiresAt: far}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.ConsumeState(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if max := time.Now().Add(StateTTL + time.Minute); st.ExpiresAt.After(max) {
+		t.Errorf("expiry not clamped: %v", st.ExpiresAt)
+	}
+}
+
 // Exact-boundary expiry is pinned without sleeping: expiresAt itself counts
 // as expired (matches the Mongo TTL, which reaps at expiry, not after).
 func TestConsumeStateBoundaryTick(t *testing.T) {

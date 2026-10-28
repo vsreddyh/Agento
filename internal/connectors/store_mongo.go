@@ -715,6 +715,12 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	if st.ExpiresAt.IsZero() {
 		st.ExpiresAt = time.Now().Add(StateTTL)
 	}
+	// Clamp absurd futures: a one-year oauth_states row is never a
+	// legitimate pending attempt, and the TTL backstop would honour it.
+	// Capped, not rejected — the row still works, just not forever.
+	if exp := time.Now().Add(StateTTL); st.ExpiresAt.After(exp) {
+		st.ExpiresAt = exp
+	}
 	// One pending attempt per connector (mirrors the memory cap): a new tap
 	// supersedes the old one, bounding live rows to one per connector
 	// regardless of tap spam — not "3 max", which would silently break
