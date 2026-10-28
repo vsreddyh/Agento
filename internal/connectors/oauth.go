@@ -95,6 +95,32 @@ type OAuthConfig struct {
 	TokenURL string
 }
 
+// validRedirectHost reports whether host is a registrable spelling:
+// ASCII labels of [a-z0-9-] with no empties and no leading/trailing
+// hyphens (the console registration is punycode, never Unicode).
+// Host is expected lowercased already; uppercase fails closed rather
+// than being folded here, so checked == sent by construction.
+func validRedirectHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if c >= 0x80 || !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+	}
+	return true
+}
+
 // CanonicalRedirectURL validates and canonicalises in one step so every
 // caller sends the exact registered shape: absolute http(s), https unless
 // loopback, no userinfo/query/fragment, path ending in the single
@@ -129,13 +155,12 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
 	}
-	if strings.Contains(parsed.Host, "%") || !isASCIIHost(parsed.Host) {
+	if strings.Contains(parsed.Host, "%") {
 		// No legitimate registration percent-encodes the host (zone IDs
 		// included — a link-local callback is not a real registration):
 		// %00/%2e spellings would otherwise pass every check verbatim
-		// yet mismatch Google exactly. Same for non-ASCII hosts: the
-		// console registration is punycode, never Unicode.
-		return "", errors.New("connectors: redirect URL host must be plain ASCII with no percent-encoding")
+		// yet mismatch Google exactly.
+		return "", errors.New("connectors: redirect URL host must not contain percent-encoding")
 	}
 	// Strip default ports: the console registration is canonically
 	// port-less, while an operator-supplied URL may name :443/:80
@@ -173,6 +198,14 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// redirect_uri_mismatch in the browser, not as a config error —
 		// so fail closed here with a pointer at the scheme.
 		return "", errors.New("connectors: redirect URL must use https (http loopback-only)")
+	}
+	if h := strings.Trim(parsed.Hostname(), "[]"); net.ParseIP(h) == nil && !validRedirectHost(h) {
+		// Hostname syntax no console registration can hold: underscores,
+		// leading/trailing hyphens, empty labels, non-ASCII (punycode at
+		// the console, never Unicode). IP literals bypass label rules
+		// (loopback-ness checked above). Fail closed here instead of
+		// dying with redirect_uri_mismatch in the browser.
+		return "", errors.New("connectors: redirect URL host is not a valid hostname")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never

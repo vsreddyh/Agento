@@ -97,19 +97,6 @@ func HasControl(s string) bool {
 	return strings.ContainsFunc(s, unicode.IsControl)
 }
 
-// isASCIIHost reports whether every byte is plain ASCII: the console
-// registration is punycode, never Unicode, and Google exact-matches
-// redirect_uri — so a Unicode host can only mismatch after passing
-// every other check.
-func isASCIIHost(host string) bool {
-	for i := 0; i < len(host); i++ {
-		if host[i] >= 0x80 {
-			return false
-		}
-	}
-	return true
-}
-
 // Status is a connector's lifecycle state.
 type Status string
 

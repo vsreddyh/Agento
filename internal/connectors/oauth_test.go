@@ -257,6 +257,28 @@ func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
 	}
 }
 
+// Hostnames no console registration can hold fail closed: underscores,
+// leading/trailing hyphens, empty labels, non-ASCII (punycode at the
+// console, never Unicode).
+func TestOAuthConfigRejectsBadHostname(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	for _, tc := range []struct{ name, url string }{
+		{"underscore", "https://ho_st/p/api/connectors/callback"},
+		{"leading hyphen", "https://-host/p/api/connectors/callback"},
+		{"unicode", "https://m\xc3\xbcnchen/p/api/connectors/callback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)
+			if _, err := OAuthConfigFromEnv(); err == nil {
+				t.Fatalf("bad hostname %q should fail closed", tc.url)
+			}
+		})
+	}
+}
+
 // Percent-encoded controls fail closed too: Parse decodes %00 before the
 // shape checks, so gating only the raw string would miss them.
 func TestOAuthConfigRejectsEncodedControls(t *testing.T) {
