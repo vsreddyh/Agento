@@ -401,6 +401,9 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
 		return NewStoreError("oauth state or verifier too long", false)
 	}
+	if len(st.RedirectURI) > MaxStateFieldLen {
+		return NewStoreError("oauth redirect too long", false)
+	}
 	if !Known(st.Connector) {
 		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
 	}
@@ -422,7 +425,11 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	if exp := now.Add(StateTTL); st.ExpiresAt.After(exp) {
 		st.ExpiresAt = exp
 	}
-	if st.ExpiresAt.Before(now) {
+	// Creation and ConsumeState agree on the boundary tick: == now counts
+	// as expired on both sides (!After here, !Before there), so a direct
+	// caller minting == now cannot supersede the live row with a stillborn
+	// one the next callback instantly rejects as dead.
+	if !st.ExpiresAt.After(now) {
 		return NewStoreError("oauth state already expired", false)
 	}
 	s.mu.Lock()

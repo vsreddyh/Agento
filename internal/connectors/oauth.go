@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"net"
 )
 
 // OAuth exchange for the first connectors (#316, second layer).

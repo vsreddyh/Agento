@@ -23,7 +23,10 @@ import (
 // generated with `openssl rand -hex 32`), server-side only, same secrecy as
 // MONGODB_URI. Without it the OAuth flow is unconfigured and connect 501s
 // (see OAuthConfigFromEnv) — tokens can never land unencrypted by forgetting
-// the variable, they just can't land at all.
+// the variable, they just can't land at all. There is no key versioning:
+// rotating the key invalidates every stored grant (old seals stop opening),
+// so every connector needs reconnect after a rotation — not a provider
+// outage, an expected re-consent.
 
 const encryptionKeyEnv = "CONNECTORS_ENCRYPTION_KEY"
 

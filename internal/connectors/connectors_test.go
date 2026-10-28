@@ -780,18 +780,29 @@ func TestCreateStateRejectsPastExpiry(t *testing.T) {
 	}
 }
 
-// Exact-boundary expiry is pinned without sleeping: expiresAt itself counts
-// as expired (matches the Mongo TTL, which reaps at expiry, not after).
+// An oversized pinned redirect fails closed at creation, not after consent.
+func TestCreateStateRejectsLongRedirect(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	big := strings.Repeat("x", MaxStateFieldLen+1)
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", RedirectURI: big}); err == nil {
+		t.Fatal("oversized redirect should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("long redirect should be a deterministic 400, got %v", err)
+	}
+}
+
+// Exact-boundary expiry is pinned without sleeping: expiresAt == now
+// counts as expired (matches the Mongo TTL, which reaps at expiry, not
+// after) — on BOTH sides. Creation rejects it, so the consume-side boundary
+// is exercised with a +1ns row instead.
 func TestConsumeStateBoundaryTick(t *testing.T) {
 	s := NewMemoryStore()
 	fixed := time.Now().Truncate(time.Second)
 	s.now = func() time.Time { return fixed }
 	ctx := context.Background()
-	if err := s.CreateState(ctx, OAuthState{State: "edge", Connector: "gmail", Verifier: "v", ExpiresAt: fixed}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.ConsumeState(ctx, "edge"); err == nil {
-		t.Fatal("expiresAt==now should count as expired")
+	if err := s.CreateState(ctx, OAuthState{State: "edge", Connector: "gmail", Verifier: "v", ExpiresAt: fixed}); err == nil {
+		t.Fatal("expiresAt==now should fail at creation")
 	}
 	if err := s.CreateState(ctx, OAuthState{State: "live", Connector: "gmail", Verifier: "v", ExpiresAt: fixed.Add(time.Nanosecond)}); err != nil {
 		t.Fatal(err)
