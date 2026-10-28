@@ -1133,3 +1133,37 @@ func TestDecryptTokenRejectsEmpty(t *testing.T) {
 		t.Fatal("empty sealed input should fail")
 	}
 }
+
+// Refusal/policy sync: IsDraftOnlySend must name exactly the send paths,
+// and the same tools must gate (not refuse-or-run-free) in the relay
+// policy. A renamed tool misses the refusal and falls through to the
+// gated backstop — safe, but the agent stalls on an approval for the
+// exact flow v1 sells ("create a draft instead"). Sync this list with
+// the wired servers' real tool names whenever they change.
+func TestIsDraftOnlySendMatchesServers(t *testing.T) {
+	refused := map[string][]string{
+		"gmail":    {"send_message", "send_gmail"},
+		"calendar": {"create_event", "send_invite"},
+	}
+	free := map[string][]string{
+		"gmail":    {"search_gmail", "read_gmail", "list_messages", "create_draft"},
+		"calendar": {"list_events", "get_event", "create_event_draft"},
+	}
+	for server, tools := range refused {
+		for _, tool := range tools {
+			if !IsDraftOnlySend(server, tool) {
+				t.Errorf("%s/%s should be refused outright", server, tool)
+			}
+		}
+	}
+	for server, tools := range free {
+		for _, tool := range tools {
+			if IsDraftOnlySend(server, tool) {
+				t.Errorf("%s/%s should run, not be refused", server, tool)
+			}
+		}
+	}
+	if IsDraftOnlySend("gmail", "unknown_tool_xyz") {
+		t.Error("unknown tools must not be refused")
+	}
+}

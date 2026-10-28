@@ -93,12 +93,16 @@ func canonicalRedirectURL(raw string) (string, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
 	}
+	// Hostnames are case-insensitive: fold before validation so a
+	// mixed-case registration compares equal to what Google
+	// exact-matches against (ports are unaffected by lowercasing).
+	parsed.Host = strings.ToLower(parsed.Host)
 	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {
-		// Google only permits http for loopback; a non-localhost http
-		// registration can never complete. Fail closed with a pointer
-		// at the scheme instead of dying with redirect_uri_mismatch
-		// (or worse, sending a grant over plaintext http).
-		return "", errors.New("connectors: redirect URL must be https unless localhost")
+		// Google only permits http for loopback: a non-localhost http
+		// registration can never complete, and the failure surfaces as
+		// redirect_uri_mismatch in the browser, not as a config error —
+		// so fail closed here with a pointer at the scheme.
+		return "", errors.New("connectors: redirect URL must use https (http loopback-only)")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
@@ -113,10 +117,10 @@ func canonicalRedirectURL(raw string) (string, error) {
 		// not in the browser with redirect_uri_mismatch.
 		return "", errors.New("connectors: redirect URL must have no query or fragment; register the bare callback URL")
 	}
-	if !strings.HasSuffix(strings.TrimRight(path.Clean(parsed.Path), "/"), "/api/connectors/callback") {
+	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
+	if !strings.HasSuffix(parsed.Path, "/api/connectors/callback") {
 		return "", errors.New("connectors: redirect URL path must end in /api/connectors/callback (the single registered endpoint)")
 	}
-	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
 	return parsed.String(), nil
 }
 
@@ -197,7 +201,10 @@ func NewState() (state, verifier string, err error) {
 // or an outbound token request. Enforced at the gateway (fast path) AND the
 // store (ConsumeState/CreateState) AND Exchange: every layer is exported
 // for direct callers (future MCP servers), so the gateway cap alone would
-// leave the enforcement to one layer.
+// leave the enforcement to one layer. Sealed tokens reuse the same bound
+// (a stored grant must decrypt to use it, so a multi-MB cipher can never
+// become a servable grant) — raise independently if Google ever lengthens
+// tokens past what this cap allows.
 const MaxStateFieldLen = 2048
 
 // AuthURL builds the Google consent URL for one connector attempt. Offline
@@ -224,7 +231,14 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	if strings.TrimSpace(cfg.AuthURL) == "" || strings.TrimSpace(cfg.TokenURL) == "" {
+	// Work on a trimmed copy from here on: the checks below and the
+	// built URL must see identical values.
+	trimmed := *cfg
+	trimmed.ClientID = strings.TrimSpace(trimmed.ClientID)
+	trimmed.RedirectURL = strings.TrimSpace(trimmed.RedirectURL)
+	trimmed.AuthURL = strings.TrimSpace(trimmed.AuthURL)
+	trimmed.TokenURL = strings.TrimSpace(trimmed.TokenURL)
+	if trimmed.AuthURL == "" || trimmed.TokenURL == "" {
 		// A hand-built cfg with no endpoints mints a consent URL Google
 		// can only 400. OAuthConfigFromEnv always sets both to the
 		// Google endpoints, so this guards direct callers only.
@@ -233,7 +247,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	canonical, err := canonicalRedirectURL(cfg.RedirectURL)
+	canonical, err := canonicalRedirectURL(trimmed.RedirectURL)
 	if err != nil {
 		// Same shape gate as the env path: a hand-built redirect that
 		// would never match a registration fails here, not in the
@@ -245,8 +259,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	}
 	// Build from the canonicalised shape, not cfg.RedirectURL verbatim,
 	// so AuthURL and Exchange agree on the exact string.
-	redirect := *cfg
-	redirect.RedirectURL = canonical
+	trimmed.RedirectURL = canonical
 	// Folded and trimmed like every store verb — unknown or empty inputs
 	// fail closed, and overlong inputs fail closed too (same
 	// MaxStateFieldLen bound the stores enforce): a multi-KB state or
@@ -270,7 +283,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	}
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
-	return redirect.oauth2(GoogleScopes(id)).AuthCodeURL(state,
+	return trimmed.oauth2(GoogleScopes(id)).AuthCodeURL(state,
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 		oauth2.SetAuthURLParam("access_type", "offline"),

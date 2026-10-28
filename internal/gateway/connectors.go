@@ -442,7 +442,9 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// open as nothing with no error to triage.
 	authURL := connectors.AuthURL(s.cfg.ConnectorOAuth, id, state, verifier, s.cfg.Logf)
 	if authURL == "" {
-		s.cfg.Logf("connectors: auth URL build failed for %s", id)
+		// No log here: the helper already logged which guard fired.
+		// A second line would split triage across two entries for one
+		// failure.
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not start the connect flow")
 		return

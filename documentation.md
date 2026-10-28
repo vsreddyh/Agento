@@ -349,7 +349,10 @@ secret.
 Wire shape note: a row with no `updated_at` was never touched; an explicit
 disconnect sets it. Same status, different shape — the difference is the
 signal (explicit-off vs never-touched), so a future shape-normalisation
-must not erase it. `last_error` appears only on `expired` rows: connected
+must not erase it. Caveat: a token write landing without a status write
+(crash between the two writes) also carries `updated_at` — that row reads
+as explicit-off but means interrupted setup, not an operator action; only
+the disconnect path carries real human intent. `last_error` appears only on `expired` rows: connected
 and disconnected rows never carry it (enforced on write, repaired on read),
 so the app can branch on its presence for the reconnect case. `connected_at`
 appears only on `connected` rows with a valid stamp (a connected row without
