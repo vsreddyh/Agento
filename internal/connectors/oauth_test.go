@@ -101,6 +101,16 @@ func TestExchangeRejectsEmptyClient(t *testing.T) {
 	}
 }
 
+// Control bytes in code/verifier fail closed before any network call.
+func TestExchangeRejectsControlBytes(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "co\rde", "verifier", nil); err == nil {
+		t.Fatal("control-byte code should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("control code should be a deterministic 400, got %v", err)
+	}
+}
+
 // Redirect validation fails closed: typo'd host/scheme or a missing
 // callback suffix must break startup config, not die in the browser.
 func TestOAuthConfigValidatesRedirect(t *testing.T) {

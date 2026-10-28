@@ -936,6 +936,23 @@ func TestCreateStateRejectsEmptyVerifier(t *testing.T) {
 	}
 }
 
+// Control bytes fail closed at creation, not after consent: an embedded
+// NUL/CR/LF would otherwise become a DB filter or an outbound request.
+func TestCreateStateRejectsControlBytes(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s\x00tate", Connector: "gmail", Verifier: "v"}); err == nil {
+		t.Fatal("control-byte state should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("control state should be a deterministic 400, got %v", err)
+	}
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v\ne"}); err == nil {
+		t.Fatal("control-byte verifier should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("control verifier should be a deterministic 400, got %v", err)
+	}
+}
+
 // Durability contract: memory is not durable (OAuth stays off), Mongo is
 // (zero value still reports true — durability is a backend property, not
 // row state).

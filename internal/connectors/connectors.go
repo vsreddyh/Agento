@@ -21,6 +21,7 @@ package connectors
 
 import (
 	"strings"
+	"unicode"
 )
 
 // Collection holds one document per connector id. Fixed ids, so the table
@@ -84,6 +85,14 @@ func Known(id string) bool {
 		return true
 	}
 	return false
+}
+
+// hasControl reports inner control bytes (NUL/CR/LF and friends): never
+// valid in an id, state, verifier, or code. Checked on trimmed values —
+// TrimSpace strips edges, not interiors — so an embedded control fails
+// closed instead of becoming a DB filter or an outbound request.
+func hasControl(s string) bool {
+	return strings.ContainsFunc(s, unicode.IsControl)
 }
 
 // Status is a connector's lifecycle state.

@@ -258,16 +258,21 @@ func TestConnectorsConnectCleansUpAfterAuthURLRefusal(t *testing.T) {
 
 // A control-bearing verifier from a hand-inserted row fails closed with
 // the dead-attempt shape before any Exchange call — same gate as
-// code/state, which live one branch up.
+// code/state, which live one branch up. The stub stands in for a legacy
+// or hand-inserted row: CreateState itself rejects controls, so the row
+// can only predate the check.
+type controlVerifierStore struct {
+	connectors.Store
+}
+
+func (controlVerifierStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\x00x"}, nil
+}
+
 func TestConnectorsCallbackRejectsControlVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
-	store := connectors.NewMemoryStore()
-	ctx := context.Background()
-	if err := store.CreateState(ctx, connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\x00x"}); err != nil {
-		t.Fatal(err)
-	}
-	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: controlVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
 	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("control verifier: %d, want 400 (%s)", rec.Code, rec.Body)

@@ -442,6 +442,9 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
 		return NewStoreError("oauth state or verifier too long", false)
 	}
+	if hasControl(st.State) || hasControl(st.Verifier) {
+		return NewStoreError("oauth state or verifier invalid", false)
+	}
 	if len(st.RedirectURI) > MaxStateFieldLen {
 		return NewStoreError("oauth redirect too long", false)
 	}

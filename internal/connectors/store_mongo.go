@@ -708,7 +708,12 @@ func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error)
 // CreateState records a pending OAuth attempt. States are single-use by
 // contract (see ConsumeState); an id collision is a caller bug (400), never
 // an overwrite.
-func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
+func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
+	// ctx is intentionally unused: delete + insert each run on their own
+	// detached quickCtx below (a slow Atlas must not eat the verb budget
+	// and turn the create into a 502). Named _ so the next reader doesn't
+	// assume the verb deadline bounds this write — see the budget note at
+	// the insert.
 	// Normalised like every other verb: SetTokens/GetTokens/Disconnect all
 	// fold case+spacing first, and a non-normalised stored row would miss
 	// both the Known check here and the Disconnect scrub comparison later.
@@ -732,6 +737,9 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	}
 	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
 		return NewStoreError("oauth state or verifier too long", false)
+	}
+	if hasControl(st.State) || hasControl(st.Verifier) {
+		return NewStoreError("oauth state or verifier invalid", false)
 	}
 	if len(st.RedirectURI) > MaxStateFieldLen {
 		return NewStoreError("oauth redirect too long", false)

@@ -366,6 +366,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if len(code) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
 		return nil, NewStoreError("oauth code or verifier too long", false)
 	}
+	if hasControl(code) || hasControl(verifier) {
+		return nil, NewStoreError("oauth code or verifier invalid", false)
+	}
 	// Folded like AuthURL above and every store verb: same logical id,
 	// same answer, wherever the caller normalised.
 	id = NormalizedID(id)
@@ -447,7 +450,9 @@ type TokenRow struct {
 	// A past timestamp means the same as zero (renew immediately) by
 	// accident of comparison, not by a separate contract: clock skew or
 	// a stubby test token lands here, and the refresher cannot tell it
-	// from a genuinely stale row — nor does it need to.
+	// from a genuinely stale row — nor does it need to. Far-future values
+	// are clamped to now+MaxAccessLifetime at write time (gateway + both
+	// stores), so a stored expiry never reads as "don't renew for decades".
 	AccessExpiryUnixMilli int64 `bson:"accessExpiry" json:"-"`
 }
 
