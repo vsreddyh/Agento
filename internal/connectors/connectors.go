@@ -87,11 +87,13 @@ func Known(id string) bool {
 	return false
 }
 
-// hasControl reports inner control bytes (NUL/CR/LF and friends): never
+// HasControl reports inner control bytes (NUL/CR/LF and friends): never
 // valid in an id, state, verifier, or code. Checked on trimmed values —
 // TrimSpace strips edges, not interiors — so an embedded control fails
 // closed instead of becoming a DB filter or an outbound request.
-func hasControl(s string) bool {
+// Exported so the gateway reuses this single definition instead of
+// carrying its own copy.
+func HasControl(s string) bool {
 	return strings.ContainsFunc(s, unicode.IsControl)
 }
 
@@ -183,7 +185,7 @@ const RefusalMessage = "sending is disabled for this connector in v1; create a d
 // 4xx (NotFound when NotFound, else BadRequest). Get the bool right at the
 // call site: it is the status code.
 //
-// Trust boundary: the GATEWAY is the control-byte boundary (hasControl
+// Trust boundary: the GATEWAY is the control-byte boundary (HasControl
 // rejects before the store). Msg may carry caller-influenced text (e.g.
 // "unknown connector a\nb" from a direct store caller); gateway echoes are
 // scrubbed+bounded, but store callers must not log Msg raw.

@@ -172,7 +172,9 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// Inner controls fail closed like every sibling input (state/code/
 	// verifier at every layer): url.Parse/String round-trips them, so a
 	// control-bearing path would pass validation yet mismatch Google.
-	if hasControl(raw) {
+	// Both spellings: raw covers literals, decoded covers %00-style
+	// encodings that Parse decodes before Clean/String re-encodes.
+	if HasControl(raw) || HasControl(parsed.Path) || HasControl(parsed.Host) {
 		return "", errors.New("connectors: redirect URL must not contain control characters")
 	}
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
@@ -197,7 +199,7 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	// (redirect below, state/code/verifier at every layer): an
 	// operator-pasted control would otherwise embed in the minted
 	// AuthCodeURL and the token request and fail at Google after consent.
-	if hasControl(clientID) || hasControl(clientSecret) {
+	if HasControl(clientID) || HasControl(clientSecret) {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters")
 	}
 	// Fail closed on a misregistered redirect: Google matches the callback
@@ -229,14 +231,14 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 }
 
 func (c *OAuthConfig) endpoint() oauth2.Endpoint {
-	return oauth2.Endpoint{AuthURL: c.AuthURL, TokenURL: c.TokenURL}
+	return oauth2.Endpoint{AuthURL: strings.TrimSpace(c.AuthURL), TokenURL: strings.TrimSpace(c.TokenURL)}
 }
 
 func (c *OAuthConfig) oauth2(scopes []string) *oauth2.Config {
 	return &oauth2.Config{
-		ClientID:     c.ClientID,
-		ClientSecret: c.ClientSecret,
-		RedirectURL:  c.RedirectURL,
+		ClientID:     strings.TrimSpace(c.ClientID),
+		ClientSecret: strings.TrimSpace(c.ClientSecret),
+		RedirectURL:  strings.TrimSpace(c.RedirectURL),
 		Scopes:       scopes,
 		Endpoint:     c.endpoint(),
 	}
@@ -310,7 +312,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	trimmed.RedirectURL = strings.TrimSpace(trimmed.RedirectURL)
 	trimmed.AuthURL = strings.TrimSpace(trimmed.AuthURL)
 	trimmed.TokenURL = strings.TrimSpace(trimmed.TokenURL)
-	if hasControl(trimmed.ClientID) || hasControl(trimmed.ClientSecret) {
+	if HasControl(trimmed.ClientID) || HasControl(trimmed.ClientSecret) {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: invalid client credential", id)
 		}
@@ -362,7 +364,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	if hasControl(state) || hasControl(verifier) {
+	if HasControl(state) || HasControl(verifier) {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: invalid state or verifier", id)
 		}
@@ -411,7 +413,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if len(code) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
 		return nil, NewStoreError("oauth code or verifier too long", false)
 	}
-	if hasControl(code) || hasControl(verifier) {
+	if HasControl(code) || HasControl(verifier) {
 		return nil, NewStoreError("oauth code or verifier invalid", false)
 	}
 	// Config-shape before identity, matching AuthURL: a bad redirect or
@@ -431,7 +433,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
 	cc.AuthURL = strings.TrimSpace(cc.AuthURL)
 	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
-	if hasControl(cc.ClientID) || hasControl(cc.ClientSecret) {
+	if HasControl(cc.ClientID) || HasControl(cc.ClientSecret) {
 		return nil, NewStoreError("oauth client credential is invalid", false)
 	}
 	// Length gate above covers the trimmed values copied here — keep the

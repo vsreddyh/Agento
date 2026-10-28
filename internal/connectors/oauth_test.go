@@ -244,6 +244,19 @@ func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
 	}
 }
 
+// Percent-encoded controls fail closed too: Parse decodes %00 before the
+// shape checks, so gating only the raw string would miss them.
+func TestOAuthConfigRejectsEncodedControls(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host/p/api/connectors/callback%00")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("encoded control should fail closed")
+	}
+}
+
 // IPv6 literals keep their brackets through canonicalisation: stripping
 // the default port must not emit an unbracketed (hence invalid) host,
 // or the loopback-http gate that follows misreads it.

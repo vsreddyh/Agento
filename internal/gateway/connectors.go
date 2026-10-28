@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode"
 
 	"agento/internal/approvals"
 	"agento/internal/connectors"
@@ -35,13 +34,6 @@ import (
 // Google-redirected browser carries no Authorization header, and the state
 // is the capability. An expired row is the reconnect prompt: the app
 // banners it and offers the connect flow, never a password field.
-
-// hasControl reports whether s contains any control byte. NUL, \n, \r and
-// friends are never valid in an id or verb; rejecting the whole class (not
-// just NUL) keeps echoed 404s and log lines break-free.
-func hasControl(s string) bool {
-	return strings.ContainsFunc(s, unicode.IsControl)
-}
 
 // maxConnectorIDLen bounds the id segment. Ids are short fixed strings;
 // anything longer matches nothing. Same no-oracle 404 contract as runs.
@@ -323,7 +315,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// 404. Same bare echoless 404 for both — JSON-escaping keeps the app
 	// safe, but line-oriented log tailing must never see an injected break,
 	// and no valid id or verb contains one.
-	if id == "" || hasControl(id) || hasControl(action) {
+	if id == "" || connectors.HasControl(id) || connectors.HasControl(action) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
 		return
@@ -569,7 +561,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// before failing. Same dead-attempt shape as the oversized branch —
 	// the values are server-minted or Google-issued, so a control byte is
 	// never a legitimate credential.
-	if hasControl(code) || hasControl(state) {
+	if connectors.HasControl(code) || connectors.HasControl(state) {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			callbackStateReject)
 		return
@@ -617,7 +609,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// is already consumed at this point (verifier lives inside it, so the
 	// check cannot run first) — burning a hand-inserted row is intended;
 	// prod rows pass CreateState's own control gate and never reach here.
-	if hasControl(st.Verifier) {
+	if connectors.HasControl(st.Verifier) {
 		callbackDeadAttempt(w, r)
 		return
 	}
