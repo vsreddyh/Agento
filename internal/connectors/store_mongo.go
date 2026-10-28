@@ -571,7 +571,8 @@ func backfillDisplay(c Connector, id string) Connector {
 // quickCtx gives pre-reads and the confirming read their own short budget
 // instead of spending the verb's deadline: a slow read must never starve a
 // would-be-successful write into a 502. Detached from request cancellation
-// deliberately — one cheap idempotent read at two rows. Do not copy this for
+// by design — no tracing in this stack to lose, and budgets are short so
+// orphaned IO from a hung-up client stays bounded at 5s. Do not copy this for
 // non-idempotent work (the OAuth follow-up's token writes stay on the
 // request ctx).
 //

@@ -101,13 +101,20 @@ func TestExchangeRejectsEmptyClient(t *testing.T) {
 	}
 }
 
-// Control bytes in code/verifier fail closed before any network call.
+// Control bytes and invalid UTF-8 in code/verifier fail closed before any
+// network call: overlong sequences decode as RuneError (not control), so
+// the control gate alone would miss them.
 func TestExchangeRejectsControlBytes(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if _, err := Exchange(context.Background(), cfg, Gmail, "co\rde", "verifier", nil); err == nil {
 		t.Fatal("control-byte code should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("control code should be a deterministic 400, got %v", err)
+	}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "v\xc0\x80erifier", nil); err == nil {
+		t.Fatal("invalid-utf8 verifier should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("invalid utf8 should be a deterministic 400, got %v", err)
 	}
 }
 

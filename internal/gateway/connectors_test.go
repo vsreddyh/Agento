@@ -269,6 +269,31 @@ func (controlVerifierStore) ConsumeState(context.Context, string) (connectors.OA
 	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\x00x"}, nil
 }
 
+// Invalid UTF-8 in a verifier fails the same way: overlong sequences
+// decode as RuneError (not control), so the control gate alone misses
+// them.
+func TestConnectorsCallbackRejectsInvalidUTF8Verifier(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := invalidUTF8Store{connectors.NewMemoryStore()}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid-utf8 verifier: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("invalid utf8 verifier should use the dead-attempt message: %s", rec.Body)
+	}
+}
+
+type invalidUTF8Store struct {
+	connectors.Store
+}
+
+func (invalidUTF8Store) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\xc0\x80x"}, nil
+}
+
 func TestConnectorsCallbackRejectsControlVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()

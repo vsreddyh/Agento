@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/approvals"
 
@@ -420,6 +421,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		return nil, NewStoreError("oauth code or verifier too long", false)
 	}
 	if HasControl(code) || HasControl(verifier) {
+		return nil, NewStoreError("oauth code or verifier invalid", false)
+	}
+	if !utf8.ValidString(code) || !utf8.ValidString(verifier) {
 		return nil, NewStoreError("oauth code or verifier invalid", false)
 	}
 	// Config-shape before identity, matching AuthURL: a bad redirect or

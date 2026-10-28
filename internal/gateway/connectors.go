@@ -441,7 +441,8 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		// Logged like every other server-side failure on this path, as a
 		// static string: rand carries no discriminant (and no caller
-		// input), so there is nothing to quote or scrub.
+		// input), so there is nothing to quote or scrub. Deliberate, not
+		// an omission — do not "restore" a %v here.
 		s.cfg.Logf("connectors: could not mint connect state")
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not start the connect flow")
@@ -478,13 +479,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		RedirectURI: pinnedRedirect,
 	}); err != nil {
 		// Same timeout/client-gone split as list/disconnect and every
-		// callback store call: the domain mapper below never sees a
-		// deadline, and a gone client never pays for the AuthURL build
-		// + 200 write that follows. Note the split reads the verb ctx,
-		// which covers validation only on this path — CreateState's
-		// delete + insert run detached, so a detached-IO timeout
-		// surfaces as generic 502 here (see the store-side note).
-		// Near-simultaneous 5s clocks make that mistriage window
+		// callback store call — but validation-only on this path: the
+		// verb ctx never reaches IO (delete + insert run detached), so a
+		// detached-IO timeout surfaces as generic 502, never the timeout
+		// wording. Near-simultaneous 5s clocks make that window
 		// milliseconds; re-tap recovers either way.
 		storeTimeoutOrGone(w, s, ctx, err, "connect")
 		return
@@ -622,7 +620,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// is already consumed at this point (verifier lives inside it, so the
 	// check cannot run first) — burning a hand-inserted row is intended;
 	// prod rows pass CreateState's own control gate and never reach here.
-	if connectors.HasControl(st.Verifier) {
+	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) {
 		callbackDeadAttempt(w, r)
 		return
 	}
