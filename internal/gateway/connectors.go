@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/approvals"
 	"agento/internal/connectors"
@@ -178,7 +179,10 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, logf func(string, ...
 	canonical, err := connectors.CanonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
 		if logf != nil {
-			logf("connectors: connect redirect invalid: %v", err)
+			// Echo the attempted value: redirect is non-secret (logged
+			// verbatim on success), and triage needs the mismatch
+			// candidate without re-reading .env.
+			logf("connectors: connect redirect invalid (want %q): %v", cfg.RedirectURL, err)
 		}
 		return "", err
 	}
@@ -260,6 +264,12 @@ func callbackTimeoutOrGone(w http.ResponseWriter, s *Server, r *http.Request, ct
 // grant pipeline to one verb-level deadline (connectorCallbackCtx, 30s)
 // instead of stacking per-call budgets.
 func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest string) {
+	// First line, before every branch: no answer on this surface may sit
+	// in a heuristic cache — success bodies complete grants, and error
+	// bodies carry single-use capability URLs. Single ownership here (not
+	// per-branch) so the next branch added beside these cannot miss it
+	// the way the callback 405 once did.
+	w.Header().Set("Cache-Control", "no-store")
 	// Exact match for the collection, prefix-with-slash for members:
 	// "api/connectorsfoo" is an unknown path, not connector "foo" — the
 	// prefix form without a slash boundary would mislabel the resource and
@@ -354,12 +364,6 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"unknown connector "+bounded(approvals.ScrubError(norm)))
 		return
 	}
-	// no-store across the whole member surface (disconnect/connect/405/404):
-	// the `connect` handler sets it first-line and the list helper sets its
-	// own, but this branch answers too — one place here so the next verb
-	// cannot miss it the way the callback 405 once did.
-	w.Header().Set("Cache-Control", "no-store")
-
 	switch action {
 	case "disconnect":
 		if !requireMethod(w, r, http.MethodPost, "/api/connectors/{id}/disconnect") {
@@ -562,6 +566,15 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// the values are server-minted or Google-issued, so a control byte is
 	// never a legitimate credential.
 	if connectors.HasControl(code) || connectors.HasControl(state) {
+		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
+			callbackStateReject)
+		return
+	}
+	// Invalid UTF-8 fails here too: overlong/invalid byte sequences decode
+	// as RuneError (not control), so the control gate alone would miss
+	// them — and a BSON filter built from them fails downstream as a 502
+	// instead of here as a 400. Same dead-attempt shape, no oracle.
+	if !utf8.ValidString(code) || !utf8.ValidString(state) {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			callbackStateReject)
 		return

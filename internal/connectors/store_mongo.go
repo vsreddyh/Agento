@@ -626,6 +626,13 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	if tok.AccessCipher == "" && tok.AccessExpiryUnixMilli != 0 {
 		return NewStoreError("connector grant expiry without access token", false)
 	}
+	// Negative expiries are a third missing representation: UnixMilli is
+	// never negative for a real token, and the refresher treats any past
+	// value as renew-now — so reject instead of storing a second spelling
+	// of "already expired".
+	if tok.AccessCipher != "" && tok.AccessExpiryUnixMilli < 0 {
+		return NewStoreError("connector grant expiry is negative", false)
+	}
 	// Clamp absurd futures: a far-future expiry reads as "don't renew for
 	// decades". Capped like the state clamp (row still works, renews
 	// soon). Wall-clock by design; the injectable clock lives on the

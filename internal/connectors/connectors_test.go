@@ -1057,6 +1057,19 @@ func TestSetTokensRejectsExpiryWithoutAccess(t *testing.T) {
 	}
 }
 
+// Negative expiries are a third missing representation: UnixMilli is never
+// negative for a real token. Reject instead of storing a second spelling
+// of "already expired".
+func TestSetTokensRejectsNegativeExpiry(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a", AccessExpiryUnixMilli: -1}); err == nil {
+		t.Fatal("negative expiry should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("negative expiry should be a deterministic 400, got %v", err)
+	}
+}
+
 // Oversized ciphers are a deterministic reject at the store, not an
 // unbounded stored doc — same bound as code/state/verifier.
 func TestSetTokensRejectsOversizedCipher(t *testing.T) {

@@ -436,7 +436,9 @@ func run() error {
 	var connectorOAuth *connectors.OAuthConfig
 	if connectorStore.Durable() {
 		if cfg, err := connectors.OAuthConfigFromEnv(); err != nil {
-			logger.Printf("connectors: OAuth unavailable (%v); connect answers 501", err)
+			// Echo the attempted redirect: non-secret, and the triage
+			// pointer when the failure is a registration mismatch.
+			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, os.Getenv("GOOGLE_REDIRECT_URL"))
 		} else {
 			connectorOAuth = cfg
 			// The redirect URL is not a secret — log it so the operator can

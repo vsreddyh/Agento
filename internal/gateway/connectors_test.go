@@ -456,6 +456,22 @@ func TestConnectorsCallbackRejectsControlBytes(t *testing.T) {
 	}
 }
 
+// Invalid UTF-8 fails with the same dead-attempt shape: overlong/invalid
+// sequences decode as RuneError (not control), so the control gate alone
+// would miss them before the DB filter.
+func TestConnectorsCallbackRejectsInvalidUTF8(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=%C0%80&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid-utf8 code: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("invalid utf8 should use the dead-attempt message: %s", rec.Body)
+	}
+}
+
 // A dead attempt in a browser tab answers HTML, not JSON: the operator
 // just consented and needs close-this-tab guidance, not a raw error body.
 // API clients (no text/html Accept) keep the existing JSON shape.
