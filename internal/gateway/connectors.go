@@ -182,6 +182,7 @@ const callbackStateReject = "that connect attempt expired or was already used; s
 func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connect expired</title></head>` +
 			`<body><p>This connect attempt expired or was already used. Close this tab and tap connect again in the Agento app.</p></body></html>`))
@@ -202,6 +203,7 @@ func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
 func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg string) {
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(code)
 		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connect</title></head><body><p>` +
 			html.EscapeString(msg) + ` Close this tab and return to the Agento app.</p></body></html>`))
@@ -395,6 +397,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	}
 	state, verifier, err := connectors.NewState()
 	if err != nil {
+		// Logged like every other server-side failure on this path:
+		// without it a (near-impossible) rand failure is a silent 502
+		// indistinguishable from the AuthURL-empty branch below.
+		s.cfg.Logf("connectors: could not mint connect state: %v", err)
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"could not start the connect flow")
 		return
@@ -612,6 +618,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// at the top of the handler for every branch on this path.
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connected</title></head>` +
 			`<body><p>Connected. You can close this tab and return to the Agento app.</p></body></html>`))

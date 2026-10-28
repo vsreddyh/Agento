@@ -192,7 +192,7 @@ func oauthTestServer(t *testing.T, failExchange bool) (*connectors.OAuthConfig, 
 	var key [32]byte
 	copy(key[:], "test-envelope-key-0123456789ab")
 	cfg := &connectors.OAuthConfig{
-		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb",
+		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback",
 		Key: key, AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t",
 	}
 	return cfg, srv.Close
@@ -385,6 +385,9 @@ func TestConnectorsCallbackDeadAttemptServesHTMLToBrowsers(t *testing.T) {
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("cache-control = %q, want no-store", cc)
 	}
+	if ct := rec.Header().Get("X-Content-Type-Options"); ct != "nosniff" {
+		t.Errorf("x-content-type-options = %q, want nosniff", ct)
+	}
 	// Same 400 meaning without the browser header: JSON shape unchanged.
 	rec2 := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", "")
 	if rec2.Code != http.StatusBadRequest {
@@ -466,7 +469,7 @@ func TestConnectorsCallbackWhitespaceAccessStaysEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := &connectors.OAuthConfig{
-		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb",
+		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback",
 		Key: key, AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t",
 	}
 	store := connectors.NewMemoryStore()
@@ -515,6 +518,9 @@ func TestConnectorsCallbackServesHTMLToBrowsers(t *testing.T) {
 	}
 	if cc := rec2.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("cache-control = %q, want no-store", cc)
+	}
+	if ct := rec2.Header().Get("X-Content-Type-Options"); ct != "nosniff" {
+		t.Errorf("x-content-type-options = %q, want nosniff", ct)
 	}
 }
 

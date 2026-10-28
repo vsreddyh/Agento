@@ -167,6 +167,17 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Pending attempts die on every disconnecting path, like the tokens
+	// and like Disconnect (and the Mongo twin): a browser completing an
+	// old consent after this verb must fail at ConsumeState, not silently
+	// reconnect without fresh intent.
+	if st == StatusDisconnected {
+		for state, existing := range s.states {
+			if existing.Connector == id {
+				delete(s.states, state)
+			}
+		}
+	}
 	c, ok := s.rows[id]
 	if !ok {
 		c = DefaultRow(id)

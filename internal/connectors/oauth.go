@@ -80,6 +80,35 @@ type OAuthConfig struct {
 	TokenURL string
 }
 
+// ValidRedirectURL is the single redirect-shape validator: absolute
+// http(s), no userinfo/query/fragment, path ending in the one registered
+// callback. Returns the parsed URL for canonicalisation.
+// OAuthConfigFromEnv and AuthURL both funnel through it, so a hand-built
+// cfg gets the same fail-closed shape check as the env path.
+func ValidRedirectURL(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return nil, errors.New("connectors: redirect URL must be an absolute http(s) URL")
+	}
+	if parsed.User != nil {
+		// Userinfo would be logged verbatim in the startup line and never
+		// match Google's exact-redirect comparison — fail closed rather
+		// than storing credentials in the service log.
+		return nil, errors.New("connectors: redirect URL must not contain userinfo (user:pass@)")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		// Google compares the full redirect_uri exactly: a registered
+		// query or fragment would never match what the gateway sends
+		// (bare path), so fail here with a pointer at the registration,
+		// not in the browser with redirect_uri_mismatch.
+		return nil, errors.New("connectors: redirect URL must have no query or fragment; register the bare callback URL")
+	}
+	if !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/api/connectors/callback") {
+		return nil, errors.New("connectors: redirect URL path must end in /api/connectors/callback (the single registered endpoint)")
+	}
+	return parsed, nil
+}
+
 // OAuthConfigFromEnv builds the OAuth client from the environment. ANY
 // missing piece is an error (nil config, connect stays 501): a half-open
 // flow — auth URL without exchange, exchange without storage key — would
@@ -100,25 +129,9 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	// first: splitProfile Cleans the path server-side, so .../callback/
 	// would serve fine — rejecting it here would 501 a working config
 	// over punctuation.
-	parsed, err := url.Parse(redirectURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must be an absolute http(s) URL")
-	}
-	if parsed.User != nil {
-		// Userinfo would be logged verbatim in the startup line below and
-		// never match Google's exact-redirect comparison — fail closed
-		// rather than storing credentials in the service log.
-		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must not contain userinfo (user:pass@)")
-	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		// Google compares the full redirect_uri exactly: a registered query
-		// or fragment would never match what the gateway sends (bare path),
-		// so fail here with a pointer at the registration, not in the
-		// browser with redirect_uri_mismatch.
-		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL must have no query or fragment; register the bare callback URL")
-	}
-	if !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/api/connectors/callback") {
-		return nil, errors.New("connectors: GOOGLE_REDIRECT_URL path must end in /api/connectors/callback (the single registered endpoint)")
+	parsed, err := ValidRedirectURL(redirectURL)
+	if err != nil {
+		return nil, err
 	}
 	// Canonicalise on the parsed path, not the raw string: the string
 	// trim is only correct because query/fragment are rejected above,
@@ -188,16 +201,16 @@ const MaxStateFieldLen = 2048
 // and a reconnect that yields no refresh token would silently downgrade the
 // row to access-token-only with no renewal path.
 //
-// Fail-closed builder: nil cfg, unknown id, empty/overlong inputs, or
-// empty endpoints return "" — cheaper than a panic and cheaper than a
-// consent URL that can only die later at ConsumeState. cfg itself must
-// come from OAuthConfigFromEnv, which is the single place that validates
-// the redirect shape (absolute http(s), no userinfo/query/fragment,
-// correct path suffix) and sets both Google endpoints; a hand-built cfg
-// with a non-matching redirect mints a URL Google will reject at consent
-// time. The gateway route, CreateState, and Exchange all re-check inputs
-// (defense in depth for direct callers), but this helper needs no
-// trusted caller.
+// Fail-closed builder: nil cfg, unknown id, empty/overlong inputs,
+// empty endpoints, or a misshapen redirect return "" — cheaper than a
+// panic and cheaper than a consent URL that can only die later at
+// ConsumeState. cfg normally comes from OAuthConfigFromEnv (which also
+// validates the redirect shape and sets both Google endpoints), but a
+// hand-built cfg with a non-matching redirect is rejected here too via
+// the same ValidRedirectURL check — shape is helper-enforced, not just
+// caller-promised. The gateway route, CreateState, and Exchange all
+// re-check inputs (defense in depth for direct callers), but this
+// helper needs no trusted caller.
 func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
 		return ""
@@ -206,6 +219,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string) string {
 		// A hand-built cfg with no endpoints mints a consent URL Google
 		// can only 400. OAuthConfigFromEnv always sets both to the
 		// Google endpoints, so this guards direct callers only.
+		return ""
+	}
+	if _, err := ValidRedirectURL(cfg.RedirectURL); err != nil {
+		// Same shape gate as the env path: a hand-built redirect that
+		// would never match a registration fails here, not in the
+		// browser with redirect_uri_mismatch.
 		return ""
 	}
 	// Folded and trimmed like every store verb — unknown or empty inputs

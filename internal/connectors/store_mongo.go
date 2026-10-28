@@ -193,6 +193,20 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	}
 	// Three tiers, one probe (status+error+stamp+display). Absent doc always
 	// takes the full write. Unexpected probe failures log once, here.
+	//
+	// Pending attempts die on every disconnecting path too (like the
+	// tokens, and like Disconnect): a browser completing an old consent
+	// after this verb must fail at ConsumeState, not silently reconnect
+	// without fresh intent. Advisory on its own detached budget (TTL is
+	// the backstop); a failed scrub only logs, never fails the verb.
+	if st == StatusDisconnected {
+		srubCtx, scrubCancel := quickCtx()
+		_, serr := s.states.DeleteMany(srubCtx, bson.D{{Key: "connector", Value: id}})
+		scrubCancel()
+		if serr != nil {
+			s.logf("connectors: state scrub %s failed: %v", id, serr)
+		}
+	}
 	pctx, pcancel := quickCtx()
 	var cur probeDoc
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},

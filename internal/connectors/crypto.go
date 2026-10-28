@@ -97,6 +97,14 @@ func DecryptToken(key [32]byte, sealed string) (string, error) {
 	if key == ([32]byte{}) {
 		return "", errors.New("connectors: refusing to open a token under a zero key")
 	}
+	// Bounded before decoding: base64 decode allocates the full output
+	// up front, so a multi-MB hand-edited column would buy a large alloc
+	// before the nonce-length check ever runs. Same MaxStateFieldLen the
+	// write path enforces (sealed tokens are a few hundred chars), so a
+	// legitimate grant never trips it.
+	if len(sealed) > MaxStateFieldLen {
+		return "", errors.New("connectors: token is too long")
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(sealed)
 	if err != nil {
 		return "", errors.New("connectors: token is not valid base64")
