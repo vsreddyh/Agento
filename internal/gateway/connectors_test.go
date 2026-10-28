@@ -395,6 +395,50 @@ func TestConnectorsCallbackDeadAttemptServesHTMLToBrowsers(t *testing.T) {
 	}
 }
 
+// Every callback failure answers HTML to browsers, not just dead
+// attempts and success: the consenting tab always gets close-this-tab
+// guidance, never raw JSON. API clients keep the JSON shapes unchanged.
+func TestConnectorsCallbackErrorsServeHTMLToBrowsers(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	html := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Accept", "text/html")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+	// Missing params: browser gets the close-this-tab page, not JSON.
+	rec := html("/api/connectors/callback?code=x")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing-param html: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("content-type = %q, want text/html", ct)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "Close this tab") || !strings.Contains(body, "callback needs") {
+		t.Errorf("html error lost message or guidance: %s", body)
+	}
+	// Oversized state: same dead-attempt message, HTML envelope.
+	rec = html("/api/connectors/callback?code=x&state=" + strings.Repeat("y", 3000))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized html: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("oversized content-type = %q, want text/html", ct)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "Close this tab") || !strings.Contains(body, "start over from connect") {
+		t.Errorf("oversized html missing message or guidance: %s", body)
+	}
+	// Same failures without the browser header stay JSON.
+	rec2 := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x", "")
+	if rec2.Code != http.StatusBadRequest || strings.Contains(rec2.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("missing-param json: %d %s (%s)", rec2.Code, rec2.Header().Get("Content-Type"), rec2.Body)
+	}
+}
+
 func TestConnectorsCallbackWhitespaceAccessStaysEmpty(t *testing.T) {
 	// A whitespace-only access token must land as literal "", not a sealed
 	// blob — same missing-value contract as the empty case.

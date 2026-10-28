@@ -82,7 +82,7 @@ retention pass must not add a TTL to this collection.
 ### Surfaces
 
 - `GET /api/connectors` — two rows, disconnected synthesised when no
-  document exists (a fresh deploy lists three disconnected connectors, not
+  document exists (a fresh deploy lists two disconnected connectors, not
   an empty list).
 - `POST /api/connectors/{id}/disconnect` — clears tokens server-side.
 - `POST /api/connectors/{id}/connect` — mints a one-time state+PKCE pair,
@@ -119,8 +119,9 @@ retention pass must not add a TTL to this collection.
 
 - `internal/connectors` owns ids/scopes/status/Store (memory + Mongo,
   `FromEnv`, display-only projection).
-- `internal/gateway` serves the three routes; `cmd/pi-gateway` wires the
-  store with the same memory fallback + index pattern as the siblings.
+- `internal/gateway` serves the four routes (list, disconnect, connect,
+  callback); `cmd/pi-gateway` wires the store with the same memory
+  fallback + index pattern as the siblings.
 - `cmd/mcp-gate` refuses draft-only sends before the approval check.
 - App Connect UI, OAuth exchange, and `mcp.json` wiring arrive stacked on
   top — this PR is the shape they fill in.

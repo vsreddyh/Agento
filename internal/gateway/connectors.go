@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"html"
 	"net/http"
 	"strings"
 	"time"
@@ -80,6 +81,14 @@ func connectorWire(c connectors.Connector) map[string]any {
 }
 
 func connectorsError(w http.ResponseWriter, err error) {
+	code, typ, msg := connectorsErrorMapped(err)
+	apiError(w, code, typ, "", msg)
+}
+
+// connectorsErrorMapped is the pure domain→status mapping behind
+// connectorsError. The callback path reuses it so its browser HTML and
+// API JSON answers carry the same status, type, and scrubbed message.
+func connectorsErrorMapped(err error) (code int, typ, msg string) {
 	var se *connectors.StoreError
 	if errors.As(err, &se) {
 		// Scrubbed in every branch, including NotFound: that message
@@ -87,18 +96,17 @@ func connectorsError(w http.ResponseWriter, err error) {
 		// is the one branch that most needs it. Contract for future
 		// StoreError construction: Msg must be safe OR get scrubbed here —
 		// this switch scrubs, so callers don't have to.
-		msg := bounded(approvals.ScrubError(se.Msg))
+		msg = bounded(approvals.ScrubError(se.Msg))
 		switch {
 		case se.NotFound:
-			apiError(w, http.StatusNotFound, "invalid_request_error", "", msg)
+			return http.StatusNotFound, "invalid_request_error", msg
 		case se.Upstream:
-			apiError(w, http.StatusBadGateway, "upstream_error", "", msg)
+			return http.StatusBadGateway, "upstream_error", msg
 		default:
-			apiError(w, http.StatusBadRequest, "invalid_request_error", "", msg)
+			return http.StatusBadRequest, "invalid_request_error", msg
 		}
-		return
 	}
-	apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(approvals.ScrubError(err.Error())))
+	return http.StatusBadRequest, "invalid_request_error", bounded(approvals.ScrubError(err.Error()))
 }
 
 func connectorCtx(r *http.Request) (context.Context, context.CancelFunc) {
@@ -181,6 +189,42 @@ func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
 	}
 	apiError(w, http.StatusBadRequest, "invalid_request_error", "",
 		callbackStateReject)
+}
+
+// callbackError answers every other callback failure in both
+// representations: JSON for API clients (the app polls
+// GET /api/connectors instead of reading error bodies), close-this-tab
+// HTML for the Google-redirected browser tab that just consented. Same
+// status, same message — only the envelope differs, so no branch can
+// drift into a guidance gap or an oracle. Message text is HTML-escaped:
+// every caller passes a static string or a scrubbed domain-mapped one,
+// and the escape keeps that contract even if a caller slips.
+func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg string) {
+	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connect</title></head><body><p>` +
+			html.EscapeString(msg) + ` Close this tab and return to the Agento app.</p></body></html>`))
+		return
+	}
+	apiError(w, code, typ, "", msg)
+}
+
+// callbackTimeoutOrGone is storeTimeoutOrGone for the callback path: same
+// timeout/client-gone split, but the domain fallthrough answers in both
+// representations (see callbackError) instead of JSON-only.
+func callbackTimeoutOrGone(w http.ResponseWriter, s *Server, r *http.Request, ctx context.Context, err error, verb string) {
+	if ctx.Err() == context.DeadlineExceeded {
+		callbackError(w, r, http.StatusBadGateway, "upstream_error",
+			"the connector store did not answer in time")
+		return
+	}
+	if ctx.Err() != nil {
+		s.cfg.Logf("connectors: %s aborted, client gone: %v", verb, ctx.Err())
+		return
+	}
+	code, typ, msg := connectorsErrorMapped(err)
+	callbackError(w, r, code, typ, msg)
 }
 
 // handleConnectors serves /api/connectors. Global like approvals, not
@@ -364,7 +408,11 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		Connector: id,
 		Verifier:  verifier,
 	}); err != nil {
-		connectorsError(w, err)
+		// Same timeout/client-gone split as list/disconnect and every
+		// callback store call: the domain mapper below never sees a
+		// deadline, and a gone client never pays for the AuthURL build
+		// + 200 write that follows.
+		storeTimeoutOrGone(w, s, ctx, err, "connect")
 		return
 	}
 	// Fail-closed builder: empty means a helper refused (nil cfg, unknown
@@ -400,14 +448,14 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// a heuristic cache — success JSON and 400s alike.
 	w.Header().Set("Cache-Control", "no-store")
 	if s.cfg.ConnectorOAuth == nil {
-		apiError(w, http.StatusNotImplemented, "invalid_request_error", "",
+		callbackError(w, r, http.StatusNotImplemented, "invalid_request_error",
 			"connect is not configured on this server yet — never paste a token in chat")
 		return
 	}
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	if code == "" || state == "" {
-		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			"callback needs ?code= and ?state=; start over from connect")
 		return
 	}
@@ -419,7 +467,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// request. Same 400 shape as every other callback failure, so no
 	// oracle is added.
 	if len(code) > connectors.MaxStateFieldLen || len(state) > connectors.MaxStateFieldLen {
-		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
+		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			callbackStateReject)
 		return
 	}
@@ -431,7 +479,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// verbs below): a deadline answers 502 with the timeout wording,
 		// a gone client logs and returns without writing to a dead conn.
 		if ctx.Err() == context.DeadlineExceeded {
-			apiError(w, http.StatusBadGateway, "upstream_error", "",
+			callbackError(w, r, http.StatusBadGateway, "upstream_error",
 				"the connector store did not answer in time")
 			return
 		}
@@ -449,7 +497,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// shape — same 400 meaning either way.
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.Upstream {
-			connectorsError(w, err)
+			code, typ, msg := connectorsErrorMapped(err)
+			callbackError(w, r, code, typ, msg)
 			return
 		}
 		callbackDeadAttempt(w, r)
@@ -463,7 +512,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// gone browser logs without writing to a dead conn. Only then
 		// the domain map below.
 		if ctx.Err() == context.DeadlineExceeded {
-			apiError(w, http.StatusBadGateway, "upstream_error", "",
+			callbackError(w, r, http.StatusBadGateway, "upstream_error",
 				"the connector store did not answer in time")
 			return
 		}
@@ -480,7 +529,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			callbackDeadAttempt(w, r)
 			return
 		}
-		connectorsError(w, err)
+		code, typ, msg := connectorsErrorMapped(err)
+		callbackError(w, r, code, typ, msg)
 		return
 	}
 	cfg := s.cfg.ConnectorOAuth
@@ -495,7 +545,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// Logged, not answered in detail: seal failures are server-side
 		// (rand, zero key) and carry nothing the client can act on.
 		s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
-		apiError(w, http.StatusBadGateway, "upstream_error", "",
+		callbackError(w, r, http.StatusBadGateway, "upstream_error",
 			"could not store the grant")
 		return
 	}
@@ -507,7 +557,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		accessSealed, err = connectors.EncryptToken(cfg.Key, accessToken)
 		if err != nil {
 			s.cfg.Logf("connectors: token seal failed for %s: %v", id, err)
-			apiError(w, http.StatusBadGateway, "upstream_error", "",
+			callbackError(w, r, http.StatusBadGateway, "upstream_error",
 				"could not store the grant")
 			return
 		}
@@ -521,8 +571,9 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		AccessCipher:          accessSealed,
 		AccessExpiryUnixMilli: expiry,
 	}); err != nil {
-		// Same timeout/client-gone split as list/disconnect.
-		storeTimeoutOrGone(w, s, ctx, err, "callback tokens")
+		// Same timeout/client-gone split as list/disconnect, answered
+		// in both representations (see callbackError).
+		callbackTimeoutOrGone(w, s, r, ctx, err, "callback tokens")
 		return
 	}
 	// Status last, tokens first: a connected row without tokens is the one
@@ -536,7 +587,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// concurrent legitimate connect.
 	c, err := s.connectors.SetStatus(ctx, id, connectors.StatusConnected, "")
 	if err != nil {
-		storeTimeoutOrGone(w, s, ctx, err, "callback status")
+		callbackTimeoutOrGone(w, s, r, ctx, err, "callback status")
 		return
 	}
 	// A browser tab (Accept: text/html) gets a close-this-tab page; API
