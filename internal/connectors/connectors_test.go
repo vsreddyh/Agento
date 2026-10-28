@@ -879,7 +879,7 @@ func TestEncryptTokenRefusesPadded(t *testing.T) {
 // fires here so the store never sees a multi-MB cipher from a direct
 // caller. Sealed grants stay well under the bound in prod.
 func TestEncryptTokenRefusesOversized(t *testing.T) {
-	if _, err := EncryptToken([32]byte{1}, strings.Repeat("x", MaxStateFieldLen+1)); err == nil {
+	if _, err := EncryptToken([32]byte{1}, strings.Repeat("x", MaxPlaintextLen+1)); err == nil {
 		t.Fatal("sealing oversized token should fail")
 	}
 }
@@ -891,7 +891,7 @@ func TestEncryptTokenRefusesOversized(t *testing.T) {
 func TestTokenBoundsRoundTrip(t *testing.T) {
 	var key [32]byte
 	copy(key[:], "test-envelope-key-0123456789ab")
-	sealed, err := EncryptToken(key, strings.Repeat("x", MaxStateFieldLen))
+	sealed, err := EncryptToken(key, strings.Repeat("x", MaxPlaintextLen))
 	if err != nil {
 		t.Fatalf("max-size plaintext should seal: %v", err)
 	}

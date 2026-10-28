@@ -303,6 +303,15 @@ const MaxStateFieldLen = 2048
 // tokens past what fits here.
 const MaxCipherLen = 4096
 
+// MaxPlaintextLen bounds the plaintext EncryptToken will seal. Same value
+// as MaxStateFieldLen today, deliberately a separate name: the 2048 here
+// is about token size (Google refresh tokens are ~100-200 chars; this
+// cap only ever fires on garbage or hostile input), while MaxStateFieldLen
+// is about OAuth input size (codes, states, verifiers). If Google
+// lengthens refresh tokens past 2048, raise this — not the OAuth-input
+// bound, which has nothing to do with token size.
+const MaxPlaintextLen = 2048
+
 // AuthURL builds the Google consent URL for one connector attempt. Offline
 // access (a refresh token) + consent prompt every time: without
 // prompt=consent Google returns a refresh token only on the FIRST grant,
@@ -393,7 +402,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	if HasControl(state) || HasControl(verifier) {
+	if HasControl(state) || HasControl(verifier) || !utf8.ValidString(state) || !utf8.ValidString(verifier) {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: invalid state or verifier", id)
 		}

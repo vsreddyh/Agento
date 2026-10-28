@@ -73,10 +73,9 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 	}
 	// Length-capped before the alloc: gcm.Seal allocates the full output
 	// up front, so an unbounded plaintext buys a large alloc before the
-	// store 400s the resulting cipher. Sealed grants stay well under
-	// 2048 (same bound the stores enforce) — a legitimate token never
-	// trips this.
-	if len(plaintext) > MaxStateFieldLen {
+	// store 400s the resulting cipher. Plaintext grants stay well under
+	// MaxPlaintextLen in prod — a legitimate token never trips this.
+	if len(plaintext) > MaxPlaintextLen {
 		return "", errors.New("connectors: refusing to seal an oversized token")
 	}
 	block, err := aes.NewCipher(key[:])

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/approvals"
 	"agento/internal/mongostore"
@@ -746,7 +747,7 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
 		return NewStoreError("oauth state or verifier too long", false)
 	}
-	if HasControl(st.State) || HasControl(st.Verifier) {
+	if HasControl(st.State) || HasControl(st.Verifier) || !utf8.ValidString(st.State) || !utf8.ValidString(st.Verifier) {
 		return NewStoreError("oauth state or verifier invalid", false)
 	}
 	if len(st.RedirectURI) > MaxStateFieldLen {
