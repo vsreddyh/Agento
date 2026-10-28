@@ -158,6 +158,7 @@ func TestOAuthConfigCanonicalisesNonCanonicalRedirect(t *testing.T) {
 		{"dot segment", "https://host/p/./api/connectors/callback", "https://host/p/api/connectors/callback"},
 		{"trailing dot", "https://host./p/api/connectors/callback", "https://host/p/api/connectors/callback"},
 		{"trailing dot with port", "https://host.:8443/p/api/connectors/callback", "https://host:8443/p/api/connectors/callback"},
+		{"double trailing dot", "https://host../p/api/connectors/callback", "https://host/p/api/connectors/callback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)

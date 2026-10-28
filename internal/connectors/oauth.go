@@ -107,9 +107,10 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// A trailing-dot FQDN spelling is folded too: the console
 	// registration is canonically dot-less, and the dot would
 	// otherwise pass validation yet mismatch Google exactly.
+	// TrimRight, not TrimSuffix: "host.." must fold fully, not to "host.".
 	// (Fold before the empty check: a bare "." host must fail as empty,
 	// not validate as dot-less nothing.)
-	parsed.Host = strings.TrimSuffix(strings.ToLower(parsed.Host), ".")
+	parsed.Host = strings.TrimRight(strings.ToLower(parsed.Host), ".")
 	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
 	}
@@ -120,7 +121,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// to "host:8443", not pass validation dotted. Brackets go back on
 	// IPv6 literals, or the stripped host stops parsing as a URL.
 	if h, p, err := net.SplitHostPort(parsed.Host); err == nil {
-		h = strings.TrimSuffix(h, ".")
+		h = strings.TrimRight(h, ".")
 		if strings.Contains(h, ":") {
 			h = "[" + h + "]"
 		}

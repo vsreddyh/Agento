@@ -256,6 +256,27 @@ func TestConnectorsConnectCleansUpAfterAuthURLRefusal(t *testing.T) {
 	}
 }
 
+// A control-bearing verifier from a hand-inserted row fails closed with
+// the dead-attempt shape before any Exchange call — same gate as
+// code/state, which live one branch up.
+func TestConnectorsCallbackRejectsControlVerifier(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := connectors.NewMemoryStore()
+	ctx := context.Background()
+	if err := store.CreateState(ctx, connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\x00x"}); err != nil {
+		t.Fatal(err)
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("control verifier: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("control verifier should use the dead-attempt message: %s", rec.Body)
+	}
+}
+
 func TestConnectorsConnectReturnsAuthURL(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()

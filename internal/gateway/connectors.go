@@ -601,6 +601,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// Folded here, not just downstream: Exchange/SetTokens/SetStatus all
 	// re-fold, but the log lines below must observe the same spelling the
 	// store sees — stored == logged == sent by construction.
+	// Verifier gated like code/state above: server-minted base64url in
+	// prod, but a hand-inserted row could carry controls into an outbound
+	// request and a log line. Same dead-attempt shape, no oracle.
+	if hasControl(st.Verifier) {
+		callbackDeadAttempt(w, r)
+		return
+	}
 	// Send the pinned redirect from mint time, not the live config: a
 	// rotation mid-consent would otherwise exact-mismatch Google.
 	// Empty means minted before this column existed: fall back to the

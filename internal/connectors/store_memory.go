@@ -497,7 +497,10 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// keeps that ordering while unlocking only once.
 	var reap, supersede []string
 	for state, existing := range s.states {
-		if !existing.ExpiresAt.IsZero() && !now.Before(existing.ExpiresAt) {
+		// Reap predicate matches the consume rule: zero counts as
+		// expired on read, so it must reap on sweep too — otherwise a
+		// hand-inserted zero row is dead-on-read yet immortal.
+		if existing.ExpiresAt.IsZero() || !now.Before(existing.ExpiresAt) {
 			reap = append(reap, state)
 		} else if existing.Connector == st.Connector {
 			supersede = append(supersede, state)
