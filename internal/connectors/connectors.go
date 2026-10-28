@@ -75,9 +75,11 @@ func ScopesFor(id string) []string {
 	}
 }
 
-// Known reports whether id is a v1 connector.
+// Known reports whether id is a v1 connector. Folds like every sibling
+// helper: same logical id, same answer — the fold lives here instead of
+// relying on every caller to pre-fold before branching on it.
 func Known(id string) bool {
-	switch id {
+	switch NormalizedID(id) {
 	case Gmail, Calendar:
 		return true
 	}
