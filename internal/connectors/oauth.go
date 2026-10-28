@@ -172,9 +172,14 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// Inner controls fail closed like every sibling input (state/code/
 	// verifier at every layer): url.Parse/String round-trips them, so a
 	// control-bearing path would pass validation yet mismatch Google.
-	// Both spellings: raw covers literals, decoded covers %00-style
-	// encodings that Parse decodes before Clean/String re-encodes.
-	if HasControl(raw) || HasControl(parsed.Path) || HasControl(parsed.Host) {
+	// All three spellings: raw covers literals, decoded path covers
+	// %00-style encodings that Parse decodes before Clean/String
+	// re-encodes, and the host is unescaped explicitly because Parse
+	// leaves Host percent-encoded (a %00 in host would otherwise pass
+	// every check verbatim). Unescape failure rejects too — a malformed
+	// host is not a registration.
+	decodedHost, hostErr := url.PathUnescape(parsed.Host)
+	if HasControl(raw) || HasControl(parsed.Path) || hostErr != nil || HasControl(decodedHost) {
 		return "", errors.New("connectors: redirect URL must not contain control characters")
 	}
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
@@ -266,12 +271,13 @@ func NewState() (state, verifier string, err error) {
 // hundred chars. Anything past 2048 is not a real credential — it is a
 // garbage or hostile input that must 400 before it becomes a DB filter
 // or an outbound token request. Enforced at the gateway (fast path) AND the
-// store (ConsumeState/CreateState) AND Exchange: every layer is exported
-// for direct callers (future MCP servers), so the gateway cap alone would
-// leave the enforcement to one layer. Sealed tokens reuse the same bound
-// (a stored grant must decrypt to use it, so a multi-MB cipher can never
-// become a servable grant) — raise independently if Google ever lengthens
-// tokens past what this cap allows.
+// store (ConsumeState/CreateState) AND Exchange AND DecryptToken (the
+// read-side point: oversized sealed rows fail at open, not at GetTokens):
+// every layer is exported for direct callers (future MCP servers), so the
+// gateway cap alone would leave the enforcement to one layer. Sealed tokens
+// reuse the same bound (a stored grant must decrypt to use it, so a
+// multi-MB cipher can never become a servable grant) — raise independently
+// if Google ever lengthens tokens past what this cap allows.
 const MaxStateFieldLen = 2048
 
 // AuthURL builds the Google consent URL for one connector attempt. Offline

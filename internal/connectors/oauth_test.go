@@ -255,6 +255,12 @@ func TestOAuthConfigRejectsEncodedControls(t *testing.T) {
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("encoded control should fail closed")
 	}
+	// Encoded controls in host fail the same way: Parse leaves Host
+	// percent-encoded, so the check unescapes before testing.
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://h%00st/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("encoded control in host should fail closed")
+	}
 }
 
 // IPv6 literals keep their brackets through canonicalisation: stripping
