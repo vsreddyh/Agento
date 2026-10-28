@@ -428,6 +428,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		State:     state,
 		Connector: id,
 		Verifier:  verifier,
+		// Pin the exact redirect_uri minted for this attempt: a config
+		// rotation mid-consent must not strand it with a mismatch.
+		// cfg.RedirectURL is already canonical (FromEnv enforces it).
+		RedirectURI: s.cfg.ConnectorOAuth.RedirectURL,
 	}); err != nil {
 		// Same timeout/client-gone split as list/disconnect and every
 		// callback store call: the domain mapper below never sees a
@@ -528,7 +532,17 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := st.Connector
-	tok, err := connectors.Exchange(ctx, s.cfg.ConnectorOAuth, id, code, st.Verifier, s.cfg.Logf)
+	// Send the pinned redirect from mint time, not the live config: a
+	// rotation mid-consent would otherwise exact-mismatch Google.
+	// Empty means minted before this column existed: fall back to the
+	// live config rather than failing an otherwise valid attempt.
+	exCfg := s.cfg.ConnectorOAuth
+	if st.RedirectURI != "" {
+		pinned := *exCfg
+		pinned.RedirectURL = st.RedirectURI
+		exCfg = &pinned
+	}
+	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {
 		// Same timeout/client-gone split as ConsumeState above, but the
 		// deadline wording names the exchange, not the store: the 30s

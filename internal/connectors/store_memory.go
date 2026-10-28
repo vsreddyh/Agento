@@ -409,14 +409,21 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 		// verifier-less attempt can never survive Exchange.
 		return NewStoreError("oauth state needs a verifier", false)
 	}
+	// Single clock read for the whole verb: default, clamp bound, and
+	// past-expiry check must agree on "now", or a tick between reads
+	// could mint-then-kill (or keep-then-reap) the same row.
+	now := s.timeNow()
 	if st.ExpiresAt.IsZero() {
-		st.ExpiresAt = s.timeNow().Add(StateTTL)
+		st.ExpiresAt = now.Add(StateTTL)
 	}
 	// Clamp absurd futures: a one-year oauth_states row is never a
 	// legitimate pending attempt, and the TTL backstop would honour it.
 	// Capped, not rejected — the row still works, just not forever.
-	if exp := s.timeNow().Add(StateTTL); st.ExpiresAt.After(exp) {
+	if exp := now.Add(StateTTL); st.ExpiresAt.After(exp) {
 		st.ExpiresAt = exp
+	}
+	if st.ExpiresAt.Before(now) {
+		return NewStoreError("oauth state already expired", false)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -432,7 +439,6 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// 400 like the Mongo duplicate-key path, not silently overwrite
 	// after deleting the row it collides with). Collect-then-mutate
 	// keeps that ordering while unlocking only once.
-	now := s.timeNow()
 	var reap, supersede []string
 	for state, existing := range s.states {
 		if !existing.ExpiresAt.IsZero() && !now.Before(existing.ExpiresAt) {

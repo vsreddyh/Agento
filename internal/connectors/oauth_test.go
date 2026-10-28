@@ -79,6 +79,17 @@ func TestExchangeTrimsTokens(t *testing.T) {
 	}
 }
 
+// Empty endpoints fail closed before any network call: a hand-built
+// config missing AuthURL/TokenURL must not reach the token endpoint.
+func TestExchangeRejectsEmptyEndpoints(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback"}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "verifier", nil); err == nil {
+		t.Fatal("empty endpoints should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("empty endpoints should be a deterministic 400, got %v", err)
+	}
+}
+
 // Redirect validation fails closed: typo'd host/scheme or a missing
 // callback suffix must break startup config, not die in the browser.
 func TestOAuthConfigValidatesRedirect(t *testing.T) {
@@ -160,6 +171,24 @@ func TestOAuthConfigRejectsNonLocalhostHTTP(t *testing.T) {
 	t.Setenv("GOOGLE_REDIRECT_URL", "http://localhost:8643/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err != nil {
 		t.Fatalf("loopback http redirect should pass: %v", err)
+	}
+}
+
+// IPv6 literals keep their brackets through canonicalisation: stripping
+// the default port must not emit an unbracketed (hence invalid) host,
+// or the loopback-http gate that follows misreads it.
+func TestOAuthConfigCanonicalisesIPv6Loopback(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "http://[::1]:80/api/connectors/callback")
+	cfg, err := OAuthConfigFromEnv()
+	if err != nil {
+		t.Fatalf("IPv6 loopback http should pass: %v", err)
+	}
+	if want := "http://[::1]/api/connectors/callback"; cfg.RedirectURL != want {
+		t.Errorf("RedirectURL = %q, want %q", cfg.RedirectURL, want)
 	}
 }
 

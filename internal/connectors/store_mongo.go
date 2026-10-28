@@ -712,14 +712,21 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 		// verifier-less attempt can never survive Exchange.
 		return NewStoreError("oauth state needs a verifier", false)
 	}
+	// Single clock read for the whole verb: default, clamp bound, and
+	// past-expiry check must agree on "now", or a tick between reads
+	// could mint-then-kill (or keep-then-reap) the same row.
+	now := time.Now()
 	if st.ExpiresAt.IsZero() {
-		st.ExpiresAt = time.Now().Add(StateTTL)
+		st.ExpiresAt = now.Add(StateTTL)
 	}
 	// Clamp absurd futures: a one-year oauth_states row is never a
 	// legitimate pending attempt, and the TTL backstop would honour it.
 	// Capped, not rejected — the row still works, just not forever.
-	if exp := time.Now().Add(StateTTL); st.ExpiresAt.After(exp) {
+	if exp := now.Add(StateTTL); st.ExpiresAt.After(exp) {
 		st.ExpiresAt = exp
+	}
+	if st.ExpiresAt.Before(now) {
+		return NewStoreError("oauth state already expired", false)
 	}
 	// One pending attempt per connector (mirrors the memory cap): a new tap
 	// supersedes the old one, bounding live rows to one per connector

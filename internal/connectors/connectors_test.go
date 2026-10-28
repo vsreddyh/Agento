@@ -630,11 +630,22 @@ func TestOAuthStateLifecycle(t *testing.T) {
 	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
 		t.Fatalf("second consume should be NotFound, got %v", err)
 	}
-	// Expired consumes as NotFound.
-	if err := s.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
+	// Expired at creation fails fast: an explicitly-expired row can never
+	// be consumed, so storing it would only strand a dead attempt.
+	if err := s.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: "v", ExpiresAt: time.Now().Add(-time.Minute)}); err == nil {
+		t.Fatal("explicitly expired create should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("expired create should be a deterministic 400, got %v", err)
+	}
+	// Expiry still enforced at consume time.
+	s2 := NewMemoryStore()
+	fixed := time.Now()
+	s2.now = func() time.Time { return fixed }
+	if err := s2.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: "v", ExpiresAt: fixed.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeState(ctx, "s2"); err == nil {
+	s2.now = func() time.Time { return fixed.Add(2 * time.Minute) }
+	if _, err := s2.ConsumeState(ctx, "s2"); err == nil {
 		t.Fatal("expired consume should fail")
 	}
 	// Unknown connector rejected at create.
@@ -751,6 +762,21 @@ func TestCreateStateClampsFarFutureExpiry(t *testing.T) {
 	}
 	if max := time.Now().Add(StateTTL + time.Minute); st.ExpiresAt.After(max) {
 		t.Errorf("expiry not clamped: %v", st.ExpiresAt)
+	}
+}
+
+// An explicitly expired state fails fast at creation, like a missing
+// verifier: a row that ConsumeState would immediately reject must never
+// be stored. Fail closed (400), not silent, so the caller retries with
+// a fresh attempt instead of triaging a dead one.
+func TestCreateStateRejectsPastExpiry(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	past := time.Now().Add(-time.Minute)
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", ExpiresAt: past}); err == nil {
+		t.Fatal("explicitly expired state should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("expired state should be a deterministic 400, got %v", err)
 	}
 }
 

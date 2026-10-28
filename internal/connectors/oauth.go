@@ -82,14 +82,14 @@ type OAuthConfig struct {
 	TokenURL string
 }
 
-// canonicalRedirectURL validates and canonicalises in one step so every
+// CanonicalRedirectURL validates and canonicalises in one step so every
 // caller sends the exact registered shape: absolute http(s), https unless
 // loopback, no userinfo/query/fragment, path ending in the single
 // registered callback endpoint. path.Clean collapses double slashes and
 // dot segments before the suffix check, so validated-shape == sent-shape
 // by construction — Google exact-matches redirect_uri, and a mismatch
 // dies in the browser with nothing in the server log pointing at it.
-func canonicalRedirectURL(raw string) (string, error) {
+func CanonicalRedirectURL(raw string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
@@ -100,10 +100,14 @@ func canonicalRedirectURL(raw string) (string, error) {
 	parsed.Host = strings.ToLower(parsed.Host)
 	// Strip default ports: the console registration is canonically
 	// port-less, while an operator-supplied URL may name :443/:80
-	// explicitly — and Google exact-matches redirect_uri.
+	// explicitly — and Google exact-matches redirect_uri. Brackets go
+	// back on IPv6 literals, or the stripped host stops parsing as a URL.
 	if (parsed.Scheme == "https" && strings.HasSuffix(parsed.Host, ":443")) ||
 		(parsed.Scheme == "http" && strings.HasSuffix(parsed.Host, ":80")) {
 		if h, _, err := net.SplitHostPort(parsed.Host); err == nil {
+			if strings.Contains(h, ":") {
+				h = "[" + h + "]"
+			}
 			parsed.Host = h
 		}
 	}
@@ -154,7 +158,7 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	// first: splitProfile Cleans the path server-side, so .../callback/
 	// would serve fine — rejecting it here would 501 a working config
 	// over punctuation.
-	parsed, err := canonicalRedirectURL(redirectURL)
+	parsed, err := CanonicalRedirectURL(redirectURL)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +233,7 @@ const MaxStateFieldLen = 2048
 // ConsumeState. cfg normally comes from OAuthConfigFromEnv (which also
 // validates the redirect shape and sets both Google endpoints), but a
 // hand-built cfg with a non-matching redirect is rejected here too via
-// the same canonicalRedirectURL check — shape is helper-enforced, not just
+// the same CanonicalRedirectURL check — shape is helper-enforced, not just
 // caller-promised. logf (may be nil) names which guard fired for
 // server-side triage; the app never sees it. The gateway route, CreateState, and Exchange all
 // re-check inputs (defense in depth for direct callers), but this
@@ -257,7 +261,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	canonical, err := canonicalRedirectURL(trimmed.RedirectURL)
+	canonical, err := CanonicalRedirectURL(trimmed.RedirectURL)
 	if err != nil {
 		// Same shape gate as the env path: a hand-built redirect that
 		// would never match a registration fails here, not in the
@@ -345,7 +349,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// must mint and send the same string. Trimmed like every other
 	// input: padded client fields are a caller bug, and the checked
 	// values must match what is sent.
-	redirect, err := canonicalRedirectURL(cfg.RedirectURL)
+	redirect, err := CanonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
 		return nil, NewStoreError("oauth client redirect URL is invalid", false)
 	}
@@ -354,6 +358,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
 	cc.AuthURL = strings.TrimSpace(cc.AuthURL)
 	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
+	if cc.AuthURL == "" || cc.TokenURL == "" {
+		return nil, NewStoreError("oauth client endpoints are not configured", false)
+	}
 	cc.RedirectURL = redirect
 	tok, err := cc.oauth2(GoogleScopes(id)).Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifier))
@@ -413,4 +420,9 @@ type OAuthState struct {
 	Connector string    `bson:"connector" json:"-"`
 	Verifier  string    `bson:"verifier" json:"-"`
 	ExpiresAt time.Time `bson:"expiresAt" json:"-"`
+	// RedirectURI pins the exact redirect sent at mint time, so a config
+	// rotation mid-consent cannot strand the attempt with a mismatch.
+	// Empty means minted before this column existed: fall back to the
+	// live config instead of failing an otherwise valid attempt.
+	RedirectURI string `bson:"redirectUri,omitempty" json:"-"`
 }
