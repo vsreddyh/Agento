@@ -236,6 +236,12 @@ func TestOAuthConfigRejectsControlClient(t *testing.T) {
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("control-byte client id should fail closed")
 	}
+	// Invalid UTF-8 fails the same way: bad bytes decode as RuneError
+	// (not control), so the control gate alone would miss them.
+	t.Setenv("GOOGLE_CLIENT_ID", "ci\xc0\x80d")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("invalid-utf8 client id should fail closed")
+	}
 }
 
 // A non-numeric port can never match a console registration: fail closed

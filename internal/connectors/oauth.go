@@ -107,6 +107,13 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	if err != nil {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
 	}
+	trimmed := strings.TrimSpace(raw)
+	// Inner controls fail closed like every sibling input (state/code/
+	// verifier at every layer): url.Parse/String round-trips them, so a
+	// control-bearing path would pass validation yet mismatch Google.
+	// Checked on the trimmed form — the same string Parse saw — so
+	// edge whitespace (forgiven by the trim contract) doesn't misfile
+	// as a control-character error.
 	// Hostnames are case-insensitive: fold before validation so a
 	// mixed-case registration compares equal to what Google
 	// exact-matches against (ports are unaffected by lowercasing).
@@ -180,7 +187,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// every check verbatim). Unescape failure rejects too — a malformed
 	// host is not a registration.
 	decodedHost, hostErr := url.PathUnescape(parsed.Host)
-	if HasControl(raw) || HasControl(parsed.Path) || hostErr != nil || HasControl(decodedHost) {
+	if HasControl(trimmed) || HasControl(parsed.Path) || hostErr != nil || HasControl(decodedHost) {
 		return "", errors.New("connectors: redirect URL must not contain control characters")
 	}
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
@@ -201,11 +208,12 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	if clientID == "" || clientSecret == "" || redirectURL == "" {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL must all be set for OAuth")
 	}
-	// Credentials fail fast on control bytes like every sibling input
+	// Credentials fail fast on control bytes and invalid UTF-8 like every
+	// sibling input (redirect below, state/code/verifier at every layer): an
 	// (redirect below, state/code/verifier at every layer): an
 	// operator-pasted control would otherwise embed in the minted
 	// AuthCodeURL and the token request and fail at Google after consent.
-	if HasControl(clientID) || HasControl(clientSecret) {
+	if HasControl(clientID) || HasControl(clientSecret) || !utf8.ValidString(clientID) || !utf8.ValidString(clientSecret) {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters")
 	}
 	// Fail closed on a misregistered redirect: Google matches the callback
@@ -319,7 +327,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	trimmed.RedirectURL = strings.TrimSpace(trimmed.RedirectURL)
 	trimmed.AuthURL = strings.TrimSpace(trimmed.AuthURL)
 	trimmed.TokenURL = strings.TrimSpace(trimmed.TokenURL)
-	if HasControl(trimmed.ClientID) || HasControl(trimmed.ClientSecret) {
+	if HasControl(trimmed.ClientID) || HasControl(trimmed.ClientSecret) || !utf8.ValidString(trimmed.ClientID) || !utf8.ValidString(trimmed.ClientSecret) {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: invalid client credential", id)
 		}
@@ -443,7 +451,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
 	cc.AuthURL = strings.TrimSpace(cc.AuthURL)
 	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
-	if HasControl(cc.ClientID) || HasControl(cc.ClientSecret) {
+	if HasControl(cc.ClientID) || HasControl(cc.ClientSecret) || !utf8.ValidString(cc.ClientID) || !utf8.ValidString(cc.ClientSecret) {
 		return nil, NewStoreError("oauth client credential is invalid", false)
 	}
 	// Length gate above covers the trimmed values copied here — keep the
