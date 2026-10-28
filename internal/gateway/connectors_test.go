@@ -375,6 +375,22 @@ func TestConnectorsCallbackRejectsOversizedInput(t *testing.T) {
 	}
 }
 
+// Embedded control bytes fail closed with the same dead-attempt shape:
+// a NUL/CR/LF in code/state must never become a DB filter or an outbound
+// token request.
+func TestConnectorsCallbackRejectsControlBytes(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%00b&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("control-byte code: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("control bytes should use the dead-attempt message: %s", rec.Body)
+	}
+}
+
 // A dead attempt in a browser tab answers HTML, not JSON: the operator
 // just consented and needs close-this-tab guidance, not a raw error body.
 // API clients (no text/html Accept) keep the existing JSON shape.

@@ -351,6 +351,14 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
 	}
+	// Expiry-without-access is a second missing representation: the
+	// refresher keys renew-now off zero expiry, and the no-op predicates
+	// read a non-zero expiry as grant signal. The gateway zeroes expiry
+	// when access is empty (single representation of missing) — the store
+	// enforces the same rule instead of relying on the one prod caller.
+	if tok.AccessCipher == "" && tok.AccessExpiryUnixMilli != 0 {
+		return NewStoreError("connector grant expiry without access token", false)
+	}
 	// Reject padded ciphers instead of trimming-and-storing: the string
 	// the checks see and the bytes the store keeps must be identical,
 	// or a direct caller mints an undecryptable "present" grant (same

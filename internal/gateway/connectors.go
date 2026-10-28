@@ -152,6 +152,11 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet, "/api/connectors") {
 		return
 	}
+	// no-store like every other verb on this surface: the app polls this
+	// loop, and a heuristic cache would serve a stale disconnected after
+	// the callback flipped to connected. No capability here (status +
+	// scopes only), so this is staleness, not leak — still no-store.
+	w.Header().Set("Cache-Control", "no-store")
 	ctx, cancel := connectorCtx(r)
 	defer cancel()
 	list, err := s.connectors.List(ctx)
@@ -535,6 +540,16 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			callbackStateReject)
 		return
 	}
+	// Control bytes fail closed here, not at Google: an embedded NUL/CR/LF
+	// would otherwise become a Mongo filter and an outbound token request
+	// before failing. Same dead-attempt shape as the oversized branch —
+	// the values are server-minted or Google-issued, so a control byte is
+	// never a legitimate credential.
+	if hasControl(code) || hasControl(state) {
+		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
+			callbackStateReject)
+		return
+	}
 	ctx, cancel := connectorCallbackCtx(r)
 	defer cancel()
 	st, err := s.connectors.ConsumeState(ctx, state)
@@ -568,7 +583,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		callbackDeadAttempt(w, r)
 		return
 	}
-	id := st.Connector
+	id := connectors.NormalizedID(st.Connector)
+	// Folded here, not just downstream: Exchange/SetTokens/SetStatus all
+	// re-fold, but the log lines below must observe the same spelling the
+	// store sees — stored == logged == sent by construction.
 	// Send the pinned redirect from mint time, not the live config: a
 	// rotation mid-consent would otherwise exact-mismatch Google.
 	// Empty means minted before this column existed: fall back to the

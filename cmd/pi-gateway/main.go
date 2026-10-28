@@ -420,10 +420,10 @@ func run() error {
 		// Mongo relies on THIS index), so triage must hear about it at
 		// every startup, not once in a scrolled-past line.
 		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+		defer cancelIndex()
 		if err := store.EnsureIndexes(indexCtx); err != nil {
 			logger.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
 		}
-		cancelIndex()
 	}
 
 	// Google OAuth client (#316, second layer). ANY piece missing (client

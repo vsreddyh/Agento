@@ -361,6 +361,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
 	cc.AuthURL = strings.TrimSpace(cc.AuthURL)
 	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
+	if cc.ClientID == "" || cc.ClientSecret == "" {
+		return nil, NewStoreError("oauth client is not configured", false)
+	}
 	if cc.AuthURL == "" || cc.TokenURL == "" {
 		return nil, NewStoreError("oauth client endpoints are not configured", false)
 	}

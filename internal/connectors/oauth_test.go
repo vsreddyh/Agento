@@ -90,6 +90,17 @@ func TestExchangeRejectsEmptyEndpoints(t *testing.T) {
 	}
 }
 
+// Empty client credentials fail closed before any network call, matching
+// AuthURL: a hand-built cfg with blank id/secret can only 400 at Google.
+func TestExchangeRejectsEmptyClient(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "   ", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "verifier", nil); err == nil {
+		t.Fatal("blank client id should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("blank client should be a deterministic 400, got %v", err)
+	}
+}
+
 // Redirect validation fails closed: typo'd host/scheme or a missing
 // callback suffix must break startup config, not die in the browser.
 func TestOAuthConfigValidatesRedirect(t *testing.T) {

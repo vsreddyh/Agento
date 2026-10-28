@@ -1001,6 +1001,20 @@ func TestSetTokensRejectsWhitespaceAccess(t *testing.T) {
 	}
 }
 
+// Expiry without access is a second missing representation: the row would
+// read as holding a grant (non-zero expiry) for a token that doesn't
+// exist. Fail closed so the single representation (zero expiry, empty
+// access) is the only way to say "no access token".
+func TestSetTokensRejectsExpiryWithoutAccess(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessExpiryUnixMilli: 123}); err == nil {
+		t.Fatal("expiry without access should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("expiry-without-access should be a deterministic 400, got %v", err)
+	}
+}
+
 // Oversized ciphers are a deterministic reject at the store, not an
 // unbounded stored doc — same bound as code/state/verifier.
 func TestSetTokensRejectsOversizedCipher(t *testing.T) {
