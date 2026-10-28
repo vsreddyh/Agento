@@ -927,6 +927,13 @@ func TestCreateStateRejectsEmptyVerifier(t *testing.T) {
 	if err := s.CreateState(ctx, OAuthState{State: "nv", Connector: "gmail", Verifier: ""}); err == nil {
 		t.Fatal("empty verifier should fail")
 	}
+	// Empty-before-Known, matching Exchange: unknown id + empty verifier
+	// 400s on empty, not 404s on identity.
+	if err := s.CreateState(ctx, OAuthState{State: "nv", Connector: "slack", Verifier: "  "}); err == nil {
+		t.Fatal("empty verifier should fail even for unknown id")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("unknown+empty should be a deterministic 400, got %v", err)
+	}
 }
 
 // Durability contract: memory is not durable (OAuth stays off), Mongo is

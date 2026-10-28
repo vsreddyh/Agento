@@ -713,11 +713,22 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 	if st.State == "" {
 		return NewStoreError("oauth state needs an id", false)
 	}
+	// Empty → length → Known, matching Exchange: an empty or oversized
+	// input 400s the same way whether the id is known or not, so the
+	// unknown-id path cannot be told apart by which error fires first.
+	if strings.TrimSpace(st.Verifier) == "" {
+		// Fail fast at creation, not after the user completed consent: a
+		// verifier-less attempt can never survive Exchange.
+		return NewStoreError("oauth state needs a verifier", false)
+	}
 	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
 		return NewStoreError("oauth state or verifier too long", false)
 	}
 	if len(st.RedirectURI) > MaxStateFieldLen {
 		return NewStoreError("oauth redirect too long", false)
+	}
+	if !Known(st.Connector) {
+		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
 	}
 	// Shape-checked like AuthURL/Exchange, not just length-capped: a
 	// sub-2048 garbage redirect would otherwise supersede the live
@@ -731,14 +742,6 @@ func (s *MongoStore) CreateState(ctx context.Context, st OAuthState) error {
 			return NewStoreError("oauth redirect is invalid", false)
 		}
 		st.RedirectURI = canonical
-	}
-	if !Known(st.Connector) {
-		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
-	}
-	if strings.TrimSpace(st.Verifier) == "" {
-		// Fail fast at creation, not after the user completed consent: a
-		// verifier-less attempt can never survive Exchange.
-		return NewStoreError("oauth state needs a verifier", false)
 	}
 	// Single clock read for the whole verb: default, clamp bound, and
 	// past-expiry check must agree on "now", or a tick between reads

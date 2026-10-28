@@ -448,12 +448,12 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// Mongo TTL-indexed). Passing wall-clock time here would bypass the
 	// injectable default and pin a boundary no test covers — single clock
 	// owner, set at the store.
-	// Budget composition note: the 5s verb budget covers the CreateState
-	// call, whose delete and insert each run on their own detached 5s
-	// quickCtx inside the store — a slow Atlas no longer turns either
-	// write into a 502 that reads as "connect failed". A verb-deadline
-	// 502 after a landed insert recovers via re-tap supersede, and a
-	// failed create mints nothing, so re-tap stays a clean retry.
+	// Budget composition note: the 5s verb budget covers validation only.
+	// CreateState's delete and insert each run on their own detached 5s
+	// quickCtx inside the store — a slow Atlas can no longer trip the
+	// verb deadline on this path at all. A verb-deadline 502 after a
+	// landed insert recovers via re-tap supersede, and a failed create
+	// mints nothing, so re-tap stays a clean retry.
 	//
 	// Fail fast on a misshapen configured redirect: storing raw and letting
 	// the store 400 it would misread a server config error as bad state
@@ -673,6 +673,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	var expiry int64
 	if accessToken != "" && !tok.Expiry.IsZero() {
 		expiry = tok.Expiry.UnixMilli()
+		// Clamp absurd futures: a far-future expires_in (hand-built
+		// token, clock skew) would otherwise read as "don't renew for
+		// decades". Same unbounded-lifetime class as the state clamp.
+		if max := time.Now().Add(24 * time.Hour).UnixMilli(); expiry > max {
+			expiry = max
+		}
 	}
 	if err := s.connectors.SetTokens(ctx, id, connectors.TokenRow{
 		RefreshCipher:         refreshSealed,

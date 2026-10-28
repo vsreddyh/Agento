@@ -377,9 +377,10 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		oauth2.SetAuthURLParam("code_verifier", verifier))
 	if err != nil {
 		if logf != nil {
-			// Scrubbed + capped like the domain mapper below: the raw
-			// provider error_description is unbounded and untrusted.
-			logf("connectors: grant exchange failed for %q: %v", id, approvals.ScrubError(err.Error()))
+			// Scrubbed + capped like the domain mapper below — and
+			// quoted, so an inner control byte in provider text cannot
+			// split the log line.
+			logf("connectors: grant exchange failed for %q: %q", id, approvals.ScrubError(err.Error()))
 		}
 		return nil, NewStoreError("grant exchange failed", true)
 	}
