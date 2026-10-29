@@ -247,12 +247,12 @@ func IsDraftOnlySend(server, tool string) bool {
 	server = NormalizedID(server)
 	tool = NormalizedID(tool)
 	switch server {
-	case "gmail":
+	case Gmail:
 		switch tool {
 		case "send_message", "send_gmail":
 			return true
 		}
-	case "calendar":
+	case Calendar:
 		switch tool {
 		case "create_event", "send_invite":
 			return true

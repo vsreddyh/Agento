@@ -636,3 +636,30 @@ func TestSkillArgsReportsBrokenSkillAfterAHealthyOne(t *testing.T) {
 			logged.String())
 	}
 }
+
+// truncateForLog caps bytes, never runes: values at or under budget pass
+// through untouched (so byte-for-byte comparisons never truncate a value
+// the server would send), and over-budget values cut at a rune boundary.
+func TestTruncateForLog(t *testing.T) {
+	if got := truncateForLog("abc", 2048); got != "abc" {
+		t.Errorf("short value = %q, want untouched", got)
+	}
+	exact := strings.Repeat("x", 2048)
+	if got := truncateForLog(exact, 2048); got != exact {
+		t.Errorf("exact-budget value must log whole, got len %d", len(got))
+	}
+	big := strings.Repeat("x", 2050)
+	got := truncateForLog(big, 2048)
+	if len(got) != 2048+len("… (truncated)") || !strings.HasSuffix(got, "… (truncated)") {
+		t.Fatalf("over-budget value = len %d, want 2048 + marker", len(got))
+	}
+	// Multi-byte rune straddling the cap: cut before it, never through it.
+	multi := strings.Repeat("x", 2047) + "é" + "rest"
+	got = truncateForLog(multi, 2048)
+	if got != strings.Repeat("x", 2047)+"… (truncated)" {
+		t.Fatalf("straddling rune must cut before it, got len %d valid=%v", len(got), strings.HasSuffix(got, "… (truncated)"))
+	}
+	if !strings.HasSuffix(got, "… (truncated)") {
+		t.Fatalf("marker must survive, got %q", got)
+	}
+}

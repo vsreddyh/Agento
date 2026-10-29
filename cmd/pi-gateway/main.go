@@ -48,10 +48,35 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/gateway"
 	"agento/internal/pi"
 )
+
+// truncateForLog caps a log value at maxBytes bytes without splitting a
+// multi-byte char: range over a string yields rune-start byte indices, so
+// accumulating whole runes while the total stays within budget always ends
+// on a boundary. Values at or under budget pass through untouched, so the
+// byte-for-byte comparison this log line exists for never truncates a
+// value the server would actually send. Different units from the
+// gateway's bounded() on purpose: this is bytes-capped like every len()
+// gate on the surface, bounded() is display-capped at 128 runes for
+// UI/API echoes — do not unify the two truncators.
+func truncateForLog(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := 0
+	for _, r := range s {
+		if w := utf8.RuneLen(r); cut+w > maxBytes {
+			break
+		} else {
+			cut += w
+		}
+	}
+	return s[:cut] + "\u2026 (truncated)"
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -446,31 +471,11 @@ func run() error {
 		if cfg, err := connectors.OAuthConfigFromEnv(); err != nil {
 			// Echo the attempted redirect: non-secret, and the triage
 			// pointer when the failure is a registration mismatch.
-			// Capped at MaxRedirectLen bytes — the same bound
-			// CanonicalRedirectURL enforces, so any storable value logs
-			// whole and the byte-for-byte comparison this line exists for
-			// never truncates a value the server would actually send.
-			// Bytes for the bound (rune counts over-admit multi-byte
-			// values up to ~4x), cut at a rune boundary by walking the
-			// byte string — never slicing it — so no char splits. range
-			// over a string yields the byte index of each rune start
-			// (not a rune count), so redirect[:end] is safe exactly
-			// because end only ever holds one of those start indices.
-			// Different units from the gateway's bounded() on purpose:
-			// this log is bytes-capped like every len() gate on the
-			// surface, bounded() is display-capped at 128 runes for
-			// UI/API echoes — do not unify the two truncators.
-			redirect := os.Getenv("GOOGLE_REDIRECT_URL")
-			if len(redirect) > connectors.MaxRedirectLen {
-				end := 0
-				for i := range redirect {
-					if i > connectors.MaxRedirectLen {
-						break
-					}
-					end = i
-				}
-				redirect = redirect[:end] + "\u2026 (truncated)"
-			}
+			// Capped via truncateForLog: MaxRedirectLen bytes (not runes),
+			// cut at a rune boundary, so any storable value logs whole
+			// and the byte-for-byte comparison this line exists for never
+			// truncates a value the server would actually send.
+			redirect := truncateForLog(os.Getenv("GOOGLE_REDIRECT_URL"), connectors.MaxRedirectLen)
 			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, redirect)
 		} else {
 			connectorOAuth = cfg
