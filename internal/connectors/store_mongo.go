@@ -765,7 +765,9 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// on read), and without these a crash between SetTokens and
 	// SetStatus would leave a display-less row. updatedAt rides along so
 	// the crash-window row reads as explicit-off (something happened here)
-	// rather than never-touched. Reads project only the display shape, so
+	// rather than never-touched. Wall-clock by design like the memory
+	// twin: display-only stamp, not a lifetime tick (injectable timeNow
+	// owns state-expiry ticks). Reads project only the display shape, so
 	// these columns are inert until the transition write lands the real row.
 	now := time.Now().UnixMilli()
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}}, bson.D{

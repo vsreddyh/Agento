@@ -617,7 +617,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// them.
 	if HasControl(id) || !utf8.ValidString(id) {
 		if logf != nil {
-			logf("connectors: auth URL build failed: invalid connector id")
+			logf("connectors: auth URL build failed: invalid connector id %q", id)
 		}
 		return ""
 	}

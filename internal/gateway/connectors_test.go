@@ -1183,7 +1183,14 @@ func TestConnectorsCallbackHugeScopeStillConnects(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	store := connectors.NewMemoryStore()
-	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	var mu sync.Mutex
+	var logged []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
 	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
 	authURL, _ := decodeBody(t, rec)["auth_url"].(string)
 	u, err := url.Parse(authURL)
@@ -1197,6 +1204,17 @@ func TestConnectorsCallbackHugeScopeStillConnects(t *testing.T) {
 	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state+"&scope="+strings.Repeat("s", 3000), "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("huge-scope valid attempt: %d, want 200 (%s)", rec.Code, rec.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, line := range logged {
+		if strings.Contains(line, "subset check skipped") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("oversized scope should log the skip, got: %q", logged)
 	}
 }
 

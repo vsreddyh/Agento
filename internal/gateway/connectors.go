@@ -886,11 +886,15 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// not to the mint path, which cannot know which calls the app will make.
 	// Length-gated like code/state: the value is attacker-influenced and
 	// only feeds a log line plus set compare, so oversized input skips the
-	// check instead of paying the split on megabytes.
+	// check instead of paying the split on megabytes. The skip logs: a
+	// junk-suffixed scope that suppresses the subset warning must leave
+	// its own trace, or a later draft 403 has no line to trace back to.
 	if granted := query.Get("scope"); granted != "" && len(granted) <= connectors.MaxStateFieldLen {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
 			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, strings.Join(missing, " "), bounded(approvals.ScrubError(granted)))
 		}
+	} else if len(granted) > connectors.MaxStateFieldLen {
+		s.cfg.Logf("connectors: grant for %q scope param oversized, subset check skipped (grant stored; drafts may 403)", id)
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {
