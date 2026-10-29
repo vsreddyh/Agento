@@ -473,24 +473,9 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	if trimmed.AuthURL == "" || trimmed.TokenURL == "" {
-		// A hand-built cfg with no endpoints mints a consent URL Google
-		// can only 400. OAuthConfigFromEnv always sets both to the
-		// Google endpoints, so this guards direct callers only.
-		if logf != nil {
-			logf("connectors: auth URL build failed for %q: missing endpoint", id)
-		}
-		return ""
-	}
-	if HasControl(trimmed.AuthURL) || HasControl(trimmed.TokenURL) || !utf8.ValidString(trimmed.AuthURL) || !utf8.ValidString(trimmed.TokenURL) {
-		// Same fail-fast class as the credential gate above: a control-
-		// bearing endpoint would mint a consent URL Google can only 400,
-		// after the user consented.
-		if logf != nil {
-			logf("connectors: auth URL build failed for %q: invalid endpoint", id)
-		}
-		return ""
-	}
+	// Redirect shape before endpoints-empty, matching Exchange: a hand-built
+	// cfg with both bad answers redirect-first in both helpers, so the same
+	// input pair hits the same guard first whichever helper runs.
 	canonical, err := CanonicalRedirectURL(trimmed.RedirectURL)
 	if err != nil {
 		// Same shape gate as the env path: a hand-built redirect that
@@ -509,6 +494,24 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	if len(trimmed.RedirectURL) > MaxStateFieldLen {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: oversized redirect", id)
+		}
+		return ""
+	}
+	if trimmed.AuthURL == "" || trimmed.TokenURL == "" {
+		// A hand-built cfg with no endpoints mints a consent URL Google
+		// can only 400. OAuthConfigFromEnv always sets both to the
+		// Google endpoints, so this guards direct callers only.
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: missing endpoint", id)
+		}
+		return ""
+	}
+	if HasControl(trimmed.AuthURL) || HasControl(trimmed.TokenURL) || !utf8.ValidString(trimmed.AuthURL) || !utf8.ValidString(trimmed.TokenURL) {
+		// Same fail-fast class as the credential gate above: a control-
+		// bearing endpoint would mint a consent URL Google can only 400,
+		// after the user consented.
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: invalid endpoint", id)
 		}
 		return ""
 	}

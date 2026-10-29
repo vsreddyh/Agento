@@ -446,3 +446,24 @@ func TestOAuthConfigCanonicalisesRedirect(t *testing.T) {
 		t.Fatalf("RedirectURL = %q, want canonical %q", cfg.RedirectURL, want)
 	}
 }
+
+// A cfg with both a bad redirect and missing endpoints fails redirect-first
+// in both helpers: the same input pair hits the same guard first whichever
+// helper runs.
+func TestRedirectBeforeEndpointsInBothHelpers(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://evil.example/x", AuthURL: "", TokenURL: ""}
+	var logged string
+	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
+	if got := AuthURL(cfg, "gmail", "s", "v", logf); got != "" {
+		t.Fatalf("dual-bad AuthURL = %q, want empty", got)
+	}
+	if !strings.Contains(logged, "redirect") {
+		t.Fatalf("dual-bad AuthURL should fail on redirect, logged %q", logged)
+	}
+	logged = ""
+	if _, err := Exchange(context.Background(), cfg, "gmail", "code", "verifier", logf); err == nil {
+		t.Fatal("dual-bad Exchange should fail")
+	} else if !strings.Contains(logged, "redirect") {
+		t.Fatalf("dual-bad Exchange should fail on redirect, logged %q", logged)
+	}
+}

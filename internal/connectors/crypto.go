@@ -63,6 +63,15 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 	if TrimCredential(plaintext) == "" {
 		return "", errors.New("connectors: refusing to seal an empty token; pass through empty instead")
 	}
+	// Length before padded/controls (empty → length → padded → control):
+	// the same input pair reports the same discriminant on every leg.
+	// Capped before the alloc: gcm.Seal allocates the full output up
+	// front, so an unbounded plaintext buys a large alloc before the
+	// store 400s the resulting cipher. Plaintext grants stay well under
+	// MaxPlaintextLen in prod — a legitimate token never trips this.
+	if len(plaintext) > MaxPlaintextLen {
+		return "", errors.New("connectors: refusing to seal an oversized token")
+	}
 	if plaintext != TrimCredential(plaintext) {
 		// Refuse padded plaintext instead of sealing it: a sealed-with-
 		// padding value is valid base64url with no spaces, so the
@@ -70,15 +79,6 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 		// to a value Google rejects. Checked == stored, all the way
 		// down (same contract as the caller-side trim-before-seal).
 		return "", errors.New("connectors: refusing to seal a padded token; trim before sealing")
-	}
-	// Length before controls (empty → length → control, matching Exchange
-	// and the stores) so the same input pair reports the same discriminant
-	// everywhere. Capped before the alloc: gcm.Seal allocates the full
-	// output up front, so an unbounded plaintext buys a large alloc before
-	// the store 400s the resulting cipher. Plaintext grants stay well under
-	// MaxPlaintextLen in prod — a legitimate token never trips this.
-	if len(plaintext) > MaxPlaintextLen {
-		return "", errors.New("connectors: refusing to seal an oversized token")
 	}
 	// Controls and invalid UTF-8 fail here like every sibling input: a
 	// sealed-with-control plaintext is valid base64url the SetTokens

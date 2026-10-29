@@ -920,6 +920,13 @@ func TestEncryptTokenRefusesOversized(t *testing.T) {
 	if _, err := EncryptToken([32]byte{1}, strings.Repeat("x", MaxPlaintextLen+1)); err == nil {
 		t.Fatal("sealing oversized token should fail")
 	}
+	// Oversized and padded reports length first (empty → length → padded
+	// → control), matching every sibling leg for the same input pair.
+	if _, err := EncryptToken([32]byte{1}, " "+strings.Repeat("x", MaxPlaintextLen+1)+" "); err == nil {
+		t.Fatal("sealing oversized padded token should fail")
+	} else if !strings.Contains(err.Error(), "oversized") {
+		t.Fatalf("oversized+padded should report length, got %q", err)
+	}
 }
 
 // The bounds round-trip: a max-size plaintext seals to a cipher the store
