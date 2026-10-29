@@ -347,7 +347,7 @@ func TestOAuthConfigStripsPaddedDefaultPort(t *testing.T) {
 // Length is capped before parsing: a multi-MB redirect must not pay the
 // parse + Clean + String alloc before the deterministic 400.
 func TestCanonicalRedirectRejectsOversized(t *testing.T) {
-	if _, err := CanonicalRedirectURL("https://host.example/" + strings.Repeat("x", MaxStateFieldLen)); err == nil {
+	if _, err := CanonicalRedirectURL("https://host.example/" + strings.Repeat("x", MaxRedirectLen)); err == nil {
 		t.Fatal("oversized redirect should fail closed")
 	}
 }

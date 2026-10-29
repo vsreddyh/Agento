@@ -552,7 +552,7 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	if HasControl(st.State) || HasControl(st.Verifier) || !utf8.ValidString(st.State) || !utf8.ValidString(st.Verifier) || HasWhitespace(st.State) || HasWhitespace(st.Verifier) {
 		return NewStoreError("oauth state or verifier invalid", false)
 	}
-	if len(st.RedirectURI) > MaxStateFieldLen {
+	if len(st.RedirectURI) > MaxRedirectLen {
 		return NewStoreError("oauth redirect too long", false)
 	}
 	if !Known(st.Connector) {
@@ -573,7 +573,7 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 		// Checked == stored: canonicalisation can grow the string
 		// (IPv6 brackets), so the raw length gate above is not enough —
 		// a just-under-cap raw could land just-over-cap canonical.
-		if len(st.RedirectURI) > MaxStateFieldLen {
+		if len(st.RedirectURI) > MaxRedirectLen {
 			return NewStoreError("oauth redirect too long", false)
 		}
 	}

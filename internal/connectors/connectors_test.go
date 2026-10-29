@@ -784,7 +784,7 @@ func TestCreateStateRejectsPastExpiry(t *testing.T) {
 func TestCreateStateRejectsLongRedirect(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	big := strings.Repeat("x", MaxStateFieldLen+1)
+	big := strings.Repeat("x", MaxRedirectLen+1)
 	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", RedirectURI: big}); err == nil {
 		t.Fatal("oversized redirect should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {

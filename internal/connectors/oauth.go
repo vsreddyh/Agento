@@ -189,9 +189,9 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	trimmed := TrimCredential(raw)
 	// Length-capped before Parse: a multi-MB hand-built value would
 	// otherwise pay the full parse + Clean + String alloc before any
-	// 400. Same MaxStateFieldLen the CreateState redirect cap uses —
+	// 400. Same MaxRedirectLen the CreateState redirect cap uses —
 	// registrations are ~60 chars, so 2048 is generous, not tight.
-	if len(trimmed) > MaxStateFieldLen {
+	if len(trimmed) > MaxRedirectLen {
 		return "", errors.New("connectors: redirect URL too long")
 	}
 	parsed, err := url.Parse(trimmed)
@@ -326,10 +326,10 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	}
 	// Length-cap the canonical output, not just the raw input: growth
 	// through canonicalisation (brackets, unescaping) must not mint a
-	// stored/sent string the write paths would 400. Same MaxStateFieldLen
-	// as every sibling gate, so checked == sent == stored by construction.
+	// stored/sent string the write paths would 400. Same MaxRedirectLen
+	// as every sibling redirect gate, so checked == sent == stored by construction.
 	out := parsed.String()
-	if len(out) > MaxStateFieldLen {
+	if len(out) > MaxRedirectLen {
 		return "", errors.New("connectors: redirect URL too long")
 	}
 	return out, nil
@@ -504,6 +504,15 @@ const MaxPlaintextLen = 2048
 // with credential size.
 const MaxCredentialLen = 2048
 
+// MaxRedirectLen bounds the registered redirect URL at parse and at every
+// canonical-output check. Same value as MaxStateFieldLen today, deliberately
+// a separate name: the 2048 here is about URL size (registrations are ~60
+// chars; host+path growth is unbounded in principle), while MaxStateFieldLen
+// is about OAuth input size (codes, states, verifiers). If a legitimate
+// registration ever needs more room, raise this — not the OAuth-input
+// bound, which has nothing to do with URL size.
+const MaxRedirectLen = 2048
+
 // AuthURL builds the Google consent URL for one connector attempt. Offline
 // access (a refresh token) + consent prompt every time: without
 // prompt=consent Google returns a refresh token only on the FIRST grant,
@@ -592,7 +601,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// canonical form like Exchange/CreateState: canonicalisation can grow
 	// the string, and the checked value must be the sent one.
 	trimmed.RedirectURL = canonical
-	if len(trimmed.RedirectURL) > MaxStateFieldLen {
+	if len(trimmed.RedirectURL) > MaxRedirectLen {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: oversized redirect", id)
 		}
@@ -713,15 +722,19 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if HasControl(id) || !utf8.ValidString(id) {
 		return nil, deny("invalid connector id")
 	}
-	// Dead caller ctx fails here — after the cheap input guards above, but
-	// before the fallback timeout below and any network I/O: a cancelled
-	// parent with no deadline would otherwise pay a full oauth2 round-trip
-	// before failing. Deterministic 400, not a 502 — nothing was sent.
-	if ctx.Err() != nil {
-		return nil, deny("grant exchange aborted, caller context ended")
-	}
+	// Config shape before caller state (deterministic, no I/O either
+	// way): a stopping server that is also misconfigured logs the
+	// misconfiguration, not the hangup — the config problem persists
+	// while the cancel is transient.
 	if cfg == nil {
 		return nil, deny("oauth client is not configured")
+	}
+	// Dead caller ctx fails here, before the fallback timeout below and
+	// any network I/O: a cancelled parent with no deadline would otherwise
+	// pay a full oauth2 round-trip before failing. Deterministic 400,
+	// not a 502 — nothing was sent.
+	if ctx.Err() != nil {
+		return nil, deny("grant exchange aborted, caller context ended")
 	}
 	// Bounded before the token endpoint, on trimmed values: codes/verifiers
 	// are short by construction, and a multi-MB value would become an
@@ -762,7 +775,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	}
 	// Checked == sent: canonicalisation can grow the string (brackets),
 	// so length-gate the canonical form too — same as both CreateStates.
-	if len(redirect) > MaxStateFieldLen {
+	if len(redirect) > MaxRedirectLen {
 		return nil, deny("oauth client redirect URL too long")
 	}
 	cc := *cfg
