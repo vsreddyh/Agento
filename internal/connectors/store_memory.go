@@ -2,7 +2,6 @@ package connectors
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -211,8 +210,8 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// content, not from updated_at.
 	hasGrant := func() bool {
 		tok, ok := s.tokens[id]
-		return ok && (strings.TrimSpace(tok.RefreshCipher) != "" ||
-			strings.TrimSpace(tok.AccessCipher) != "" ||
+		return ok && (TrimCredential(tok.RefreshCipher) != "" ||
+			TrimCredential(tok.AccessCipher) != "" ||
 			tok.AccessExpiryUnixMilli != 0)
 	}
 	var out Connector
@@ -348,14 +347,14 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	if !Known(id) {
 		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
-	if strings.TrimSpace(tok.RefreshCipher) == "" {
+	if TrimCredential(tok.RefreshCipher) == "" {
 		return NewStoreError("connector grant needs a refresh token", false)
 	}
 	// Whitespace-only access is neither a sealed grant nor literal "": the
 	// refresher keys missing off "", so a padded value would create a
 	// second missing representation that reads as present. Reject it here
 	// (same gate as refresh) rather than letting it through to storage.
-	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
+	if tok.AccessCipher != "" && TrimCredential(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
 	}
 	// Expiry-without-access is a second missing representation: the
@@ -384,8 +383,8 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	// or a direct caller mints an undecryptable "present" grant (same
 	// class as the state trim-at-write contract, enforced as a reject
 	// here because stored credentials must round-trip byte-exact).
-	if tok.RefreshCipher != strings.TrimSpace(tok.RefreshCipher) ||
-		(tok.AccessCipher != "" && tok.AccessCipher != strings.TrimSpace(tok.AccessCipher)) {
+	if tok.RefreshCipher != TrimCredential(tok.RefreshCipher) ||
+		(tok.AccessCipher != "" && tok.AccessCipher != TrimCredential(tok.AccessCipher)) {
 		return NewStoreError("connector grant token is padded", false)
 	}
 	s.mu.Lock()
@@ -415,7 +414,7 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	tok, ok := s.tokens[id]
-	if !ok || strings.TrimSpace(tok.RefreshCipher) == "" {
+	if !ok || TrimCredential(tok.RefreshCipher) == "" {
 		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	// Returned verbatim by design: size enforcement lives in DecryptToken

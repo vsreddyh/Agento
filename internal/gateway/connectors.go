@@ -553,6 +553,15 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			"callback is not configured on this server yet — never paste a token in chat")
 		return
 	}
+	// Bound the raw query before parsing it: url.Query() allocates the
+	// full map up front, so a multi-MB ?code=/state= from an
+	// unauthenticated caller would pay the parse before the per-value
+	// length gate below fires. 2x cap + slack covers both values plus
+	// separators; anything past that is garbage, rejected before Parse.
+	if len(r.URL.RawQuery) > 2*connectors.MaxStateFieldLen+64 {
+		callbackDeadAttempt(w, r)
+		return
+	}
 	// Parse the query once and reuse it: each Query() call re-parses and
 	// re-allocates the full map, and this unauthenticated entry point
 	// pays that before any fast-path reject runs.

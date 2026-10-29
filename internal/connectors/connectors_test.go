@@ -1490,3 +1490,17 @@ func TestGuardOrderMatchesAcrossLayers(t *testing.T) {
 	check400("Exchange", func() error { _, err := Exchange(ctx, cfg, bigID, big, "v", nil); return err }())
 	check400("memory CreateState", NewMemoryStore().CreateState(ctx, OAuthState{State: big, Connector: bigID, Verifier: "v"}))
 }
+
+// TrimCredential forgives edge Cf like whitespace but never interior
+// controls: padded input trims, embedded control still fails closed.
+func TestTrimCredential(t *testing.T) {
+	// U+200B zero-width space is Cf, not ASCII whitespace:
+	// TrimSpace leaves it, TrimCredential forgives it at the edges but
+	// never in the middle (interior Cf must still fail HasControl).
+	if got := TrimCredential("\u200b\u200bgmail\u200b\u200b"); got != "gmail" {
+		t.Errorf("TrimCredential padded = %q, want gmail", got)
+	}
+	if !HasControl(TrimCredential("a\u200bb")) {
+		t.Error("interior Cf must survive trimming and still fail HasControl")
+	}
+}

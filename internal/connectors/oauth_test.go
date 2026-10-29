@@ -110,6 +110,20 @@ func TestExchangeRejectsEmptyEndpoints(t *testing.T) {
 	}
 }
 
+// Deterministic rejects log their discriminant: triage reads the log,
+// not the code, to tell which guard fired.
+func TestExchangeLogsGuard(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	var logged string
+	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
+	if _, err := Exchange(context.Background(), cfg, Gmail, "", "verifier1", logf); err == nil {
+		t.Fatal("empty code should fail")
+	}
+	if !strings.Contains(logged, "empty") {
+		t.Errorf("log = %q, want the empty-code guard named", logged)
+	}
+}
+
 // Empty client credentials fail closed before any network call, matching
 // AuthURL: a hand-built cfg with blank id/secret can only 400 at Google.
 func TestExchangeRejectsEmptyClient(t *testing.T) {

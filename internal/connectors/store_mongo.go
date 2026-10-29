@@ -414,8 +414,8 @@ type probeDoc struct {
 // cipher (hand-edit, partial clear, future refresher bug) must take the
 // repair write, never the pure no-op that would keep serving it.
 func grantClear(cur probeDoc) bool {
-	return strings.TrimSpace(cur.Refresh) == "" &&
-		strings.TrimSpace(cur.Access) == "" &&
+	return TrimCredential(cur.Refresh) == "" &&
+		TrimCredential(cur.Access) == "" &&
 		cur.Expiry == 0
 }
 
@@ -635,14 +635,14 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	if !Known(id) {
 		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
-	if strings.TrimSpace(tok.RefreshCipher) == "" {
+	if TrimCredential(tok.RefreshCipher) == "" {
 		return NewStoreError("connector grant needs a refresh token", false)
 	}
 	// Whitespace-only access is neither a sealed grant nor literal "": the
 	// refresher keys missing off "", so a padded value would create a
 	// second missing representation that reads as present. Reject it here
 	// (same gate as refresh) rather than letting it through to storage.
-	if tok.AccessCipher != "" && strings.TrimSpace(tok.AccessCipher) == "" {
+	if tok.AccessCipher != "" && TrimCredential(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
 	}
 	// Expiry-without-access is a second missing representation: the
@@ -672,8 +672,8 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// or a direct caller mints an undecryptable "present" grant (same
 	// class as the state trim-at-write contract, enforced as a reject
 	// here because stored credentials must round-trip byte-exact).
-	if tok.RefreshCipher != strings.TrimSpace(tok.RefreshCipher) ||
-		(tok.AccessCipher != "" && tok.AccessCipher != strings.TrimSpace(tok.AccessCipher)) {
+	if tok.RefreshCipher != TrimCredential(tok.RefreshCipher) ||
+		(tok.AccessCipher != "" && tok.AccessCipher != TrimCredential(tok.AccessCipher)) {
 		return NewStoreError("connector grant token is padded", false)
 	}
 	// Display defaults on insert only: a token write must never invent
@@ -729,7 +729,7 @@ func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error)
 		s.logf("connectors: token read %q failed: %s", id, scrubErr(err))
 		return TokenRow{}, NewStoreError("connector token read failed", true)
 	}
-	if strings.TrimSpace(row.Refresh) == "" {
+	if TrimCredential(row.Refresh) == "" {
 		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	// Returned verbatim by design: size enforcement lives in DecryptToken

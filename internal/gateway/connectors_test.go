@@ -544,6 +544,21 @@ func TestConnectorsCallbackRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
+// The raw query is length-gated before parsing: a multi-KB ?code= must
+// fail closed without paying the full map alloc first.
+func TestConnectorsCallbackRejectsOversizedQuery(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 5000)+"&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized query: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("oversized query should dead-attempt, got: %s", rec.Body)
+	}
+}
+
 // A dead attempt in a browser tab answers HTML, not JSON: the operator
 // just consented and needs close-this-tab guidance, not a raw error body.
 // API clients (no text/html Accept) keep the existing JSON shape.

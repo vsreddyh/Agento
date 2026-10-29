@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -36,7 +35,7 @@ const encryptionKeyEnv = "CONNECTORS_ENCRYPTION_KEY"
 // silently downgrade every token row to obfuscation.
 func KeyFromEnv() ([32]byte, error) {
 	var zero [32]byte
-	raw := strings.TrimSpace(os.Getenv(encryptionKeyEnv))
+	raw := TrimCredential(os.Getenv(encryptionKeyEnv))
 	if raw == "" {
 		return zero, errors.New("connectors: " + encryptionKeyEnv + " is not set; OAuth token storage is unavailable")
 	}
@@ -61,10 +60,10 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 	if key == ([32]byte{}) {
 		return "", errors.New("connectors: refusing to seal a token under a zero key")
 	}
-	if strings.TrimSpace(plaintext) == "" {
+	if TrimCredential(plaintext) == "" {
 		return "", errors.New("connectors: refusing to seal an empty token; pass through empty instead")
 	}
-	if plaintext != strings.TrimSpace(plaintext) {
+	if plaintext != TrimCredential(plaintext) {
 		// Refuse padded plaintext instead of sealing it: a sealed-with-
 		// padding value is valid base64url with no spaces, so the
 		// SetTokens padded-cipher gate cannot see it — but it decrypts

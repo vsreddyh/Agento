@@ -530,7 +530,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// triage gets the guard name without guessing.
 	deny := func(reason string) *StoreError {
 		if logf != nil {
-			logf("connectors: grant exchange refused: %s", reason)
+			logf("connectors: grant exchange refused for %q: %s", id, reason)
 		}
 		return NewStoreError(reason, false)
 	}
