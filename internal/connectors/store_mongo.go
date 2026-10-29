@@ -593,8 +593,8 @@ func backfillDisplay(c Connector, id string) Connector {
 // consequence: a hung-up client still blocks on detached IO (the gateway's
 // gone-client check after a detached call can only skip the work that
 // hasn't started). Do not copy this for
-// non-idempotent work (the OAuth follow-up's token writes stay on the
-// request ctx).
+// non-idempotent work: the OAuth token writes on the callback path stay
+// on the 30s request ctx for exactly this reason.
 //
 // Budget composition, stated so the follow-up doesn't copy the stacking:
 // worst case per verb is 5s pre-read + 5s scrub + 5s write (verb ctx) +
@@ -861,7 +861,9 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 		return NewStoreError("oauth state already exists", false)
 	}
 	if dupErr != mongoDrv.ErrNoDocuments {
-		s.logf("connectors: state duplicate check %q failed: %s", st.State, scrubErr(dupErr))
+		// Connector id, not the state value: the state is a live
+		// single-use capability and must never land in logs, even quoted.
+		s.logf("connectors: state duplicate check for %q failed: %s", st.Connector, scrubErr(dupErr))
 		return NewStoreError("oauth state create failed", true)
 	}
 	_, serr := s.states.DeleteMany(opCtx, bson.D{{Key: "connector", Value: st.Connector}})

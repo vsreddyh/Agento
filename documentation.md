@@ -329,9 +329,9 @@ connecting/disconnecting independently from the app:
 Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
 app to open in a browser; Google redirects to the single registered
-`GET /api/connectors/callback?code=&state=` (bare spelling, direct on the
-pi port — the proxied `/p/` spelling from `.env.example` is the same
-single callback seen through nginx), the server consumes the
+`GET /api/connectors/callback?code=&state=` — one registration, two
+serving paths: the bare spelling direct on the pi port and the `/p/`
+spelling through nginx, which strips `/p` before forwarding. The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope
 key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to
 connected. Tokens land before the status flips — a connected-with-no-tokens
