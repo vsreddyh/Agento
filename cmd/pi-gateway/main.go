@@ -456,6 +456,10 @@ func run() error {
 			// over a string yields the byte index of each rune start
 			// (not a rune count), so redirect[:end] is safe exactly
 			// because end only ever holds one of those start indices.
+			// Different units from the gateway's bounded() on purpose:
+			// this log is bytes-capped like every len() gate on the
+			// surface, bounded() is display-capped at 128 runes for
+			// UI/API echoes — do not unify the two truncators.
 			redirect := os.Getenv("GOOGLE_REDIRECT_URL")
 			if len(redirect) > connectors.MaxStateFieldLen {
 				end := 0

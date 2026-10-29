@@ -334,12 +334,12 @@ Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
 app to open in a browser; Google redirects to the single registered
 `GET /api/connectors/callback?code=&state=` — one registered string with
-two serving shapes (bare vs `/p/`; the `:8443` port is a variant of the
-proxy shape, not a third shape): the bare spelling direct on the pi port
-and the `/p/` spelling through nginx, which strips `/p` before forwarding
-(port included in the match — the `:8443` spelling and the no-port
-spelling are different registrations). The callback bypasses profile
-routing entirely, so any first segment serves — bare, `/p/`, or
+two path shapes (bare direct, `/p/` via proxy); ports are variants of
+whichever path they attach to. The bare spelling works direct on the pi
+port and the `/p/` spelling through nginx, which strips `/p` before
+forwarding (port included in the match — the `:8443` spelling and the
+no-port spelling are different registrations). The callback bypasses
+profile routing entirely, so any first segment serves — bare, `/p/`, or
 `/p/<anything>/` — direct or proxied, while every other verb 404s a
 miscased or cross-profile path. The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope

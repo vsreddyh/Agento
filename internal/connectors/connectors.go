@@ -103,9 +103,11 @@ const MaxSegmentAllocLen = 2048
 // maxToolNameLen bounds tool names below the fold: ids and tool names are
 // different namespaces with different length realities (tool names are
 // operator-defined and longer), so the tool cap is deliberately roomier
-// than the id cap. Either way oversized refuses outright — a genuinely-long
-// future read tool would refuse as a send here; that is the documented
-// cost of a shared fail-closed bound. Rename, don't widen.
+// than the id cap. Either way oversized refuses outright — fail-closed,
+// like every sibling length gate. Upstream-owned names are the known
+// exception to "rename, don't widen": a wired MCP server whose tool names
+// come from upstream cannot be renamed here, so widening the cap (with a
+// test update) is the fix for a name this repo doesn't own.
 const maxToolNameLen = 128
 
 // Known reports whether id is a v1 connector. Folds like every sibling
