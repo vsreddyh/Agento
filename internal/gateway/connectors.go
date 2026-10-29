@@ -202,7 +202,10 @@ func (s *Server) cleanupOrphanState(id, state string) {
 	if _, cerr := s.connectors.ConsumeState(cleanCtx, state); cerr != nil {
 		var se *connectors.StoreError
 		if errors.As(cerr, &se) && se.Upstream {
-			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
+			// Scrubbed + bounded like every interpolated log on this
+			// surface: today's message is static, but the StoreError
+			// contract warns Msg may carry caller-influenced text.
+			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %q", id, bounded(approvals.ScrubError(cerr.Error())))
 		}
 	}
 }

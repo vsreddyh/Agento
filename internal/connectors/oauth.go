@@ -129,6 +129,11 @@ func isDigits(s string) bool {
 // calling, so checked == sent by construction and this predicate never
 // sees the raw spelling.
 func validRedirectHost(host string) bool {
+	// Byte lengths throughout (253/63): valid because the ASCII gate below
+	// rejects c >= 0x80, making bytes == runes on every accepted input.
+	// Ordering is deliberate only in outcome — the gates reject the same
+	// set either way — so a future Unicode widening must fix the units
+	// first.
 	if host == "" || len(host) > 253 {
 		return false
 	}
@@ -991,6 +996,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 			// own ctx check fires first on its path, so this branch is for
 			// direct/future callers only.
 			return nil, NewStoreError("the grant exchange did not answer in time", true)
+		}
+		if ctx.Err() == context.Canceled {
+			// Mid-flight cancel is a deterministic abort, not a flaky
+			// upstream: nothing was received, so 400 like the pre-flight
+			// dead-ctx branch — never the generic 502 below.
+			return nil, deny("grant exchange aborted, caller context ended")
 		}
 		if logf != nil {
 			// Scrubbed + capped like the domain mapper below — and

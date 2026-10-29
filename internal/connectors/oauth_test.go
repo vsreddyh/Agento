@@ -839,3 +839,23 @@ func TestConsumeStateRejectsShort(t *testing.T) {
 		t.Fatalf("short consume should be NotFound, got %v", err)
 	}
 }
+
+func TestExchangeMidFlightCancelIsAborted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"a","refresh_token":"r","expires_in":3600,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := Exchange(ctx, cfg, Gmail, "code", testVerifier, nil); err == nil {
+		t.Fatal("cancelled mid-flight should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("mid-flight cancel should be a deterministic 400, got %v", err)
+	}
+}
