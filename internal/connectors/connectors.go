@@ -265,9 +265,14 @@ func IsDraftOnlySend(server, tool string) bool {
 	// against renames. NormalizedID already trimmed the edges, so any
 	// separator folded here is interior by construction. Covered set:
 	// "-", ".", " ", "/", ":", "+", "\\" — any other separator falls to
-	// the gated backstop by design.
+	// the gated backstop by design. Runs collapse: "send--message" folds
+	// to the same single-underscore form instead of a "send__message"
+	// that matches nothing — punctuation repetition never changes identity.
 	for _, sep := range []string{"-", ".", " ", "/", ":", "+", "\\"} {
 		tool = strings.ReplaceAll(tool, sep, "_")
+	}
+	for strings.Contains(tool, "__") {
+		tool = strings.ReplaceAll(tool, "__", "_")
 	}
 	switch server {
 	case Gmail:

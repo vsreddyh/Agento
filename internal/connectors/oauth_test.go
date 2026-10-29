@@ -993,6 +993,50 @@ func TestRedactURLStripsUserinfoWithSlashPassword(t *testing.T) {
 	if !utf8.ValidString(got) || strings.Contains(got, "\x00") {
 		t.Fatalf("ambiguous input must stay log-safe, got %q", got)
 	}
+	// Absorb loop: the split userinfo must actually be stripped, not just
+	// kept log-safe — credentials never reach the log on any branch.
+	if strings.Contains(got, "user:pa") || strings.Contains(got, "ss@host") {
+		t.Fatalf("split userinfo must be absorbed and stripped, got %q", got)
+	}
+	if !strings.Contains(got, "host.example") {
+		t.Fatalf("host must survive absorb, got %q", got)
+	}
+}
+
+func TestRedactURLAbsorbGuards(t *testing.T) {
+	// Bare "host/p@th" path: no colon, so not a split userinfo — must not
+	// be mistaken for one.
+	got := RedactURL("https://host.example/p@th")
+	if !strings.Contains(got, "host.example") || !strings.Contains(got, "p@th") {
+		t.Fatalf("path @ must survive, got %q", got)
+	}
+	// IPv6 literal: brackets never trigger absorption.
+	got = RedactURL("https://[::1]/p@th")
+	if !strings.Contains(got, "[::1]") || !strings.Contains(got, "p@th") {
+		t.Fatalf("bracketed host must survive, got %q", got)
+	}
+	// host:port is not userinfo either.
+	got = RedactURL("https://host.example:8443/p@th")
+	if !strings.Contains(got, "8443") || !strings.Contains(got, "p@th") {
+		t.Fatalf("host:port must survive, got %q", got)
+	}
+}
+
+// typedNilCtx is a nil *typedNilCtx held as a context.Context: non-nil
+// interface around a nil pointer — the typed-nil caller bug.
+type typedNilCtx struct{ context.Context }
+
+func TestExchangeRejectsTypedNilContext(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	var ctx context.Context = (*typedNilCtx)(nil)
+	if ctxUsable(ctx) {
+		t.Fatal("typed-nil ctx must not test usable")
+	}
+	if _, err := Exchange(ctx, cfg, Gmail, "codecodecodecodecode1", testVerifier, nil); err == nil {
+		t.Fatal("typed-nil ctx should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.Upstream {
+		t.Fatalf("typed-nil should be a deterministic 400, got %v", err)
+	}
 }
 
 func TestDecryptTokenRejectsInteriorWhitespace(t *testing.T) {

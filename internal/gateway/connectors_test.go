@@ -1307,6 +1307,46 @@ func TestConnectorsCallbackBlankScopeIsAbsent(t *testing.T) {
 	}
 }
 
+// Padding around a real subset still warns on the trimmed form: a
+// junk-suffixed grant (?scope=<real>&scope=<1500 spaces>) is measured
+// trimmed, so the subset warning is not skipped by padding.
+func TestConnectorsCallbackPaddedSubsetStillWarns(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := connectors.NewMemoryStore()
+	var mu sync.Mutex
+	var logged []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	authURL, _ := decodeBody(t, rec)["auth_url"].(string)
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := u.Query().Get("state")
+	if state == "" {
+		t.Fatalf("no state in %s", authURL)
+	}
+	scope := url.QueryEscape("https://www.googleapis.com/auth/gmail.readonly") + "&scope=" + strings.Repeat("%20", 500)
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state="+state+"&scope="+scope, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("padded subset grant should still connect: %d (%s)", rec.Code, rec.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, line := range logged {
+		if strings.Contains(line, "missing requested scopes") && strings.Contains(line, "gmail.compose") {
+			return
+		}
+	}
+	t.Fatalf("padded subset should still warn, got: %q", logged)
+}
+
 // Fallthrough echoes the normalised verb, not the raw path: padding the
 // verb forgives routing but must not leak the raw spelling into the body.
 func TestConnectorsFallthroughEchoesNormalised(t *testing.T) {

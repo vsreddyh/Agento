@@ -1831,3 +1831,16 @@ func TestIsDraftOnlySendCoversSeparators(t *testing.T) {
 		}
 	}
 }
+
+func TestIsDraftOnlySendCollapsesRuns(t *testing.T) {
+	// Punctuation repetition never changes identity: doubled separators
+	// fold to the same single-underscore form as the canonical tool.
+	for _, tool := range []string{"send--message", "send..message", "send  message", "send//message", "send::message", "send++message", "send\\\\message", "send-_message"} {
+		if !IsDraftOnlySend("gmail", tool) {
+			t.Errorf("%q should be refused (run collapse)", tool)
+		}
+	}
+	if !IsDraftOnlySend("calendar", "create--event") {
+		t.Error("create--event should be refused (run collapse)")
+	}
+}

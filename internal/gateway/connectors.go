@@ -1054,28 +1054,24 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// junk-suffixed scope that suppresses the subset warning must leave
 	// its own trace, or a later draft 403 has no line to trace back to.
 	// Trimmed first like code/state: whitespace-only is absent, not a
-	// subset — blank == absent on every leg, so "  " never warns.
-	// Total gate implies the per-value gate: joined form only shrinks
-	// under TrimCredential, so anything clearing the total necessarily
-	// clears the length check below — the two gates cannot disagree no
-	// matter how the separator changes. Only clean, in-budget values are
-	// compared. All
-	// values joined first: a duplicated ?scope= compares the union, not
-	// just the first, so a junk second value cannot suppress the warning
-	// (same pointer class as the duplicate-params length log above).
-	// Length before the join (same bound): sum the parts plus separators
-	// so a junk-suffixed multi-value scope skips without paying the
-	// Join + Fields alloc — matching the raw-query fast-path intent above.
-	scopeTotal := 0
+	// subset — blank == absent on every leg, so "  " never warns. Each
+	// value is trimmed before joining (not the joined string after): the
+	// skip decision and the compare below see the same string, so a
+	// padding-only input reads as blank (absent) rather than oversized,
+	// and a junk-suffixed grant is measured trimmed. Raw query length is
+	// already capped above, so the join/Fields alloc here is bounded by
+	// construction. All values joined first: a duplicated ?scope= compares
+	// the union, not just the first, so a junk second value cannot suppress
+	// the warning (same pointer class as the duplicate-params length log
+	// above). Only clean, in-budget values are compared.
+	var scopes []string
 	for _, v := range query["scope"] {
-		scopeTotal += len(v) + 1
+		if t := connectors.TrimCredential(v); t != "" {
+			scopes = append(scopes, t)
+		}
 	}
-	if scopeTotal > 0 {
-		scopeTotal-- // separators join n values with n-1 spaces
-	}
-	if scopeTotal > connectors.MaxStateFieldLen+1 {
-		s.cfg.Logf("connectors: grant for %q scope params oversized (%d bytes), subset check skipped (grant stored; drafts may 403)", id, scopeTotal)
-	} else if granted := connectors.TrimCredential(strings.Join(query["scope"], " ")); granted != "" && len(granted) <= connectors.MaxStateFieldLen && !connectors.HasControl(granted) && utf8.ValidString(granted) {
+	granted := strings.Join(scopes, " ")
+	if granted != "" && len(granted) <= connectors.MaxStateFieldLen && !connectors.HasControl(granted) && utf8.ValidString(granted) {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
 			// Bounded like every interpolated value on this path: missing
 			// holds server-side scope constants today, but the next scope

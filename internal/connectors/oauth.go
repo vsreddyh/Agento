@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -265,6 +266,27 @@ func validRedirectHost(host string) bool {
 	return true
 }
 
+// ctxUsable reports whether ctx is safe to dereference: a non-nil
+// interface holding a non-nil concrete value. A typed-nil (non-nil
+// interface around a nil pointer, e.g. a nil *cancelCtx passed as a
+// context.Context) passes a plain == nil check and then panics on first
+// use — the same caller bug as untyped nil, so Exchange fails it closed
+// with the same 400 instead of crashing the worker. reflect-based because
+// Go has no language-level typed-nil test; kinds that cannot hold nil
+// (structs, etc.) count as usable without inspection.
+func ctxUsable(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v := reflect.ValueOf(ctx)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Slice, reflect.Map, reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return !v.IsNil()
+	default:
+		return true
+	}
+}
+
 // RedactURL strips any userinfo for logging: a hand-typed redirect with
 // credentials must never land verbatim in a container log, even on the
 // rejection path that exists to keep credentials out of the log in the
@@ -290,17 +312,60 @@ func stripUserinfo(s string) string {
 	}
 	// Authority ends at the first /, ?, or #: a password containing "/"
 	// ("user:pa/ss@host") still loses its userinfo, since the cut point is
-	// the last "@" before any of the three terminators.
+	// the last "@" before any of the three terminators. When "@" sits past
+	// the first separator, absorb one path segment at a time until "@" is
+	// in view (or the path runs out): a password may itself contain "/",
+	// splitting the userinfo across what looks like the path. Never absorb
+	// past "?" or "#": an "@" in the query or fragment belongs to the
+	// resource, not the credentials. Each lap consumes a separator, so
+	// the loop always terminates. Only absorb while the head looks like a
+	// split userinfo (user:… with a non-numeric tail, never a bracketed
+	// literal or host:port): a bare "host/p@th" path must not be mistaken
+	// for one.
 	seg := search
 	tail := ""
 	if i := strings.IndexAny(search, "/?#"); i >= 0 {
 		seg = search[:i]
 		tail = search[i:]
 	}
+	for strings.Index(seg, "@") < 0 && len(tail) > 0 && tail[0] == '/' && looksSplitUserinfo(seg) {
+		rest := tail[1:]
+		if j := strings.IndexAny(rest, "/?#"); j >= 0 {
+			seg += tail[:1+j]
+			tail = tail[1+j:]
+		} else {
+			seg += tail
+			tail = ""
+		}
+	}
 	if at := strings.LastIndex(seg, "@"); at >= 0 {
 		return prefix + seg[at+1:] + tail
 	}
 	return s
+}
+
+// looksSplitUserinfo reports whether seg looks like the head of a userinfo
+// split across a "/" (e.g. "user:pa" from "user:pa/ss@host"): it carries a
+// colon whose tail is not a numeric port, and no brackets (an IPv6 literal
+// is never userinfo — "[::1]" must not trigger absorption).
+func looksSplitUserinfo(seg string) bool {
+	if strings.Contains(seg, "[") {
+		return false
+	}
+	i := strings.LastIndex(seg, ":")
+	if i < 0 {
+		return false
+	}
+	rest := seg[i+1:]
+	if rest == "" {
+		return true
+	}
+	for j := 0; j < len(rest); j++ {
+		if rest[j] < '0' || rest[j] > '9' {
+			return true
+		}
+	}
+	return false
 }
 
 func RedactURL(raw string) string {
@@ -985,10 +1050,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// would panic on the first use instead of 400ing. A nil Context is a
 	// caller bug — fail closed with the discriminant instead of
 	// substituting Background (which would silently drop cancellation
-	// propagation). Untyped nil only: a typed-nil ctx (non-nil interface
-	// holding a nil pointer) still panics on first use like the driver —
-	// pass a live (possibly cancelled) ctx, never a nil of either kind.
-	if ctx == nil {
+	// propagation). Typed-nil included via ctxUsable: a non-nil interface
+	// holding a nil pointer panics just the same, so it 400s here too.
+	if !ctxUsable(ctx) {
 		if logf != nil {
 			logf("connectors: grant exchange refused: nil context")
 		}

@@ -282,6 +282,9 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	probeErr := s.coll.FindOne(pctx, bson.D{{Key: "_id", Value: id}},
 		options.FindOne().SetProjection(probeProjection())).Decode(&cur)
 	pcancel()
+	// Same composition as Disconnect: detached probe + scrub tick wall-clock
+	// before the verb-bound write below (see that site's note) — slow Atlas
+	// can starve the write into a 502; re-tap recovers.
 	probeUnexpected := probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments)
 	if probeUnexpected {
 		s.logf("connectors: SetStatus pre-read %q failed: %s", id, scrubErr(probeErr))
@@ -373,7 +376,11 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	pcancel()
 	// Sampled AFTER the probe, like SetStatus: the stamp reflects the write,
 	// not the pre-read start — a slow Atlas read would otherwise backdate
-	// updatedAt by up to 5s on the one verb v1 actually serves.
+	// updatedAt by up to 5s on the one verb v1 actually serves. Composition
+	// note: probe (5s detached) + scrub (5s detached) tick wall-clock
+	// before the verb-bound write below, so slow Atlas can starve it into a
+	// 502 that reads as "disconnect failed" — re-tap recovers, same
+	// accepted class as the CreateState sequential note.
 	now := time.Now().UnixMilli()
 	// Pending attempts die on every disconnect path, like the tokens: a
 	// browser completing an old consent after this disconnect must fail at
