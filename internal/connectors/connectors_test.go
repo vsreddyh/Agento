@@ -1525,6 +1525,15 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	if !IsDraftOnlySend("gmail⁠", "send_message⁠") {
 		t.Error("Cf-suffixed send should still be refused")
 	}
+	// Hyphen spellings refuse like underscores: a wired send-message is
+	// the same tool as send_message, so punctuation cannot drift the
+	// refusal list the way the scope test guards against renames.
+	if !IsDraftOnlySend("gmail", "send-message") {
+		t.Error("hyphenated send should still be refused")
+	}
+	if !IsDraftOnlySend("calendar", "create-event") {
+		t.Error("hyphenated create should still be refused")
+	}
 	// Oversize defers to the backstop on both parts: an oversized id is
 	// unknown by construction, and an oversized tool can never be a real
 	// send path — the gated backstop (approval hold) is the honest answer,

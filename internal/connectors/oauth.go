@@ -359,6 +359,15 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// scheme.
 		return "", errors.New("connectors: redirect URL must use https (http loopback-only)")
 	}
+	if strings.HasSuffix(parsed.Hostname(), ".localhost") {
+		// Bare "localhost" only, no subdomains — checked after the scheme
+		// gate so http://foo.localhost still reports the scheme (pinned),
+		// while https://foo.localhost names the subdomain rule instead of
+		// the generic FQDN-shape message below. A subdomain resolves
+		// loopback locally but no public registration can hold it, so the
+		// fix (use bare localhost) must be obvious.
+		return "", errors.New("connectors: redirect URL must use bare localhost, not a subdomain (no public registration can hold *.localhost)")
+	}
 	if h := parsed.Hostname(); net.ParseIP(h) != nil && !net.ParseIP(h).IsLoopback() {
 		// IPs other than loopback can never hold a public Google
 		// registration (private/LAN, Tailscale, or public alike): the
@@ -835,9 +844,16 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// Deliberately shorter than the gateway budget: direct callers fail
 	// fast on a hung endpoint, the gateway owns the patient path — the
 	// callback ctx is the one place a slow Google P99 is worth waiting for.
-	if _, ok := ctx.Deadline(); !ok {
+	// Upper-bounded too: a caller deadline beyond the gateway budget is
+	// capped to it, so no direct/future caller can hang a worker longer
+	// than the callback path itself tolerates.
+	if dl, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+	} else if time.Until(dl) > 30*time.Second {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
 	// Length before fold and before Known, matching AuthURL and every

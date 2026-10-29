@@ -778,3 +778,11 @@ func TestRedactURLCapsExactly(t *testing.T) {
 		t.Fatal("exact-cap redact should return something")
 	}
 }
+
+func TestCanonicalRedirectRejectsLocalhostSubdomain(t *testing.T) {
+	if _, err := CanonicalRedirectURL("https://foo.localhost/p/api/connectors/callback"); err == nil {
+		t.Fatal("localhost subdomain should fail closed")
+	} else if !strings.Contains(err.Error(), "bare localhost") {
+		t.Fatalf("should name the subdomain rule, got %q", err)
+	}
+}

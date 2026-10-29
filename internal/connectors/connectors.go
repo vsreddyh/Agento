@@ -250,6 +250,10 @@ func IsDraftOnlySend(server, tool string) bool {
 	}
 	server = NormalizedID(server)
 	tool = NormalizedID(tool)
+	// Hyphens fold to underscores: a wired server exposing send-message
+	// means the same tool as send_message — without this the refusal list
+	// drifts on punctuation the way the scope test guards against renames.
+	tool = strings.ReplaceAll(tool, "-", "_")
 	switch server {
 	case Gmail:
 		switch tool {
