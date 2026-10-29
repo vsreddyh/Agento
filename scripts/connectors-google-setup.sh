@@ -212,9 +212,9 @@ TOTAL_STAGES=8
 # Cleanup for this wizard's temp files + the backgrounded `tailscale up`.
 # (Library tmpfiles inside write_env are created and removed within the
 # function; these live across stages, so they get the trap.)
-LOG=""; FOUT=""; TS_PID=""; RENDER_OUT=""; RENDER_ERR=""
+LOG=""; FOUT=""; TS_PID=""; RENDER_OUT=""; RENDER_ERR=""; _cb_tmp=""
 wizard_cleanup() {
-  rm -f "$LOG" "$FOUT" "$RENDER_OUT" "$RENDER_ERR" 2>/dev/null || true
+  rm -f "$LOG" "$FOUT" "$RENDER_OUT" "$RENDER_ERR" "$_cb_tmp" 2>/dev/null || true
   if [[ -n "$TS_PID" ]] && kill -0 "$TS_PID" 2>/dev/null; then
     kill "$TS_PID" 2>/dev/null || true
   fi
@@ -227,7 +227,8 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
 TS_HOST="${TS_HOST:-$(hostname -s)}"
 TS_DNS="${TS_DNS:-}"          # <name>.<tailnet>.ts.net, no trailing dot
-REDIRECT_URI="${REDIRECT_URI:-}"  # https://$TS_DNS/p/api/connectors/callback
+REDIRECT_URI="${REDIRECT_URI:-}"  # preset honoured; empty means derive from TS_DNS below
+_redirect_preset="${REDIRECT_URI:-}"
 
 say_dns() { [[ -n "$TS_DNS" ]] && note "tailnet host: https://$TS_DNS"; }
 
@@ -258,7 +259,7 @@ fi
 # critical one — without it every tailscale-status check misreads as down.
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
-for _dep in jq openssl curl podman-compose seq; do
+for _dep in jq openssl curl podman-compose seq hostname; do
   if ! command -v "$_dep" >/dev/null 2>&1; then _missing="$_missing $_dep"; fi
 done
 unset _dep
@@ -278,7 +279,8 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
 fi
 printf '\n'
 note "This host is the live stack. Writing .env is safe (inert until the"
-note "pi container is recreated — a restart picks the values up)."
+note "pi container is recreated — ./scripts/hermes.sh restart recreates it;"
+note "a plain container restart without recreation will not pick up .env)."
 note "Nothing is restarted by this wizard."
 printf '\n'
 if ! confirm "Proceed with Tailscale Funnel setup on this host?"; then
@@ -316,7 +318,7 @@ fi
 stage "Join your tailnet"
 if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
   note "already connected"
-  TS_HOST=$(tailscale status --json | jq -r '.Self.HostName')
+  TS_HOST=$(tailscale status --json | jq -r '.Self.HostName // empty')
 else
   say "The machine name becomes the public hostname: <name>.<tailnet>.ts.net"
   step "Pick a short lowercase name (letters, digits, hyphen)."
@@ -375,7 +377,13 @@ if ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/
   exit 1
 fi
 
-TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)
+# TS_DNS honours a caller preset (dry-runs) instead of silently discarding
+# it — same contract as ENV_FILE. Empty means discover from the daemon.
+if [[ -n "$TS_DNS" ]]; then
+  note "using preset TS_DNS=$TS_DNS (skipping discovery)"
+else
+  TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)
+fi
 if [[ -z "$TS_DNS" || "$TS_DNS" == "null" ]]; then
   warn "could not read the tailnet DNS name (is MagicDNS enabled?)"
   exit 1
@@ -400,12 +408,11 @@ printf '\n'
 FOUT=$(mktemp)
 # Re-runs are safe: if 443 already forwards to this proxy, keep it instead
 # of erroring out of the wizard.
-if _funnel_status=$(tailscale funnel status 2>/dev/null || true); then
-  if echo "$_funnel_status" | grep -q "443" && echo "$_funnel_status" | grep -q "8080"; then
-    note "funnel already serving 443 → this proxy; keeping it"
-    printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
-    rm -f "$FOUT"; FOUT=""
-  fi
+_funnel_status=$(tailscale funnel status 2>/dev/null || true)
+if echo "$_funnel_status" | grep -qE '443.*8080|8080.*443'; then
+  note "funnel already serving 443 → this proxy; keeping it"
+  printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
+  rm -f "$FOUT"; FOUT=""
 fi
 unset _funnel_status
 if [[ -n "$FOUT" ]]; then
@@ -430,7 +437,13 @@ rm -f "$FOUT"; FOUT=""
 fi
 printf '\n'
 
-REDIRECT_URI="https://$TS_DNS/p/api/connectors/callback"
+if [[ -n "$_redirect_preset" ]]; then
+  REDIRECT_URI="$_redirect_preset"
+  note "using preset REDIRECT_URI (skipping derivation from TS_DNS)"
+else
+  REDIRECT_URI="https://$TS_DNS/p/api/connectors/callback"
+fi
+unset _redirect_preset
 say "Waiting for public DNS + certificate (can take a few minutes)…"
 ok=0
 for __i in $(seq 1 30); do
@@ -559,7 +572,7 @@ else
   _cb_tmp=$(mktemp)
   sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$TS_DNS|" "$ENV_FILE" > "$_cb_tmp"
   cat "$_cb_tmp" > "$ENV_FILE"
-  rm -f "$_cb_tmp"; unset _cb_tmp
+  rm -f "$_cb_tmp"; _cb_tmp=""
 fi
 
 write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID"
@@ -596,8 +609,9 @@ finish
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"
 printf '  1. Nothing is restarted yet. These vars are inert until the pi\n'
-printf '     container is recreated — a restart picks them up (rebuild first\n'
-printf '     only if the image predates the connectors code).\n'
+printf '     container is recreated — ./scripts/hermes.sh restart recreates\n'
+printf '     it (a plain container restart without recreation will not pick\n'
+printf '     up .env changes).\n'
 printf '  2. Compare the canonical string the gateway logs at boot:\n'
 printf '       podman-compose -f docker/docker-compose.yml logs pi | grep "OAuth configured"\n'
 printf '     with what is registered in Google. They must match byte-for-byte;\n'
