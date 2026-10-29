@@ -854,9 +854,9 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	}
 	// The insert runs detached too: a slow delete above must not eat the
 	// verb budget and turn this write into a 502. Duplicate-key tolerant
-	// — and note the composition: delete then insert are sequential, so
-	// one tap costs ~10s worst-case wall (5s + 5s), not 5s. Harmless at
-	// this cardinality; re-tap recovers either way.
+	// — and note the composition: dup-check + delete + insert each run a
+	// 5s detached budget, sequential, so one tap costs ~15s worst-case
+	// wall. Harmless at this cardinality; re-tap recovers either way.
 	// (concurrent tap), and a verb-deadline 502 after a landed insert
 	// recovers via re-tap supersede — same idempotency story as ever.
 	insCtx, insCancel := quickCtx()

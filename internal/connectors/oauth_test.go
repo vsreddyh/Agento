@@ -277,6 +277,14 @@ func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
 	}
 }
 
+// Length is capped before parsing: a multi-MB redirect must not pay the
+// parse + Clean + String alloc before the deterministic 400.
+func TestCanonicalRedirectRejectsOversized(t *testing.T) {
+	if _, err := CanonicalRedirectURL("https://host/" + strings.Repeat("x", MaxStateFieldLen)); err == nil {
+		t.Fatal("oversized redirect should fail closed")
+	}
+}
+
 // Oversized client credentials fail closed at config load, matching the
 // state/code/verifier length gates: a multi-MB id would otherwise mint a
 // consent URL Google 414s.

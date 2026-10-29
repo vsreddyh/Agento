@@ -461,13 +461,14 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// Mongo TTL-indexed). Passing wall-clock time here would bypass the
 	// injectable default and pin a boundary no test covers — single clock
 	// owner, set at the store.
-	// Budget composition note: the 5s verb budget covers validation only —
-	// CreateState's delete and insert each run on their own detached 5s
-	// quickCtx inside the store. Detached IO does not stop the verb clock:
-	// a slow Atlas that spends ~10s wall in delete+insert returns after
-	// the verb already fired, so the split below answers the timeout
-	// wording (masking the detached Upstream). That mislabel is harmless
-	// here — slow means retry, and re-tap supersedes either way.
+	// Budget composition note: the 5s verb budget covers validation only.
+	// CreateState's dup-check, delete, and insert each run on their own
+	// detached 5s quickCtx inside the store — sequential, so one tap
+	// costs ~15s worst-case wall. Detached IO does not stop the verb
+	// clock: a slow Atlas returns after the verb already fired, so the
+	// no-split handling below answers the detached Upstream as-is (not
+	// the timeout wording). That is honest either way — slow means
+	// retry, and re-tap supersedes.
 	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
 		State:     state,
 		Connector: id,

@@ -133,6 +133,13 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// Trimmed once, parsed once: every check below sees the same string,
 	// so a future edit cannot split checked-vs-parsed by re-deriving one.
 	trimmed := strings.TrimSpace(raw)
+	// Length-capped before Parse: a multi-MB hand-built value would
+	// otherwise pay the full parse + Clean + String alloc before any
+	// 400. Same MaxStateFieldLen the CreateState redirect cap uses —
+	// registrations are ~60 chars, so 2048 is generous, not tight.
+	if len(trimmed) > MaxStateFieldLen {
+		return "", errors.New("connectors: redirect URL too long")
+	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
 		return "", errors.New("connectors: redirect URL must be an absolute http(s) URL")
@@ -200,13 +207,13 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// so fail closed here with a pointer at the scheme.
 		return "", errors.New("connectors: redirect URL must use https (http loopback-only)")
 	}
-	if h := strings.TrimPrefix(strings.TrimSuffix(parsed.Hostname(), "]"), "["); net.ParseIP(h) == nil && !validRedirectHost(h) {
+	if h := parsed.Hostname(); net.ParseIP(h) == nil && !validRedirectHost(h) {
 		// Hostname syntax no console registration can hold: underscores,
 		// leading/trailing hyphens, empty labels, non-ASCII (punycode at
 		// the console, never Unicode). IP literals bypass label rules
-		// (loopback-ness checked above). One bracket pair, not a cutset:
-		// Trim would fold "]evil[" to "evil". Fail closed here instead
-		// of dying with redirect_uri_mismatch in the browser.
+		// (loopback-ness checked above). Hostname() already strips brackets
+		// and port, so h arrives bare — no Trim needed. Fail closed here
+		// instead of dying with redirect_uri_mismatch in the browser.
 		return "", errors.New("connectors: redirect URL host is not a valid hostname")
 	}
 	if parsed.User != nil {
@@ -512,6 +519,11 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	redirect, err := CanonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
 		return nil, NewStoreError("oauth client redirect URL is invalid", false)
+	}
+	// Checked == sent: canonicalisation can grow the string (brackets),
+	// so length-gate the canonical form too — same as both CreateStates.
+	if len(redirect) > MaxStateFieldLen {
+		return nil, NewStoreError("oauth client redirect URL too long", false)
 	}
 	cc := *cfg
 	cc.ClientID = strings.TrimSpace(cc.ClientID)
