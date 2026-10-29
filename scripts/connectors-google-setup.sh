@@ -332,7 +332,7 @@ stage "Install Tailscale"
 if command -v tailscale >/dev/null 2>&1; then
   note "already installed: $(tailscale version 2>/dev/null | head -n1 || true)"
 else
-  _codename=""; [[ -f /etc/os-release ]] && _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"')
+  _codename=""; [[ -f /etc/os-release ]] && _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"' || true)
   say "Installing from Tailscale's official apt repo${_codename:+ (Ubuntu $_codename)}."
   unset _codename
   note "This adds /etc/apt/sources.list.d/tailscale.list and the tailscaled service."
@@ -370,6 +370,8 @@ if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/de
 else
   say "The machine name becomes the public hostname: <name>.<tailnet>.ts.net"
   step "Pick a short lowercase name (letters, digits, hyphen)."
+  note "This name is re-asked each run (only the .env values persist) — after"
+  note "a successful join, re-runs take the already-connected path instead."
   # ask's Enter-keeps-current reads ENV_FILE, where TS_HOST never lives —
   # so remember an env preset explicitly instead of losing it to hostname -s.
   _ts_preset="${TS_HOST:-}"
@@ -564,7 +566,7 @@ else
   _URI_FROM_PRESET=0
 fi
 unset _redirect_preset
-say "Waiting for public DNS + certificate (can take a few minutes)…"
+say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # Preset/dry-run hostnames (or SKIP_PROBE=1) skip the 30× poll: a fake name
 # would burn ~5 min of timeouts before the .env write. One opportunistic
 # probe still reports status without the wait.
@@ -813,11 +815,11 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
       printf '  %s✓%s %s present in rendered compose config\n' "$GREEN" "$RESET" "$k"
     else
       printf '  %s✗%s %s renders EMPTY — fix it before restarting\n' "$YELLOW" "$RESET" "$k"
-      _render_missing="$_render_missing $k"
+      _render_missing="${_render_missing:+$_render_missing }$k"
     fi
   done
   if [[ -n "$_render_missing" ]]; then
-    warn "empty render for:${_render_missing} — an empty value is the misconfiguration this step exists to catch"
+    warn "empty render for: ${_render_missing} — an empty value is the misconfiguration this step exists to catch"
     exit 1
   fi
   unset _render_missing
@@ -838,6 +840,7 @@ printf '     it (a plain container restart without recreation will not pick\n'
 printf '     up .env changes).\n'
 printf '  2. Compare the canonical string the gateway logs at boot:\n'
 printf '       %s -f %s/docker/docker-compose.yml logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$REPO_DIR"
+printf '     (if the render step above used sudo, prefix sudo here too)\n'
 printf '     with what is registered in Google. They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
 printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
