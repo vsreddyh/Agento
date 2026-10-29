@@ -50,7 +50,7 @@ func ListIDs() []string {
 // echo of caller text. Folds like every store verb and OAuth helper: same
 // logical id, same answer, wherever the caller normalised.
 func DisplayName(id string) string {
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return "Unknown"
 	}
 	id = NormalizedID(id)
@@ -69,7 +69,7 @@ func DisplayName(id string) string {
 // the app shows these at connect time, and disconnect revokes them
 // together. Folds like every store verb: same logical id, same answer.
 func ScopesFor(id string) []string {
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return nil
 	}
 	switch NormalizedID(id) {
@@ -82,16 +82,17 @@ func ScopesFor(id string) []string {
 	}
 }
 
-// maxConnectorIDLen bounds connector ids below the gateway: ids are two
-// short fixed strings, so anything longer cannot match a known id. Same
-// value as the gateway's segment cap (which cannot be shared: the gateway
-// imports this package, not vice versa). Checked before Normalise/fold so
-// a multi-MB id fails without a lowercase+trim alloc or a quoted log line
-// for the 404 it was always going to get.
-const maxConnectorIDLen = 64
+// MaxConnectorIDLen bounds connector ids everywhere: ids are two short
+// fixed strings, so anything longer cannot match a known id. Single owner
+// for both packages — the gateway imports this package, so its member
+// dispatch uses this const instead of carrying a second copy that could
+// drift. Checked before Normalise/fold so a multi-MB id fails without a
+// lowercase+trim alloc or a quoted log line for the 404 it was always
+// going to get.
+const MaxConnectorIDLen = 64
 
 // MaxSegmentAllocLen bounds raw gateway path segments before any fold or
-// scan. Deliberately separate from both maxConnectorIDLen (64, the
+// scan. Deliberately separate from both MaxConnectorIDLen (64, the
 // identity contract) and MaxStateFieldLen (the OAuth-input bound): it
 // guards allocs only, and must merely exceed the contract gate — so
 // raising the OAuth-input bound for a future long code must never
@@ -114,7 +115,7 @@ const maxToolNameLen = 128
 // helper: same logical id, same answer — the fold lives here instead of
 // relying on every caller to pre-fold before branching on it.
 func Known(id string) bool {
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return false
 	}
 	switch NormalizedID(id) {
@@ -228,7 +229,7 @@ func IsDraftOnlySend(server, tool string) bool {
 	// operator-defined). Oversize defers to identity, split by part:
 	// servers fail closed to the backstop (an oversized id is unknown by
 	// construction), tools fail closed to refusal on known servers.
-	if len(server) > maxConnectorIDLen {
+	if len(server) > MaxConnectorIDLen {
 		// Unknown by construction: Known length-checks first, so an
 		// oversized server can never be a known id — fall through to the
 		// gated backstop like any other unknown name. No Known() call

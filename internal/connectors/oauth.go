@@ -66,7 +66,7 @@ const (
 // together, and the ADR records why. Folds like every store verb: same
 // logical id, same answer.
 func GoogleScopes(id string) []string {
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return nil
 	}
 	id = NormalizedID(id)
@@ -534,7 +534,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// Length before fold and before Known: ids are two short fixed
 	// strings, so anything over the cap is certainly unknown — fail
 	// without paying the normalize alloc or logging the value.
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		if logf != nil {
 			logf("connectors: auth URL build failed: oversized connector id")
 		}
@@ -681,6 +681,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 // write sites (gateway + both SetTokens), so callers that persist must go
 // through SetTokens — direct use of tok.Expiry sees the raw provider value.
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
+	// Nil ctx fails closed like every other input leg: the helper is
+	// exported for direct/future callers, and this is the one path that
+	// would otherwise panic (ctx.Deadline) instead of 400ing.
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Bound the provider round-trip for direct callers: the gateway always
 	// passes its 30s callback ctx, but the helper is exported — an
 	// unbounded caller ctx plus a hung token endpoint must not hang a
@@ -695,7 +701,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// store verb: an oversized id is certainly unknown. Logged without
 	// the value: quoting megabytes would reintroduce the log alloc this
 	// gate exists to avoid.
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		if logf != nil {
 			logf("connectors: grant exchange refused: oversized connector id")
 		}

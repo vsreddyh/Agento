@@ -639,3 +639,13 @@ func TestExchangeRejectsDeadContext(t *testing.T) {
 		t.Fatalf("dead ctx should log the abort discriminant, got %q", logged)
 	}
 }
+
+// A nil ctx fails closed, not panics: the only input leg that could.
+func TestExchangeRejectsNilContext(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if _, err := Exchange(nil, cfg, Gmail, "code", "verifier", nil); err == nil { //nolint:staticcheck // intentional nil ctx: the contract under test
+		t.Fatal("nil ctx should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("nil ctx should be a deterministic 400, got %v", err)
+	}
+}

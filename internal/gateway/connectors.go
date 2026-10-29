@@ -36,10 +36,6 @@ import (
 // is the capability. An expired row is the reconnect prompt: the app
 // banners it and offers the connect flow, never a password field.
 
-// maxConnectorIDLen bounds the id segment. Ids are short fixed strings;
-// anything longer matches nothing. Same no-oracle 404 contract as runs.
-const maxConnectorIDLen = 64
-
 // acceptsHTML reports text/html negotiation without lowercasing an
 // unbounded header: unauthenticated callers control Accept, and Go allows
 // ~1MB of it — a megabyte value would buy a megabyte alloc before any gate
@@ -415,11 +411,11 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// unknown — and anything over the cap skips the HasControl rune walks
 	// and the ToLower alloc below. (The raw pre-filter above only kills
 	// multi-MB; this is the contract gate, same 64 as every sibling.)
-	if len(id) > maxConnectorIDLen {
+	if len(id) > connectors.MaxConnectorIDLen {
 		connectorsError(w, connectors.NewStoreError("oversized connector id", false))
 		return
 	}
-	if len(action) > maxConnectorIDLen {
+	if len(action) > connectors.MaxConnectorIDLen {
 		connectorsError(w, connectors.NewStoreError("oversized path segment", false))
 		return
 	}
@@ -444,7 +440,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// header size anyway, but there is no reason to pay rune-scan + alloc
 	// on a garbage path before the inevitable 404.
 	action = strings.ToLower(action)
-	if len(action) > maxConnectorIDLen {
+	if len(action) > connectors.MaxConnectorIDLen {
 		// Same length-before-identity as the id legs: 400, not 404.
 		// Kept as a separate gate even though the trimmed check above
 		// usually fires first: ToLower can grow byte length for exotic
@@ -465,7 +461,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"unknown connector")
 		return
 	}
-	if len(norm) > maxConnectorIDLen {
+	if len(norm) > connectors.MaxConnectorIDLen {
 		// Length before identity, matching every store verb and helper:
 		// the same oversized input 400s in the stores, so it 400s here
 		// too instead of reading as unknown. No echo — the value is

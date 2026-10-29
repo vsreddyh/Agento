@@ -1506,7 +1506,7 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	// own a send path, so it falls to the backstop like any other unknown
 	// name; a known server with a garbage tool refuses outright, since no
 	// legit tool of that server is that long.
-	if IsDraftOnlySend(strings.Repeat("x", maxConnectorIDLen+1), "send_message") {
+	if IsDraftOnlySend(strings.Repeat("x", MaxConnectorIDLen+1), "send_message") {
 		t.Error("oversized server should fall to the backstop, not refuse")
 	}
 	if !IsDraftOnlySend("gmail", strings.Repeat("x", maxToolNameLen+1)) {
@@ -1560,7 +1560,7 @@ func TestTrimCredential(t *testing.T) {
 // normalize alloc, no quoted value, same 400 everywhere.
 func TestOversizedIDFailsClosed(t *testing.T) {
 	ctx := context.Background()
-	big := strings.Repeat("x", maxConnectorIDLen+1)
+	big := strings.Repeat("x", MaxConnectorIDLen+1)
 	if Known(big) {
 		t.Error("oversized id must not be known")
 	}
@@ -1674,8 +1674,8 @@ func TestRejectsInteriorWhitespace(t *testing.T) {
 // that understand it. Same value today, independent names by design — this
 // pins the ordering, not the number.
 func TestBoundLayering(t *testing.T) {
-	if MaxSegmentAllocLen < maxConnectorIDLen {
-		t.Errorf("MaxSegmentAllocLen (%d) must clear maxConnectorIDLen (%d)", MaxSegmentAllocLen, maxConnectorIDLen)
+	if MaxSegmentAllocLen < MaxConnectorIDLen {
+		t.Errorf("MaxSegmentAllocLen (%d) must clear MaxConnectorIDLen (%d)", MaxSegmentAllocLen, MaxConnectorIDLen)
 	}
 	if MaxSegmentAllocLen < MaxStateFieldLen {
 		t.Errorf("MaxSegmentAllocLen (%d) must clear MaxStateFieldLen (%d)", MaxSegmentAllocLen, MaxStateFieldLen)

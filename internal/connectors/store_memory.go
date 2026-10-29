@@ -159,7 +159,7 @@ func (s *MemoryStore) Get(_ context.Context, id string) (Connector, error) {
 	// Length before fold and before Known: ids are two short fixed
 	// strings, so anything over the cap is certainly unknown — fail
 	// without the normalize alloc or a quoted value in the 404.
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return Connector{}, NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
@@ -186,7 +186,7 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// Length before fold and before Known: ids are two short fixed
 	// strings, so anything over the cap is certainly unknown — fail
 	// without the normalize alloc or a quoted value in the 404.
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return Connector{}, NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
@@ -310,7 +310,7 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	// Length before fold and before Known: ids are two short fixed
 	// strings, so anything over the cap is certainly unknown — fail
 	// without the normalize alloc or a quoted value in the 404.
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return Connector{}, NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
@@ -386,7 +386,7 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) error {
 	// Length before fold (see Get): an oversized id is certainly
 	// unknown — fail before the normalize alloc.
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
@@ -483,7 +483,7 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 	// Length before fold and before Known: ids are two short fixed
 	// strings, so anything over the cap is certainly unknown — fail
 	// without the normalize alloc or a quoted value in the 404.
-	if len(id) > maxConnectorIDLen {
+	if len(id) > MaxConnectorIDLen {
 		return TokenRow{}, NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
@@ -520,7 +520,7 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// Length before fold: an oversized connector is certainly unknown —
 	// fail before the normalize alloc (same class as the id verbs).
-	if len(st.Connector) > maxConnectorIDLen {
+	if len(st.Connector) > MaxConnectorIDLen {
 		return NewStoreError("oversized connector id", false)
 	}
 	st.Connector = NormalizedID(st.Connector)

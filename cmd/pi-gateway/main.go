@@ -446,7 +446,7 @@ func run() error {
 		if cfg, err := connectors.OAuthConfigFromEnv(); err != nil {
 			// Echo the attempted redirect: non-secret, and the triage
 			// pointer when the failure is a registration mismatch.
-			// Capped at MaxStateFieldLen bytes — the same bound
+			// Capped at MaxRedirectLen bytes — the same bound
 			// CanonicalRedirectURL enforces, so any storable value logs
 			// whole and the byte-for-byte comparison this line exists for
 			// never truncates a value the server would actually send.
@@ -461,10 +461,10 @@ func run() error {
 			// surface, bounded() is display-capped at 128 runes for
 			// UI/API echoes — do not unify the two truncators.
 			redirect := os.Getenv("GOOGLE_REDIRECT_URL")
-			if len(redirect) > connectors.MaxStateFieldLen {
+			if len(redirect) > connectors.MaxRedirectLen {
 				end := 0
 				for i := range redirect {
-					if i > connectors.MaxStateFieldLen {
+					if i > connectors.MaxRedirectLen {
 						break
 					}
 					end = i
