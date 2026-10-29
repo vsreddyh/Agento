@@ -286,8 +286,9 @@ if [[ "$ENV_FILE" == ".env" ]]; then ENV_FILE="$REPO_DIR/.env"; fi
 # Tilde never expands inside a variable value: ~/x would canonicalize to
 # $PWD/~/x below. Expand a leading ~ (or bare ~) against $HOME first.
 if [[ "$ENV_FILE" == "~" ]]; then ENV_FILE="${HOME:-~}"; fi
-# shellcheck disable=SC2088 — matching a literal ~ is the point here;
-# the expansion SC2088 wants is exactly what the next line implements.
+# Literal-tilde match is the point below; the expansion SC2088 wants is
+# exactly what the assignment implements.
+# shellcheck disable=SC2088
 if [[ "$ENV_FILE" == "~/"* ]]; then ENV_FILE="${HOME:-~}/${ENV_FILE#"~/"}"; fi
 # An explicit relative export (ENV_FILE=throwaway.env) would otherwise
 # split-brain: stage 8 writes against the caller's cwd while the render
