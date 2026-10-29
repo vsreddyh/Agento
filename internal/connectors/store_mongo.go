@@ -1004,8 +1004,11 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 // eagerly here AND lazily by the TTL index: the index reaps what this check
 // already refused.
 func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState, error) {
-	// Trimmed like the write path and the gateway: padded input resolves
-	// instead of 404ing on whitespace no writer could have stored.
+	// Caller ctx by design, unlike CreateState's detached opCtx: consume is
+	// a single indexed delete with no advisory pre-work, so the caller's
+	// budget (5s verbs, 30s callback) is the right bound — there is nothing
+	// to detach from. Trimmed like the write path and the gateway: padded
+	// input resolves instead of 404ing on whitespace no writer could have stored.
 	// Length-gated like the gateway: oversized input answers the same
 	// NotFound as unknown, never reaching Mongo as a filter. Control-gated
 	// like CreateState: a control-bearing id must not reach the filter.

@@ -1642,3 +1642,16 @@ func TestRejectsInteriorWhitespace(t *testing.T) {
 		t.Fatalf("spaced consume should be NotFound, got %v", err)
 	}
 }
+
+// Bound layering is a contract: the raw pre-filter must never be tighter
+// than the contract gate it feeds, or valid input dies before the checks
+// that understand it. Same value today, independent names by design — this
+// pins the ordering, not the number.
+func TestBoundLayering(t *testing.T) {
+	if MaxSegmentAllocLen < maxConnectorIDLen {
+		t.Errorf("MaxSegmentAllocLen (%d) must clear maxConnectorIDLen (%d)", MaxSegmentAllocLen, maxConnectorIDLen)
+	}
+	if MaxSegmentAllocLen < MaxStateFieldLen {
+		t.Errorf("MaxSegmentAllocLen (%d) must clear MaxStateFieldLen (%d)", MaxSegmentAllocLen, MaxStateFieldLen)
+	}
+}

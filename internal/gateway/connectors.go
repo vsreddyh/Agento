@@ -239,7 +239,12 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, id string, logf func(
 // the "same status, same message, two envelopes" contract stays structural,
 // not disciplined. body must already be display-safe (static text or
 // html.EscapeString at the call site), like the apiError path below.
+// no-store lives here AND at each caller: the callers cover the JSON
+// envelope on the same path, this covers the HTML one — the 405 lesson
+// (a bypassed first-line header) applied to both envelopes, so neither
+// envelope trusts the other.
 func writeCallbackPage(w http.ResponseWriter, code int, title, body string) {
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
