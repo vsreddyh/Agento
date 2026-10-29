@@ -823,11 +823,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		if logf != nil {
 			logf("connectors: grant exchange refused: nil context")
 		}
-		// Upstream, not a 400: nil never comes from the wire — it is a
-		// direct-caller programmer bug, same "nothing was sent" class as
-		// the timeout branch below. Triage must read it as a caller
-		// defect, not "re-tap the consent".
-		return nil, NewStoreError("grant exchange aborted, nil context", true)
+		// Deterministic 400 like the dead-ctx branch below (not Upstream):
+		// nil never comes from the wire — it is a direct-caller
+		// programmer bug in the same "nothing was sent" class, and 502
+		// would misread as a flaky upstream worth retrying. The distinct
+		// discriminant stays in the log line.
+		return nil, NewStoreError("grant exchange aborted, nil context", false)
 	}
 	// Dead caller before the fallback wrap below (same ordering as the
 	// gateway fast paths): a cancelled parent with no deadline must not

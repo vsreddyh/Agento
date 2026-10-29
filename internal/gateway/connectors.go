@@ -251,7 +251,12 @@ func writeCallbackPage(w http.ResponseWriter, code int, title, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`<!doctype html><html><head><title>` + title + `</title></head><body><p>` + body + `</p></body></html>`))
+	// Both envelopes escaped inside the helper: body was already owned
+	// here by contract, title now too — every current title is a static
+	// literal, but the next caller passing a dynamic title (connector id,
+	// provider text) must not land unescaped in a browser-parsed page.
+	// Safe by construction, not by discipline.
+	_, _ = w.Write([]byte(`<!doctype html><html><head><title>` + html.EscapeString(title) + `</title></head><body><p>` + body + `</p></body></html>`))
 }
 
 // callbackDeadAttempt answers a dead OAuth attempt (unknown, consumed, or
@@ -670,6 +675,12 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			if ctx.Err() != context.DeadlineExceeded {
 				return
 			}
+			// Verb-deadline answers the single timeout 502 like every
+			// sibling verb (storeTimeoutOrGone), not the detached generic:
+			// one grep term for one fault, even though this leg is nearly
+			// dead by construction (see above).
+			storeTimeoutOrGone(w, s, ctx, err, "connect")
+			return
 		}
 		connectorsError(w, err)
 		return
