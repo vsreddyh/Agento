@@ -911,15 +911,13 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	if len(st.RedirectURI) > MaxRedirectLen {
 		return NewStoreError("oauth redirect too long", false)
 	}
-	if !Known(st.Connector) {
-		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
-	}
-	// Shape-checked like AuthURL/Exchange, not just length-capped: a
-	// sub-2048 garbage redirect would otherwise supersede the live
-	// attempt and fail only at Exchange — after the user consented.
-	// Canonicalised and stored, so stored == sent by construction.
-	// Empty means minted before this column existed: allowed, the
-	// callback falls back to the live config.
+	// Shape before identity, matching Exchange/AuthURL: an unknown id with
+	// a bad redirect 400s on shape in every helper, so the same input pair
+	// answers identically wherever it is checked. Canonicalised and stored,
+	// so stored == sent by construction. Empty means minted before this
+	// column existed: allowed, the callback falls back to the live config.
+	// (A sub-2048 garbage redirect would otherwise supersede the live
+	// attempt and fail only at Exchange — after the user consented.)
 	if st.RedirectURI != "" {
 		canonical, err := CanonicalRedirectURL(st.RedirectURI)
 		if err != nil {
@@ -932,6 +930,9 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 		if len(st.RedirectURI) > MaxRedirectLen {
 			return NewStoreError("oauth redirect too long", false)
 		}
+	}
+	if !Known(st.Connector) {
+		return &StoreError{Msg: "unknown connector " + st.Connector, NotFound: true}
 	}
 	// Single clock read for the whole verb: default, clamp bound, and
 	// past-expiry check must agree on "now", or a tick between reads
@@ -1037,6 +1038,12 @@ func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState
 	// like CreateState: a control-bearing id must not reach the filter.
 	state = TrimCredential(state)
 	if len(state) > MaxStateFieldLen {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
+	if len(state) < MinStateLen {
+		// Floor like every sibling leg: a short state is unmintable
+		// (NewState mints 22 chars), so it answers the same NotFound as
+		// unknown/expired instead of reaching the store as a filter.
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	if HasControl(state) || !utf8.ValidString(state) || HasWhitespace(state) {

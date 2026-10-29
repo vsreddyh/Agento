@@ -922,12 +922,16 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// its own trace, or a later draft 403 has no line to trace back to.
 	// Trimmed first like code/state: whitespace-only is absent, not a
 	// subset — blank == absent on every leg, so "  " never warns.
-	if granted := connectors.TrimCredential(query.Get("scope")); granted != "" && len(granted) <= connectors.MaxStateFieldLen {
+	if granted := connectors.TrimCredential(query.Get("scope")); granted != "" && len(granted) <= connectors.MaxStateFieldLen && !connectors.HasControl(granted) && utf8.ValidString(granted) {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
 			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, missing, bounded(approvals.ScrubError(granted)))
 		}
-	} else if len(granted) > connectors.MaxStateFieldLen {
-		s.cfg.Logf("connectors: grant for %q scope param oversized (%d bytes), subset check skipped (grant stored; drafts may 403)", id, len(granted))
+	} else if len(granted) > 0 {
+		// Oversized, control-bearing, or undecodable: skip the compare
+		// like the oversized leg, never the grant. Same blank==absent
+		// contract as code/state — only non-empty values reach here, and
+		// only clean ones are compared.
+		s.cfg.Logf("connectors: grant for %q scope param unusable (%d bytes), subset check skipped (grant stored; drafts may 403)", id, len(granted))
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {

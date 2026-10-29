@@ -818,3 +818,24 @@ func TestExchangeZeroesExpiryWithoutAccess(t *testing.T) {
 		t.Fatalf("expiry without access should be zeroed, got %v", tok.Expiry)
 	}
 }
+
+func TestCreateStateShapeBeforeIdentity(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	err := s.CreateState(ctx, OAuthState{State: testState, Connector: "slack", Verifier: testVerifier, RedirectURI: "https://evil.example/x"})
+	if err == nil {
+		t.Fatal("bad-redirect unknown-id should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("shape should beat identity: deterministic 400, got %v", err)
+	}
+}
+
+func TestConsumeStateRejectsShort(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if _, err := s.ConsumeState(ctx, "short"); err == nil {
+		t.Fatal("short state should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("short consume should be NotFound, got %v", err)
+	}
+}
