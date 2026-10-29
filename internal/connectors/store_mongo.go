@@ -632,9 +632,8 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	if HasControl(tok.RefreshCipher) || HasControl(tok.AccessCipher) || !utf8.ValidString(tok.RefreshCipher) || !utf8.ValidString(tok.AccessCipher) {
 		return NewStoreError("connector grant token is invalid", false)
 	}
-	if !Known(id) {
-		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
-	}
+	// Empty before identity, matching every sibling verb: an empty or
+	// blank cipher 400s the same way whether the id is known or not.
 	if TrimCredential(tok.RefreshCipher) == "" {
 		return NewStoreError("connector grant needs a refresh token", false)
 	}
@@ -644,6 +643,9 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// (same gate as refresh) rather than letting it through to storage.
 	if tok.AccessCipher != "" && TrimCredential(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
+	}
+	if !Known(id) {
+		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	// Expiry-without-access is a second missing representation: the
 	// refresher keys renew-now off zero expiry, and the no-op predicates

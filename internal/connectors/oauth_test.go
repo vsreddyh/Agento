@@ -322,6 +322,13 @@ func TestAuthURLRejectsLongClient(t *testing.T) {
 	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("oversized client id URL = %q, want empty", got)
 	}
+	// Control-bearing endpoints fail the same gate as credentials: a
+	// minted consent URL with embedded controls can only 400 at Google
+	// after the user consented.
+	evil := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o\x7f", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(evil, "gmail", "s", "v", nil); got != "" {
+		t.Errorf("control-bearing endpoint URL = %q, want empty", got)
+	}
 }
 
 func TestExchangeRejectsOversizedToken(t *testing.T) {

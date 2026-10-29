@@ -451,6 +451,15 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
+	if HasControl(trimmed.AuthURL) || HasControl(trimmed.TokenURL) || !utf8.ValidString(trimmed.AuthURL) || !utf8.ValidString(trimmed.TokenURL) {
+		// Same fail-fast class as the credential gate above: a control-
+		// bearing endpoint would mint a consent URL Google can only 400,
+		// after the user consented.
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: invalid endpoint", id)
+		}
+		return ""
+	}
 	canonical, err := CanonicalRedirectURL(trimmed.RedirectURL)
 	if err != nil {
 		// Same shape gate as the env path: a hand-built redirect that
@@ -593,6 +602,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	}
 	if cc.AuthURL == "" || cc.TokenURL == "" {
 		return nil, deny("oauth client endpoints are not configured")
+	}
+	if HasControl(cc.AuthURL) || HasControl(cc.TokenURL) || !utf8.ValidString(cc.AuthURL) || !utf8.ValidString(cc.TokenURL) {
+		return nil, deny("oauth client endpoint is invalid")
 	}
 	// Folded like AuthURL above and every store verb: same logical id,
 	// same answer, wherever the caller normalised.

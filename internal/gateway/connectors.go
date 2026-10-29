@@ -737,9 +737,9 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// Clamp absurd futures: a far-future expires_in (hand-built
 		// token, clock skew) would otherwise read as "don't renew for
 		// decades". Same unbounded-lifetime class as the state clamp;
-		// the stores re-enforce the same bound. Wall-clock deliberately
-		// (display-adjacent bound, not an expiry input — the injectable
-		// clock owns state-expiry ticks, not this).
+		// the stores re-enforce the same bound. Wall-clock deliberately:
+		// a display-adjacent bound, not an expiry input — the injectable
+		// clock (see connectors timeNow) owns state-expiry ticks.
 		if max := time.Now().Add(connectors.MaxAccessLifetime).UnixMilli(); expiry > max {
 			expiry = max
 		}
