@@ -967,3 +967,12 @@ func TestCanonicalRedirectRejectsEncodedPath(t *testing.T) {
 		}
 	}
 }
+
+func TestExchangeRedirectErrorIsStatic(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://evil.example/x", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "codecodecodecodecode1", testVerifier, nil); err == nil {
+		t.Fatal("bad redirect should fail")
+	} else if msg := err.Error(); msg != "oauth client redirect URL is invalid" {
+		t.Fatalf("client message should be static, got %q", msg)
+	}
+}

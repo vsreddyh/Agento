@@ -1098,12 +1098,16 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// values must match what is sent.
 	redirect, err := CanonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
-		// Keep the canonicaliser discriminant: AuthURL logs the underlying
-		// check the same way, and this branch fires exactly for hand-built
-		// cfg / regressions — when triage needs to know which of the ~10
-		// shape checks fired. Static text only (no input echo), so it is
-		// safe in both the log line and the client-mapped message.
-		return nil, deny("oauth client redirect URL is invalid: " + err.Error())
+		// Static to the client, detailed in the log: every other
+		// provider/config-shape failure on this path returns a fixed
+		// discriminant (so a future canonicaliser message that
+		// interpolates input can never reach the callback caller), with
+		// the check name log-only for triage. AuthURL does the same
+		// (logs the check, returns "").
+		if logf != nil {
+			logf("connectors: grant exchange refused for %q: invalid redirect (%s)", id, err.Error())
+		}
+		return nil, NewStoreError("oauth client redirect URL is invalid", false)
 	}
 	// Checked == sent: canonicalisation can grow the string (brackets),
 	// so length-gate the canonical form too — same as both CreateStates.
