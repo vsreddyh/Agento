@@ -221,6 +221,19 @@ wizard_cleanup() {
 }
 trap wizard_cleanup EXIT INT TERM
 
+# _alive PID: zombie-aware liveness for backgrounded jobs. kill -0
+# succeeds on zombies (exited but unreaped), so a bare kill -0 reads an
+# instantly-dead `tailscale up` as alive and burns the wait loops. ps
+# reports Z for zombies; if ps itself is missing, fall back to kill -0
+# semantics rather than misreading a live process as dead.
+_alive() {
+  kill -0 "$1" 2>/dev/null || return 1
+  local st
+  st=$(ps -o stat= -p "$1" 2>/dev/null || true)
+  [[ -z "$st" ]] && return 0
+  [[ "$st" != *Z* ]]
+}
+
 # _valid_tsdns HOST: strict tailnet-hostname check for preset paths —
 # every dot-separated label must satisfy the TS_HOST shape (lowercase,
 # label-bound), and at least two labels must precede .ts.net (real
@@ -228,6 +241,9 @@ trap wizard_cleanup EXIT INT TERM
 # a.ts.net must fail here, not at the probe).
 _valid_tsdns() {
   local rest="$1" label
+  # RFC bounds first: label ≤63, hostname ≤253 — a 100-char-label typo
+  # fails at the preset note, not at the probe.
+  (( ${#rest} <= 253 )) || return 1
   [[ "$rest" == *.ts.net ]] || return 1
   rest="${rest%.ts.net}"
   # A doubled suffix (foo.ts.net.ts.net) would otherwise strip once and
@@ -238,9 +254,11 @@ _valid_tsdns() {
   [[ "$rest" == *.* ]] || return 1
   while [[ "$rest" == *.* ]]; do
     label="${rest%%.*}"
+    (( ${#label} <= 63 )) || return 1
     [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
     rest="${rest#*.}"
   done
+  (( ${#rest} <= 63 )) || return 1
   [[ "$rest" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]
 }
 
@@ -410,7 +428,7 @@ else
   for ((__i = 1; __i <= 60; __i++)); do
     URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" | head -n1 || true)
     [[ -n "$URL" ]] && break
-    kill -0 "$TS_PID" 2>/dev/null || break
+    _alive "$TS_PID" || break
     printf '%s' '.'; sleep 1
   done
   printf '\n'
@@ -426,7 +444,7 @@ else
   # the wait below can never succeed — check state once and fall through to
   # the "not Running yet" exit instead of two minutes of dots.
   _up_alive=0
-  if kill -0 "$TS_PID" 2>/dev/null; then _up_alive=1; fi
+  if _alive "$TS_PID"; then _up_alive=1; fi
   if (( _up_alive == 0 )) && ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
     note "setup process already exited and daemon not Running — skipping the wait"
   else
@@ -438,9 +456,13 @@ else
   fi
   unset _up_alive
   # `tailscale up` exits once the node is up, so by the time Running is
-  # confirmed it is already reaped-or-reapable: wait so the EXIT trap can
-  # never fire on a recycled PID. (Already-connected takes this path with
-  # TS_PID empty — wait on "" is suppressed, hence the guard.)
+  # confirmed it is already reaped-or-reapable: this wait returns at once
+  # in every normal flow and only exists so the EXIT trap can never fire
+  # on a recycled PID. Deliberately unbounded: bounding a wait(1) builtin
+  # takes a killer-watchdog the latency doesn't justify — a `up` that
+  # lingers post-connect is doing work the wizard should wait for, not
+  # outrun. (Already-connected takes this path with TS_PID empty — hence
+  # the guard, since wait on "" is only accidentally harmless.)
   if [[ -n "$TS_PID" ]] && tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
     wait "$TS_PID" 2>/dev/null || true
     TS_PID=""
@@ -726,6 +748,12 @@ if [[ ! -f "$ENV_FILE" ]]; then
   fi
   exit 1
 fi
+# The four write_env calls below fail silently under set -e on an
+# unwritable file (library); fail fast here with the message instead.
+if [[ ! -w "$ENV_FILE" ]]; then
+  warn "no write permission on $ENV_FILE — fix ownership/permissions, then re-run"
+  exit 1
+fi
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
 cp -p "$ENV_FILE" "$BACKUP"
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
@@ -820,6 +848,10 @@ unset _have_podman
 # four secret values interpolated, and a kill -9 would leave fixed paths
 # behind on world-readable /tmp. Registered in the EXIT trap above.
 RENDER_OUT=$(mktemp); RENDER_ERR=$(mktemp)
+# Deliberately unbounded: `config` is client-side YAML rendering (the
+# socket-touching detection above is already timeout-bounded), so a hang
+# here means a wedged compose binary, not a slow network — no budget
+# would make that failure friendlier than the exit below.
 if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >"$RENDER_OUT" 2>"$RENDER_ERR"; then
   # Empty vars render as KEY: '' — the quote alone must not satisfy the
   # check, or a missing var reads as "reaches the pi service".
