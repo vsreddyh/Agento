@@ -484,6 +484,8 @@ func run() error {
 			// the startup line carries at most one marker. Any storable value
 			// logs whole, and the byte-for-byte comparison this line exists
 			// for never truncates a value the server would actually send.
+			// A marked-truncated line is not comparable: shorten
+			// GOOGLE_REDIRECT_URL and restart, never register the prefix.
 			redirect := connectors.RedactURL(os.Getenv("GOOGLE_REDIRECT_URL"))
 			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, redirect)
 		} else {

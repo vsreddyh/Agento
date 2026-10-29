@@ -67,7 +67,9 @@ const (
 // Negatives floor to 0 while positive past timestamps return as-is: both
 // mean renew-now per TokenRow, but only negatives lack any other spelling —
 // a past timestamp stays addressable (when), a negative becomes the
-// sentinel (missing).
+// sentinel (missing). Renew-now check is therefore `expiry <= now`, never
+// `== 0`: branching on the sentinel alone would treat a past timestamp
+// as still valid.
 func (t TokenRow) EffectiveExpiry(now time.Time) int64 {
 	return ClampAccessExpiry(t.AccessExpiryUnixMilli, now)
 }
