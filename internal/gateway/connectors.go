@@ -566,8 +566,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// Bound the raw query before parsing it: url.Query() allocates the
 	// full map up front, so a multi-MB ?code=/state= from an
 	// unauthenticated caller would pay the parse before the per-value
-	// length gate below fires. 2x cap + slack covers both values plus
-	// separators; anything past that is garbage, rejected before Parse.
+	// length gate below fires. Raw counts encoded bytes (percent-encoding
+	// expands: %00 is 3 raw bytes for 1 decoded byte), so this fires first
+	// by construction — 2x cap + slack covers both values plus separators,
+	// and anything past that is garbage, rejected before Parse.
 	if len(r.URL.RawQuery) > 2*connectors.MaxStateFieldLen+64 {
 		callbackDeadAttempt(w, r)
 		return

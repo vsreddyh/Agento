@@ -1555,3 +1555,34 @@ func TestOversizedIDFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// Control-bearing ids fail closed before Known: the "unknown connector"
+// echo must never carry controls into the response body or log line.
+func TestInvalidIDFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	bad := "gm\nail"
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, bad, "s", "v", nil); got != "" {
+		t.Errorf("control-id AuthURL = %q, want empty", got)
+	}
+	if _, err := Exchange(ctx, cfg, bad, "code", "verifier", nil); err == nil {
+		t.Error("control-id Exchange should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Errorf("control-id Exchange should be a deterministic 400, got %v", err)
+	}
+	s := NewMemoryStore()
+	for name, err := range map[string]error{
+		"Get":         func() error { _, err := s.Get(ctx, bad); return err }(),
+		"Disconnect":  func() error { _, err := s.Disconnect(ctx, bad); return err }(),
+		"SetTokens":   s.SetTokens(ctx, bad, TokenRow{RefreshCipher: "r"}),
+		"CreateState": s.CreateState(ctx, OAuthState{State: "s1", Connector: bad, Verifier: "v"}),
+	} {
+		if err == nil {
+			t.Errorf("control-id store %s should fail", name)
+		} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+			t.Errorf("control-id store %s should be a deterministic 400, got %v", name, err)
+		} else if strings.Contains(se.Msg, "\n") {
+			t.Errorf("control-id store %s echo carries the control: %q", name, se.Msg)
+		}
+	}
+}

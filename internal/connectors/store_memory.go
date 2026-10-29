@@ -151,6 +151,13 @@ func (s *MemoryStore) Get(_ context.Context, id string) (Connector, error) {
 		return Connector{}, NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
+	// Controls fail closed like every sibling input: a control-bearing
+	// id would otherwise ride the "unknown connector" echo below into
+	// the JSON body and the scrubbed log line. Checked post-fold so
+	// edge Cf forgiven by TrimCredential still folds instead of 400ing.
+	if HasControl(id) || !utf8.ValidString(id) {
+		return Connector{}, NewStoreError("invalid connector id", false)
+	}
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
@@ -171,6 +178,13 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 		return Connector{}, NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
+	// Controls fail closed like every sibling input: a control-bearing
+	// id would otherwise ride the "unknown connector" echo below into
+	// the JSON body and the scrubbed log line. Checked post-fold so
+	// edge Cf forgiven by TrimCredential still folds instead of 400ing.
+	if HasControl(id) || !utf8.ValidString(id) {
+		return Connector{}, NewStoreError("invalid connector id", false)
+	}
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
@@ -285,6 +299,13 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 		return Connector{}, NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
+	// Controls fail closed like every sibling input: a control-bearing
+	// id would otherwise ride the "unknown connector" echo below into
+	// the JSON body and the scrubbed log line. Checked post-fold so
+	// edge Cf forgiven by TrimCredential still folds instead of 400ing.
+	if HasControl(id) || !utf8.ValidString(id) {
+		return Connector{}, NewStoreError("invalid connector id", false)
+	}
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
@@ -354,6 +375,11 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 		return NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
+	// Controls fail closed like the id verbs above: a control-bearing id
+	// would otherwise ride the "unknown connector" echo below.
+	if HasControl(id) || !utf8.ValidString(id) {
+		return NewStoreError("invalid connector id", false)
+	}
 	// Length before identity, matching CreateState/ConsumeState/Exchange:
 	// an oversized input 400s the same way whether the id is known or
 	// not, so the unknown-id path cannot be told apart by which error
@@ -439,6 +465,13 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 		return TokenRow{}, NewStoreError("oversized connector id", false)
 	}
 	id = NormalizedID(id)
+	// Controls fail closed like every sibling input: a control-bearing
+	// id would otherwise ride the "unknown connector" echo below into
+	// the JSON body and the scrubbed log line. Checked post-fold so
+	// edge Cf forgiven by TrimCredential still folds instead of 400ing.
+	if HasControl(id) || !utf8.ValidString(id) {
+		return TokenRow{}, NewStoreError("invalid connector id", false)
+	}
 	if !Known(id) {
 		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
@@ -466,6 +499,11 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 		return NewStoreError("oversized connector id", false)
 	}
 	st.Connector = NormalizedID(st.Connector)
+	// Controls fail closed like the id verbs: a control-bearing connector
+	// would otherwise ride the "unknown connector" echo below.
+	if HasControl(st.Connector) || !utf8.ValidString(st.Connector) {
+		return NewStoreError("invalid connector id", false)
+	}
 	// Trimmed before storing: the callback trims query params before
 	// ConsumeState, so a padded value stored verbatim would never match a
 	// lookup — and a padded verifier would break Exchange at Google after

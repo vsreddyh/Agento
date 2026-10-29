@@ -236,7 +236,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// (loopback-ness checked above). Hostname() already strips brackets
 		// and port, so h arrives bare — no Trim needed. Fail closed here
 		// instead of dying with redirect_uri_mismatch in the browser.
-		return "", errors.New("connectors: redirect URL host is not a valid hostname (use a dotted FQDN or punycode; single-label and Unicode hosts are rejected)")
+		return "", errors.New("connectors: redirect URL host is not a valid hostname (use a dotted FQDN or punycode; single-label — except localhost — and Unicode hosts are rejected)")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
@@ -569,6 +569,13 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 			logf("connectors: grant exchange refused for %q: %s", id, reason)
 		}
 		return NewStoreError(reason, false)
+	}
+	// Controls fail closed like every sibling input, before any shape
+	// check: a control-bearing id would otherwise ride the NotFound echo
+	// below into the response body. Checked post-fold so edge Cf forgiven
+	// by TrimCredential still folds instead of 400ing.
+	if HasControl(id) || !utf8.ValidString(id) {
+		return nil, deny("invalid connector id")
 	}
 	if cfg == nil {
 		return nil, deny("oauth client is not configured")
