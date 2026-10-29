@@ -481,6 +481,27 @@ func TestConnectorsCallbackRejectsControlBytes(t *testing.T) {
 	}
 }
 
+// Trimmed-to-empty is malformed, not missing: an invisible-only value was
+// never server-minted, so it dead-attempts like unknown/consumed/expired
+// instead of answering the missing-params branch (same status either way).
+func TestConnectorsCallbackTrimsToDeadAttempt(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=++&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("whitespace-only code: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("trimmed-empty code should dead-attempt, got: %s", rec.Body)
+	}
+	// Truly absent params keep the missing-params message.
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?state=s1", "")
+	if !strings.Contains(rec.Body.String(), "callback needs") {
+		t.Fatalf("absent code should name missing params, got: %s", rec.Body)
+	}
+}
+
 // Invalid UTF-8 fails with the same dead-attempt shape: overlong/invalid
 // sequences decode as RuneError (not control), so the control gate alone
 // would miss them before the DB filter.

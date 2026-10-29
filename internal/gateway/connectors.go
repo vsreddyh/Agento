@@ -555,9 +555,17 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	}
 	code := connectors.TrimCredential(r.URL.Query().Get("code"))
 	state := connectors.TrimCredential(r.URL.Query().Get("state"))
-	if code == "" || state == "" {
+	if r.URL.Query().Get("code") == "" || r.URL.Query().Get("state") == "" {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			"callback needs ?code= and ?state=; start over from connect")
+		return
+	}
+	// Trimmed-to-empty is malformed, not missing: an invisible-only value
+	// was never server-minted, so it dead-attempts like unknown/consumed/
+	// expired instead of answering the missing-params branch (same status,
+	// one indistinguishable 400 either way).
+	if code == "" || state == "" {
+		callbackDeadAttempt(w, r)
 		return
 	}
 	// Length-gated before the store/Google calls (shared

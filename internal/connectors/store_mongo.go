@@ -39,6 +39,17 @@ func (s *MongoStore) logf(format string, args ...any) {
 	}
 }
 
+// scrubErr scrubs + bounds a store-internal error for log lines: driver
+// errors can embed the offending filter/value, so a raw %v would leak
+// caller-influenced text into container logs. Same contract as the
+// gateway's bounded(ScrubError(...)) on the read path.
+func scrubErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return approvals.ScrubError(err.Error())
+}
+
 // New connects to uri/dbName.
 func New(uri, dbName string) (*MongoStore, error) {
 	_, db, err := mongostore.Open(uri, dbName)
@@ -108,7 +119,7 @@ func findOneOpts() *options.FindOneOptions {
 func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	cur, err := s.coll.Find(ctx, bson.D{}, findOpts())
 	if err != nil {
-		s.logf("connectors: list failed: %v", err)
+		s.logf("connectors: list failed: %s", scrubErr(err))
 		return nil, NewStoreError("connector list failed", true)
 	}
 	// Cleanup on its own budget, not the verb's: a slow Atlas read must not
@@ -118,13 +129,13 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	for cur.Next(ctx) {
 		var c Connector
 		if err := cur.Decode(&c); err != nil {
-			s.logf("connectors: list decode failed: %v", err)
+			s.logf("connectors: list decode failed: %s", scrubErr(err))
 			return nil, NewStoreError("connector list failed", true)
 		}
 		byID[c.ID] = c
 	}
 	if err := cur.Err(); err != nil {
-		s.logf("connectors: list cursor failed: %v", err)
+		s.logf("connectors: list cursor failed: %s", scrubErr(err))
 		return nil, NewStoreError("connector list failed", true)
 	}
 	out := make([]Connector, 0, len(listIDs))
@@ -174,7 +185,7 @@ func (s *MongoStore) Get(ctx context.Context, id string) (Connector, error) {
 		if err == mongoDrv.ErrNoDocuments {
 			return DefaultRow(id), nil
 		}
-		s.logf("connectors: read %q failed: %v", id, err)
+		s.logf("connectors: read %q failed: %s", id, scrubErr(err))
 		return Connector{}, NewStoreError("connector read failed", true)
 	}
 	return backfillDisplay(c, id), nil
@@ -210,7 +221,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		_, serr := s.states.DeleteMany(srubCtx, bson.D{{Key: "connector", Value: id}})
 		scrubCancel()
 		if serr != nil {
-			s.logf("connectors: state scrub %q failed: %v", id, serr)
+			s.logf("connectors: state scrub %q failed: %s", id, scrubErr(serr))
 		}
 	}
 	pctx, pcancel := quickCtx()
@@ -220,7 +231,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	pcancel()
 	probeUnexpected := probeErr != nil && !errors.Is(probeErr, mongoDrv.ErrNoDocuments)
 	if probeUnexpected {
-		s.logf("connectors: SetStatus pre-read %q failed: %v", id, probeErr)
+		s.logf("connectors: SetStatus pre-read %q failed: %s", id, scrubErr(probeErr))
 	}
 	if probeErr == nil && cur.Status == st && cur.LastError == lastErr {
 		// Pure no-op only when there is also no grant to clear: a
@@ -237,7 +248,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 		// write that would otherwise leave them.
 		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 			repairUpdateDoc(id, lastErr, st == StatusDisconnected)); derr != nil {
-			s.logf("connectors: display refresh %q failed: %v", id, derr)
+			s.logf("connectors: display refresh %q failed: %s", id, scrubErr(derr))
 			return Connector{}, NewStoreError("connector write failed", true)
 		}
 		return s.readBack(id)
@@ -273,7 +284,7 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 		statusUpdateDoc(id, st, lastErr, now, connectedAt), options.Update().SetUpsert(true))
 	if err != nil {
-		s.logf("connectors: write %q failed: %v", id, err)
+		s.logf("connectors: write %q failed: %s", id, scrubErr(err))
 		return Connector{}, NewStoreError("connector write failed", true)
 	}
 	return s.readBack(id)
@@ -309,7 +320,7 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	_, serr := s.states.DeleteMany(srubCtx, bson.D{{Key: "connector", Value: id}})
 	scrubCancel()
 	if serr != nil {
-		s.logf("connectors: state scrub %q failed: %v", id, serr)
+		s.logf("connectors: state scrub %q failed: %s", id, scrubErr(serr))
 	}
 	transition, preReadOK := disconnectTransition(probeErr, probe.Status)
 	// Idempotent no-op: already disconnected means updated_at is the last
@@ -327,7 +338,7 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 		}
 		if _, derr := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 			repairUpdateDoc(id, "", true)); derr != nil {
-			s.logf("connectors: display refresh %q failed: %v", id, derr)
+			s.logf("connectors: display refresh %q failed: %s", id, scrubErr(derr))
 			return Connector{}, NewStoreError("connector disconnect failed", true)
 		}
 		return s.readBack(id)
@@ -338,7 +349,7 @@ func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, erro
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}},
 		disconnectUpdateDoc(id, now), options.Update().SetUpsert(true))
 	if err != nil {
-		s.logf("connectors: disconnect %q failed: %v", id, err)
+		s.logf("connectors: disconnect %q failed: %s", id, scrubErr(err))
 		return Connector{}, NewStoreError("connector disconnect failed", true)
 	}
 	if transition {
@@ -686,7 +697,7 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 		}},
 	}, options.Update().SetUpsert(true))
 	if err != nil {
-		s.logf("connectors: token write %q failed: %v", id, err)
+		s.logf("connectors: token write %q failed: %s", id, scrubErr(err))
 		return NewStoreError("connector token write failed", true)
 	}
 	return nil
@@ -715,7 +726,7 @@ func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error)
 		if err == mongoDrv.ErrNoDocuments {
 			return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 		}
-		s.logf("connectors: token read %q failed: %v", id, err)
+		s.logf("connectors: token read %q failed: %s", id, scrubErr(err))
 		return TokenRow{}, NewStoreError("connector token read failed", true)
 	}
 	if strings.TrimSpace(row.Refresh) == "" {
@@ -850,19 +861,19 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 		return NewStoreError("oauth state already exists", false)
 	}
 	if dupErr != mongoDrv.ErrNoDocuments {
-		s.logf("connectors: state duplicate check %q failed: %v", st.State, dupErr)
+		s.logf("connectors: state duplicate check %q failed: %s", st.State, scrubErr(dupErr))
 		return NewStoreError("oauth state create failed", true)
 	}
 	_, serr := s.states.DeleteMany(opCtx, bson.D{{Key: "connector", Value: st.Connector}})
 	if serr != nil {
-		s.logf("connectors: state supersede %q failed: %v", st.Connector, serr)
+		s.logf("connectors: state supersede %q failed: %s", st.Connector, scrubErr(serr))
 	}
 	_, err := s.states.InsertOne(opCtx, st)
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
 			return NewStoreError("oauth state already exists", false)
 		}
-		s.logf("connectors: state create failed: %v", err)
+		s.logf("connectors: state create failed: %s", scrubErr(err))
 		return NewStoreError("oauth state create failed", true)
 	}
 	return nil
@@ -894,7 +905,7 @@ func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState
 		if err == mongoDrv.ErrNoDocuments {
 			return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 		}
-		s.logf("connectors: state consume failed: %v", err)
+		s.logf("connectors: state consume failed: %s", scrubErr(err))
 		return OAuthState{}, NewStoreError("oauth state consume failed", true)
 	}
 	// Zero counts as expired, matching the memory side (no IsZero carve-out
