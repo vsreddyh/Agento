@@ -553,9 +553,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			"callback is not configured on this server yet — never paste a token in chat")
 		return
 	}
-	code := connectors.TrimCredential(r.URL.Query().Get("code"))
-	state := connectors.TrimCredential(r.URL.Query().Get("state"))
-	if r.URL.Query().Get("code") == "" || r.URL.Query().Get("state") == "" {
+	// Parse the query once and reuse it: each Query() call re-parses and
+	// re-allocates the full map, and this unauthenticated entry point
+	// pays that before any fast-path reject runs.
+	query := r.URL.Query()
+	code := connectors.TrimCredential(query.Get("code"))
+	state := connectors.TrimCredential(query.Get("state"))
+	if query.Get("code") == "" || query.Get("state") == "" {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			"callback needs ?code= and ?state=; start over from connect")
 		return
@@ -694,8 +698,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	cfg := s.cfg.ConnectorOAuth
 	// Trimmed copies are what get sealed: a padded value would otherwise
 	// pass the non-empty checks and seal with padding the refresher cannot
-	// use (same class as the whitespace cases fixed earlier — check and
-	// stored bytes must be the same string).
+	// use (same class as the whitespace cases fixed earlier — checked and
+	// stored bytes must be the same string). Exchange already normalises
+	// on return; this trim is the backstop, not the owner — do not remove
+	// either side without checking the other still holds.
 	refreshToken := connectors.TrimCredential(tok.RefreshToken)
 	accessToken := connectors.TrimCredential(tok.AccessToken)
 	refreshSealed, err := connectors.EncryptToken(cfg.Key, refreshToken)
