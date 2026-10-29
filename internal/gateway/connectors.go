@@ -344,7 +344,10 @@ func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg st
 }
 
 // missingScopes reports requested scopes absent from a space-delimited
-// granted set (the ?scope= Google appends to the callback). Set compare:
+// granted set (the ?scope= Google appends to the callback). Space-delimited
+// by spec (RFC 6749): commas are not separators, so a comma-joined value
+// would false-warn — Google sends spaces, and anything else is treated
+// literally (a "missing" warning, never a grant failure). Set compare:
 // order and repeats don't matter, only coverage. Empty granted means
 // Google sent none — treated as "nothing to compare", not a total miss,
 // since some flows omit the param on full grants.
@@ -743,6 +746,12 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		connectorsError(w, err)
 		return
 	}
+	// Detached-Upstream answers the generic 502 here (not the timeout
+	// contract): CreateState runs detached by design, so a slow-Atlas
+	// failure is not a verb-deadline fault and must not borrow its
+	// wording — triage greps this path by "create failed", the verb path
+	// by "did not answer in time", and the log line names the op either
+	// way. Intentional divergence from the sibling verbs; re-tap recovers.
 	// Fail-closed builder: empty means a helper refused (nil cfg, unknown
 	// id — both pre-checked above, so this is defense in depth, not a live
 	// branch). Never hand the app a 200 with an empty auth_url it would
