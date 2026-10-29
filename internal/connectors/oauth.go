@@ -1177,7 +1177,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// skewed provider value. Same unbounded-lifetime class as the state
 	// clamp — fail safe (renew soon), never far. Wall-clock by design and
 	// advisory only: the stores re-clamp authoritatively on their own
-	// clocks, so a stepped fake clock and this gate never have to agree.
+	// clocks, so a stepped fake clock and this gate never have to agree
+	// (see ClampAccessExpiry's single-owner contract — this call site is a
+	// reader, not an owner).
 	// Zero stays zero: a clamped-to-zero (negative floored) expiry is the
 	// renew-now sentinel (time.Time{}), not the epoch — stored == delivered.
 	if !tok.Expiry.IsZero() {

@@ -250,14 +250,17 @@ func IsDraftOnlySend(server, tool string) bool {
 	}
 	server = NormalizedID(server)
 	tool = NormalizedID(tool)
-	// Hyphens, dots, and spaces fold to underscores: a wired send-message,
-	// send.message, or "send message" is the same tool as send_message —
-	// without this the refusal list drifts on punctuation the way the scope
-	// test guards against renames. Trimmed again before folding (not just
-	// relying on NormalizedID above): the interior-only reading holds no
-	// matter who calls this helper next, so a padded direct input folds to
-	// the refused form instead of a lookalike with edge underscores.
-	tool = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(TrimCredential(tool), "-", "_"), ".", "_"), " ", "_")
+	// Hyphens, dots, spaces, slashes, and colons fold to underscores: a
+	// wired send-message, send.message, "send message", send/message, or
+	// send:message is the same tool as send_message — without this the
+	// refusal list drifts on punctuation the way the scope test guards
+	// against renames. NormalizedID already trimmed the edges, so any
+	// separator folded here is interior by construction. Covered set:
+	// - . space / : — any other separator falls to the gated backstop
+	// by design.
+	for _, sep := range []string{"-", ".", " ", "/", ":"} {
+		tool = strings.ReplaceAll(tool, sep, "_")
+	}
 	switch server {
 	case Gmail:
 		switch tool {

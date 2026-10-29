@@ -1542,6 +1542,12 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	if !IsDraftOnlySend("gmail", "send.message") {
 		t.Error("dotted send should still be refused")
 	}
+	if !IsDraftOnlySend("gmail", "send/message") {
+		t.Error("slashed send should still be refused")
+	}
+	if !IsDraftOnlySend("gmail", "send:message") {
+		t.Error("colon send should still be refused")
+	}
 	if !IsDraftOnlySend("gmail", "send message") {
 		t.Error("spaced send should still be refused")
 	}
