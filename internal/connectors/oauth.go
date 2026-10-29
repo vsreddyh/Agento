@@ -334,6 +334,12 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 }
 
 func (c *OAuthConfig) endpoint() oauth2.Endpoint {
+	// Re-trims what the callers already trimmed: idempotent defense in
+	// depth for direct oauth2()/endpoint() callers, not the single trim
+	// point — AuthURL/Exchange each trim their own copy first, and the
+	// copy-contract comments there describe that side. Do not "dedupe"
+	// either layer: removing the helper trim breaks direct callers,
+	// removing the copy trim breaks checked == sent.
 	return oauth2.Endpoint{AuthURL: TrimCredential(c.AuthURL), TokenURL: TrimCredential(c.TokenURL)}
 }
 
