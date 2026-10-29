@@ -290,12 +290,12 @@ fi
 # critical one — without it every tailscale-status check misreads as down.
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
-for _dep in jq openssl curl podman podman-compose seq hostname; do
+for _dep in jq openssl curl podman podman-compose seq hostname date; do
   if ! command -v "$_dep" >/dev/null 2>&1; then _missing="${_missing:+$_missing }$_dep"; fi
 done
 unset _dep
 if [[ -n "$_missing" ]]; then
-  warn "missing:${_missing} — install them, then re-run"
+  warn "missing: ${_missing} — install them, then re-run"
   exit 1
 fi
 unset _missing
@@ -361,7 +361,7 @@ fi
 stage "Join your tailnet"
 if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
   note "already connected"
-  TS_HOST=$(tailscale status --json | jq -r '.Self.HostName // empty' || true)
+  TS_HOST=$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty' || true)
 else
   say "The machine name becomes the public hostname: <name>.<tailnet>.ts.net"
   step "Pick a short lowercase name (letters, digits, hyphen)."
@@ -371,7 +371,7 @@ else
   # Computed once: hostname -s can emit a dotted FQDN on minimal images —
   # cut to the first label so the strict regex below doesn't loop-reject
   # the default.
-  _host_default=$(hostname -s | cut -d. -f1 || true)
+  _host_default=$(hostname -s 2>/dev/null | cut -d. -f1 || true)
   # An unset hostname yields an empty default, an empty fallback, and a
   # regex that rejects empty — an endless warn loop with no way forward
   # except Ctrl-C. Fail fast instead.
@@ -501,32 +501,34 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # another — port 443 is implied by https://, never printed next to 8080),
 # so match across the whole output — but bind the port to the proxy word
 # on its own line, or hint text mentioning a URL and the port elsewhere
-# would take the fast path without the binding existing.
-if echo "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && echo "$_funnel_status" | grep -qiE 'https://|443'; then
+# would take the fast path without the binding existing. Also require the
+# served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
+# keeps host A while the URI, comment, and probe all use host B.
+if echo "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && echo "$_funnel_status" | grep -qiE 'https://|443' && echo "$_funnel_status" | grep -qF "$TS_DNS"; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
   rm -f "$FOUT"; FOUT=""
 fi
 unset _funnel_status
 if [[ -n "$FOUT" ]]; then
-if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1; then
-  if grep -qiE "already|in use|exists" "$FOUT"; then
-    note "funnel reports it is already serving; keeping the existing one"
-  else
-    warn "funnel did not start:"
-    sed 's/^/      /' "$FOUT" || true
-    pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
-    tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1 || {
-      if grep -qiE "already|in use|exists" "$FOUT"; then
-        note "funnel reports it is already serving; keeping the existing one"
-      else
-        warn "still failing:"; sed 's/^/      /' "$FOUT" || true; exit 1
-      fi
-    }
+  if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1; then
+    if grep -qiE "already|in use|exists" "$FOUT"; then
+      note "funnel reports it is already serving; keeping the existing one"
+    else
+      warn "funnel did not start:"
+      sed 's/^/      /' "$FOUT" || true
+      pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
+      tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1 || {
+        if grep -qiE "already|in use|exists" "$FOUT"; then
+          note "funnel reports it is already serving; keeping the existing one"
+        else
+          warn "still failing:"; sed 's/^/      /' "$FOUT" || true; exit 1
+        fi
+      }
+    fi
   fi
-fi
-sed 's/^/      /' "$FOUT" || true
-rm -f "$FOUT"; FOUT=""
+  sed 's/^/      /' "$FOUT" || true
+  rm -f "$FOUT"; FOUT=""
 fi
 printf '\n'
 
