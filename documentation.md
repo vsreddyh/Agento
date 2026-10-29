@@ -403,7 +403,7 @@ Operator setup on a host with no domain: `scripts/connectors-google-setup.sh`
 is an interactive wizard that walks the two things only a human can do —
 joining a tailnet and creating the Google client — and derives the rest.
 It publishes the callback over Tailscale Funnel (public TLS on 443 →
-`localhost:8080`, the same nginx proxy), because Google accepts only
+`http://127.0.0.1:8080`, the same nginx proxy), because Google accepts only
 `https://` or a loopback `http://` and a bare-IP host can register neither.
 Note the funnel publishes the whole proxy (chat + sync stay PASSWORD-gated);
 the callback is the only new unauthenticated surface, so do not share the

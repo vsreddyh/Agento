@@ -280,6 +280,8 @@ note "This host is the live stack. Writing .env is safe (inert until the"
 note "pi container is recreated — ./scripts/hermes.sh restart recreates it;"
 note "a plain container restart without recreation will not pick up .env)."
 note "Nothing is restarted by this wizard."
+note "Dry-run knobs (all optional): TS_DNS / REDIRECT_URI presets skip"
+note "discovery, ENV_FILE points at another file, SKIP_PROBE=1 skips the wait."
 printf '\n'
 if ! confirm "Proceed with Tailscale Funnel setup on this host?"; then
   say "Stopped. Nothing changed."
@@ -459,6 +461,13 @@ fi
 printf '\n'
 
 if [[ -n "$_redirect_preset" ]]; then
+  # Same treatment as the TS_DNS preset: write_env single-quote-escapes but
+  # does not stop newlines, so a multiline preset would write a second line
+  # into .env. read-based input can't contain one — only presets can.
+  if [[ ! "$_redirect_preset" =~ ^https://[A-Za-z0-9.-]+\.ts\.net/p/api/connectors/callback$ ]]; then
+    warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/p/api/connectors/callback URL; unset it to derive from TS_DNS"
+    exit 1
+  fi
   REDIRECT_URI="$_redirect_preset"
   note "using preset REDIRECT_URI (skipping derivation from TS_DNS)"
 else
@@ -585,6 +594,16 @@ stage "Write .env and verify"
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
 cp -p "$ENV_FILE" "$BACKUP"
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
+# Secrets are about to land in this file: 0600 regardless of what the
+# checkout/editor left behind (a fresh file already gets 0600 in write_env).
+chmod 600 "$ENV_FILE"
+# Backups are full-secret copies — keep the last 5, prune the rest.
+_baks=(); shopt -s nullglob; _baks=("$ENV_FILE".bak.*); shopt -u nullglob
+if (( ${#_baks[@]} > 5 )); then
+  printf '%s\n' "${_baks[@]}" | sort -r | tail -n +6 | xargs -r rm -f --
+  note "pruned .env backups to the last 5"
+fi
+unset _baks
 
 if v=$(_existing CONNECTORS_ENCRYPTION_KEY 2>/dev/null) && [[ -n "$v" ]]; then
   note "keeping the existing envelope key (rotating it would invalidate every stored grant)"
@@ -646,8 +665,9 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
   fi
   unset _render_missing
 else
-  warn "compose render failed:"
+  warn "compose render failed (the .env writes stand, but nothing is verified — fix compose and re-run):"
   sed 's/^/      /' "$RENDER_ERR" || true
+  exit 1
 fi
 rm -f "$RENDER_OUT" "$RENDER_ERR"; RENDER_OUT=""; RENDER_ERR=""
 
