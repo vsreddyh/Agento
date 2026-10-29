@@ -34,7 +34,7 @@ func TestExchangeAgainstStub(t *testing.T) {
 	defer srv.Close()
 
 	mkcfg := func() *OAuthConfig {
-		return &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+		return &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	}
 	tok, err := Exchange(context.Background(), mkcfg(), Gmail, "code1", "verifier1", nil)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestExchangeTrimsTokens(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"  a1  ","refresh_token":"  r1  ","expires_in":3600,"token_type":"Bearer"}`)
 	}))
 	defer srv.Close()
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	tok, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestExchangeRejectsControlToken(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"a123","refresh_token":"r\u0001123","expires_in":3600,"token_type":"Bearer"}`)
 	}))
 	defer srv.Close()
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
 		t.Fatal("control-bearing provider token should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
@@ -102,7 +102,7 @@ func TestExchangeRejectsControlToken(t *testing.T) {
 // Empty endpoints fail closed before any network call: a hand-built
 // config missing AuthURL/TokenURL must not reach the token endpoint.
 func TestExchangeRejectsEmptyEndpoints(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback"}
 	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "verifier", nil); err == nil {
 		t.Fatal("empty endpoints should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
@@ -113,7 +113,7 @@ func TestExchangeRejectsEmptyEndpoints(t *testing.T) {
 // Deterministic rejects log their discriminant: triage reads the log,
 // not the code, to tell which guard fired.
 func TestExchangeLogsGuard(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	var logged string
 	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
 	if _, err := Exchange(context.Background(), cfg, Gmail, "", "verifier1", logf); err == nil {
@@ -127,7 +127,7 @@ func TestExchangeLogsGuard(t *testing.T) {
 // Empty client credentials fail closed before any network call, matching
 // AuthURL: a hand-built cfg with blank id/secret can only 400 at Google.
 func TestExchangeRejectsEmptyClient(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "   ", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "   ", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "verifier", nil); err == nil {
 		t.Fatal("blank client id should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
@@ -139,7 +139,7 @@ func TestExchangeRejectsEmptyClient(t *testing.T) {
 // network call: overlong sequences decode as RuneError (not control), so
 // the control gate alone would miss them.
 func TestExchangeRejectsControlBytes(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if _, err := Exchange(context.Background(), cfg, Gmail, "co\rde", "verifier", nil); err == nil {
 		t.Fatal("control-byte code should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
@@ -175,14 +175,14 @@ func TestOAuthConfigValidatesRedirect(t *testing.T) {
 		url  string
 		ok   bool
 	}{
-		{"good", "https://host.example:8080/p/api/connectors/callback", true},
+		{"good", "https://host.example.com:8080/p/api/connectors/callback", true},
 		{"http ok", "http://localhost:8643/api/connectors/callback", true},
-		{"trailing slash ok", "https://host.example:8080/p/api/connectors/callback/", true},
-		{"wrong suffix", "https://host.example/p/api/connectors/gmail/callback", false},
+		{"trailing slash ok", "https://host.example.com:8080/p/api/connectors/callback/", true},
+		{"wrong suffix", "https://host.example.com/p/api/connectors/gmail/callback", false},
 		{"no scheme", "host/api/connectors/callback", false},
 		{"ftp", "ftp://host/api/connectors/callback", false},
-		{"query rejected", "https://host.example/p/api/connectors/callback?x=1", false},
-		{"fragment rejected", "https://host.example/p/api/connectors/callback#y", false},
+		{"query rejected", "https://host.example.com/p/api/connectors/callback?x=1", false},
+		{"fragment rejected", "https://host.example.com/p/api/connectors/callback#y", false},
 		{"missing", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,7 +201,7 @@ func TestOAuthConfigValidatesRedirect(t *testing.T) {
 // A control-bearing redirect fails closed at validation, not in the
 // browser with redirect_uri_mismatch.
 func TestCanonicalRedirectRejectsControlBytes(t *testing.T) {
-	if _, err := CanonicalRedirectURL("https://host.example/p/api/connectors/callback\x7f"); err == nil {
+	if _, err := CanonicalRedirectURL("https://host.example.com/p/api/connectors/callback\x7f"); err == nil {
 		t.Fatal("control-bearing redirect should fail closed")
 	}
 }
@@ -224,13 +224,13 @@ func TestOAuthConfigCanonicalisesNonCanonicalRedirect(t *testing.T) {
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
 	// Cleaned, not rejected: validated shape must equal sent shape.
 	for _, tc := range []struct{ name, url, want string }{
-		{"double slash", "https://host.example/p//api/connectors/callback", "https://host.example/p/api/connectors/callback"},
-		{"dot segment", "https://host.example/p/./api/connectors/callback", "https://host.example/p/api/connectors/callback"},
-		{"trailing dot", "https://host.example./p/api/connectors/callback", "https://host.example/p/api/connectors/callback"},
-		{"trailing dot with port", "https://host.example.:8443/p/api/connectors/callback", "https://host.example:8443/p/api/connectors/callback"},
-		{"double trailing dot", "https://host.example../p/api/connectors/callback", "https://host.example/p/api/connectors/callback"},
+		{"double slash", "https://host.example.com/p//api/connectors/callback", "https://host.example.com/p/api/connectors/callback"},
+		{"dot segment", "https://host.example.com/p/./api/connectors/callback", "https://host.example.com/p/api/connectors/callback"},
+		{"trailing dot", "https://host.example.com./p/api/connectors/callback", "https://host.example.com/p/api/connectors/callback"},
+		{"trailing dot with port", "https://host.example.com.:8443/p/api/connectors/callback", "https://host.example.com:8443/p/api/connectors/callback"},
+		{"double trailing dot", "https://host.example.com../p/api/connectors/callback", "https://host.example.com/p/api/connectors/callback"},
 		{"ipv6 non-default port", "http://[::1]:8643/api/connectors/callback", "http://[::1]:8643/api/connectors/callback"},
-		{"uppercase folds", "https://HOST.EXAMPLE/p/api/connectors/callback", "https://host.example/p/api/connectors/callback"},
+		{"uppercase folds", "https://HOST.EXAMPLE.COM/p/api/connectors/callback", "https://host.example.com/p/api/connectors/callback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)
@@ -250,7 +250,7 @@ func TestOAuthConfigRejectsNonLocalhostHTTP(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "http://plainhost.example/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "http://plainhost.example.com/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("non-localhost http redirect should fail closed")
 	}
@@ -279,7 +279,7 @@ func TestOAuthConfigRejectsControlClient(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid\x7f")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("control-byte client id should fail closed")
 	}
@@ -298,13 +298,13 @@ func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:abc/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com:abc/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("non-numeric port should fail closed")
 	}
 	// Atoi-accepted but non-canonical spellings fail too: "+80" is numeric
 	// to Atoi yet JoinHostPort would re-emit it verbatim (validated != sent).
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:+80/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com:+80/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("signed port should fail closed")
 	}
@@ -317,12 +317,12 @@ func TestOAuthConfigCanonicalisesPaddedPort(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:080/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com:080/p/api/connectors/callback")
 	cfg, err := OAuthConfigFromEnv()
 	if err != nil {
 		t.Fatalf("padded port should canonicalise, not fail: %v", err)
 	}
-	if cfg.RedirectURL != "https://host.example:80/p/api/connectors/callback" {
+	if cfg.RedirectURL != "https://host.example.com:80/p/api/connectors/callback" {
 		t.Errorf("RedirectURL = %q, want canonical :80 form", cfg.RedirectURL)
 	}
 }
@@ -334,12 +334,12 @@ func TestOAuthConfigStripsPaddedDefaultPort(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:0443/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com:0443/p/api/connectors/callback")
 	cfg, err := OAuthConfigFromEnv()
 	if err != nil {
 		t.Fatalf("padded default port should canonicalise, not fail: %v", err)
 	}
-	if cfg.RedirectURL != "https://host.example/p/api/connectors/callback" {
+	if cfg.RedirectURL != "https://host.example.com/p/api/connectors/callback" {
 		t.Errorf("RedirectURL = %q, want canonical no-port form", cfg.RedirectURL)
 	}
 }
@@ -347,7 +347,7 @@ func TestOAuthConfigStripsPaddedDefaultPort(t *testing.T) {
 // Length is capped before parsing: a multi-MB redirect must not pay the
 // parse + Clean + String alloc before the deterministic 400.
 func TestCanonicalRedirectRejectsOversized(t *testing.T) {
-	if _, err := CanonicalRedirectURL("https://host.example/" + strings.Repeat("x", MaxRedirectLen)); err == nil {
+	if _, err := CanonicalRedirectURL("https://host.example.com/" + strings.Repeat("x", MaxRedirectLen)); err == nil {
 		t.Fatal("oversized redirect should fail closed")
 	}
 }
@@ -360,7 +360,7 @@ func TestOAuthConfigRejectsLongClient(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", strings.Repeat("x", MaxCredentialLen+1))
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("oversized client id should fail closed")
 	}
@@ -370,14 +370,14 @@ func TestOAuthConfigRejectsLongClient(t *testing.T) {
 // would otherwise mint a consent URL Google 414s, and a multi-KB provider
 // token would 502 at seal time after the state is consumed.
 func TestAuthURLRejectsLongClient(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: strings.Repeat("x", MaxCredentialLen+1), ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: strings.Repeat("x", MaxCredentialLen+1), ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("oversized client id URL = %q, want empty", got)
 	}
 	// Control-bearing endpoints fail the same gate as credentials: a
 	// minted consent URL with embedded controls can only 400 at Google
 	// after the user consented.
-	evil := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o\x7f", TokenURL: "https://tok.example/t"}
+	evil := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o\x7f", TokenURL: "https://tok.example/t"}
 	if got := AuthURL(evil, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("control-bearing endpoint URL = %q, want empty", got)
 	}
@@ -389,7 +389,7 @@ func TestExchangeRejectsOversizedToken(t *testing.T) {
 		fmt.Fprintf(w, `{"access_token":"a123","refresh_token":%q,"expires_in":3600,"token_type":"Bearer"}`, strings.Repeat("y", MaxPlaintextLen+1))
 	}))
 	defer srv.Close()
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
 		t.Fatal("oversized provider token should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
@@ -411,6 +411,8 @@ func TestOAuthConfigRejectsBadHostname(t *testing.T) {
 		{"unicode", "https://m\xc3\xbcnchen/p/api/connectors/callback"},
 		{"single label", "https://myhost/p/api/connectors/callback"},
 		{"numeric non-ip", "https://999.999.999.999/p/api/connectors/callback"},
+		{"single-char TLD", "https://myhost.b/p/api/connectors/callback"},
+		{"reserved TLD", "https://myhost.test/p/api/connectors/callback"},
 		{"numeric TLD", "https://myhost.123/p/api/connectors/callback"},
 		{"localhost subdomain", "https://foo.localhost/p/api/connectors/callback"},
 	} {
@@ -430,13 +432,13 @@ func TestOAuthConfigRejectsEncodedControls(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback%00")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com/p/api/connectors/callback%00")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("encoded control should fail closed")
 	}
 	// Invalid UTF-8 fails the same way: bad bytes decode as RuneError
 	// (not control), so the control gate alone would miss them.
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback\xff")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com/p/api/connectors/callback\xff")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("invalid-utf8 redirect should fail closed")
 	}
@@ -473,12 +475,12 @@ func TestOAuthConfigStripsDefaultPort(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:443/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com:443/p/api/connectors/callback")
 	cfg, err := OAuthConfigFromEnv()
 	if err != nil {
 		t.Fatalf("explicit default port should canonicalise, not fail: %v", err)
 	}
-	if cfg.RedirectURL != "https://host.example/p/api/connectors/callback" {
+	if cfg.RedirectURL != "https://host.example.com/p/api/connectors/callback" {
 		t.Errorf("RedirectURL = %q, want canonical no-port form", cfg.RedirectURL)
 	}
 }
@@ -491,12 +493,12 @@ func TestOAuthConfigCanonicalisesRedirect(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:8080/p/api/connectors/callback/")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com:8080/p/api/connectors/callback/")
 	cfg, err := OAuthConfigFromEnv()
 	if err != nil {
 		t.Fatalf("valid redirect rejected: %v", err)
 	}
-	if want := "https://host.example:8080/p/api/connectors/callback"; cfg.RedirectURL != want {
+	if want := "https://host.example.com:8080/p/api/connectors/callback"; cfg.RedirectURL != want {
 		t.Fatalf("RedirectURL = %q, want canonical %q", cfg.RedirectURL, want)
 	}
 }
@@ -529,7 +531,7 @@ func TestOAuthConfigNamesMissingVars(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("missing secret should fail closed")
 	} else if !strings.Contains(err.Error(), "GOOGLE_CLIENT_SECRET") {
@@ -547,11 +549,11 @@ func TestOAuthConfigRejectsInteriorSpace(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "abc def")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example.com/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("spaced client id should fail closed")
 	}
-	cfg := &OAuthConfig{ClientID: "abc def", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "abc def", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("spaced client id URL = %q, want empty", got)
 	}
@@ -571,7 +573,7 @@ func TestExchangeRejectsSpacedToken(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"a123","refresh_token":"r 123","expires_in":3600,"token_type":"Bearer"}`)
 	}))
 	defer srv.Close()
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
 		t.Fatal("spaced provider token should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
@@ -582,7 +584,7 @@ func TestExchangeRejectsSpacedToken(t *testing.T) {
 // Interior spaces in the redirect fail the explicit gate, not just the
 // suffix check: every rejected class is named up front.
 func TestCanonicalRedirectRejectsSpaces(t *testing.T) {
-	if _, err := CanonicalRedirectURL("https://host.example/p/api/connectors/call back"); err == nil {
+	if _, err := CanonicalRedirectURL("https://host.example.com/p/api/connectors/call back"); err == nil {
 		t.Fatal("spaced path should fail closed")
 	} else if !strings.Contains(err.Error(), "spaces") {
 		t.Fatalf("spaced redirect should name the class, got %q", err)
@@ -593,11 +595,11 @@ func TestCanonicalRedirectRejectsSpaces(t *testing.T) {
 // a hand-built cfg with a spaced endpoint would otherwise mint a consent
 // URL Google can only 400 after the user consented.
 func TestAuthURLRejectsSpacedEndpoint(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o x", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o x", TokenURL: "https://tok.example/t"}
 	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("spaced endpoint URL = %q, want empty", got)
 	}
-	bad := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t x"}
+	bad := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t x"}
 	if _, err := Exchange(context.Background(), bad, Gmail, "code", "verifier", nil); err == nil {
 		t.Fatal("spaced endpoint Exchange should fail")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
@@ -626,7 +628,7 @@ func TestOAuthConfigNamesAllMissingVars(t *testing.T) {
 // A dead caller ctx fails before any guard or network I/O: deterministic
 // 400, never a 502 for work that never started.
 func TestExchangeRejectsDeadContext(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var logged string
@@ -642,7 +644,7 @@ func TestExchangeRejectsDeadContext(t *testing.T) {
 
 // A nil ctx fails closed, not panics: the only input leg that could.
 func TestExchangeRejectsNilContext(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: "", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if _, err := Exchange(nil, cfg, Gmail, "code", "verifier", nil); err == nil { //nolint:staticcheck // intentional nil ctx: the contract under test
 		t.Fatal("nil ctx should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {

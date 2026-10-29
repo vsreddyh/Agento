@@ -117,12 +117,15 @@ func isDigits(s string) bool {
 
 // validRedirectHost reports whether host is a registrable spelling:
 // ASCII labels of [a-z0-9-] with no empties and no leading/trailing
-// hyphens, at least one dot, and at least one letter unless the host is
-// "localhost" or a valid IP (an all-numeric dotted quad that is not a
-// real IP can never be registered). The console registration is punycode,
-// never Unicode. Takes the already-folded host: CanonicalRedirectURL
-// lowercases before calling, so checked == sent by construction and this
-// predicate never sees the raw spelling.
+// hyphens, at least one dot, a lettered TLD of length 2+, and no
+// RFC-2606 reserved TLD. "localhost" and IP literals bypass the rules
+// (loopback-ness is checked separately). The console registration is
+// punycode, never Unicode. Registrability — not just syntax — is the
+// bar: an unregistrable host passes every other check and dies with
+// redirect_uri_mismatch in the browser, so it must fail here.
+// Takes the already-folded host: CanonicalRedirectURL lowercases before
+// calling, so checked == sent by construction and this predicate never
+// sees the raw spelling.
 func validRedirectHost(host string) bool {
 	if host == "" || len(host) > 253 {
 		return false
@@ -133,7 +136,6 @@ func validRedirectHost(host string) bool {
 	if !strings.Contains(host, ".") {
 		return false
 	}
-	hasAlpha := false
 	labels := strings.Split(host, ".")
 	for _, label := range labels {
 		if len(label) == 0 || len(label) > 63 {
@@ -144,20 +146,22 @@ func validRedirectHost(host string) bool {
 			if c >= 0x80 || !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
 				return false
 			}
-			if c >= 'a' && c <= 'z' {
-				hasAlpha = true
-			}
 		}
 		if label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 	}
-	// The TLD itself must carry a letter: ICANN never issues all-numeric
-	// TLDs, so "myhost.123" is a typo that would die at Google instead of
-	// here. A letter anywhere else is not enough ("123.com" stays valid).
+	// The TLD itself must be a lettered, multi-char label: ICANN never
+	// issues all-numeric or single-char TLDs, so "myhost.123" and "a.b"
+	// are typos that would die at Google instead of here. A letter
+	// elsewhere is not enough ("123.com" stays valid).
+	tld := labels[len(labels)-1]
+	if len(tld) < 2 {
+		return false
+	}
 	tldAlpha := false
-	for i := 0; i < len(labels[len(labels)-1]); i++ {
-		if c := labels[len(labels)-1][i]; c >= 'a' && c <= 'z' {
+	for i := 0; i < len(tld); i++ {
+		if c := tld[i]; c >= 'a' && c <= 'z' {
 			tldAlpha = true
 			break
 		}
@@ -165,15 +169,17 @@ func validRedirectHost(host string) bool {
 	if !tldAlpha {
 		return false
 	}
-	// "*.localhost" resolves loopback locally but is not a public
-	// registration (and the http loopback gate only whitelists bare
-	// "localhost"): validated-shape would never match a console entry.
+	// RFC-2606 reserved names can never be public registrations (and the
+	// http loopback gate only whitelists bare "localhost"): validated-shape
+	// would never match a console entry.
+	switch tld {
+	case "test", "example", "invalid":
+		return false
+	}
 	if strings.HasSuffix(host, ".localhost") {
 		return false
 	}
-	// A letter somewhere rules out all-numeric typos like 999.999.999.999
-	// that net.ParseIP already rejected as addresses.
-	return hasAlpha
+	return true
 }
 
 // CanonicalRedirectURL validates and canonicalises in one step so every
@@ -285,7 +291,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// (loopback-ness checked above). Hostname() already strips brackets
 		// and port, so h arrives bare — no Trim needed. Fail closed here
 		// instead of dying with redirect_uri_mismatch in the browser.
-		return "", errors.New("connectors: redirect URL host must be a dotted FQDN with a lettered TLD (all-numeric, single-label non-localhost, and Unicode hosts are rejected; register the punycode form, never Unicode)")
+		return "", errors.New("connectors: redirect URL host must be a dotted FQDN with a lettered multi-char TLD (all-numeric, single-char, single-label non-localhost, reserved, and Unicode hosts are rejected; register the punycode form)")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
@@ -448,8 +454,7 @@ func (c *OAuthConfig) oauth2(scopes []string) *oauth2.Config {
 // exchange needs no client-secret-in-browser — the secret never leaves the
 // server, and the app never sees the verifier either). All-or-nothing:
 // either rand.Read aborts the pair with ("", "", err) — no partial pair is
-// ever minted, which the connect handler relies on when it 502s before
-// CreateState.
+// ever minted, so the connect handler 502s without touching the store.
 func NewState() (state, verifier string, err error) {
 	rb := make([]byte, 16)
 	if _, err := rand.Read(rb); err != nil {

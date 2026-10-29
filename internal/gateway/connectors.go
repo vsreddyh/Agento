@@ -289,6 +289,25 @@ func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg st
 	apiError(w, code, typ, "", msg)
 }
 
+// missingScopes reports requested scopes absent from a space-delimited
+// granted set (the ?scope= Google appends to the callback). Set compare:
+// order and repeats don't matter, only coverage. Empty granted means
+// Google sent none — treated as "nothing to compare", not a total miss,
+// since some flows omit the param on full grants.
+func missingScopes(want []string, granted string) []string {
+	have := make(map[string]bool, len(want))
+	for _, s := range strings.Fields(granted) {
+		have[s] = true
+	}
+	var missing []string
+	for _, s := range want {
+		if !have[s] {
+			missing = append(missing, s)
+		}
+	}
+	return missing
+}
+
 // callbackTimeoutOrGone is storeTimeoutOrGone for the callback path: same
 // timeout/client-gone split, but the domain fallthrough answers in both
 // representations (see callbackError) instead of JSON-only.
@@ -842,6 +861,18 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		pinned := *exCfg
 		pinned.RedirectURL = st.RedirectURI
 		exCfg = &pinned
+	}
+	// Granted-scope subset warns, not fails: Google appends the granted
+	// scopes (?scope=, space-delimited) and granular consent or admin
+	// restriction can return fewer than requested. The grant still stores
+	// and flips (read paths keep working on a subset); a later draft 403
+	// traces back to this line, not to the relay. Enforcement belongs to
+	// the consumers that need the missing scope (follow-up MCP servers),
+	// not to the mint path, which cannot know which calls the app will make.
+	if granted := query.Get("scope"); granted != "" {
+		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
+			s.cfg.Logf("connectors: grant for %q missing requested scopes: %s (subset granted; drafts may 403)", id, strings.Join(missing, ", "))
+		}
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {

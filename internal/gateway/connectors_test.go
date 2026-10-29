@@ -233,7 +233,7 @@ func oauthTestServer(t *testing.T, failExchange bool) (*connectors.OAuthConfig, 
 	var key [32]byte
 	copy(key[:], "test-envelope-key-0123456789ab")
 	cfg := &connectors.OAuthConfig{
-		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback",
+		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback",
 		Key: key, AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t",
 	}
 	return cfg, srv.Close
@@ -761,7 +761,7 @@ func TestConnectorsCallbackWhitespaceAccessStaysEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := &connectors.OAuthConfig{
-		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback",
+		ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback",
 		Key: key, AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t",
 	}
 	store := connectors.NewMemoryStore()
@@ -1132,4 +1132,47 @@ type badRedirectStore struct {
 
 func (badRedirectStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
 	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v", RedirectURI: "not-a-url"}, nil
+}
+
+// A granted subset still connects (reads keep working) but logs the gap:
+// the next draft 403 traces back to this line, not to the relay.
+func TestConnectorsCallbackSubsetScopeWarns(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := connectors.NewMemoryStore()
+	var mu sync.Mutex
+	var logged []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	authURL, _ := decodeBody(t, rec)["auth_url"].(string)
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := u.Query().Get("state")
+	if state == "" {
+		t.Fatalf("no state in %s", authURL)
+	}
+	// Grant read-only only: compose is missing.
+	scope := url.QueryEscape("https://www.googleapis.com/auth/gmail.readonly")
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state+"&scope="+scope, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("subset grant should still connect: %d (%s)", rec.Code, rec.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, line := range logged {
+		if strings.Contains(line, "missing requested scopes") && strings.Contains(line, "gmail.compose") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("subset grant should log the gap, got: %q", logged)
+	}
 }

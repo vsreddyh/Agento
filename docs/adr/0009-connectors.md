@@ -114,7 +114,12 @@ retention pass must not add a TTL to this collection.
   not the path). Consumes the state (single-use: no code exchanged twice),
   exchanges server-side, seals tokens with the envelope key, flips the row
   to connected. Tokens land before the status flips — a
-  connected-with-no-tokens row is never servable.
+  connected-with-no-tokens row is never servable. Granted scopes are
+  logged, not enforced: granular consent can return a subset (the
+  ?scope= param names what Google actually granted), and the row still
+  flips — read paths keep working, and a later draft 403 traces back to
+  the subset warning in the log, not to the relay. Consumers that need a
+  missing scope enforce it at use time (follow-up MCP servers).
 - `@-mention` in-chat attach, connector MCP servers, and the app Connect
   screen are follow-ups, not this PR. The relay refusal, list/disconnect
   shapes, and now the grant pipeline are what they build on.
