@@ -645,13 +645,20 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// from growing the map without bound; same lazy-expiry contract as the
 	// Mongo TTL, enforced at write time instead of by the database.
 	//
-	// Single pass, single critical section, by structural necessity — not
-	// performance: the sweep must run before the duplicate check (an
-	// expired row with the same state id is reapable, not a collision),
-	// and the supersede must run after it (reusing a state string must
-	// 400 like the Mongo duplicate-key path, not silently overwrite
-	// after deleting the row it collides with). Collect-then-mutate
-	// keeps that ordering while unlocking only once.
+	// Duplicate check BEFORE the sweep: any live-or-expired row with the
+	// same state id is a collision — reusing an expired id must 400 like
+	// the Mongo duplicate-key path (which has no pre-sweep; TTL reaps on
+	// its own minute), not succeed via the sweep. Fail-closed either way:
+	// states are 128-bit rand, so reuse is caller bug or hand-insert.
+	if _, exists := s.states[st.State]; exists {
+		// Duplicate bit consumed by the gateway duplicate-skip: Msg is free
+		// text, the bit is the contract.
+		return &StoreError{Msg: "oauth state already exists", Duplicate: true}
+	}
+	// Single critical section, by structural necessity — not performance:
+	// the supersede must run inside the same lock as the insert (reusing a
+	// state string must 400 above, never silently overwrite). Collect-then-
+	// mutate keeps that ordering while unlocking only once.
 	var reap, supersede []string
 	for state, existing := range s.states {
 		// Reap predicate matches the consume rule: zero counts as
@@ -665,15 +672,6 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	}
 	for _, state := range reap {
 		delete(s.states, state)
-	}
-	// Duplicate check AFTER the sweep above: reusing the same state
-	// string for the same connector (caller bug — states are 128-bit rand)
-	// must 400 like the Mongo duplicate-key path, not silently overwrite
-	// after deleting the row it collides with.
-	if _, exists := s.states[st.State]; exists {
-		// Duplicate bit consumed by the gateway duplicate-skip: Msg is free
-		// text, the bit is the contract.
-		return &StoreError{Msg: "oauth state already exists", Duplicate: true}
 	}
 	// One pending attempt per connector: a new tap supersedes the old one
 	// (its browser tab fails at ConsumeState with "try connect again").

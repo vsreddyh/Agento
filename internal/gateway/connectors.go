@@ -753,6 +753,16 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			storeTimeoutOrGone(w, s, ctx, err, "connect")
 			return
 		}
+		// Generic failure below the gone-client split (validation 400s
+		// already returned above; this is the detached-IO Upstream leg):
+		// the row may have landed after a supersede-delete, so clean up
+		// best-effort like the sibling branches — an
+		// insert-timeout-after-landing must not strand a live row no
+		// client holds. Skipped only for the duplicate shape, which
+		// predates this call (same guard as the deadline leg above).
+		if !isDuplicateStateError(err) {
+			s.cleanupOrphanState(id, state)
+		}
 		connectorsError(w, err)
 		return
 	}
@@ -1020,7 +1030,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// silently sent to Google. Same warn-pattern as the subset-scope
 		// line below (mint requires bearer, so not an anonymous vector).
 		if st.RedirectURI != s.cfg.ConnectorOAuth.RedirectURL {
-			s.cfg.Logf("connectors: callback for %q uses pinned redirect %q (live config differs; rotation or hand-inserted row)", id, st.RedirectURI)
+			s.cfg.Logf("connectors: callback for %q uses pinned redirect %q (live config differs; rotation or hand-inserted row)", id, connectors.RedactURL(st.RedirectURI))
 		}
 	} else {
 		// Fallback, not a pin: pre-column rows have no stored redirect, so
@@ -1029,7 +1039,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// minted under the OLD one, so the 502 it may produce reads as
 		// rotation fallout in the log, not a helper bug. Keyword for the
 		// post-rotation grep: rotation suspected.
-		s.cfg.Logf("connectors: callback for %q uses live redirect %q (no pinned value; pre-column row or fallback — rotation suspected if recently rotated)", id, s.cfg.ConnectorOAuth.RedirectURL)
+		s.cfg.Logf("connectors: callback for %q uses live redirect %q (no pinned value; pre-column row or fallback — rotation suspected if recently rotated)", id, connectors.RedactURL(s.cfg.ConnectorOAuth.RedirectURL))
 	}
 	// Granted-scope subset warns, not fails: Google appends the granted
 	// scopes (?scope=, space-delimited) and granular consent or admin

@@ -492,12 +492,17 @@ func run() error {
 			connectorOAuth = cfg
 			// The redirect URL is not a secret — log it so the operator can
 			// compare byte-for-byte against the Cloud console registration.
-			// A mismatch dies in the browser (redirect_uri_mismatch), not
-			// here, so this line is the triage pointer.
+			// RedactURL keeps it scrubbed + bounded like every other logged
+			// redirect; the comparison holds because storable values log
+			// whole (registrations are ~60 chars) — only a >300-rune value
+			// would carry the truncation marker, and such a value is never
+			// a real registration. A mismatch dies in the browser
+			// (redirect_uri_mismatch), not here, so this line is the
+			// triage pointer.
 			// The connector list derives from the package source of truth,
 			// not a literal, so this triage line cannot drift the next time
 			// an id lands or drops.
-			logger.Printf("connectors: OAuth configured for %s (callback %q)", strings.Join(connectors.ListIDs(), ", "), cfg.RedirectURL)
+			logger.Printf("connectors: OAuth configured for %s (callback %q)", strings.Join(connectors.ListIDs(), ", "), connectors.RedactURL(cfg.RedirectURL))
 		}
 	} else {
 		logger.Printf("connectors: OAuth unavailable (no durable store); connect answers 501")

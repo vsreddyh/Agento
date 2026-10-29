@@ -424,8 +424,10 @@ func apiError(w http.ResponseWriter, status int, kind, param, message string) {
 	resp.Error.Type = kind
 	resp.Error.Param = param
 	resp.Error.Code = strconv.Itoa(status)
-	// Same default as writeJSONResponse: errors never cache.
+	// Same default as writeJSONResponse: errors never cache, and JSON
+	// responses are never sniffed as HTML.
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(resp)

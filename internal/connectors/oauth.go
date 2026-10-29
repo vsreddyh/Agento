@@ -580,13 +580,16 @@ func CanonicalRedirectURL(raw string) (string, error) {
 }
 
 // validCredential reports whether a trimmed client id/secret is shaped
-// like a real credential: no controls, valid UTF-8, and no whitespace at
-// all. Edge owner is TrimCredential (forgives edge whitespace + Cf);
-// this is the interior owner (rejects what survives trimming). Read them
-// together: the next edit must not "fix" one side without the other —
+// like a real credential: non-empty, no controls, valid UTF-8, and no
+// whitespace at all. Edge owner is TrimCredential (forgives edge whitespace
+// + Cf); this is the interior owner (rejects what survives trimming). Read
+// them together: the next edit must not "fix" one side without the other —
 // same split-ownership pattern as the endpoint() trim-contract comment.
+// Empty is invalid here (not merely missing): every caller checks presence
+// separately, so this predicate never sees "" on the happy path — but a
+// direct caller that skips the presence check must still fail closed.
 func validCredential(s string) bool {
-	if HasControl(s) || !utf8.ValidString(s) {
+	if s == "" || HasControl(s) || !utf8.ValidString(s) {
 		return false
 	}
 	return strings.IndexFunc(s, unicode.IsSpace) < 0
@@ -673,11 +676,21 @@ func (c *OAuthConfig) endpoint() oauth2.Endpoint {
 	// point — AuthURL/Exchange each trim their own copy first, and the
 	// copy-contract comments there describe that side. Do not "dedupe"
 	// either layer: removing the helper trim breaks direct callers,
-	// removing the copy trim breaks checked == sent.
+	// removing the copy trim breaks checked == sent. Nil receiver guards
+	// itself (all current callers pre-check, but a future direct caller
+	// must not panic): a zero Endpoint fails closed downstream as
+	// missing-endpoint, never as a dial to "".
+	if c == nil {
+		return oauth2.Endpoint{}
+	}
 	return oauth2.Endpoint{AuthURL: TrimCredential(c.AuthURL), TokenURL: TrimCredential(c.TokenURL)}
 }
 
 func (c *OAuthConfig) oauth2(scopes []string) *oauth2.Config {
+	// Same nil guard as endpoint: fail closed downstream, never panic.
+	if c == nil {
+		return &oauth2.Config{}
+	}
 	return &oauth2.Config{
 		ClientID:     TrimCredential(c.ClientID),
 		ClientSecret: TrimCredential(c.ClientSecret),
@@ -1110,7 +1123,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		// the check name log-only for triage. AuthURL does the same
 		// (logs the check, returns "").
 		if logf != nil {
-			logf("connectors: grant exchange refused for %q: invalid redirect (%s)", id, err.Error())
+			logf("connectors: grant exchange refused for %q: invalid redirect (%q)", id, err.Error())
 		}
 		return nil, NewStoreError("oauth client redirect URL is invalid", false)
 	}
