@@ -1747,3 +1747,13 @@ func TestIsDraftOnlySendTrimsBeforeFold(t *testing.T) {
 		t.Error("padded hyphenated send should still be refused")
 	}
 }
+
+func TestSetTokensExpiryBeforeIdentity(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "slack", TokenRow{RefreshCipher: "r", AccessExpiryUnixMilli: 123}); err == nil {
+		t.Fatal("unknown-id + expiry-without-access should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("shape should beat identity: deterministic 400, got %v", err)
+	}
+}

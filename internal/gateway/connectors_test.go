@@ -1418,3 +1418,24 @@ func (d *dupCreateStore) ConsumeState(ctx context.Context, state string) (connec
 	d.consumed = append(d.consumed, state)
 	return d.Store.ConsumeState(ctx, state)
 }
+
+func TestAcceptsHTMLBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		accept string
+		want   bool
+	}{
+		{"text/html", true},
+		{"text/html, application/json", true},
+		{"text/html;level=1", true},
+		{"application/x-text/htmlfoo", false},
+		{"text/htmlfoo", false},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		if tc.accept != "" {
+			r.Header.Set("Accept", tc.accept)
+		}
+		if got := acceptsHTML(r, nil); got != tc.want {
+			t.Errorf("Accept %q: got %v, want %v", tc.accept, got, tc.want)
+		}
+	}
+}

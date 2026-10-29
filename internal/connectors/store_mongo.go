@@ -746,9 +746,9 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 		(tok.AccessCipher != "" && tok.AccessCipher != TrimCredential(tok.AccessCipher)) {
 		return NewStoreError("connector grant token is padded", false)
 	}
-	if !Known(id) {
-		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
-	}
+	// Expiry-without-access before identity, like every sibling shape
+	// gate: an unknown id with an inconsistent pair 400s on shape, not
+	// 404s on identity — same input pair, same answer everywhere.
 	// Expiry-without-access is a second missing representation: the
 	// refresher keys renew-now off zero expiry, and the no-op predicates
 	// read a non-zero expiry as grant signal. The gateway zeroes expiry
@@ -756,6 +756,9 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// enforces the same rule instead of relying on the one prod caller.
 	if tok.AccessCipher == "" && tok.AccessExpiryUnixMilli != 0 {
 		return NewStoreError("connector grant expiry without access token", false)
+	}
+	if !Known(id) {
+		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	// Clamp absurd futures: a far-future expiry reads as "don't renew for
 	// decades". Capped like the state clamp (row still works, renews
@@ -996,6 +999,8 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	var dup OAuthState
 	dupErr := s.states.FindOne(opCtx, bson.D{{Key: "_id", Value: st.State}}).Decode(&dup)
 	if dupErr == nil {
+		// Literal shared with the gateway duplicate-skip (isDuplicateStateError):
+		// rename here only with that matcher.
 		return NewStoreError("oauth state already exists", false)
 	}
 	if dupErr != mongoDrv.ErrNoDocuments {
@@ -1011,6 +1016,7 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	_, err := s.states.InsertOne(opCtx, st)
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
+			// Same shared literal as above — keep all three identical.
 			return NewStoreError("oauth state already exists", false)
 		}
 		s.logf("connectors: state create failed: %s", scrubErr(err))

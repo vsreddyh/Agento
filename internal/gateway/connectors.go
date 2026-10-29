@@ -55,7 +55,29 @@ func acceptsHTML(r *http.Request, logf func(string, ...any)) bool {
 		}
 		return false
 	}
-	return strings.Contains(strings.ToLower(accept), "text/html")
+	// Boundary-checked, not substring: "text/html" must end the value or be
+	// followed by a parameter/list separator — so application/x-text/htmlfoo
+	// stays JSON. Browsers send bare "text/html", so the convenience page
+	// keeps working while non-HTML ranges cannot trigger it.
+	return hasHTMLRange(strings.ToLower(accept))
+}
+
+// hasHTMLRange reports a boundary-delimited "text/html" token: end of value
+// or followed by space, comma, or semicolon (parameter/list separator).
+func hasHTMLRange(lower string) bool {
+	for i := 0; i+len("text/html") <= len(lower); {
+		j := strings.Index(lower[i:], "text/html")
+		if j < 0 {
+			return false
+		}
+		i += j
+		after := i + len("text/html")
+		if after == len(lower) || lower[after] == ' ' || lower[after] == ',' || lower[after] == ';' || lower[after] == '\t' {
+			return true
+		}
+		i = after
+	}
+	return false
 }
 
 func connectorWire(c connectors.Connector) map[string]any {
@@ -1030,8 +1052,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// Oversized, control-bearing, or undecodable: skip the compare
 		// like the oversized leg, never the grant. Same blank==absent
 		// contract as code/state — only non-empty values reach here, and
-		// only clean ones are compared.
-		s.cfg.Logf("connectors: grant for %q scope param unusable (%d bytes), subset check skipped (grant stored; drafts may 403)", id, len(granted))
+		// only clean ones are compared. Logged length is the post-trim
+		// value the compare would have seen, not the raw sum — so triage
+		// sizes the attacker input from what mattered, not the padding.
+		s.cfg.Logf("connectors: grant for %q scope param unusable (%d bytes trimmed), subset check skipped (grant stored; drafts may 403)", id, len(granted))
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {

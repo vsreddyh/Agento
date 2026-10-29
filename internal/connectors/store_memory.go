@@ -455,9 +455,9 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 		(tok.AccessCipher != "" && tok.AccessCipher != TrimCredential(tok.AccessCipher)) {
 		return NewStoreError("connector grant token is padded", false)
 	}
-	if !Known(id) {
-		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
-	}
+	// Expiry-without-access before identity, like every sibling shape
+	// gate: an unknown id with an inconsistent pair 400s on shape, not
+	// 404s on identity — same input pair, same answer everywhere.
 	// Expiry-without-access is a second missing representation: the
 	// refresher keys renew-now off zero expiry, and the no-op predicates
 	// read a non-zero expiry as grant signal. The gateway zeroes expiry
@@ -465,6 +465,9 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	// enforces the same rule instead of relying on the one prod caller.
 	if tok.AccessCipher == "" && tok.AccessExpiryUnixMilli != 0 {
 		return NewStoreError("connector grant expiry without access token", false)
+	}
+	if !Known(id) {
+		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	// Clamp absurd futures: a far-future expiry reads as "don't renew for
 	// decades". Capped like the state clamp (row still works, renews
@@ -655,6 +658,9 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// must 400 like the Mongo duplicate-key path, not silently overwrite
 	// after deleting the row it collides with.
 	if _, exists := s.states[st.State]; exists {
+		// Literal shared with the gateway duplicate-skip (isDuplicateStateError):
+		// rename here only with that matcher — a reword without it turns
+		// skip-cleanup into burn-a-live-row.
 		return NewStoreError("oauth state already exists", false)
 	}
 	// One pending attempt per connector: a new tap supersedes the old one
