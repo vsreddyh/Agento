@@ -910,3 +910,11 @@ func TestValidRedirectHostAllAlphaTLD(t *testing.T) {
 		}
 	}
 }
+
+func TestValidRedirectHostExtendedReserved(t *testing.T) {
+	for _, h := range []string{"myhost.corp", "myhost.localdomain", "myhost.intranet", "localhost.localdomain", "myhost.home.arpa"} {
+		if validRedirectHost(h) {
+			t.Errorf("%q should fail closed", h)
+		}
+	}
+}

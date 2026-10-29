@@ -196,24 +196,29 @@ func validRedirectHost(host string) bool {
 			}
 		}
 	}
-	// RFC-2606 reserved names plus LAN/mDNS TLDs can never be public
-	// registrations (and the http loopback gate only whitelists bare
-	// "localhost"): validated-shape would never match a console entry.
-	// mDNS (.local), unqualified-LAN (.lan, .internal, .home), special-use
+	// Reserved + private-use names can never be public registrations (and
+	// the http loopback gate only whitelists bare "localhost"):
+	// validated-shape would never match a console entry. RFC-2606
+	// (.test, .example, .invalid), mDNS (.local), unqualified-LAN (.lan,
+	// .internal, .home, .corp, .localdomain, .intranet), special-use
 	// (.onion, .arpa incl. .home.arpa) all validate syntactically yet no
 	// public Google registration can hold them — same validated-shape !=
 	// registrable-shape class as the single-char/numeric-TLD gates above.
-	// Fail here instead of dying with redirect_uri_mismatch in the browser.
+	// Best-effort, not exhaustive: an unlisted private TLD still fails at
+	// Google, not here — the list names the common cases so triage reads
+	// the common typos fast. Fail here instead of dying with
+	// redirect_uri_mismatch in the browser.
 	switch tld {
-	case "test", "example", "invalid", "local", "internal", "lan", "home", "onion", "arpa":
+	case "test", "example", "invalid", "local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion", "arpa":
 		return false
 	}
-	// Bare "localhost" only, no subdomains: "*.localhost" resolves
-	// loopback locally, but no public registration can hold it and the
-	// http gate above whitelists bare "localhost" alone — accepting
-	// subdomains here would validate spellings nothing else in the
+	// Bare "localhost" only, in both directions: "*.localhost" resolves
+	// loopback locally but no public registration can hold it, and
+	// "localhost.<anything>" is just as unregistrable (same class as the
+	// TLD rejects above). The http gate whitelists bare "localhost" alone —
+	// accepting either form would validate spellings nothing else in the
 	// pipeline accepts. Local-CA subdomain setups stay out of scope.
-	if strings.HasSuffix(host, ".localhost") {
+	if strings.HasSuffix(host, ".localhost") || strings.HasPrefix(host, "localhost.") {
 		return false
 	}
 	return true
