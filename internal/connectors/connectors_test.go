@@ -1463,3 +1463,30 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 		t.Error("Cf-suffixed send should still be refused")
 	}
 }
+
+// Guard order is a contract: empty → length → control → shape → Known
+// holds in AuthURL, Exchange, and both CreateStates, so an oversized or
+// empty input for an unknown id 400s identically everywhere instead of
+// 404ing on identity in one layer and 400ing on shape in another.
+// (Mongo mirrors the memory order by construction; it needs Atlas to run,
+// so the memory leg pins the contract here.)
+func TestGuardOrderMatchesAcrossLayers(t *testing.T) {
+	ctx := context.Background()
+	bigID := "slack"
+	big := strings.Repeat("x", MaxStateFieldLen+1)
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	check400 := func(name string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: oversized unknown-id should fail", name)
+		}
+		if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+			t.Fatalf("%s: want deterministic 400, got %v", name, err)
+		}
+	}
+	if got := AuthURL(cfg, bigID, big, "v", nil); got != "" {
+		t.Errorf("AuthURL oversized unknown-id = %q, want empty", got)
+	}
+	check400("Exchange", func() error { _, err := Exchange(ctx, cfg, bigID, big, "v", nil); return err }())
+	check400("memory CreateState", NewMemoryStore().CreateState(ctx, OAuthState{State: big, Connector: bigID, Verifier: "v"}))
+}

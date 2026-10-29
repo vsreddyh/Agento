@@ -233,7 +233,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// (loopback-ness checked above). Hostname() already strips brackets
 		// and port, so h arrives bare — no Trim needed. Fail closed here
 		// instead of dying with redirect_uri_mismatch in the browser.
-		return "", errors.New("connectors: redirect URL host is not a valid hostname")
+		return "", errors.New("connectors: redirect URL host is not a valid hostname (use FQDN or punycode; single-label and Unicode hosts are rejected)")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
@@ -462,8 +462,16 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		return ""
 	}
 	// Build from the canonicalised shape, not cfg.RedirectURL verbatim,
-	// so AuthURL and Exchange agree on the exact string.
+	// so AuthURL and Exchange agree on the exact string. Length-gate the
+	// canonical form like Exchange/CreateState: canonicalisation can grow
+	// the string, and the checked value must be the sent one.
 	trimmed.RedirectURL = canonical
+	if len(trimmed.RedirectURL) > MaxStateFieldLen {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: oversized redirect", id)
+		}
+		return ""
+	}
 	// Folded and trimmed like every store verb — unknown or empty inputs
 	// fail closed, and overlong inputs fail closed too (same
 	// MaxStateFieldLen bound the stores enforce): a multi-KB state or
@@ -517,8 +525,17 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 // the log — oauth2 errors echo the token endpoint verbatim, and the client
 // needs a retry signal, not provider internals. logf may be nil (tests).
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
+	// Every deterministic reject below logs its discriminant, mirroring
+	// AuthURL's per-guard logf: the client gets the mapped 400/404, and
+	// triage gets the guard name without guessing.
+	deny := func(reason string) *StoreError {
+		if logf != nil {
+			logf("connectors: grant exchange refused: %s", reason)
+		}
+		return NewStoreError(reason, false)
+	}
 	if cfg == nil {
-		return nil, NewStoreError("oauth client is not configured", false)
+		return nil, deny("oauth client is not configured")
 	}
 	// Bounded before the token endpoint, on trimmed values: codes/verifiers
 	// are short by construction, and a multi-MB value would become an
@@ -532,16 +549,13 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		// Deterministic caller error, not an upstream failure: nothing was
 		// sent anywhere. Same 400 shape as the length and no-refresh
 		// branches.
-		return nil, NewStoreError("oauth code or verifier is empty", false)
+		return nil, deny("oauth code or verifier is empty")
 	}
 	if len(code) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
-		return nil, NewStoreError("oauth code or verifier too long", false)
+		return nil, deny("oauth code or verifier too long")
 	}
-	if HasControl(code) || HasControl(verifier) {
-		return nil, NewStoreError("oauth code or verifier invalid", false)
-	}
-	if !utf8.ValidString(code) || !utf8.ValidString(verifier) {
-		return nil, NewStoreError("oauth code or verifier invalid", false)
+	if HasControl(code) || HasControl(verifier) || !utf8.ValidString(code) || !utf8.ValidString(verifier) {
+		return nil, deny("oauth code or verifier invalid")
 	}
 	// Config-shape before identity, matching AuthURL: a bad redirect or
 	// blank client fields 400s on shape the same way whether the id is
@@ -553,12 +567,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// values must match what is sent.
 	redirect, err := CanonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
-		return nil, NewStoreError("oauth client redirect URL is invalid", false)
+		return nil, deny("oauth client redirect URL is invalid")
 	}
 	// Checked == sent: canonicalisation can grow the string (brackets),
 	// so length-gate the canonical form too — same as both CreateStates.
 	if len(redirect) > MaxStateFieldLen {
-		return nil, NewStoreError("oauth client redirect URL too long", false)
+		return nil, deny("oauth client redirect URL too long")
 	}
 	cc := *cfg
 	cc.ClientID = TrimCredential(cc.ClientID)
@@ -566,24 +580,27 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.AuthURL = TrimCredential(cc.AuthURL)
 	cc.TokenURL = TrimCredential(cc.TokenURL)
 	if HasControl(cc.ClientID) || HasControl(cc.ClientSecret) || !utf8.ValidString(cc.ClientID) || !utf8.ValidString(cc.ClientSecret) {
-		return nil, NewStoreError("oauth client credential is invalid", false)
+		return nil, deny("oauth client credential is invalid")
 	}
 	if len(cc.ClientID) > MaxStateFieldLen || len(cc.ClientSecret) > MaxStateFieldLen {
-		return nil, NewStoreError("oauth client credential too long", false)
+		return nil, deny("oauth client credential too long")
 	}
 	// Length gate above covers the trimmed values copied here — keep the
 	// copy below the gate, or padding could push a real credential over
 	// the cap (the padded-push class fixed for the trim-copy contract).
 	if cc.ClientID == "" || cc.ClientSecret == "" {
-		return nil, NewStoreError("oauth client is not configured", false)
+		return nil, deny("oauth client is not configured")
 	}
 	if cc.AuthURL == "" || cc.TokenURL == "" {
-		return nil, NewStoreError("oauth client endpoints are not configured", false)
+		return nil, deny("oauth client endpoints are not configured")
 	}
 	// Folded like AuthURL above and every store verb: same logical id,
 	// same answer, wherever the caller normalised.
 	id = NormalizedID(id)
 	if !Known(id) {
+		if logf != nil {
+			logf("connectors: grant exchange refused: unknown connector %q", id)
+		}
 		return nil, &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}
 	cc.RedirectURL = redirect
@@ -607,6 +624,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		// triage must read this as misconfigured consent, not an outage.
 		// Trimmed like SetTokens: same definition of "missing" on both
 		// sides of the store boundary.
+		if logf != nil {
+			logf("connectors: grant exchange refused: no refresh token in provider response")
+		}
 		return nil, NewStoreError("grant exchange returned no refresh token; reconnect and approve offline access", false)
 	}
 	// Normalise before return: the checked strings and the delivered
@@ -620,13 +640,13 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// provider token would 502 at seal time (state already consumed)
 	// instead of 400ing here as the deterministic answer it is.
 	if HasControl(tok.RefreshToken) || HasControl(tok.AccessToken) || !utf8.ValidString(tok.RefreshToken) || !utf8.ValidString(tok.AccessToken) {
-		return nil, NewStoreError("grant exchange returned an invalid token", false)
+		return nil, deny("grant exchange returned an invalid token")
 	}
 	// Length-capped like the ciphertext it will become: a multi-MB token
 	// would otherwise 502 at seal time after the state is consumed.
 	// Same MaxPlaintextLen the seal gate enforces, checked here first.
 	if len(tok.RefreshToken) > MaxPlaintextLen || len(tok.AccessToken) > MaxPlaintextLen {
-		return nil, NewStoreError("grant exchange returned an oversized token", false)
+		return nil, deny("grant exchange returned an oversized token")
 	}
 	return tok, nil
 }
