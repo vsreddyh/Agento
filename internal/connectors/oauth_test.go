@@ -704,6 +704,11 @@ func TestRedactURL(t *testing.T) {
 	if got := RedactURL(strings.Repeat("x", 5000)); len(got) > 400 {
 		t.Fatalf("unparseable input must be bounded, got len %d", len(got))
 	}
+	// Over-cap input carries its own truncation marker: downstream
+	// truncators key off exact bounds and would otherwise stay silent.
+	if got := RedactURL("https://" + strings.Repeat("h", 3000) + "/p/api/connectors/callback"); !strings.Contains(got, "truncated") {
+		t.Fatalf("over-cap redact should mark the cut, got len %d", len(got))
+	}
 }
 
 func TestValidRedirectHostRejectsLANTLDs(t *testing.T) {

@@ -1542,6 +1542,9 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	if !IsDraftOnlySend("gmail", "send.message") {
 		t.Error("dotted send should still be refused")
 	}
+	if !IsDraftOnlySend("gmail", "send message") {
+		t.Error("spaced send should still be refused")
+	}
 	// Oversize defers to the backstop on both parts: an oversized id is
 	// unknown by construction, and an oversized tool can never be a real
 	// send path — the gated backstop (approval hold) is the honest answer,

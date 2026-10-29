@@ -293,22 +293,29 @@ func RedactURL(raw string) string {
 	// rune-map + Parse below, matching CanonicalRedirectURL: a multi-MB
 	// misconfigured value must not pay map + parse on every tap.
 	trimmed := TrimCredential(raw)
-	if len(trimmed) > MaxRedirectLen {
-		// Byte cap with a rune-boundary cut (same walk as truncateForLog):
-		// never slice through a multi-byte char. Inclusive: end lands past
-		// the last whole rune that fits, so a max-length value logs at the
-		// cap instead of one rune short. It may still fail Parse on a cut
-		// escape (trailing "%2") — that branch is fail-closed, so the cap
-		// trades a possible rejection for a bounded map + parse on every tap.
+	// Byte cap with a rune-boundary cut (same walk as truncateForLog):
+	// never slice through a multi-byte char. The cut bounds the map +
+	// parse work below; the marker is appended after ScrubError (which
+	// bounds to 300 runes and would otherwise swallow it), so the startup
+	// line stays honest about the truncation.
+	cut := len(trimmed) > MaxRedirectLen
+	work := trimmed
+	if cut {
 		end := 0
-		for i, r := range trimmed {
+		for i, r := range work {
 			if w := utf8.RuneLen(r); i+w > MaxRedirectLen {
 				break
 			} else {
 				end = i + w
 			}
 		}
-		trimmed = trimmed[:end]
+		work = work[:end]
+	}
+	mark := func(s string) string {
+		if cut {
+			return s + "\u2026[truncated]"
+		}
+		return s
 	}
 	strip := func(s string) string {
 		return strings.Map(func(r rune) rune {
@@ -318,23 +325,23 @@ func RedactURL(raw string) string {
 			return r
 		}, s)
 	}
-	parsed, err := url.Parse(trimmed)
+	parsed, err := url.Parse(work)
 	if err != nil {
-		return approvals.ScrubError(stripUserinfo(strip(trimmed)))
+		return mark(approvals.ScrubError(stripUserinfo(strip(work))))
 	}
 	if parsed.User == nil {
 		// No userinfo to strip, but the value is still operator-influenced:
 		// strip controls and scrub+bound so the helper is safe under any
 		// verb, not just the %q call sites use today. Clean short URLs
 		// pass through unchanged (nothing to scrub, under the bound).
-		return approvals.ScrubError(strip(trimmed))
+		return mark(approvals.ScrubError(strip(work)))
 	}
 	parsed.User = nil
 	// Scrubbed + bounded like the other branches: the stripped form is
 	// still operator-influenced (hand-typed host/path), so the helper
 	// never returns a raw string on any branch. Clean short URLs pass
 	// through unchanged (nothing to scrub, under the bound).
-	return approvals.ScrubError(parsed.String())
+	return mark(approvals.ScrubError(parsed.String()))
 }
 
 // CanonicalRedirectURL validates and canonicalises in one step so every

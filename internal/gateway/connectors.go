@@ -956,6 +956,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		if st.RedirectURI != s.cfg.ConnectorOAuth.RedirectURL {
 			s.cfg.Logf("connectors: callback for %q uses pinned redirect %q (live config differs; rotation or hand-inserted row)", id, st.RedirectURI)
 		}
+	} else {
+		// Fallback, not a pin: pre-column rows have no stored redirect, so
+		// the live config is the only candidate. Auditable like the pinned
+		// path above — after a rotation this sends the NEW string for a row
+		// minted under the OLD one, so the 502 it may produce reads as
+		// rotation fallout in the log, not a helper bug.
+		s.cfg.Logf("connectors: callback for %q uses live redirect %q (no pinned value; pre-column row or fallback)", id, s.cfg.ConnectorOAuth.RedirectURL)
 	}
 	// Granted-scope subset warns, not fails: Google appends the granted
 	// scopes (?scope=, space-delimited) and granular consent or admin
