@@ -208,6 +208,32 @@ func validRedirectHost(host string) bool {
 // caller-influenced, so the helper strips controls, scrubs, and bounds,
 // never returning the raw string. What remains is the operator's own
 // typo, needed for triage.
+// stripUserinfo best-effort removes a userinfo prefix from a value url.Parse
+// rejected: userinfo (if any) ends at the last "@" before the first "/",
+// with or without a scheme (a schemeless hand-typed "user:pass@host/..."
+// fails Parse differently but carries the same credentials). s must already
+// be control-stripped. Returns s unchanged when no "@"-before-"/" exists.
+func stripUserinfo(s string) string {
+	// Find the authority section: after "://" if present, else the whole
+	// string up to the first "/".
+	search := s
+	prefix := ""
+	if i := strings.Index(s, "://"); i >= 0 {
+		prefix = s[:i+3]
+		search = s[i+3:]
+	}
+	seg := search
+	tail := ""
+	if slash := strings.Index(search, "/"); slash >= 0 {
+		seg = search[:slash]
+		tail = search[slash:]
+	}
+	if at := strings.LastIndex(seg, "@"); at >= 0 {
+		return prefix + seg[at+1:] + tail
+	}
+	return s
+}
+
 func RedactURL(raw string) string {
 	// Same trim as every sibling gate (TrimCredential, not TrimSpace): an
 	// edge Cf forgiven by CanonicalRedirectURL must not survive here, so
@@ -243,25 +269,7 @@ func RedactURL(raw string) string {
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		s := strip(trimmed)
-		// Best-effort userinfo cut for the parse-failure branch too:
-		// userinfo (if any) sits between "://" and the first "/" after
-		// it, ending at "@". Drop through the "@" so credentials never
-		// log even when Parse fails — the contract ("never return the raw
-		// string, must strip userinfo") holds on the malformed branch the
-		// helper exists for, not just the clean one.
-		if schemeEnd := strings.Index(s, "://"); schemeEnd >= 0 {
-			schemeEnd += 3
-			rest := s[schemeEnd:]
-			seg := rest
-			if slash := strings.Index(rest, "/"); slash >= 0 {
-				seg = rest[:slash]
-			}
-			if at := strings.LastIndex(seg, "@"); at >= 0 {
-				s = s[:schemeEnd] + rest[at+1:]
-			}
-		}
-		return approvals.ScrubError(s)
+		return approvals.ScrubError(stripUserinfo(strip(trimmed)))
 	}
 	if parsed.User == nil {
 		// No userinfo to strip, but the value is still operator-influenced:

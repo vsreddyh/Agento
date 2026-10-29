@@ -43,9 +43,16 @@ import (
 // JSON. Guidance-vs-alloc tradeoff, stated so it sticks: HTML here is a
 // close-this-tab convenience, JSON is the contract — a long-Accept browser
 // (extensions, enterprise headers) gets valid JSON, not a broken flow.
-func acceptsHTML(r *http.Request) bool {
+// Length-only log on the skip: a browser tab that got JSON instead of the
+// close-this-tab page reads as a regression with nothing to trace — same
+// pointer class as the duplicate-params and oversized-scope skips. logf
+// may be nil (tests).
+func acceptsHTML(r *http.Request, logf func(string, ...any)) bool {
 	accept := r.Header.Get("Accept")
 	if len(accept) > 512 {
+		if logf != nil {
+			logf("connectors: Accept header oversized (%d bytes), answering JSON", len(accept))
+		}
 		return false
 	}
 	return strings.Contains(strings.ToLower(accept), "text/html")
@@ -269,13 +276,13 @@ func writeCallbackPage(w http.ResponseWriter, code int, title, body string) {
 // browser tab gets the close-this-tab page (the operator just consented
 // and needs guidance, not JSON); API clients get the existing JSON shape
 // unchanged. no-store is already set at the top of the handler.
-func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
+func callbackDeadAttempt(w http.ResponseWriter, r *http.Request, logf func(string, ...any)) {
 	// Single ownership: every answer on this path carries a single-use
 	// capability URL, so the helpers set no-store themselves instead of
 	// relying on each caller (the 405 branch bypasses the handler's
 	// first-line header).
 	w.Header().Set("Cache-Control", "no-store")
-	if acceptsHTML(r) {
+	if acceptsHTML(r, logf) {
 		writeCallbackPage(w, http.StatusBadRequest, "Agento connect expired",
 			"This connect attempt expired or was already used. Close this tab and tap connect again in the Agento app.")
 		return
@@ -292,12 +299,12 @@ func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
 // drift into a guidance gap or an oracle. Message text is HTML-escaped:
 // every caller passes a static string or a scrubbed domain-mapped one,
 // and the escape keeps that contract even if a caller slips.
-func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg string) {
+func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg string, logf func(string, ...any)) {
 	// Single ownership like callbackDeadAttempt: no-store lives here, not
 	// at each call site, so the next branch added beside the 405 check
 	// cannot miss it.
 	w.Header().Set("Cache-Control", "no-store")
-	if acceptsHTML(r) {
+	if acceptsHTML(r, logf) {
 		writeCallbackPage(w, code, "Agento connect",
 			msg+" Close this tab and return to the Agento app.")
 		return
@@ -338,7 +345,7 @@ func missingScopes(want []string, granted string) []string {
 func callbackTimeoutOrGone(w http.ResponseWriter, s *Server, r *http.Request, ctx context.Context, err error, verb string) {
 	if ctx.Err() == context.DeadlineExceeded {
 		callbackError(w, r, http.StatusBadGateway, "upstream_error",
-			"the connector store did not answer in time")
+			"the connector store did not answer in time", s.cfg.Logf)
 		return
 	}
 	if ctx.Err() != nil {
@@ -346,7 +353,7 @@ func callbackTimeoutOrGone(w http.ResponseWriter, s *Server, r *http.Request, ct
 		return
 	}
 	code, typ, msg := connectorsErrorMapped(err)
-	callbackError(w, r, code, typ, msg)
+	callbackError(w, r, code, typ, msg, s.cfg.Logf)
 }
 
 // handleConnectors serves /api/connectors. Global like approvals, not
@@ -397,7 +404,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			// Allow header preserved from requireMethod's contract.
 			w.Header().Set("Allow", http.MethodGet)
 			callbackError(w, r, http.StatusMethodNotAllowed, "invalid_request_error",
-				"/api/connectors/callback accepts GET")
+				"/api/connectors/callback accepts GET", s.cfg.Logf)
 			return
 		}
 		s.handleConnectorCallback(w, r)
@@ -769,12 +776,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// gates — same 400 shape, so no oracle, but the fast-path gate is
 	// deliberately coarser than the per-value contract.
 	if len(r.URL.RawQuery) > 3*(3*connectors.MaxStateFieldLen)+256 {
-		callbackDeadAttempt(w, r)
+		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return
 	}
 	if s.cfg.ConnectorOAuth == nil {
 		callbackError(w, r, http.StatusNotImplemented, "invalid_request_error",
-			"callback is not configured on this server yet — never paste a token in chat")
+			"callback is not configured on this server yet — never paste a token in chat", s.cfg.Logf)
 		return
 	}
 	// Parse the query once and reuse it: each Query() call re-parses and
@@ -807,7 +814,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// existed. One 400 body for both, so no branch distinguishes them.
 	if code == "" || state == "" {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
-			"callback needs ?code= and ?state=; start over from connect")
+			"callback needs ?code= and ?state=; start over from connect", s.cfg.Logf)
 		return
 	}
 	// Length-gated before the store/Google calls (shared
@@ -819,18 +826,18 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// oracle is added.
 	if len(code) > connectors.MaxStateFieldLen || len(state) > connectors.MaxStateFieldLen {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
-			callbackStateReject)
+			callbackStateReject, s.cfg.Logf)
 		return
 	}
 	// Floor like state: Google codes are hundreds of chars, so anything
 	// under MinStateLen is hand-minted junk — dead-attempt before it can
 	// burn the single-use state on a Google round-trip that only 502s.
 	if len(code) < connectors.MinStateLen {
-		callbackDeadAttempt(w, r)
+		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return
 	}
 	if len(state) < connectors.MinStateLen {
-		callbackDeadAttempt(w, r)
+		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return
 	}
 	// Control bytes fail closed here, not at Google: an embedded NUL/CR/LF
@@ -840,7 +847,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// never a legitimate credential.
 	if connectors.HasControl(code) || connectors.HasControl(state) || connectors.HasWhitespace(code) || connectors.HasWhitespace(state) {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
-			callbackStateReject)
+			callbackStateReject, s.cfg.Logf)
 		return
 	}
 	// Invalid UTF-8 fails here too: overlong/invalid byte sequences decode
@@ -849,7 +856,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// instead of here as a 400. Same dead-attempt shape, no oracle.
 	if !utf8.ValidString(code) || !utf8.ValidString(state) {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
-			callbackStateReject)
+			callbackStateReject, s.cfg.Logf)
 		return
 	}
 	ctx, cancel := connectorCallbackCtx(r)
@@ -861,7 +868,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// a gone client logs and returns without writing to a dead conn.
 		if ctx.Err() == context.DeadlineExceeded {
 			callbackError(w, r, http.StatusBadGateway, "upstream_error",
-				"the connector store did not answer in time")
+				"the connector store did not answer in time", s.cfg.Logf)
 			return
 		}
 		if ctx.Err() != nil {
@@ -879,10 +886,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.Upstream {
 			status, typ, msg := connectorsErrorMapped(err)
-			callbackError(w, r, status, typ, msg)
+			callbackError(w, r, status, typ, msg, s.cfg.Logf)
 			return
 		}
-		callbackDeadAttempt(w, r)
+		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return
 	}
 	id := connectors.NormalizedID(st.Connector)
@@ -899,7 +906,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// (only code/state fail pre-consume; the verifier can only be checked
 	// after the read).
 	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || connectors.HasWhitespace(st.Verifier) || len(st.Verifier) > connectors.MaxVerifierLen || len(st.Verifier) < connectors.MinVerifierLen {
-		callbackDeadAttempt(w, r)
+		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return
 	}
 	// Pinned-redirect misshape burns the same way, in the same place:
@@ -916,7 +923,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// validated by construction on every path, not just mint.
 		redirect, rerr := connectors.CanonicalRedirectURL(st.RedirectURI)
 		if rerr != nil {
-			callbackDeadAttempt(w, r)
+			callbackDeadAttempt(w, r, s.cfg.Logf)
 			return
 		}
 		st.RedirectURI = redirect
@@ -958,8 +965,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// junk-suffixed scope that suppresses the subset warning must leave
 	// its own trace, or a later draft 403 has no line to trace back to.
 	// Trimmed first like code/state: whitespace-only is absent, not a
-	// subset — blank == absent on every leg, so "  " never warns.
-	if granted := connectors.TrimCredential(query.Get("scope")); granted != "" && len(granted) <= connectors.MaxStateFieldLen && !connectors.HasControl(granted) && utf8.ValidString(granted) {
+	// subset — blank == absent on every leg, so "  " never warns. All
+	// values joined first: a duplicated ?scope= compares the union, not
+	// just the first, so a junk second value cannot suppress the warning
+	// (same pointer class as the duplicate-params length log above).
+	granted := connectors.TrimCredential(strings.Join(query["scope"], " "))
+	if granted != "" && len(granted) <= connectors.MaxStateFieldLen && !connectors.HasControl(granted) && utf8.ValidString(granted) {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
 			// Bounded like every interpolated value on this path: missing
 			// holds server-side scope constants today, but the next scope
@@ -988,7 +999,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// Only then the domain map below.
 		if ctx.Err() == context.DeadlineExceeded {
 			callbackError(w, r, http.StatusBadGateway, "upstream_error",
-				"the grant exchange did not answer in time")
+				"the grant exchange did not answer in time", s.cfg.Logf)
 			return
 		}
 		if ctx.Err() != nil {
@@ -1001,11 +1012,11 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			// row — CreateState rejects unknown ids, so no live flow gets
 			// here): same dead-attempt 400 as every other failure on this
 			// unauthenticated path, never a 404 oracle on id validity.
-			callbackDeadAttempt(w, r)
+			callbackDeadAttempt(w, r, s.cfg.Logf)
 			return
 		}
 		status, typ, msg := connectorsErrorMapped(err)
-		callbackError(w, r, status, typ, msg)
+		callbackError(w, r, status, typ, msg, s.cfg.Logf)
 		return
 	}
 	cfg := s.cfg.ConnectorOAuth
@@ -1021,9 +1032,9 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		// Logged, not answered in detail: seal failures are server-side
 		// (rand, zero key) and carry nothing the client can act on.
-		s.cfg.Logf("connectors: token seal failed for %q: %v", id, err)
+		s.cfg.Logf("connectors: token seal failed for %q: %q", id, bounded(approvals.ScrubError(err.Error())))
 		callbackError(w, r, http.StatusBadGateway, "upstream_error",
-			"could not store the grant")
+			"could not store the grant", s.cfg.Logf)
 		return
 	}
 	// Empty access tokens stay empty: sealing "" would create a second
@@ -1033,9 +1044,9 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	if accessToken != "" {
 		accessSealed, err = connectors.EncryptToken(cfg.Key, accessToken)
 		if err != nil {
-			s.cfg.Logf("connectors: token seal failed for %q: %v", id, err)
+			s.cfg.Logf("connectors: token seal failed for %q: %q", id, bounded(approvals.ScrubError(err.Error())))
 			callbackError(w, r, http.StatusBadGateway, "upstream_error",
-				"could not store the grant")
+				"could not store the grant", s.cfg.Logf)
 			return
 		}
 	}
@@ -1093,7 +1104,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// at the top of the handler for every branch on this path.
 	// Same envelope helper as every other branch on this path, so the
 	// success page cannot drift from the dead-attempt page.
-	if acceptsHTML(r) {
+	if acceptsHTML(r, s.cfg.Logf) {
 		writeCallbackPage(w, http.StatusOK, "Agento connected",
 			"Connected. You can close this tab and return to the Agento app.")
 		return
