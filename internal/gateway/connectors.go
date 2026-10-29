@@ -370,10 +370,10 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		return
 	}
 	path := strings.TrimPrefix(rest, "api/connectors/")
-	// Belt-and-braces: splitProfile already ran path.Clean, which strips
-	// trailing slashes, so this rarely fires — but a doubly-slashed client
-	// path reaching here as "gmail/disconnect/" would otherwise 404 as an
-	// unknown action instead of hitting the verb.
+	// Unreachable via splitProfile (path.Clean strips trailing slashes
+	// before dispatch), kept as defense in depth: without it a
+	// doubly-slashed client path reaching here as "gmail/disconnect/"
+	// would 404 as an unknown action instead of hitting the verb.
 	path = strings.TrimSuffix(path, "/")
 
 	if path == "" {

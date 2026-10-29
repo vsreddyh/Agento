@@ -1186,6 +1186,32 @@ func TestSetTokensRejectsPaddedCipher(t *testing.T) {
 	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: " a "}); err == nil {
 		t.Fatal("padded access cipher should fail")
 	}
+	// Shape before identity: padded for an unknown id 400s on shape, not
+	// 404s on identity — same as every other length/shape gate.
+	if err := s.SetTokens(ctx, "slack", TokenRow{RefreshCipher: " r "}); err == nil {
+		t.Fatal("padded unknown-id cipher should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("padded unknown-id should be a deterministic 400, got %v", err)
+	}
+}
+
+// Interior-space ciphers fail closed at write time, not at decrypt: they
+// would otherwise store as present and fail generically at open.
+func TestSetTokensRejectsSpacedCipher(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r 123"}); err == nil {
+		t.Fatal("spaced refresh cipher should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("spaced cipher should be a deterministic 400, got %v", err)
+	}
+	// Blank and padded keep their own messages: whitespace-only is
+	// "missing", edge-padded is "padded" — only interior space lands here.
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "   "}); err == nil {
+		t.Fatal("blank cipher should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream || se.Msg != "connector grant needs a refresh token" {
+		t.Fatalf("blank cipher should say missing, got %v", err)
+	}
 }
 
 // Control-bearing ciphers fail closed at write time, not at decrypt:

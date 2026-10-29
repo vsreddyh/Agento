@@ -400,7 +400,7 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	// Controls fail closed like every sibling input: a control-bearing
 	// cipher is undecryptable (DecryptToken only fails later, generically),
 	// so reject the shape here that the read side cannot name.
-	if HasControl(tok.RefreshCipher) || HasControl(tok.AccessCipher) || !utf8.ValidString(tok.RefreshCipher) || !utf8.ValidString(tok.AccessCipher) {
+	if HasControl(tok.RefreshCipher) || HasControl(tok.AccessCipher) || !utf8.ValidString(tok.RefreshCipher) || !utf8.ValidString(tok.AccessCipher) || HasWhitespace(TrimCredential(tok.RefreshCipher)) || (tok.AccessCipher != "" && HasWhitespace(TrimCredential(tok.AccessCipher))) {
 		return NewStoreError("connector grant token is invalid", false)
 	}
 	// Empty before identity, matching every sibling verb: an empty or
@@ -414,6 +414,17 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	// (same gate as refresh) rather than letting it through to storage.
 	if tok.AccessCipher != "" && TrimCredential(tok.AccessCipher) == "" {
 		return NewStoreError("connector grant access token is blank", false)
+	}
+	// Padded before identity, like every sibling shape gate: a padded
+	// cipher for an unknown id 400s instead of 404ing on identity.
+	// Checked == stored — the string the checks see and the bytes the
+	// store keeps must be identical, or a direct caller mints an
+	// undecryptable "present" grant (same class as the state
+	// trim-at-write contract, enforced as a reject here because stored
+	// credentials must round-trip byte-exact).
+	if tok.RefreshCipher != TrimCredential(tok.RefreshCipher) ||
+		(tok.AccessCipher != "" && tok.AccessCipher != TrimCredential(tok.AccessCipher)) {
+		return NewStoreError("connector grant token is padded", false)
 	}
 	if !Known(id) {
 		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -438,15 +449,6 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	// soon). Memory clock is injectable; mongo is wall-clock by design.
 	if max := s.timeNow().Add(MaxAccessLifetime).UnixMilli(); tok.AccessExpiryUnixMilli > max {
 		tok.AccessExpiryUnixMilli = max
-	}
-	// Reject padded ciphers instead of trimming-and-storing: the string
-	// the checks see and the bytes the store keeps must be identical,
-	// or a direct caller mints an undecryptable "present" grant (same
-	// class as the state trim-at-write contract, enforced as a reject
-	// here because stored credentials must round-trip byte-exact).
-	if tok.RefreshCipher != TrimCredential(tok.RefreshCipher) ||
-		(tok.AccessCipher != "" && tok.AccessCipher != TrimCredential(tok.AccessCipher)) {
-		return NewStoreError("connector grant token is padded", false)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
