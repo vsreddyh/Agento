@@ -820,6 +820,23 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	// as generic 502, not the timeout wording. Both clocks are 5s from a
 	// near-simultaneous start, so the mistriage window is milliseconds,
 	// and re-tap is the recovery either way.
+	// Duplicate check BEFORE the supersede below: reusing the same state
+	// string must 400 like the memory backend, not silently overwrite
+	// after the supersede deletes the row it collides with. A detached
+	// read like the scrub: advisory-shaped, but a failed check fails
+	// closed — proceeding blind would risk the silent overwrite this
+	// check exists to prevent.
+	dupCtx, dupCancel := quickCtx()
+	var dup OAuthState
+	dupErr := s.states.FindOne(dupCtx, bson.D{{Key: "_id", Value: st.State}}).Decode(&dup)
+	dupCancel()
+	if dupErr == nil {
+		return NewStoreError("oauth state already exists", false)
+	}
+	if dupErr != mongoDrv.ErrNoDocuments {
+		s.logf("connectors: state duplicate check %q failed: %v", st.State, dupErr)
+		return NewStoreError("oauth state create failed", true)
+	}
 	supCtx, supCancel := quickCtx()
 	_, serr := s.states.DeleteMany(supCtx, bson.D{{Key: "connector", Value: st.Connector}})
 	supCancel()

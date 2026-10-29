@@ -200,12 +200,13 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// so fail closed here with a pointer at the scheme.
 		return "", errors.New("connectors: redirect URL must use https (http loopback-only)")
 	}
-	if h := strings.Trim(parsed.Hostname(), "[]"); net.ParseIP(h) == nil && !validRedirectHost(h) {
+	if h := strings.TrimPrefix(strings.TrimSuffix(parsed.Hostname(), "]"), "["); net.ParseIP(h) == nil && !validRedirectHost(h) {
 		// Hostname syntax no console registration can hold: underscores,
 		// leading/trailing hyphens, empty labels, non-ASCII (punycode at
 		// the console, never Unicode). IP literals bypass label rules
-		// (loopback-ness checked above). Fail closed here instead of
-		// dying with redirect_uri_mismatch in the browser.
+		// (loopback-ness checked above). One bracket pair, not a cutset:
+		// Trim would fold "]evil[" to "evil". Fail closed here instead
+		// of dying with redirect_uri_mismatch in the browser.
 		return "", errors.New("connectors: redirect URL host is not a valid hostname")
 	}
 	if parsed.User != nil {

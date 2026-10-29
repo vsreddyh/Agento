@@ -627,9 +627,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// request and a log line. Same dead-attempt shape, no oracle. The row
 	// is already consumed at this point (verifier lives inside it, so the
 	// check cannot run first) — burning a hand-inserted row is intended;
-	// prod rows pass CreateState's own control gate and never reach here.
+	// prod rows pass CreateState's own controls gate and never reach here.
 	// Both legs burn: controls and invalid UTF-8 alike (only code/state
 	// fail pre-consume; the verifier can only be checked after the read).
+	// Same for the pinned redirect below: CreateState shape-checks at
+	// mint, so only a hand-inserted row carries a bad redirect into
+	// Exchange — burning it is the same intentional fail-closed.
 	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) {
 		callbackDeadAttempt(w, r)
 		return
