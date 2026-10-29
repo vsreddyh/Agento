@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -96,11 +97,13 @@ type MemoryStore struct {
 	tokens map[string]TokenRow
 	states map[string]OAuthState
 	// now is the clock for state expiry (ConsumeState boundary). Nil means
-	// time.Now; tests pin the exact boundary tick without sleeping. Mongo
+	// time.Now; tests pin the exact boundary tick via setNow without
+	// sleeping (atomic, so re-pinning never races in-flight verbs under
+	// -race). Mongo
 	// has no equivalent hook (wall-clock inline, untestable without live
 	// Atlas) — same !Before rule, so behavior matches; only the pin
 	// differs, and DB tests need Atlas anyway.
-	now func() time.Time
+	now atomic.Pointer[func() time.Time]
 }
 
 // timeNow resolves the store clock. Tests pin the exact expiry boundary
@@ -109,10 +112,15 @@ type MemoryStore struct {
 // deliberately (display-only, never an expiry input), so "injectable"
 // means the lifetime decisions, not every timestamp the store writes.
 func (s *MemoryStore) timeNow() time.Time {
-	if s.now == nil {
-		return time.Now()
+	if f := s.now.Load(); f != nil {
+		return (*f)()
 	}
-	return s.now()
+	return time.Now()
+}
+
+// setNow pins the clock for tests (race-safe; see the now field).
+func (s *MemoryStore) setNow(f func() time.Time) {
+	s.now.Store(&f)
 }
 
 // Durable reports false: rows die with the process, so the gateway keeps

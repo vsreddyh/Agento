@@ -693,6 +693,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// failure branches below plus the gone-client-before-200 branch share
 	// the same detached-budget ConsumeState (see cleanupOrphanState) — grep
 	// all three before assuming a path mints without cover.
+	// Verb ctx covers validation + mint only here: CreateState ignores it
+	// for IO (detached quickCtx inside the store, `_` param) — so the verb
+	// deadline below can only fire on validation/mint, never on slow Atlas.
+	// Matches the store's own budget note; re-tap recovers either way.
 	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
 		State:     state,
 		Connector: id,

@@ -288,11 +288,14 @@ func stripUserinfo(s string) string {
 		prefix = s[:i+3]
 		search = s[i+3:]
 	}
+	// Authority ends at the first /, ?, or #: a password containing "/"
+	// ("user:pa/ss@host") still loses its userinfo, since the cut point is
+	// the last "@" before any of the three terminators.
 	seg := search
 	tail := ""
-	if slash := strings.Index(search, "/"); slash >= 0 {
-		seg = search[:slash]
-		tail = search[slash:]
+	if i := strings.IndexAny(search, "/?#"); i >= 0 {
+		seg = search[:i]
+		tail = search[i:]
 	}
 	if at := strings.LastIndex(seg, "@"); at >= 0 {
 		return prefix + seg[at+1:] + tail
@@ -350,11 +353,13 @@ func RedactURL(raw string) string {
 		return mark(approvals.ScrubError(stripUserinfo(strip(work))))
 	}
 	if parsed.User == nil {
-		// No userinfo to strip, but the value is still operator-influenced:
-		// strip controls and scrub+bound so the helper is safe under any
-		// verb, not just the %q call sites use today. Clean short URLs
-		// pass through unchanged (nothing to scrub, under the bound).
-		return mark(approvals.ScrubError(strip(work)))
+		// No structured userinfo — but Parse can succeed while leaving a
+		// userinfo-shaped prefix in the path ("user:pa/ss@host" parses
+		// user-less with the credentials spread across host/path). Run the
+		// same best-effort strip, so every branch upholds the contract.
+		// Clean short URLs pass through unchanged (nothing to scrub,
+		// under the bound).
+		return mark(approvals.ScrubError(stripUserinfo(strip(work))))
 	}
 	parsed.User = nil
 	// Scrubbed + bounded like the other branches: the stripped form is

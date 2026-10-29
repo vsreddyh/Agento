@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // Exchange against a stub token endpoint: success stores both tokens, and a
@@ -974,5 +975,31 @@ func TestExchangeRedirectErrorIsStatic(t *testing.T) {
 		t.Fatal("bad redirect should fail")
 	} else if msg := err.Error(); msg != "oauth client redirect URL is invalid" {
 		t.Fatalf("client message should be static, got %q", msg)
+	}
+}
+
+func TestRedactURLStripsUserinfoWithSlashPassword(t *testing.T) {
+	// Schemeless with @ before the first separator: stripped outright.
+	got := RedactURL("user:pass@host.example/p/api/connectors/callback")
+	if strings.Contains(got, "user") || strings.Contains(got, "pass@") {
+		t.Fatalf("schemeless userinfo must be stripped, got %q", got)
+	}
+	if !strings.Contains(got, "host.example") {
+		t.Fatalf("host must survive, got %q", got)
+	}
+	// Ambiguous slash-password ("user:pa/ss@host") has no "@-before-first-/",
+	// so no structured userinfo to cut: must still scrub + bound, never crash.
+	got = RedactURL("https://user:pa/ss@host.example/p/api/connectors/callback")
+	if !utf8.ValidString(got) || strings.Contains(got, "\x00") {
+		t.Fatalf("ambiguous input must stay log-safe, got %q", got)
+	}
+}
+
+func TestDecryptTokenRejectsInteriorWhitespace(t *testing.T) {
+	key := [32]byte{1}
+	if _, err := DecryptToken(key, "ab cd"); err == nil {
+		t.Fatal("interior whitespace should fail closed")
+	} else if !strings.Contains(err.Error(), "whitespace") {
+		t.Fatalf("should name the whitespace gate, got %q", err)
 	}
 }

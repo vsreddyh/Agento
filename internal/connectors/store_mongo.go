@@ -130,8 +130,11 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 		return nil, NewStoreError("connector list failed", true)
 	}
 	// Cleanup on its own budget, not the verb's: a slow Atlas read must not
-	// make the cursor close eat the same expired deadline.
-	defer cur.Close(context.Background())
+	// make the cursor close eat the same expired deadline — and a verb that
+	// already timed out must not hang the close forever either.
+	closeCtx, closeCancel := quickCtx()
+	defer closeCancel()
+	defer cur.Close(closeCtx)
 	byID := make(map[string]Connector, 2)
 	for cur.Next(ctx) {
 		var c Connector

@@ -402,6 +402,10 @@ func writeJSONResponse(w http.ResponseWriter, status int, payload any) {
 			"could not encode the response")
 		return
 	}
+	// no-store by default: no JSON response on this server is heuristically
+	// cacheable (single-use capabilities, capability-bearing URLs, per-tab
+	// state). Callers that already set no-store are unaffected (same value).
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)

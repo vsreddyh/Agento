@@ -657,11 +657,11 @@ func TestOAuthStateLifecycle(t *testing.T) {
 	// Expiry still enforced at consume time.
 	s2 := NewMemoryStore()
 	fixed := time.Now()
-	s2.now = func() time.Time { return fixed }
+	s2.setNow(func() time.Time { return fixed })
 	if err := s2.CreateState(ctx, OAuthState{State: testState2, Connector: "gmail", Verifier: testVerifier, ExpiresAt: fixed.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	s2.now = func() time.Time { return fixed.Add(2 * time.Minute) }
+	s2.setNow(func() time.Time { return fixed.Add(2 * time.Minute) })
 	if _, err := s2.ConsumeState(ctx, testState2); err == nil {
 		t.Fatal("expired consume should fail")
 	}
@@ -848,7 +848,7 @@ func TestCreateStateRejectsBadRedirect(t *testing.T) {
 func TestConsumeStateBoundaryTick(t *testing.T) {
 	s := NewMemoryStore()
 	fixed := time.Now().Truncate(time.Second)
-	s.now = func() time.Time { return fixed }
+	s.setNow(func() time.Time { return fixed })
 	ctx := context.Background()
 	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, ExpiresAt: fixed}); err == nil {
 		t.Fatal("expiresAt==now should fail at creation")
@@ -1821,5 +1821,13 @@ func TestDecryptTokenRejectsBlankPadded(t *testing.T) {
 		t.Fatal("padded cipher should fail closed")
 	} else if !strings.Contains(err.Error(), "padded") {
 		t.Fatalf("padded should name its shape, got %q", err)
+	}
+}
+
+func TestIsDraftOnlySendCoversSeparators(t *testing.T) {
+	for _, tool := range []string{"send-message", "send.message", "send message", "send/message", "send:message", "send+message", "send\\message"} {
+		if !IsDraftOnlySend("gmail", tool) {
+			t.Errorf("%q should be refused", tool)
+		}
 	}
 }

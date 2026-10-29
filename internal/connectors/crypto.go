@@ -149,6 +149,13 @@ func DecryptToken(key [32]byte, sealed string) (string, error) {
 	if sealed != TrimCredential(sealed) {
 		return "", errors.New("connectors: refusing to open a padded token; trim before opening")
 	}
+	// Interior whitespace fails here with its own discriminant, matching
+	// the write-side HasWhitespace gate: "ab cd" would otherwise fall
+	// through to the generic base64 error below. Edges belong to the
+	// blank/padded gates above; only interior whitespace reaches here.
+	if HasWhitespace(sealed) {
+		return "", errors.New("connectors: token contains whitespace")
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(sealed)
 	if err != nil {
 		return "", errors.New("connectors: token is not valid base64")
