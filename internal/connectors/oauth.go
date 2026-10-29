@@ -816,19 +816,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	trimmed.RedirectURL = TrimCredential(trimmed.RedirectURL)
 	trimmed.AuthURL = TrimCredential(trimmed.AuthURL)
 	trimmed.TokenURL = TrimCredential(trimmed.TokenURL)
-	if !validCredential(trimmed.ClientID) || !validCredential(trimmed.ClientSecret) {
-		if logf != nil {
-			logf("connectors: auth URL build failed for %q: invalid client credential", id)
-		}
-		return ""
-	}
-	if len(trimmed.ClientID) > MaxCredentialLen || len(trimmed.ClientSecret) > MaxCredentialLen {
-		if logf != nil {
-			logf("connectors: auth URL build failed for %q: oversized client credential", id)
-		}
-		return ""
-	}
-	// Redirect shape before endpoints-empty, matching Exchange: a hand-built
+	// Redirect shape before credentials, matching Exchange: a hand-built
 	// cfg with both bad answers redirect-first in both helpers, so the same
 	// input pair hits the same guard first whichever helper runs.
 	canonical, err := CanonicalRedirectURL(trimmed.RedirectURL)
@@ -851,6 +839,18 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	if len(trimmed.RedirectURL) > MaxRedirectLen {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: oversized redirect", id)
+		}
+		return ""
+	}
+	if !validCredential(trimmed.ClientID) || !validCredential(trimmed.ClientSecret) {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: invalid client credential", id)
+		}
+		return ""
+	}
+	if len(trimmed.ClientID) > MaxCredentialLen || len(trimmed.ClientSecret) > MaxCredentialLen {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: oversized client credential", id)
 		}
 		return ""
 	}

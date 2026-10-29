@@ -1012,9 +1012,8 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	var dup OAuthState
 	dupErr := s.states.FindOne(opCtx, bson.D{{Key: "_id", Value: st.State}}).Decode(&dup)
 	if dupErr == nil {
-		// Literal shared with the gateway duplicate-skip (isDuplicateStateError):
-		// rename here only with that matcher.
-		return NewStoreError("oauth state already exists", false)
+		// Duplicate bit consumed by the gateway duplicate-skip (see memory twin).
+		return &StoreError{Msg: "oauth state already exists", Duplicate: true}
 	}
 	if dupErr != mongoDrv.ErrNoDocuments {
 		// Connector id, not the state value: the state is a live
@@ -1029,8 +1028,8 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	_, err := s.states.InsertOne(opCtx, st)
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
-			// Same shared literal as above — keep all three identical.
-			return NewStoreError("oauth state already exists", false)
+			// Same Duplicate bit as above (all three identical by construction).
+			return &StoreError{Msg: "oauth state already exists", Duplicate: true}
 		}
 		s.logf("connectors: state create failed: %s", scrubErr(err))
 		return NewStoreError("oauth state create failed", true)

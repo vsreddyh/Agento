@@ -663,10 +663,9 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// must 400 like the Mongo duplicate-key path, not silently overwrite
 	// after deleting the row it collides with.
 	if _, exists := s.states[st.State]; exists {
-		// Literal shared with the gateway duplicate-skip (isDuplicateStateError):
-		// rename here only with that matcher — a reword without it turns
-		// skip-cleanup into burn-a-live-row.
-		return NewStoreError("oauth state already exists", false)
+		// Duplicate bit consumed by the gateway duplicate-skip: Msg is free
+		// text, the bit is the contract.
+		return &StoreError{Msg: "oauth state already exists", Duplicate: true}
 	}
 	// One pending attempt per connector: a new tap supersedes the old one
 	// (its browser tab fails at ConsumeState with "try connect again").

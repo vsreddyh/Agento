@@ -227,11 +227,11 @@ const callbackStateReject = "that connect attempt expired or was already used; s
 // exchange window, re-tap recovers. See ADR-0009.
 // isDuplicateStateError reports the already-exists shape both stores
 // return when the state id collides with a live row: that row predates the
-// call, so the caller must not consume it. Matched on message (both
-// backends share the literal); a typed sentinel would be nicer, but the
-// shape is stable and asserted by the duplicate tests on both backends.
+// call, so the caller must not consume it. Typed via StoreError.Duplicate,
+// not the message — reword Msg freely without touching this contract.
 func isDuplicateStateError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "oauth state already exists")
+	var se *connectors.StoreError
+	return err != nil && errors.As(err, &se) && se.Duplicate
 }
 
 func (s *Server) cleanupOrphanState(id, state string) {
@@ -266,11 +266,15 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, id string, logf func(
 			// compare against the success-path `callback %q` line for the
 			// exact sent bytes (a scrub-shaped substring would log
 			// differently here than what AuthURL/Exchange would send).
-			// Double-bounded by design (RedactURL scrubs+bounds, bounded()
-			// display-caps): idempotent, and each layer owns one job —
-			// helper owns scrub, caller owns display cap — so removing
-			// either bound re-opens the other class. Do not "dedupe".
-			logf("connectors: connect redirect invalid for %q (want %q): %q", id, bounded(connectors.RedactURL(cfg.RedirectURL)), err.Error())
+			// Single owner: RedactURL already scrubs + bounds + marks.
+			// No second bounded() here — that would re-cap a 300-rune
+			// value at 128 and stack a second truncation marker onto the
+			// first, breaking the byte-for-byte comparison this log exists
+			// for. Do not re-wrap. Fidelity note: this failure line caps at
+			// ~300 runes while the success-path callback line logs the full
+			// string — diff a truncated failure `want` against the console
+			// only up to its marker, or fix-then-read the success line.
+			logf("connectors: connect redirect invalid for %q (want %q): %q", id, connectors.RedactURL(cfg.RedirectURL), err.Error())
 		}
 		return "", err
 	}

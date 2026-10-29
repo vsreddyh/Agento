@@ -1411,7 +1411,7 @@ type dupCreateStore struct {
 }
 
 func (d *dupCreateStore) CreateState(context.Context, connectors.OAuthState) error {
-	return connectors.NewStoreError("oauth state already exists", false)
+	return &connectors.StoreError{Msg: "oauth state already exists", Duplicate: true}
 }
 
 func (d *dupCreateStore) ConsumeState(ctx context.Context, state string) (connectors.OAuthState, error) {

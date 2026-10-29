@@ -294,6 +294,11 @@ type StoreError struct {
 	Msg      string
 	NotFound bool
 	Upstream bool
+	// Duplicate marks the already-exists shape: a CreateState whose state
+	// id collides with a live row. The gateway's cleanup-skip branches on
+	// this bit, not on the message — reword Msg freely without touching
+	// the contract.
+	Duplicate bool
 }
 
 func (e *StoreError) Error() string { return e.Msg }
