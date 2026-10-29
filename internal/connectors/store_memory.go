@@ -18,9 +18,14 @@ type Store interface {
 	// ctx (no IO to hang), but the Mongo backend runs every verb on the
 	// passed ctx verbatim — an unbounded caller ctx plus a hung Atlas
 	// hangs the verb forever. The gateway always passes a 5s/30s ctx;
-	// direct/future callers must do the same (context.WithTimeout), there
-	// is no in-verb default. Same contract as database/sql: the deadline
-	// is the caller's job.
+	// direct/future callers must do the same (context.WithTimeout).
+	// Deliberately stricter than Exchange, which self-bounds when the
+	// caller passes none: an outbound HTTPS round-trip has unbounded
+	// latency by nature (hung endpoint either side), while these verbs are
+	// local indexed reads whose only unbounded case is a hung database —
+	// and a shared in-verb default here would mask a caller that forgot
+	// cancellation propagation as well as one that forgot a deadline.
+	// Same contract as database/sql: the deadline is the caller's job.
 	// List returns the two v1 rows, synthesising disconnected rows for
 	// ids with no document yet (a fresh deploy lists two disconnected
 	// connectors, not an empty list).
