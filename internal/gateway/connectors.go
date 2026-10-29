@@ -67,7 +67,11 @@ func connectorWire(c connectors.Connector) map[string]any {
 		"status":       string(c.Status),
 	}
 	if c.LastError != "" {
-		out["last_error"] = c.LastError
+		// Scrubbed + bounded like every other echo on this surface: the
+		// only writer in this PR passes "", but the store contract does
+		// not bound the column — the next writer that sets provider text
+		// must not land it in an API body uncapped.
+		out["last_error"] = bounded(approvals.ScrubError(c.LastError))
 	}
 	// Emitted only while connected with a valid stamp: the stored value is
 	// first-connected-at and is retained across disconnect/expire, so
@@ -562,14 +566,22 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// best-effort like the empty-auth_url branch below (same detached
 		// budget, same single-use delete). A failed or abandoned build
 		// mints nothing observable either way.
-		if ctx.Err() != nil && ctx.Err() != context.DeadlineExceeded {
-			s.cfg.Logf("connectors: connect aborted, request ended (client gone or server stopping): %v", ctx.Err())
+		if ctx.Err() != nil {
+			// Log first: triage distinguishes hangup/shutdown from a slow
+			// Atlas verb deadline below by this line, not the cleanup
+			// outcome — the row may already have landed on detached IO in
+			// either case, so both branches clean up best-effort on a
+			// detached budget (same single-use delete as the empty-auth_url
+			// branch). A failed or abandoned build mints nothing observable.
+			s.cfg.Logf("connectors: connect aborted, request ended (client gone, server stopping, or verb deadline): %v", ctx.Err())
 			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if _, cerr := s.connectors.ConsumeState(cleanCtx, state); cerr != nil {
 				s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
 			}
 			cleanCancel()
-			return
+			if ctx.Err() != context.DeadlineExceeded {
+				return
+			}
 		}
 		connectorsError(w, err)
 		return

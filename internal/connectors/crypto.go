@@ -87,10 +87,12 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 		// down (same contract as the caller-side trim-before-seal).
 		return "", errors.New("connectors: refusing to seal a padded token; trim before sealing")
 	}
-	// Controls and invalid UTF-8 fail here like every sibling input: a
-	// sealed-with-control plaintext is valid base64url the SetTokens
-	// gates cannot see, but decrypts to a value Google rejects.
-	if HasControl(plaintext) || !utf8.ValidString(plaintext) {
+	// Controls, invalid UTF-8, and whitespace fail here like every sibling
+	// input: a sealed-with-space plaintext is valid base64url the SetTokens
+	// gates cannot see, but decrypts to a value Google rejects. Same
+	// HasWhitespace gate as the state/verifier/code legs (interior-only by
+	// construction — seal callers trim edges first).
+	if HasControl(plaintext) || !utf8.ValidString(plaintext) || HasWhitespace(plaintext) {
 		return "", errors.New("connectors: refusing to seal an invalid token")
 	}
 	block, err := aes.NewCipher(key[:])

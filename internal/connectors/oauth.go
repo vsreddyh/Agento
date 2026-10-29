@@ -794,7 +794,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// Controls fail closed like every sibling input: a control-bearing
 	// provider token would 502 at seal time (state already consumed)
 	// instead of 400ing here as the deterministic answer it is.
-	if HasControl(tok.RefreshToken) || HasControl(tok.AccessToken) || !utf8.ValidString(tok.RefreshToken) || !utf8.ValidString(tok.AccessToken) {
+	if HasControl(tok.RefreshToken) || HasControl(tok.AccessToken) || !utf8.ValidString(tok.RefreshToken) || !utf8.ValidString(tok.AccessToken) || HasWhitespace(tok.RefreshToken) || HasWhitespace(tok.AccessToken) {
 		return nil, deny("grant exchange returned an invalid token")
 	}
 	// Length-capped like the ciphertext it will become: a multi-MB token

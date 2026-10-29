@@ -904,6 +904,7 @@ func TestEncryptTokenRefusesInvalid(t *testing.T) {
 		{"control", "sec\x7fret"},
 		{"zero-width", "sec\u200bret"},
 		{"invalid utf8", "sec\xc0\x80ret"},
+		{"interior space", "sec ret"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := EncryptToken([32]byte{1}, tc.plaintext); err == nil {

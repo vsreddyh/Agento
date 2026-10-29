@@ -438,21 +438,23 @@ func run() error {
 		if cfg, err := connectors.OAuthConfigFromEnv(); err != nil {
 			// Echo the attempted redirect: non-secret, and the triage
 			// pointer when the failure is a registration mismatch.
-			// Bounded like the gateway's bounded(): the cap fires inside
-			// CanonicalRedirectURL, so an uncapped env value would emit
-			// megabytes to the log before any bound applies. Rune-first
-			// so a byte cut can never split a multi-byte char (a log-only
-			// split would be harmless, but there is no reason to buy
-			// one): the conversion transiently allocates over an
-			// OS-bounded value (~128KB) once on the config-error path.
-			// Capped at MaxStateFieldLen, the same bound CanonicalRedirectURL
-			// enforces: any storable value logs whole, so the byte-for-byte
-			// comparison this line exists for never truncates a value the
-			// server would actually send. Anything longer fails closed at
-			// config load and is quoted here only as triage context.
+			// Capped at MaxStateFieldLen bytes — the same bound
+			// CanonicalRedirectURL enforces, so any storable value logs
+			// whole and the byte-for-byte comparison this line exists for
+			// never truncates a value the server would actually send.
+			// Bytes for the bound (rune counts over-admit multi-byte
+			// values up to ~4x), cut at a rune boundary by walking the
+			// byte string — never slicing it — so no char splits.
 			redirect := os.Getenv("GOOGLE_REDIRECT_URL")
-			if r := []rune(redirect); len(r) > connectors.MaxStateFieldLen {
-				redirect = string(r[:connectors.MaxStateFieldLen]) + "\u2026 (truncated)"
+			if len(redirect) > connectors.MaxStateFieldLen {
+				end := 0
+				for i := range redirect {
+					if i > connectors.MaxStateFieldLen {
+						break
+					}
+					end = i
+				}
+				redirect = redirect[:end] + "\u2026 (truncated)"
 			}
 			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, redirect)
 		} else {

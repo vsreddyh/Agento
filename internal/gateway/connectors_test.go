@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"agento/internal/connectors"
 )
@@ -908,4 +909,40 @@ func TestConnectorsConnectUnknownIDBadConfig(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("dual-bad connect: %d, want 404 (%s)", rec.Code, rec.Body)
 	}
+}
+
+// A verb-deadline CreateState failure cleans up like every other failure
+// branch: detached IO may have landed the row after the verb clock fired.
+func TestConnectorsConnectCleansUpAfterVerbDeadline(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := &failCreateStore{Store: connectors.NewMemoryStore()}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond)
+	r := httptest.NewRequest(http.MethodPost, "/api/connectors/gmail/connect", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, r)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("deadline connect: %d, want 502 (%s)", rec.Code, rec.Body)
+	}
+	if len(store.consumed) != 1 {
+		t.Fatalf("deadline cleanup consumed %d rows, want 1", len(store.consumed))
+	}
+}
+
+type failCreateStore struct {
+	connectors.Store
+	consumed []string
+}
+
+func (f *failCreateStore) CreateState(context.Context, connectors.OAuthState) error {
+	return connectors.NewStoreError("boom", true)
+}
+
+func (f *failCreateStore) ConsumeState(ctx context.Context, state string) (connectors.OAuthState, error) {
+	f.consumed = append(f.consumed, state)
+	return f.Store.ConsumeState(ctx, state)
 }

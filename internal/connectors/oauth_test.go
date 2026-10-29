@@ -547,3 +547,20 @@ func TestOAuthConfigRejectsInteriorSpace(t *testing.T) {
 		t.Fatalf("spaced client id should be a deterministic 400, got %v", err)
 	}
 }
+
+// Interior whitespace in provider tokens fails closed before seal time:
+// a spaced token would otherwise seal fine and die only at Google after
+// the state is consumed.
+func TestExchangeRejectsSpacedToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"a123","refresh_token":"r 123","expires_in":3600,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
+		t.Fatal("spaced provider token should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("spaced token should be a deterministic 400, got %v", err)
+	}
+}
