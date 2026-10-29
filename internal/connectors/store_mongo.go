@@ -149,20 +149,22 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	var ignored []string
 	for id := range byID {
 		// Raw, deliberately NOT folded: the storage contract is lowercase
-		// _ids (every write normalises), so a case-variant doc ("Gmail")
-		// stays stray + logged rather than served. Folding here would make
-		// List serve a row Get(FindOne, exact match) cannot see — List
-		// saying "connected" while Get says "never touched" for the same
-		// logical id. Unfolded, both synthesise DefaultRow and triage gets
-		// the log line. (The OAuth follow-up must write lowercase _ids.)
+		// _ids (every write normalises — CreateState, SetTokens,
+		// Disconnect, SetStatus all fold first), so a case-variant doc
+		// ("Gmail") stays stray + logged rather than served. Folding here
+		// would make List serve a row Get(FindOne, exact match) cannot
+		// see — List saying "connected" while Get says "never touched"
+		// for the same logical id. Unfolded, both synthesise DefaultRow
+		// and triage gets the log line.
 		if !Known(id) {
 			ignored = append(ignored, id)
 		}
 	}
-	// Fixed-set v1: stray docs (typo'd id from a future OAuth bug,
-	// hand-edit) are excluded from the shape, but must not vanish silently
-	// — triage would otherwise see "3 disconnected rows" while Mongo holds
-	// 4 docs. Sorted so two log lines for the same stray id diff clean.
+	// Fixed-set v1: stray docs (typo'd id from a hand-edit or a writer bug
+	// that skipped the normalise step) are excluded from the shape, but
+	// must not vanish silently — triage would otherwise see "2
+	// disconnected rows" while Mongo holds 3 docs. Sorted so two log lines
+	// for the same stray id diff clean.
 	sort.Strings(ignored)
 	if len(ignored) > 0 {
 		// Capped like the gateway's bounded(): a bad migration writing
