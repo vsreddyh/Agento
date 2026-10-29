@@ -165,11 +165,22 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	// 4 docs. Sorted so two log lines for the same stray id diff clean.
 	sort.Strings(ignored)
 	if len(ignored) > 0 {
-		quoted := make([]string, 0, len(ignored))
-		for _, id := range ignored {
+		// Capped like the gateway's bounded(): a bad migration writing
+		// thousands of typo'd docs must not turn one list call into a
+		// multi-MB log line. First 10 quoted, then a count.
+		const maxStrayLogged = 10
+		quoted := make([]string, 0, maxStrayLogged)
+		for i, id := range ignored {
+			if i >= maxStrayLogged {
+				break
+			}
 			quoted = append(quoted, fmt.Sprintf("%q", id))
 		}
-		s.logf("connectors: ignoring %d unknown row(s): %s", len(ignored), strings.Join(quoted, ", "))
+		suffix := ""
+		if extra := len(ignored) - len(quoted); extra > 0 {
+			suffix = fmt.Sprintf(" …and %d more", extra)
+		}
+		s.logf("connectors: ignoring %d unknown row(s): %s%s", len(ignored), strings.Join(quoted, ", "), suffix)
 	}
 	for _, id := range listIDs {
 		if c, ok := byID[id]; ok {

@@ -44,7 +44,9 @@ const maxConnectorIDLen = 64
 // unbounded header: unauthenticated callers control Accept, and Go allows
 // ~1MB of it — a megabyte value would buy a megabyte alloc before any gate
 // runs. Legit browser values are ~100 chars, so anything past 512 answers
-// JSON. Same alloc-before-cap class as the raw-query and segment prefilters.
+// JSON. Guidance-vs-alloc tradeoff, stated so it sticks: HTML here is a
+// close-this-tab convenience, JSON is the contract — a long-Accept browser
+// (extensions, enterprise headers) gets valid JSON, not a broken flow.
 func acceptsHTML(r *http.Request) bool {
 	accept := r.Header.Get("Accept")
 	if len(accept) > 512 {
@@ -572,6 +574,21 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		}
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"connect is not configured correctly on this server")
+		return
+	}
+	// Gone client before the 200: the row landed on detached IO above, but
+	// the app hung up mid-build — writing auth_url to a dead conn mints a
+	// live 10-minute attempt nobody will ever complete. Clean it up
+	// best-effort like the failure branches (same detached budget, same
+	// single-use delete), so a successful build observed by nobody mints
+	// nothing either.
+	if ctx.Err() != nil {
+		s.cfg.Logf("connectors: connect aborted, request ended (client gone or server stopping): %v", ctx.Err())
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if _, cerr := s.connectors.ConsumeState(cleanCtx, state); cerr != nil {
+			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
+		}
+		cleanCancel()
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{

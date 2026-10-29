@@ -845,3 +845,36 @@ func TestConnectorsAcceptHeaderBounded(t *testing.T) {
 		t.Fatalf("huge accept must answer JSON, got %q", ct)
 	}
 }
+
+// A gone client before the 200 mints nothing: the row is consumed
+// best-effort on a detached budget instead of landing a live attempt
+// nobody will ever complete. The recorder proves the cleanup ran —
+// without it only the (empty) body would be observable.
+type consumeRecorder struct {
+	connectors.Store
+	consumed []string
+}
+
+func (r *consumeRecorder) ConsumeState(ctx context.Context, state string) (connectors.OAuthState, error) {
+	r.consumed = append(r.consumed, state)
+	return r.Store.ConsumeState(ctx, state)
+}
+
+func TestConnectorsConnectCleansUpAfterClientGone(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := &consumeRecorder{Store: connectors.NewMemoryStore()}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodPost, "/api/connectors/gmail/connect", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, r)
+	if rec.Body.Len() != 0 {
+		t.Fatalf("gone-client connect wrote %d bytes, want none (%s)", rec.Body.Len(), rec.Body)
+	}
+	if len(store.consumed) != 1 {
+		t.Fatalf("gone-client cleanup consumed %d rows, want 1", len(store.consumed))
+	}
+}

@@ -236,7 +236,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// (loopback-ness checked above). Hostname() already strips brackets
 		// and port, so h arrives bare — no Trim needed. Fail closed here
 		// instead of dying with redirect_uri_mismatch in the browser.
-		return "", errors.New("connectors: redirect URL host is not a valid hostname (use a dotted FQDN or punycode; single-label — except localhost — and Unicode hosts are rejected)")
+		return "", errors.New("connectors: redirect URL host must be a dotted FQDN (single-label LAN names other than localhost are rejected; register the punycode form, never Unicode)")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
@@ -350,7 +350,10 @@ func (c *OAuthConfig) oauth2(scopes []string) *oauth2.Config {
 // NewState mints one CSRF state + PKCE verifier pair. State is 128 bits of
 // crypto rand, base64url; the verifier is 64 bytes (S256 flow, so the
 // exchange needs no client-secret-in-browser — the secret never leaves the
-// server, and the app never sees the verifier either).
+// server, and the app never sees the verifier either). All-or-nothing:
+// either rand.Read aborts the pair with ("", "", err) — no partial pair is
+// ever minted, which the connect handler relies on when it 502s before
+// CreateState.
 func NewState() (state, verifier string, err error) {
 	rb := make([]byte, 16)
 	if _, err := rand.Read(rb); err != nil {
