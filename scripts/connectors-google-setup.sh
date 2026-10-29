@@ -344,8 +344,10 @@ else
   # so remember an env preset explicitly instead of losing it to hostname -s.
   _ts_preset="${TS_HOST:-}"
   while true; do
-    ask TS_HOST "Machine name [${TS_HOST:-$(hostname -s)}]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
-    TS_HOST="${TS_HOST:-${_ts_preset:-$(hostname -s)}}"
+    # hostname -s can emit a dotted FQDN on minimal images — cut to the
+    # first label so the strict regex below doesn't loop-reject the default.
+    ask TS_HOST "Machine name [${TS_HOST:-$(hostname -s | cut -d. -f1)}]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+    TS_HOST="${TS_HOST:-${_ts_preset:-$(hostname -s | cut -d. -f1)}}"
     if [[ "$TS_HOST" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then break; fi
     warn "invalid: use lowercase letters, digits, hyphens (no leading/trailing hyphen)"
     TS_HOST=""; _ts_preset=""
@@ -503,7 +505,6 @@ if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
   if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then
     ok=1
-    printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$TS_DNS"
   else
     note "not reachable from here right now (expected for a dry-run name)"
   fi
@@ -527,14 +528,17 @@ if (( ok )); then
     issuer=$(openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
              | openssl x509 -noout -issuer 2>/dev/null || true)
   fi
-  [[ -n "$issuer" ]] && note "$issuer" && note "Google accepts Let's Encrypt-issued certs."
+  if [[ -n "$issuer" ]]; then
+    note "$issuer"
+    note "Google accepts Let's Encrypt-issued certs."
+  fi
 elif (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   # Preset/dry-run names were already reassured above — a fake name never
   # propagates, so the DNS-wait message below would misdirect those users.
   note "continuing to the .env write without public reachability"
 else
   warn "not reachable yet (DNS can take up to 10 min to propagate)."
-  warn "Re-run the wizard later; the .env write below still holds."
+  warn "You can continue — the URI below is still correct; re-run the probe later if needed."
 fi
 printf '\n'
 say "This is the exact string to register in Google (copy it verbatim):"

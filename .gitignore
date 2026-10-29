@@ -4,7 +4,9 @@
 .env
 !.env.example
 # Timestamped .env backups written by setup wizards (full secret copies).
-/.env.bak.*
+# Slash-free: matches the basename in every directory, so ENV_FILE
+# overrides (throwaway.env, docker/.env) are covered, not just root .env.
+*.env.bak.*
 
 # ────────────────────────────────────────────────────────
 # Containers
