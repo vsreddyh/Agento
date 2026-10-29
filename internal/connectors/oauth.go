@@ -291,7 +291,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// (loopback-ness checked above). Hostname() already strips brackets
 		// and port, so h arrives bare — no Trim needed. Fail closed here
 		// instead of dying with redirect_uri_mismatch in the browser.
-		return "", errors.New("connectors: redirect URL host must be a dotted FQDN with a lettered multi-char TLD (all-numeric, single-char, single-label non-localhost, reserved, and Unicode hosts are rejected; register the punycode form)")
+		return "", errors.New("connectors: redirect URL host must be a dotted FQDN with a lettered multi-char TLD (no LAN short names: use localhost, an IP, or a dotted name; no all-numeric, single-char, reserved, or Unicode hosts; register the punycode form)")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
@@ -509,6 +509,13 @@ const MaxPlaintextLen = 2048
 // with credential size.
 const MaxCredentialLen = 2048
 
+// MaxVerifierLen bounds PKCE verifiers: RFC 7636 fixes 43-128 chars and
+// NewState mints 86, so anything longer is not a real verifier — it is a
+// hand-built or garbage value that would mint a consent URL Google can
+// only 400 after the user consented. States and codes keep the looser
+// MaxStateFieldLen (no RFC bound); only the verifier gets the RFC cap.
+const MaxVerifierLen = 128
+
 // MaxRedirectLen bounds the registered redirect URL at parse and at every
 // canonical-output check. Same value as MaxStateFieldLen today, deliberately
 // a separate name: the 2048 here is about URL size (registrations are ~60
@@ -648,7 +655,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	if len(state) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
+	if len(state) > MaxStateFieldLen || len(verifier) > MaxVerifierLen {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: oversized state or verifier", id)
 		}
@@ -761,7 +768,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		// branches.
 		return nil, deny("oauth code or verifier is empty")
 	}
-	if len(code) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
+	if len(code) > MaxStateFieldLen || len(verifier) > MaxVerifierLen {
 		return nil, deny("oauth code or verifier too long")
 	}
 	if HasControl(code) || HasControl(verifier) || !utf8.ValidString(code) || !utf8.ValidString(verifier) || HasWhitespace(code) || HasWhitespace(verifier) {

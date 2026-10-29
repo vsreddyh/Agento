@@ -651,3 +651,35 @@ func TestExchangeRejectsNilContext(t *testing.T) {
 		t.Fatalf("nil ctx should be a deterministic 400, got %v", err)
 	}
 }
+
+// Verifiers over the RFC 7636 cap fail fast at mint, not after consent:
+// states and codes keep the looser bound, only the verifier is capped.
+func TestVerifierRFCBound(t *testing.T) {
+	big := strings.Repeat("v", 200)
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", "s", big, nil); got != "" {
+		t.Errorf("oversized-verifier AuthURL = %q, want empty", got[:20])
+	}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", big, nil); err == nil {
+		t.Fatal("oversized-verifier Exchange should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("oversized verifier should be a deterministic 400, got %v", err)
+	}
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: big}); err == nil {
+		t.Fatal("oversized-verifier CreateState should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("oversized verifier should be a deterministic 400, got %v", err)
+	}
+}
+
+// The loopback-scheme check runs before the host-shape check: a LAN host
+// over http names the scheme, not the hostname.
+func TestLoopbackSchemeBeforeHostShape(t *testing.T) {
+	if _, err := CanonicalRedirectURL("http://foo.localhost/p/api/connectors/callback"); err == nil {
+		t.Fatal("http non-allowlist host should fail closed")
+	} else if !strings.Contains(err.Error(), "https") {
+		t.Fatalf("should fail on the scheme gate, got %q", err)
+	}
+}

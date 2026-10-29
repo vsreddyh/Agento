@@ -1168,11 +1168,34 @@ func TestConnectorsCallbackSubsetScopeWarns(t *testing.T) {
 	defer mu.Unlock()
 	found := false
 	for _, line := range logged {
-		if strings.Contains(line, "missing requested scopes") && strings.Contains(line, "gmail.compose") {
+		if strings.Contains(line, "missing requested scopes") && strings.Contains(line, "gmail.compose") && strings.Contains(line, "gmail.readonly") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("subset grant should log the gap, got: %q", logged)
+		t.Fatalf("subset grant should log the gap and the grant, got: %q", logged)
+	}
+}
+
+// Oversized scope metadata never burns a valid attempt: the subset check
+// is skipped past the code/state bound, and the grant proceeds.
+func TestConnectorsCallbackHugeScopeStillConnects(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := connectors.NewMemoryStore()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	authURL, _ := decodeBody(t, rec)["auth_url"].(string)
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := u.Query().Get("state")
+	if state == "" {
+		t.Fatalf("no state in %s", authURL)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state+"&scope="+strings.Repeat("s", 3000), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("huge-scope valid attempt: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
 }

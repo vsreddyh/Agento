@@ -837,7 +837,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// All legs burn: controls, invalid UTF-8, whitespace, and length alike
 	// (only code/state fail pre-consume; the verifier can only be checked
 	// after the read).
-	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || connectors.HasWhitespace(st.Verifier) || len(st.Verifier) > connectors.MaxStateFieldLen {
+	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || connectors.HasWhitespace(st.Verifier) || len(st.Verifier) > connectors.MaxVerifierLen {
 		callbackDeadAttempt(w, r)
 		return
 	}
@@ -869,9 +869,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// traces back to this line, not to the relay. Enforcement belongs to
 	// the consumers that need the missing scope (follow-up MCP servers),
 	// not to the mint path, which cannot know which calls the app will make.
-	if granted := query.Get("scope"); granted != "" {
+	// Length-gated like code/state: the value is attacker-influenced and
+	// only feeds a log line plus set compare, so oversized input skips the
+	// check instead of paying the split on megabytes.
+	if granted := query.Get("scope"); granted != "" && len(granted) <= connectors.MaxStateFieldLen {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
-			s.cfg.Logf("connectors: grant for %q missing requested scopes: %s (subset granted; drafts may 403)", id, strings.Join(missing, ", "))
+			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, strings.Join(missing, " "), bounded(granted))
 		}
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, s.cfg.Logf)

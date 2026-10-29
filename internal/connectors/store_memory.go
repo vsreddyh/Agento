@@ -546,7 +546,7 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 		// verifier-less attempt can never survive Exchange.
 		return NewStoreError("oauth state needs a verifier", false)
 	}
-	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
+	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxVerifierLen {
 		return NewStoreError("oauth state or verifier too long", false)
 	}
 	if HasControl(st.State) || HasControl(st.Verifier) || !utf8.ValidString(st.State) || !utf8.ValidString(st.Verifier) || HasWhitespace(st.State) || HasWhitespace(st.Verifier) {
