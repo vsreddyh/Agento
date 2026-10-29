@@ -211,10 +211,10 @@ TOTAL_STAGES=8
 
 # Cleanup for this wizard's temp files + the backgrounded `tailscale up`.
 # (Library tmpfiles inside write_env are created and removed within the
-# function; these three live across stages, so they get the trap.)
-LOG=""; FOUT=""; TS_PID=""
+# function; these live across stages, so they get the trap.)
+LOG=""; FOUT=""; TS_PID=""; RENDER_OUT=""; RENDER_ERR=""
 wizard_cleanup() {
-  rm -f "$LOG" "$FOUT" /tmp/oc-compose-out /tmp/oc-compose-err 2>/dev/null || true
+  rm -f "$LOG" "$FOUT" "$RENDER_OUT" "$RENDER_ERR" 2>/dev/null || true
   if [[ -n "$TS_PID" ]] && kill -0 "$TS_PID" 2>/dev/null; then
     kill "$TS_PID" 2>/dev/null || true
   fi
@@ -222,7 +222,9 @@ wizard_cleanup() {
 trap wizard_cleanup EXIT INT TERM
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-ENV_FILE="$REPO_DIR/.env"
+# ${ENV_FILE:-...} keeps the library contract: callers (and dry-run renders
+# against a throwaway copy) can point this elsewhere.
+ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
 TS_HOST="${TS_HOST:-$(hostname -s)}"
 TS_DNS="${TS_DNS:-}"          # <name>.<tailnet>.ts.net, no trailing dot
 REDIRECT_URI="${REDIRECT_URI:-}"  # https://$TS_DNS/p/api/connectors/callback
@@ -256,7 +258,7 @@ fi
 # critical one — without it every tailscale-status check misreads as down.
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
-for _dep in jq openssl curl podman-compose; do
+for _dep in jq openssl curl podman-compose seq; do
   if ! command -v "$_dep" >/dev/null 2>&1; then _missing="$_missing $_dep"; fi
 done
 unset _dep
@@ -276,7 +278,8 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
 fi
 printf '\n'
 note "This host is the live stack. Writing .env is safe (inert until the"
-note "connectors image is deployed). Nothing is restarted by this wizard."
+note "pi container is recreated — a restart picks the values up)."
+note "Nothing is restarted by this wizard."
 printf '\n'
 if ! confirm "Proceed with Tailscale Funnel setup on this host?"; then
   say "Stopped. Nothing changed."
@@ -382,15 +385,36 @@ note "  https://console.tailscale.com/admin/acls"
 printf '\n'
 
 FOUT=$(mktemp)
+# Re-runs are safe: if 443 already forwards to this proxy, keep it instead
+# of erroring out of the wizard.
+if _funnel_status=$(tailscale funnel status 2>/dev/null || true); then
+  if echo "$_funnel_status" | grep -q "443" && echo "$_funnel_status" | grep -q "8080"; then
+    note "funnel already serving 443 → this proxy; keeping it"
+    printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
+    rm -f "$FOUT"; FOUT=""
+  fi
+fi
+unset _funnel_status
+if [[ -n "$FOUT" ]]; then
 if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1; then
-  warn "funnel did not start:"
-  sed 's/^/      /' "$FOUT" || true
-  pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
-  tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1 || {
-    warn "still failing:"; sed 's/^/      /' "$FOUT" || true; exit 1; }
+  if grep -qiE "already|in use|exists" "$FOUT"; then
+    note "funnel reports it is already serving; keeping the existing one"
+  else
+    warn "funnel did not start:"
+    sed 's/^/      /' "$FOUT" || true
+    pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
+    tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1 || {
+      if grep -qiE "already|in use|exists" "$FOUT"; then
+        note "funnel reports it is already serving; keeping the existing one"
+      else
+        warn "still failing:"; sed 's/^/      /' "$FOUT" || true; exit 1
+      fi
+    }
+  fi
 fi
 sed 's/^/      /' "$FOUT" || true
-rm -f "$FOUT"
+rm -f "$FOUT"; FOUT=""
+fi
 printf '\n'
 
 REDIRECT_URI="https://$TS_DNS/p/api/connectors/callback"
@@ -476,9 +500,9 @@ note "browser while every server-side check still passes."
 printf '\n'
 pause "Press Enter once the client is created and the dialog shows ID + secret."
 step "Copy the Client ID (…apps.googleusercontent.com)."
-ask GOOGLE_CLIENT_ID "Client ID:"
+ask GOOGLE_CLIENT_ID "Client ID:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
 step "Copy the Client secret (starts GOCSPX-). It is shown once."
-ask_secret GOOGLE_CLIENT_SECRET "Client secret (hidden):"
+ask_secret GOOGLE_CLIENT_SECRET "Client secret (hidden):" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
 
 printf '\n'
 say "Checking the two values look like what Google issues…"
@@ -506,7 +530,8 @@ else
   note "generated a new envelope key (AES-256-GCM, 32 bytes hex)"
 fi
 
-# A comment block once; write_env only replaces key lines, so this survives re-runs.
+# A comment block once, refreshed on re-runs (the tailnet name can change);
+# write_env only replaces key lines, so this survives re-runs either way.
 if ! grep -q '^# ── Google connectors' "$ENV_FILE"; then
   {
     printf '\n'
@@ -514,6 +539,9 @@ if ! grep -q '^# ── Google connectors' "$ENV_FILE"; then
     printf '# Callback is served over Tailscale Funnel: https://%s\n' "$TS_DNS"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
   } >> "$ENV_FILE"
+else
+  # Refresh the recorded hostname; keys below are fresh but this line is not.
+  sed -i "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$TS_DNS|" "$ENV_FILE"
 fi
 
 write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID"
@@ -526,10 +554,14 @@ say "Rendering compose to prove all four interpolate (values not printed)…"
 # Same sudo-fallback pattern as scripts/lib/common.sh's podman_compose():
 # a host whose user podman socket is missing needs sudo for compose.
 _compose=(podman-compose)
-podman info &>/dev/null 2>&1 || _compose=(sudo podman-compose)
-if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >/tmp/oc-compose-out 2>/tmp/oc-compose-err; then
+podman info &>/dev/null || _compose=(sudo podman-compose)
+# mktemp (mode 600) rather than fixed /tmp names: the render contains all
+# four secret values interpolated, and a kill -9 would leave fixed paths
+# behind on world-readable /tmp. Registered in the EXIT trap above.
+RENDER_OUT=$(mktemp); RENDER_ERR=$(mktemp)
+if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >"$RENDER_OUT" 2>"$RENDER_ERR"; then
   for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
-    if grep -qE "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[^[:space:]]" /tmp/oc-compose-out; then
+    if grep -qE "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[^[:space:]]" "$RENDER_OUT"; then
       printf '  %s✓%s %s reaches the pi service\n' "$GREEN" "$RESET" "$k"
     else
       printf '  %s✗%s %s is MISSING from the rendered config\n' "$YELLOW" "$RESET" "$k"
@@ -537,22 +569,22 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
   done
 else
   warn "compose render failed:"
-  sed 's/^/      /' /tmp/oc-compose-err || true
+  sed 's/^/      /' "$RENDER_ERR" || true
 fi
-rm -f /tmp/oc-compose-out /tmp/oc-compose-err
+rm -f "$RENDER_OUT" "$RENDER_ERR"; RENDER_OUT=""; RENDER_ERR=""
 
 finish
 
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"
-printf '  1. Nothing is restarted yet. These vars are inert until the connectors\n'
-printf '     image is deployed — the running image predates #367/#371.\n'
-printf '  2. Merge #371, rebuild the pi image, bring the stack up.\n'
-printf '  3. Compare the canonical string the gateway logs at boot:\n'
+printf '  1. Nothing is restarted yet. These vars are inert until the pi\n'
+printf '     container is recreated — a restart picks them up (rebuild first\n'
+printf '     only if the image predates the connectors code).\n'
+printf '  2. Compare the canonical string the gateway logs at boot:\n'
 printf '       podman-compose -f docker/docker-compose.yml logs pi | grep "OAuth configured"\n'
 printf '     with what is registered in Google. They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
-printf '  4. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
+printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
 printf '     "app isn'"'"'t verified" warning (Testing mode) → Advanced → proceed.\n'
 printf '\n'
 printf '  Re-running this wizard is safe: it keeps existing values as defaults.\n'
