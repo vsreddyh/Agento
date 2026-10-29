@@ -819,14 +819,23 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// is already consumed at this point (verifier lives inside it, so the
 	// check cannot run first) — burning a hand-inserted row is intended;
 	// prod rows pass CreateState's own controls gate and never reach here.
-	// All legs burn: controls, invalid UTF-8, and length alike (only
-	// code/state fail pre-consume; the verifier can only be checked after
-	// the read). Same for the pinned redirect below: CreateState
-	// shape-checks at mint, so only a hand-inserted row carries a bad
-	// redirect into Exchange — burning it is the same intentional fail-closed.
+	// All legs burn: controls, invalid UTF-8, whitespace, and length alike
+	// (only code/state fail pre-consume; the verifier can only be checked
+	// after the read).
 	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || connectors.HasWhitespace(st.Verifier) || len(st.Verifier) > connectors.MaxStateFieldLen {
 		callbackDeadAttempt(w, r)
 		return
+	}
+	// Pinned-redirect misshape burns the same way, in the same place:
+	// CreateState shape-checks at mint, so only a hand-inserted row
+	// carries a bad redirect here — and the row is already consumed, so
+	// this dead-attempts exactly like the verifier leg above instead of
+	// failing later inside Exchange after the Google round-trip.
+	if st.RedirectURI != "" {
+		if _, rerr := connectors.CanonicalRedirectURL(st.RedirectURI); rerr != nil {
+			callbackDeadAttempt(w, r)
+			return
+		}
 	}
 	// Send the pinned redirect from mint time, not the live config: a
 	// rotation mid-consent would otherwise exact-mismatch Google.
@@ -946,12 +955,11 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// clients (the app polls GET /api/connectors instead of reading this
 	// body) get the existing JSON shape unchanged. no-store was already set
 	// at the top of the handler for every branch on this path.
+	// Same envelope helper as every other branch on this path, so the
+	// success page cannot drift from the dead-attempt page.
 	if acceptsHTML(r) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connected</title></head>` +
-			`<body><p>Connected. You can close this tab and return to the Agento app.</p></body></html>`))
+		writeCallbackPage(w, http.StatusOK, "Agento connected",
+			"Connected. You can close this tab and return to the Agento app.")
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{"ok": true, "connector": connectorWire(c)})

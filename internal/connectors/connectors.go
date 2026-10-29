@@ -225,12 +225,14 @@ func IsDraftOnlySend(server, tool string) bool {
 	// NormalizedID, not a local fold: same composition as every sibling,
 	// so the next fold change cannot strand this one. Both parts gated
 	// (separate caps: ids are two fixed strings, tool names are
-	// operator-defined). Oversize defers to identity: an unknown server
-	// cannot own a send path, so it falls through to the gated backstop;
-	// a known server with a garbage tool refuses outright, since no legit
-	// tool of that server is that long. Precisely: known servers refuse,
-	// unknown servers gate — a genuinely-long future read tool is refused
-	// as a send only on a known server (rename, don't widen).
+	// operator-defined). Oversize defers to identity: Known length-checks
+	// first, so an oversized server is unknown by construction and always
+	// falls through to the gated backstop — only a known server with a
+	// garbage tool refuses outright, since no legit tool of that server
+	// is that long. Precisely: known servers refuse, unknown servers
+	// (any size, by construction) gate — a genuinely-long future read
+	// tool is refused as a send only on a known server
+	// (rename, don't widen).
 	if len(server) > maxConnectorIDLen || len(tool) > maxToolNameLen {
 		return Known(server)
 	}

@@ -1109,3 +1109,27 @@ func TestConnectorsCleanupUpstreamLogs(t *testing.T) {
 		t.Fatalf("upstream cleanup failure must log, got: %q", logged)
 	}
 }
+
+// A hand-inserted bad redirect burns at consume time like the verifier
+// legs: CreateState shape-checks at mint, so the dead-attempt answer here
+// is the fail-closed path, not the Exchange error.
+func TestConnectorsCallbackRejectsBadRedirect(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: badRedirectStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad redirect: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("bad redirect should dead-attempt, got: %s", rec.Body)
+	}
+}
+
+type badRedirectStore struct {
+	connectors.Store
+}
+
+func (badRedirectStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v", RedirectURI: "not-a-url"}, nil
+}

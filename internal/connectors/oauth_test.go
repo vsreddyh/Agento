@@ -622,3 +622,20 @@ func TestOAuthConfigNamesAllMissingVars(t *testing.T) {
 		}
 	}
 }
+
+// A dead caller ctx fails before any guard or network I/O: deterministic
+// 400, never a 502 for work that never started.
+func TestExchangeRejectsDeadContext(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var logged string
+	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
+	if _, err := Exchange(ctx, cfg, Gmail, "code", "verifier", logf); err == nil {
+		t.Fatal("dead-ctx Exchange should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("dead ctx should be a deterministic 400, got %v", err)
+	} else if !strings.Contains(logged, "aborted") {
+		t.Fatalf("dead ctx should log the abort discriminant, got %q", logged)
+	}
+}

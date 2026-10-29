@@ -713,6 +713,13 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if HasControl(id) || !utf8.ValidString(id) {
 		return nil, deny("invalid connector id")
 	}
+	// Dead caller ctx fails here — after the cheap input guards above, but
+	// before the fallback timeout below and any network I/O: a cancelled
+	// parent with no deadline would otherwise pay a full oauth2 round-trip
+	// before failing. Deterministic 400, not a 502 — nothing was sent.
+	if ctx.Err() != nil {
+		return nil, deny("grant exchange aborted, caller context ended")
+	}
 	if cfg == nil {
 		return nil, deny("oauth client is not configured")
 	}
