@@ -274,6 +274,11 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// "api/connectorsfoo" is an unknown path, not connector "foo" — the
 	// prefix form without a slash boundary would mislabel the resource and
 	// send triage after a bad id instead of a bad path.
+	// Case-sensitive by design: paths are lowercase-canonical. Only the
+	// callback bypass folds case (EqualFold above and in route()), because
+	// unauthenticated callers must not be distinguishable by casing; a
+	// miscased authenticated member 404s here, which is a client bug, not
+	// an oracle.
 	if rest == "api/connectors" {
 		s.serveConnectorsList(w, r)
 		return
@@ -323,6 +328,21 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	}
 
 	id, action, _ := strings.Cut(path, "/")
+	// Alloc guard before any fold or scan: a multi-MB segment must fail
+	// without the TrimFunc/ToLower/HasControl rune walks below. No echo —
+	// the value is megabytes. Semantic caps stay on the normalised forms
+	// further down (padding must not turn a known id unknown), so this is
+	// purely a pre-filter, not the contract.
+	if len(id) > connectors.MaxStateFieldLen {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown connector")
+		return
+	}
+	if len(action) > connectors.MaxStateFieldLen {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown path")
+		return
+	}
 	// Trim first, then check — matching the code/state legs and every store
 	// verb: edge whitespace and invisible Cf (zero-width, BOM) are forgiven
 	// at the edges, so a zero-width-prefixed id folds to gmail here instead
@@ -578,7 +598,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// (Raw length already gated above: url.Query() allocates the full map
 	// up front, and raw counts encoded bytes — percent-encoding expands,
 	// so %00-heavy payloads hit the raw 400 before the decoded per-value
-	// gates below ever run.)
+	// gates below ever run. Query() also discards parse errors: %zz-style
+	// malformed encoding yields empty values and the missing-params 400,
+	// not the dead-attempt shape — both are 400 by design, and the split
+	// is intentional, so do not "fix" it into one branch.)
 	query := r.URL.Query()
 	code := connectors.TrimCredential(query.Get("code"))
 	state := connectors.TrimCredential(query.Get("state"))

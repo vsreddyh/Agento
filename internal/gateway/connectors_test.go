@@ -783,3 +783,46 @@ func TestConnectorsConnectSetsNoStore(t *testing.T) {
 		t.Errorf("cache-control = %q, want no-store", cc)
 	}
 }
+
+// The raw length pre-filter fires before any fold or scan: multi-KB
+// segments 404 without paying the normalize alloc, and without echo.
+func TestConnectorsMemberOversizedSegments(t *testing.T) {
+	srv := connectorsServer(t)
+	rec := do(t, srv, http.MethodPost, "/api/connectors/"+strings.Repeat("x", 3000)+"/disconnect", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("oversized id: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), strings.Repeat("x", 100)) {
+		t.Fatalf("oversized id must not echo: %s", rec.Body.String()[:200])
+	}
+	rec = do(t, srv, http.MethodPost, "/api/connectors/gmail/"+strings.Repeat("y", 3000), "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("oversized verb: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+}
+
+// Malformed percent-encoding yields empty values and the missing-params
+// 400, not the dead-attempt shape — both are 400 by design, and the split
+// is intentional.
+func TestConnectorsCallbackMalformedEncoding(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=%zz&state=abc", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed encoding: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "callback needs") {
+		t.Fatalf("malformed encoding should name missing params, got: %s", rec.Body)
+	}
+}
+
+// Member paths are lowercase-canonical: only the callback bypass folds
+// case (unauthenticated oracle rule). A miscased member 404s.
+func TestConnectorsMemberCaseSensitive(t *testing.T) {
+	srv := connectorsServer(t)
+	rec := do(t, srv, http.MethodPost, "/API/connectors/gmail/disconnect", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("miscased member: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+}

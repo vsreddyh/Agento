@@ -440,8 +440,13 @@ func run() error {
 			// pointer when the failure is a registration mismatch.
 			// Bounded like the gateway's bounded(): the cap fires inside
 			// CanonicalRedirectURL, so an uncapped env value would emit
-			// megabytes to the log before any bound applies.
+			// megabytes to the log before any bound applies. Byte-cap
+			// first so the rune conversion below never allocates over a
+			// pathological env value (OS-bounded in practice, ~128KB).
 			redirect := os.Getenv("GOOGLE_REDIRECT_URL")
+			if len(redirect) > 1024 {
+				redirect = redirect[:1024]
+			}
 			if r := []rune(redirect); len(r) > 128 {
 				redirect = string(r[:128]) + "\u2026 (truncated)"
 			}
