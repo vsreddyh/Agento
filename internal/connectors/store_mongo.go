@@ -73,12 +73,19 @@ func FromEnv() (*MongoStore, error) {
 }
 
 // EnsureIndexes creates the states TTL (pending attempts die on their own;
-// the relay-style sweep other stores need does not exist here by design).
-// The connectors collection needs none: two fixed rows keyed by _id.
+// the relay-style sweep other stores need does not exist here by design)
+// plus the connector lookup the supersede/scrub deletes filter on. The
+// connectors collection needs none: two fixed rows keyed by _id.
 func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
-	_, err := s.states.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
+	if _, err := s.states.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
 		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
 		Options: options.Index().SetName("oauth_states_ttl").SetExpireAfterSeconds(0),
+	}); err != nil {
+		return err
+	}
+	_, err := s.states.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
+		Keys:    bson.D{{Key: "connector", Value: 1}},
+		Options: options.Index().SetName("oauth_states_connector"),
 	})
 	return err
 }

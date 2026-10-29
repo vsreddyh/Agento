@@ -494,9 +494,18 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// bounded. Detached IO errors already carry their own taxonomy
 		// (upstream 502 via the domain mapper below) — that is the
 		// honest answer. Gone clients still short-circuit: writing on a
-		// dead conn buys only a second log line for a hangup.
+		// dead conn buys only a second log line for a hangup — but the
+		// row may already have landed on detached IO, so clean it up
+		// best-effort like the empty-auth_url branch below (same detached
+		// budget, same single-use delete). A failed or abandoned build
+		// mints nothing observable either way.
 		if ctx.Err() != nil && ctx.Err() != context.DeadlineExceeded {
 			s.cfg.Logf("connectors: connect aborted, request ended (client gone or server stopping): %v", ctx.Err())
+			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if _, cerr := s.connectors.ConsumeState(cleanCtx, state); cerr != nil {
+				s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
+			}
+			cleanCancel()
 			return
 		}
 		connectorsError(w, err)

@@ -236,7 +236,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// (loopback-ness checked above). Hostname() already strips brackets
 		// and port, so h arrives bare — no Trim needed. Fail closed here
 		// instead of dying with redirect_uri_mismatch in the browser.
-		return "", errors.New("connectors: redirect URL host is not a valid hostname (use FQDN or punycode; single-label and Unicode hosts are rejected)")
+		return "", errors.New("connectors: redirect URL host is not a valid hostname (use a dotted FQDN or punycode; single-label and Unicode hosts are rejected)")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
