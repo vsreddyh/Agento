@@ -413,6 +413,10 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	action = strings.ToLower(action)
 	if len(action) > maxConnectorIDLen {
 		// Same length-before-identity as the id legs: 400, not 404.
+		// Kept as a separate gate even though the trimmed check above
+		// usually fires first: ToLower can grow byte length for exotic
+		// spellings, so the post-fold length is what the switch below
+		// actually sees — check it, don't assume the pre-fold check held.
 		connectorsError(w, connectors.NewStoreError("oversized path segment", false))
 		return
 	}

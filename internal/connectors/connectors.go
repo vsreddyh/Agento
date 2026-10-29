@@ -221,9 +221,6 @@ func IsDraftOnlySend(server, tool string) bool {
 	if len(server) > maxConnectorIDLen || len(tool) > maxToolNameLen {
 		return Known(server)
 	}
-	if len(server) > maxConnectorIDLen || len(tool) > maxToolNameLen {
-		return true
-	}
 	server = NormalizedID(server)
 	tool = NormalizedID(tool)
 	switch server {
