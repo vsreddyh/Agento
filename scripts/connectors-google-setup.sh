@@ -230,8 +230,6 @@ TS_DNS="${TS_DNS:-}"          # <name>.<tailnet>.ts.net, no trailing dot
 REDIRECT_URI="${REDIRECT_URI:-}"  # preset honoured; empty means derive from TS_DNS below
 _redirect_preset="${REDIRECT_URI:-}"
 
-say_dns() { [[ -n "$TS_DNS" ]] && note "tailnet host: https://$TS_DNS"; }
-
 banner "Google connectors over Tailscale Funnel"
 
 # ── Stage 1: preflight ────────────────────────────────────────────────────
@@ -293,7 +291,7 @@ stage "Install Tailscale"
 if command -v tailscale >/dev/null 2>&1; then
   note "already installed: $(tailscale version 2>/dev/null | head -n1 || true)"
 else
-  _codename=""; [[ -f /etc/os-release ]] && _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)
+  _codename=""; [[ -f /etc/os-release ]] && _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"')
   say "Installing from Tailscale's official apt repo${_codename:+ (Ubuntu $_codename)}."
   unset _codename
   note "This adds /etc/apt/sources.list.d/tailscale.list and the tailscaled service."
@@ -330,7 +328,7 @@ else
     TS_HOST="${TS_HOST:-${_ts_preset:-$(hostname -s)}}"
     if [[ "$TS_HOST" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then break; fi
     warn "invalid: use lowercase letters, digits, hyphens (no leading/trailing hyphen)"
-    TS_HOST=""
+    TS_HOST=""; _ts_preset=""
   done
   unset _ts_preset
   printf '\n'
@@ -346,8 +344,9 @@ else
     URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" | head -n1 || true)
     [[ -n "$URL" ]] && break
     kill -0 "$TS_PID" 2>/dev/null || break
-    sleep 1
+    printf '%s' '.'; sleep 1
   done
+  printf '\n'
   if [[ -n "$URL" ]]; then
     open_url "$URL"
     pause "Press Enter once you've approved the machine in the browser."
@@ -358,12 +357,15 @@ else
   fi
   for __i in $(seq 1 60); do
     tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && break
-    sleep 2
+    printf '%s' '.'; sleep 2
   done
-  # If the backgrounded `tailscale up` already exited, reap it now so the
-  # EXIT trap can't later kill a recycled PID. If it is still running (the
-  # Running check below failed), leave it for the trap to clean up on exit.
-  if ! kill -0 "$TS_PID" 2>/dev/null; then
+  printf '\n'
+  # `tailscale up` exits once the node is up, so by the time Running is
+  # confirmed it is already reaped-or-reapable: wait unconditionally so the
+  # EXIT trap can never fire on a recycled PID. (wait on an exited child
+  # returns at once; the still-connecting case exits 1 just below, where a
+  # live process is genuinely still ours to clean up via the trap.)
+  if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
     wait "$TS_PID" 2>/dev/null || true
     TS_PID=""
   fi
@@ -379,8 +381,10 @@ fi
 
 # TS_DNS honours a caller preset (dry-runs) instead of silently discarding
 # it — same contract as ENV_FILE. Empty means discover from the daemon.
+_DNS_FROM_PRESET=0
 if [[ -n "$TS_DNS" ]]; then
   note "using preset TS_DNS=$TS_DNS (skipping discovery)"
+  _DNS_FROM_PRESET=1
 else
   TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)
 fi
@@ -445,11 +449,24 @@ else
 fi
 unset _redirect_preset
 say "Waiting for public DNS + certificate (can take a few minutes)…"
+# Preset/dry-run hostnames (or SKIP_PROBE=1) skip the 30× poll: a fake name
+# would burn ~5 min of timeouts before the .env write. One opportunistic
+# probe still reports status without the wait.
 ok=0
-for __i in $(seq 1 30); do
-  if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then ok=1; break; fi
-  printf '%s' '.'; sleep 10
-done
+if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
+  note "preset hostname — skipping the public-reachability wait"
+  if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then
+    ok=1
+    printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$TS_DNS"
+  else
+    note "not reachable from here right now (expected for a dry-run name)"
+  fi
+else
+  for __i in $(seq 1 30); do
+    if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then ok=1; break; fi
+    printf '%s' '.'; sleep 10
+  done
+fi
 printf '\n'
 if (( ok )); then
   printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$TS_DNS"
@@ -544,7 +561,7 @@ fi
 # ── Stage 8: write .env + verify ──────────────────────────────────────────
 stage "Write .env and verify"
 [[ -f "$ENV_FILE" ]] || { warn "no $ENV_FILE at $REPO_DIR"; exit 1; }
-BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S)"
+BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
 cp -p "$ENV_FILE" "$BACKUP"
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
 
@@ -591,13 +608,22 @@ podman info &>/dev/null || _compose=(sudo podman-compose)
 # behind on world-readable /tmp. Registered in the EXIT trap above.
 RENDER_OUT=$(mktemp); RENDER_ERR=$(mktemp)
 if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >"$RENDER_OUT" 2>"$RENDER_ERR"; then
+  # Empty vars render as KEY: '' — the quote alone must not satisfy the
+  # check, or a missing var reads as "reaches the pi service".
+  _render_missing=""
   for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
-    if grep -qE "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[^[:space:]]" "$RENDER_OUT"; then
+    if grep -qE "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[^\"'[:space:]]" "$RENDER_OUT"; then
       printf '  %s✓%s %s reaches the pi service\n' "$GREEN" "$RESET" "$k"
     else
-      printf '  %s✗%s %s is MISSING from the rendered config\n' "$YELLOW" "$RESET" "$k"
+      printf '  %s✗%s %s renders EMPTY — fix it before restarting\n' "$YELLOW" "$RESET" "$k"
+      _render_missing="$_render_missing $k"
     fi
   done
+  if [[ -n "$_render_missing" ]]; then
+    warn "empty render for:${_render_missing} — an empty value is the misconfiguration this step exists to catch"
+    exit 1
+  fi
+  unset _render_missing
 else
   warn "compose render failed:"
   sed 's/^/      /' "$RENDER_ERR" || true
