@@ -738,7 +738,7 @@ func TestConnectorsCallbackErrorsServeHTMLToBrowsers(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Errorf("oversized content-type = %q, want text/html", ct)
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "Close this tab") || !strings.Contains(body, "start over from connect") {
+	if body := rec.Body.String(); !strings.Contains(body, "Close this tab") || !strings.Contains(body, "tap connect again") {
 		t.Errorf("oversized html missing message or guidance: %s", body)
 	}
 	// Same failures without the browser header stay JSON.

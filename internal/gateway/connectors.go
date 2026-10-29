@@ -824,9 +824,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// multi-MB value would become an oversized DB filter / outbound token
 	// request. Same 400 shape as every other callback failure, so no
 	// oracle is added.
+	// All pre-consume shape rejects dead-attempt like the consume failures
+	// below: same 400, same JSON (callbackStateReject), one HTML guidance
+	// page ("tap connect again") instead of two wordings that the next
+	// reader would "unify" anyway. No oracle: oversized/short is
+	// self-revealing input, and the message never varies by validity.
 	if len(code) > connectors.MaxStateFieldLen || len(state) > connectors.MaxStateFieldLen {
-		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
-			callbackStateReject, s.cfg.Logf)
+		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return
 	}
 	// Floor on state only: states are server-minted (22-char 128-bit), so a
@@ -845,8 +849,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// the values are server-minted or Google-issued, so a control byte is
 	// never a legitimate credential.
 	if connectors.HasControl(code) || connectors.HasControl(state) || connectors.HasWhitespace(code) || connectors.HasWhitespace(state) {
-		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
-			callbackStateReject, s.cfg.Logf)
+		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return
 	}
 	// Invalid UTF-8 fails here too: overlong/invalid byte sequences decode
@@ -854,8 +857,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// them — and a BSON filter built from them fails downstream as a 502
 	// instead of here as a 400. Same dead-attempt shape, no oracle.
 	if !utf8.ValidString(code) || !utf8.ValidString(state) {
-		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
-			callbackStateReject, s.cfg.Logf)
+		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return
 	}
 	ctx, cancel := connectorCallbackCtx(r)

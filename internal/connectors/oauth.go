@@ -1148,7 +1148,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// clocks (single owners), but a scheduling caller that uses tok.Expiry
 	// without persisting would otherwise sleep decades on a far-future or
 	// skewed provider value. Same unbounded-lifetime class as the state
-	// clamp — fail safe (renew soon), never far.
+	// clamp — fail safe (renew soon), never far. Wall-clock by design and
+	// advisory only: the stores re-clamp authoritatively on their own
+	// clocks, so a stepped fake clock and this gate never have to agree.
 	if !tok.Expiry.IsZero() {
 		tok.Expiry = time.UnixMilli(ClampAccessExpiry(tok.Expiry.UnixMilli(), time.Now()))
 	}

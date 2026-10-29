@@ -54,22 +54,24 @@ import (
 	"agento/internal/pi"
 )
 
-// truncateForLog caps a log value at maxBytes bytes without splitting a
+// truncateForLog caps log content at maxContentBytes bytes without splitting a
 // multi-byte char: range over a string yields rune-start byte indices, so
 // accumulating whole runes while the total stays within budget always ends
-// on a boundary. Values at or under budget pass through untouched, so the
-// byte-for-byte comparison this log line exists for never truncates a
-// value the server would actually send. Different units from the
+// on a boundary. maxContentBytes caps the content only — the marker below
+// rides ~30 bytes past it, so never size a buffer from this bound; it is a
+// log line, not a field limit. Values at or under budget pass through
+// untouched, so the byte-for-byte comparison this log line exists for never
+// truncates a value the server would actually send. Different units from the
 // gateway's bounded() on purpose: this is bytes-capped like every len()
 // gate on the surface, bounded() is display-capped at 128 runes for
 // UI/API echoes — do not unify the two truncators.
-func truncateForLog(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
+func truncateForLog(s string, maxContentBytes int) string {
+	if len(s) <= maxContentBytes {
 		return s
 	}
 	cut := 0
 	for _, r := range s {
-		if w := utf8.RuneLen(r); cut+w > maxBytes {
+		if w := utf8.RuneLen(r); cut+w > maxContentBytes {
 			break
 		} else {
 			cut += w

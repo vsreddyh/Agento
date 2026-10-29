@@ -912,6 +912,9 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	// answers identically wherever it is checked. Canonicalised and stored,
 	// so stored == sent by construction. Empty means minted before this
 	// column existed: allowed, the callback falls back to the live config.
+	// Callers must still pin (the gateway always does): an unpinned row silently
+	// downgrades to rotation-fragile, exact-mismatching after any redirect rotation.
+	// Empty is pre-column compat, not a supported mint shape for new callers.
 	// (A sub-2048 garbage redirect would otherwise supersede the live
 	// attempt and fail only at Exchange — after the user consented.)
 	if st.RedirectURI != "" {
