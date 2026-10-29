@@ -236,6 +236,21 @@ _alive() {
   [[ "$st" != *Z* ]]
 }
 
+# _check_kept_host: after taking the already-serving failure path, the
+# kept funnel's hostname is unverified (the fast path above is
+# hostname-bound; this one matches on error text alone). Re-read the
+# status and warn on a split — same warn-don't-stop as contradictory
+# presets, since a rename mid-run is legitimate.
+_check_kept_host() {
+  local _kh
+  _kh=$(tailscale funnel status 2>/dev/null | grep -oE 'https://[^[:space:]/]+' | head -n1 2>/dev/null || true)
+  _kh="${_kh#https://}"
+  if [[ -n "$_kh" && "$_kh" != "$TS_DNS" ]]; then
+    warn "kept funnel serves ($_kh) but this run targets ($TS_DNS):"
+    warn "verify with: tailscale funnel status"
+  fi
+}
+
 # _valid_tsdns HOST: strict tailnet-hostname check for preset paths —
 # every dot-separated label must satisfy the TS_HOST shape (lowercase,
 # label-bound), and at least two labels must precede .ts.net (real
@@ -588,6 +603,7 @@ if [[ -n "$FOUT" ]]; then
   if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1; then
     if grep -qiE "already|in use|exists" "$FOUT"; then
       note "funnel reports it is already serving; keeping the existing one"
+      _check_kept_host
     else
       warn "funnel did not start:"
       sed 's/^/      /' "$FOUT" || true
@@ -595,6 +611,7 @@ if [[ -n "$FOUT" ]]; then
       tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1 || {
         if grep -qiE "already|in use|exists" "$FOUT"; then
           note "funnel reports it is already serving; keeping the existing one"
+          _check_kept_host
         else
           warn "still failing:"; sed 's/^/      /' "$FOUT" || true; exit 1
         fi
@@ -646,10 +663,28 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   warn "recorded GOOGLE_REDIRECT_URL differs from the derived one:"
   warn "  recorded: $_recorded_uri"
   warn "  derived:  $REDIRECT_URI"
-  if confirm "Keep the recorded URL?"; then
-    REDIRECT_URI="$_recorded_uri"
-    note "keeping recorded REDIRECT_URI (tailnet rename? re-check the Google console registration)"
+  # A stale/typo'd entry must not sail through on keep while a deliberate
+  # non-standard URL (loopback for local testing) must survive: validate
+  # first, then tailor the question. Strict-pass keeps quietly offerable;
+  # strict-fail keeps only via an explicit knowingly-keep.
+  _rec_host=""
+  if [[ "$_recorded_uri" == https://*/p/api/connectors/callback ]]; then
+    _rec_host="${_recorded_uri#https://}"; _rec_host="${_rec_host%/p/api/connectors/callback}"
   fi
+  if [[ -n "$_rec_host" ]] && _valid_tsdns "$_rec_host"; then
+    if confirm "Keep the recorded URL?"; then
+      REDIRECT_URI="$_recorded_uri"
+      note "keeping recorded REDIRECT_URI (tailnet rename? re-check the Google console registration)"
+    fi
+  else
+    warn "recorded URL fails the expected shape (https://<host>.<tailnet>.ts.net/p/api/connectors/callback)"
+    warn "typo? keeping it registers a URL Google will never call back to."
+    if confirm "Keep it anyway (only for deliberate non-standard setups)?"; then
+      REDIRECT_URI="$_recorded_uri"
+      note "keeping non-standard recorded REDIRECT_URI as chosen"
+    fi
+  fi
+  unset _rec_host
 fi
 unset _recorded_uri
 say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
@@ -899,7 +934,7 @@ _marker='# -- Google connectors'
 if ! grep -qF -- "$_marker" "$ENV_FILE"; then
   {
     printf '\n'
-    printf '# -- Google connectors (#316) — added by setup wizard ──\n'
+    printf '# -- Google connectors (#316) -- added by setup wizard --\n'
     printf '# Callback is served over Tailscale Funnel: https://%s\n' "$_comment_host"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
   } >> "$ENV_FILE" || { warn "comment block append failed — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
@@ -915,7 +950,7 @@ else
   cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
   rm -f "$_cb_tmp"; _cb_tmp=""
 fi
-unset _comment_host
+unset _comment_host _marker
 
 write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
 write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
