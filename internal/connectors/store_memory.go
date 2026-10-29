@@ -480,11 +480,11 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	// (updated_at set at insert), not never-touched, on both backends.
 	if c, ok := s.rows[id]; !ok || c.ID == "" {
 		c := DefaultRow(id)
-		// Display-only stamp, wall-clock by design: lifetime ticks use the
-		// injectable timeNow above, but updated_at answers "when did a
-		// human-visible touch happen" — wall clock, like every other
-		// display field. See the timeNow contract, not this line, for
-		// expiry-test control.
+		// Display-only stamp, wall-clock by design (see the timeNow
+		// contract): lifetime ticks are injectable, this stamp is wall —
+		// the two clocks on one write can straddle under a stepped fake
+		// clock by construction, and that skew is accepted (display, not
+		// lifetime). Do not unify.
 		c.UpdatedAt = time.Now().UnixMilli()
 		s.rows[id] = c
 	}

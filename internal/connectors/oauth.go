@@ -1163,8 +1163,14 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// clamp — fail safe (renew soon), never far. Wall-clock by design and
 	// advisory only: the stores re-clamp authoritatively on their own
 	// clocks, so a stepped fake clock and this gate never have to agree.
+	// Zero stays zero: a clamped-to-zero (negative floored) expiry is the
+	// renew-now sentinel (time.Time{}), not the epoch — stored == delivered.
 	if !tok.Expiry.IsZero() {
-		tok.Expiry = time.UnixMilli(ClampAccessExpiry(tok.Expiry.UnixMilli(), time.Now()))
+		if clamped := ClampAccessExpiry(tok.Expiry.UnixMilli(), time.Now()); clamped <= 0 {
+			tok.Expiry = time.Time{}
+		} else {
+			tok.Expiry = time.UnixMilli(clamped)
+		}
 	}
 	// Persist via SetTokens (the write sites own the stored clamp); this
 	// return is now clamped for scheduling callers too.

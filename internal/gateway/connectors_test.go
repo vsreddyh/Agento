@@ -1383,3 +1383,38 @@ func TestConnectorsCallbackShortCodeReachesExchange(t *testing.T) {
 		t.Fatalf("short code with live state: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
 }
+
+// A duplicate CreateState never burns the live row it collides with: the
+// colliding state predates the call, so no cleanup runs — answer only.
+func TestConnectorsConnectDuplicateSkipsCleanup(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := &dupCreateStore{Store: connectors.NewMemoryStore()}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodPost, "/api/connectors/gmail/connect", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, r)
+	if rec.Body.Len() != 0 {
+		t.Fatalf("gone-client connect wrote %d bytes, want none", rec.Body.Len())
+	}
+	if len(store.consumed) != 0 {
+		t.Fatalf("duplicate cleanup consumed %d rows, want 0", len(store.consumed))
+	}
+}
+
+type dupCreateStore struct {
+	connectors.Store
+	consumed []string
+}
+
+func (d *dupCreateStore) CreateState(context.Context, connectors.OAuthState) error {
+	return connectors.NewStoreError("oauth state already exists", false)
+}
+
+func (d *dupCreateStore) ConsumeState(ctx context.Context, state string) (connectors.OAuthState, error) {
+	d.consumed = append(d.consumed, state)
+	return d.Store.ConsumeState(ctx, state)
+}

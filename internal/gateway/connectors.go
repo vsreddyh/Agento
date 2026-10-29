@@ -203,6 +203,15 @@ const callbackStateReject = "that connect attempt expired or was already used; s
 // (the insert may land after this delete): the orphan then lives until
 // TTL/next-tap supersede — same accepted class as the disconnect-during-
 // exchange window, re-tap recovers. See ADR-0009.
+// isDuplicateStateError reports the already-exists shape both stores
+// return when the state id collides with a live row: that row predates the
+// call, so the caller must not consume it. Matched on message (both
+// backends share the literal); a typed sentinel would be nicer, but the
+// shape is stable and asserted by the duplicate tests on both backends.
+func isDuplicateStateError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "oauth state already exists")
+}
+
 func (s *Server) cleanupOrphanState(id, state string) {
 	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cleanCancel()
@@ -671,7 +680,11 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// row may already have landed on detached IO, so clean it up
 		// best-effort like the empty-auth_url branch below (same detached
 		// budget, same single-use delete). A failed or abandoned build
-		// mints nothing observable either way. The DeadlineExceeded leg
+		// mints nothing observable either way. Duplicate-key failure is
+		// the exception: the colliding row predates this call (same
+		// 128-bit state already live from an earlier tap), so consuming
+		// it would burn a legitimate attempt this call never minted —
+		// skip cleanup on the already-exists shape, answer the error. The DeadlineExceeded leg
 		// below is nearly dead by construction: CreateState runs on
 		// detached opCtx (validation + mint are the only verb-clock work,
 		// ~µs), so only a hung client or depleted entropy trips it — a
@@ -685,7 +698,9 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			// detached budget (same single-use delete as the empty-auth_url
 			// branch). A failed or abandoned build mints nothing observable.
 			s.cfg.Logf("connectors: connect aborted, request ended (client gone, server stopping, or verb deadline): %v", ctx.Err())
-			s.cleanupOrphanState(id, state)
+			if !isDuplicateStateError(err) {
+				s.cleanupOrphanState(id, state)
+			}
 			if ctx.Err() != context.DeadlineExceeded {
 				return
 			}

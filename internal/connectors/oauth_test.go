@@ -929,3 +929,24 @@ func TestCanonicalRedirectRejectsNonASCIIPath(t *testing.T) {
 		t.Fatal("non-ASCII path should fail closed (validated != sent)")
 	}
 }
+
+func TestExchangeNegativeExpiryIsZero(t *testing.T) {
+	// Skewed provider offset (already-past) delivers a past timestamp:
+	// renew-now by comparison, same as a zero. The zero-vs-epoch split
+	// only matters for pre-epoch UnixMillis, which no expires_in can
+	// produce — those floor to zero inside ClampAccessExpiry (pinned by
+	// TestClampAccessExpiry + TestSetTokensFloorsNegativeExpiry).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"a","refresh_token":"r","expires_in":-5,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	tok, err := Exchange(context.Background(), cfg, Gmail, "codecodecodecodecode1", testVerifier, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tok.Expiry.Before(time.Now()) {
+		t.Fatalf("negative offset should deliver a past timestamp, got %v", tok.Expiry)
+	}
+}
