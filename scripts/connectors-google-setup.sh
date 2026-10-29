@@ -622,6 +622,15 @@ else
   _URI_FROM_PRESET=0
 fi
 unset _redirect_preset
+# The knobs are independent, so they can contradict: funnel serves TS_DNS
+# while Google registers the URI host. Both can be legitimate (dry-runs),
+# but a silent split funnels A while registering B — warn, don't stop.
+_uri_check="${REDIRECT_URI#https://}"; _uri_check="${_uri_check%%/*}"
+if [[ "$_uri_check" != "$TS_DNS" ]]; then
+  warn "REDIRECT_URI host ($_uri_check) differs from TS_DNS ($TS_DNS):"
+  warn "the funnel serves TS_DNS while Google registers the URI host."
+fi
+unset _uri_check
 say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # Preset/dry-run hostnames (or SKIP_PROBE=1) skip the 30× poll: a fake name
 # would burn ~5 min of timeouts before the .env write. One opportunistic
@@ -867,7 +876,7 @@ if ! grep -q -- '^# ── Google connectors' "$ENV_FILE"; then
     printf '# ── Google connectors (#316) — added by setup wizard ──\n'
     printf '# Callback is served over Tailscale Funnel: https://%s\n' "$_comment_host"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
-  } >> "$ENV_FILE"
+  } >> "$ENV_FILE" || { warn "comment block append failed — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
 else
   # Refresh the recorded hostname; keys below are fresh but this line is not.
   # Same tmp-file + cat pattern as the library's write_env, so a symlinked
