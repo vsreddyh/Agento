@@ -283,6 +283,12 @@ ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
 # the :- above never fires on a normal run — normalize that exact default to
 # the repo root, or running from /tmp reads /tmp/.env and stage 8 exits.
 if [[ "$ENV_FILE" == ".env" ]]; then ENV_FILE="$REPO_DIR/.env"; fi
+# Tilde never expands inside a variable value: ~/x would canonicalize to
+# $PWD/~/x below. Expand a leading ~ (or bare ~) against $HOME first.
+if [[ "$ENV_FILE" == "~" ]]; then ENV_FILE="${HOME:-~}"; fi
+# shellcheck disable=SC2088 — matching a literal ~ is the point here;
+# the expansion SC2088 wants is exactly what the next line implements.
+if [[ "$ENV_FILE" == "~/"* ]]; then ENV_FILE="${HOME:-~}/${ENV_FILE#"~/"}"; fi
 # An explicit relative export (ENV_FILE=throwaway.env) would otherwise
 # split-brain: stage 8 writes against the caller's cwd while the render
 # cd's to REPO_DIR first. Canonicalize once, against the invoking cwd.
@@ -298,7 +304,7 @@ banner "Google connectors over Tailscale Funnel"
 stage "Preflight: what this will change"
 say "This sets up the OAuth callback for the Gmail/Calendar connectors."
 say "Plan: Tailscale Funnel terminates public TLS on 443 and forwards to the"
-say "      existing nginx proxy on localhost:8080. No ports are opened, no"
+say "      existing nginx proxy on http://127.0.0.1:8080. No ports are opened, no"
 say "      domain is bought. The app keeps its current Server URL."
 say "      Note: the funnel publishes the whole proxy (chat + sync stay"
 say "      PASSWORD-gated); the OAuth callback is the only new unauthenticated"
@@ -543,7 +549,7 @@ printf '  %s✓%s %s\n' "$GREEN" "$RESET" "https://$TS_DNS"
 # ── Stage 4: funnel + public verification ─────────────────────────────────
 stage "Publish the callback over HTTPS"
 say "Funnel will terminate TLS with a publicly-trusted certificate and forward"
-say "to the existing proxy on localhost:8080. Only ports 443/8443/10000 are"
+say "to the existing proxy on http://127.0.0.1:8080. Only ports 443/8443/10000 are"
 say "allowed, so 443 it is."
 printf '\n'
 note "First run may prompt you to enable HTTPS certificates / MagicDNS for the"
@@ -631,6 +637,20 @@ if [[ "$_uri_check" != "$TS_DNS" ]]; then
   warn "the funnel serves TS_DNS while Google registers the URI host."
 fi
 unset _uri_check
+# Every other captured value offers keep-current on re-runs; the derived
+# URI must too, or a hand-customized URL (e.g. loopback for local testing)
+# is silently overwritten. Identical re-derivations stay silent — the
+# prompt fires only on an actual difference.
+if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_recorded_uri" && "$_recorded_uri" != "$REDIRECT_URI" ]]; then
+  warn "recorded GOOGLE_REDIRECT_URL differs from the derived one:"
+  warn "  recorded: $_recorded_uri"
+  warn "  derived:  $REDIRECT_URI"
+  if confirm "Keep the recorded URL?"; then
+    REDIRECT_URI="$_recorded_uri"
+    note "keeping recorded REDIRECT_URI (tailnet rename? re-check the Google console registration)"
+  fi
+fi
+unset _recorded_uri
 say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # Preset/dry-run hostnames (or SKIP_PROBE=1) skip the 30× poll: a fake name
 # would burn ~5 min of timeouts before the .env write. One opportunistic
