@@ -334,7 +334,7 @@ stage "Install Tailscale"
 if command -v tailscale >/dev/null 2>&1; then
   note "already installed: $(tailscale version 2>/dev/null | head -n1 || true)"
 else
-  _codename=""; [[ -f /etc/os-release ]] && _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"' || true)
+  _codename=""; [[ -f /etc/os-release ]] && _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '"' || true)
   say "Installing from Tailscale's official apt repo${_codename:+ (Ubuntu $_codename)}."
   unset _codename
   note "This adds /etc/apt/sources.list.d/tailscale.list and the tailscaled service."
@@ -368,7 +368,7 @@ fi
 stage "Join your tailnet"
 if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
   note "already connected"
-  TS_HOST=$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty' || true)
+  TS_HOST=$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty' 2>/dev/null || true)
 else
   say "The machine name becomes the public hostname: <name>.<tailnet>.ts.net"
   step "Pick a short lowercase name (letters, digits, hyphen)."
@@ -471,7 +471,7 @@ if [[ -n "$TS_DNS" ]]; then
   note "using preset TS_DNS=$TS_DNS (skipping discovery)"
   _DNS_FROM_PRESET=1
 else
-  TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)
+  TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.$//' || true)
 fi
 # (no "null" check: jq -r ... // empty never emits the literal string.)
 if [[ -z "$TS_DNS" ]]; then
@@ -524,14 +524,14 @@ if echo "$_funnel_status" | grep -qF "$TS_DNS" && echo "$_funnel_status" | grep 
 fi
 unset _funnel_status
 if [[ -n "$FOUT" ]]; then
-  if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1; then
+  if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1; then
     if grep -qiE "already|in use|exists" "$FOUT"; then
       note "funnel reports it is already serving; keeping the existing one"
     else
       warn "funnel did not start:"
       sed 's/^/      /' "$FOUT" || true
       pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
-      tailscale funnel --bg --https=443 http://127.0.0.1:8080 >"$FOUT" 2>&1 || {
+      tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1 || {
         if grep -qiE "already|in use|exists" "$FOUT"; then
           note "funnel reports it is already serving; keeping the existing one"
         else
@@ -804,8 +804,18 @@ printf '\n'
 say "Rendering compose to prove all four interpolate (values not printed)…"
 # Same sudo-fallback pattern as scripts/lib/common.sh's podman_compose():
 # a host whose user podman socket is missing needs sudo for compose.
+# A hung (not absent) socket would block bare `podman info` forever, so
+# bound it with timeout when present — same optional-timeout line as the
+# s_client issuer print (timeout stays out of the required preflight).
 _compose=(podman-compose)
-podman info &>/dev/null || _compose=(sudo podman-compose)
+_have_podman=0
+if command -v timeout >/dev/null 2>&1; then
+  if timeout 15 podman info &>/dev/null; then _have_podman=1; fi
+else
+  if podman info &>/dev/null; then _have_podman=1; fi
+fi
+if (( _have_podman == 0 )); then _compose=(sudo podman-compose); fi
+unset _have_podman
 # mktemp (mode 600) rather than fixed /tmp names: the render contains all
 # four secret values interpolated, and a kill -9 would leave fixed paths
 # behind on world-readable /tmp. Registered in the EXIT trap above.
