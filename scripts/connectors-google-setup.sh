@@ -229,7 +229,9 @@ trap wizard_cleanup EXIT INT TERM
 _alive() {
   kill -0 "$1" 2>/dev/null || return 1
   local st
-  st=$(ps -o stat= -p "$1" 2>/dev/null || true)
+  # procps spells it stat=, BSD/macOS state= — try both so the helper
+  # isn't silently zombie-blind off Linux.
+  st=$(ps -o stat= -p "$1" 2>/dev/null || ps -o state= -p "$1" 2>/dev/null || true)
   [[ -z "$st" ]] && return 0
   [[ "$st" != *Z* ]]
 }
@@ -428,7 +430,7 @@ else
   say "on the free Personal plan is fine) and approve this machine."
   printf '\n'
 
-  LOG=$(mktemp)
+  LOG=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — re-run when /tmp is writable"; exit 1; }
   tailscale up --hostname="$TS_HOST" </dev/null >"$LOG" 2>&1 &
   TS_PID=$!
   URL=""
@@ -537,7 +539,7 @@ note "  Funnel attribute (Access controls → Add Funnel to policy):"
 note "  https://console.tailscale.com/admin/acls"
 printf '\n'
 
-FOUT=$(mktemp)
+FOUT=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — re-run when /tmp is writable"; exit 1; }
 # Re-runs are safe: if 443 already forwards to this proxy, keep it instead
 # of erroring out of the wizard.
 _funnel_status=$(tailscale funnel status 2>/dev/null || true)
@@ -788,7 +790,7 @@ cp -p -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only di
 # cp -p preserves the source mtime, which would tie-break the -ot prune
 # below by glob order on rapid re-runs — re-stamp so filename order and
 # mtime order agree (mode from -p is kept).
-touch -- "$BACKUP"
+touch -- "$BACKUP" || { warn "backup timestamp failed (disk full?) — stopping before anything is written"; exit 1; }
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
 # Secrets are about to land in this file: 0600 regardless of what the
 # checkout/editor left behind (a fresh file already gets 0600 in write_env) —
@@ -822,7 +824,7 @@ if v=$(_existing CONNECTORS_ENCRYPTION_KEY 2>/dev/null) && [[ -n "$v" ]]; then
   note "keeping the existing envelope key (rotating it would invalidate every stored grant)"
   CONNECTORS_ENCRYPTION_KEY="$v"
 else
-  CONNECTORS_ENCRYPTION_KEY=$(openssl rand -hex 32)
+  CONNECTORS_ENCRYPTION_KEY=$(openssl rand -hex 32) || { warn "key generation failed (openssl/entropy?) — stopping before anything is written"; exit 1; }
   note "generated a new envelope key (AES-256-GCM, 32 bytes hex)"
 fi
 unset v
@@ -846,12 +848,12 @@ else
   # Refresh the recorded hostname; keys below are fresh but this line is not.
   # Same tmp-file + cat pattern as the library's write_env, so a symlinked
   # .env stays a symlink (plain sed -i would replace it with a regular file).
-  _cb_tmp=$(mktemp)
+  _cb_tmp=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
   sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" -- "$ENV_FILE" > "$_cb_tmp" || {
     warn "hostname comment refresh failed — restore with: cp -p $BACKUP $ENV_FILE"
     exit 1
   }
-  cat "$_cb_tmp" > "$ENV_FILE"
+  cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
   rm -f "$_cb_tmp"; _cb_tmp=""
 fi
 unset _comment_host
@@ -880,7 +882,8 @@ unset _have_podman
 # mktemp (mode 600) rather than fixed /tmp names: the render contains all
 # four secret values interpolated, and a kill -9 would leave fixed paths
 # behind on world-readable /tmp. Registered in the EXIT trap above.
-RENDER_OUT=$(mktemp); RENDER_ERR=$(mktemp)
+RENDER_OUT=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — stopping before the render"; exit 1; }
+RENDER_ERR=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — stopping before the render"; exit 1; }
 # Deliberately unbounded: `config` is client-side YAML rendering (the
 # socket-touching detection above is already timeout-bounded), so a hang
 # here means a wedged compose binary, not a slow network — no budget
