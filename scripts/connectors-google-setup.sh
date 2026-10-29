@@ -268,6 +268,14 @@ REPO_DIR="${REPO_DIR:-}"
 if [[ -z "$REPO_DIR" ]]; then
   REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd) || REPO_DIR=""
 fi
+# An empty REPO_DIR would resolve ENV_FILE to "/.env" (absolute, so the
+# relative-canonicalization below skips it) and misdirect stage 8 — or,
+# as root, create /.env. The cd fails only on a moved/deleted tree, but
+# fail loud regardless.
+if [[ -z "$REPO_DIR" ]]; then
+  warn "cannot resolve the repo root from this script's path — re-run from a clean checkout"
+  exit 1
+fi
 # ${ENV_FILE:-...} keeps the library contract: callers (and dry-run renders
 # against a throwaway copy) can point it elsewhere.
 ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
@@ -320,6 +328,10 @@ fi
 # misreads as down. Deliberately unlisted: ps (has a kill -0 fallback),
 # tput (colors degrade), timeout (documented optional), grep/sed/tr/cut
 # (universal).
+# Local-daemon calls (tailscale over its unix socket) are intentionally
+# unbounded throughout: a wedged daemon fails fast in practice, unlike
+# network waits, which all carry budgets (curl --max-time, loop counts,
+# timeout wrappers).
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
 for _dep in jq openssl curl podman podman-compose hostname date; do
@@ -555,8 +567,11 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
 # keeps host A while the URI, comment, and probe all use host B.
 # Hostname first: most selective on the common mismatch path, so the two
-# broader greps are skipped unless it hits.
-if echo "$_funnel_status" | grep -qF "$TS_DNS" && echo "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && echo "$_funnel_status" | grep -qiE 'https://|443'; then
+# broader greps are skipped unless it hits. The -n guard is load-bearing:
+# grep -qF "" matches every line, so without it an empty TS_DNS would
+# turn the fast path into always-keep (empty exits earlier today, but the
+# safety belongs on this line, not on ordering).
+if [[ -n "$TS_DNS" ]] && echo "$_funnel_status" | grep -qF "$TS_DNS" && echo "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && echo "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
   rm -f "$FOUT"; FOUT=""
