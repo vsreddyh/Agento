@@ -22,8 +22,8 @@ import (
 // the ADR), in columns no read path selects: List/Get project only the
 // display shape, so a token can never reach the app even if one is stored.
 //
-// Disconnect clears the token columns. Already-fetched data (chat history,
-// saved files) is NOT wiped: disconnect stops future access, it does not
+// Disconnect clears the token columns. Already-fetched data (chat history)
+// is NOT wiped: disconnect stops future access, it does not
 // rewrite the past.
 type MongoStore struct {
 	coll *mongoDrv.Collection
@@ -584,7 +584,7 @@ func statusUpdateDoc(id string, st Status, lastErr string, now, connectedAt int6
 
 // disconnectUpdateDoc builds the single UpdateOne body for Disconnect. Same
 // atomicity contract as statusUpdateDoc: tokens die in the same write that
-// flips the status. History (chat, saved files) is untouched by design.
+// flips the status. History (chat) is untouched by design.
 func disconnectUpdateDoc(id string, now int64) bson.D {
 	return bson.D{
 		{Key: "$set", Value: bson.D{
@@ -766,6 +766,11 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 		{Key: "$setOnInsert", Value: bson.D{
 			{Key: "displayName", Value: DisplayName(id)},
 			{Key: "scopes", Value: ScopesFor(id)},
+			// Status rides along so the crash-window row reads exactly
+			// like the memory backend's insert-only DefaultRow (which
+			// carries Status disconnected): same interleaving, same
+			// repair/no-bump path on the next SetStatus(disconnected).
+			{Key: "status", Value: string(StatusDisconnected)},
 			{Key: "updatedAt", Value: now},
 		}},
 	}, options.Update().SetUpsert(true))
@@ -871,7 +876,7 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
 		return NewStoreError("oauth state or verifier too long", false)
 	}
-	if HasControl(st.State) || HasControl(st.Verifier) || !utf8.ValidString(st.State) || !utf8.ValidString(st.Verifier) {
+	if HasControl(st.State) || HasControl(st.Verifier) || !utf8.ValidString(st.State) || !utf8.ValidString(st.Verifier) || HasWhitespace(st.State) || HasWhitespace(st.Verifier) {
 		return NewStoreError("oauth state or verifier invalid", false)
 	}
 	if len(st.RedirectURI) > MaxStateFieldLen {
@@ -997,7 +1002,7 @@ func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState
 	if len(state) > MaxStateFieldLen {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
-	if HasControl(state) || !utf8.ValidString(state) {
+	if HasControl(state) || !utf8.ValidString(state) || HasWhitespace(state) {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	var st OAuthState

@@ -535,7 +535,7 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxStateFieldLen {
 		return NewStoreError("oauth state or verifier too long", false)
 	}
-	if HasControl(st.State) || HasControl(st.Verifier) || !utf8.ValidString(st.State) || !utf8.ValidString(st.Verifier) {
+	if HasControl(st.State) || HasControl(st.Verifier) || !utf8.ValidString(st.State) || !utf8.ValidString(st.Verifier) || HasWhitespace(st.State) || HasWhitespace(st.Verifier) {
 		return NewStoreError("oauth state or verifier invalid", false)
 	}
 	if len(st.RedirectURI) > MaxStateFieldLen {
@@ -646,7 +646,7 @@ func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState,
 	if len(state) > MaxStateFieldLen {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
-	if HasControl(state) || !utf8.ValidString(state) {
+	if HasControl(state) || !utf8.ValidString(state) || HasWhitespace(state) {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	s.mu.Lock()

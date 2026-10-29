@@ -104,6 +104,18 @@ func Known(id string) bool {
 	return false
 }
 
+// HasWhitespace reports any Unicode whitespace in s. Server-minted
+// base64url values (states, verifiers) and Google-issued codes never
+// contain whitespace, so an interior space is operator-paste or garbage:
+// fail closed as a deterministic 400, not a 502 at Google after consent.
+// Checked on trimmed values (edges already forgiven by TrimCredential),
+// so any hit here is interior by construction. Tab is already control-
+// caught by HasControl; this covers the rest (plain space, no-break
+// space, and friends).
+func HasWhitespace(s string) bool {
+	return strings.IndexFunc(s, unicode.IsSpace) >= 0
+}
+
 // HasControl reports inner control bytes (NUL/CR/LF and friends) plus
 // invisible format characters (zero-width spaces, BOM, bidi overrides):
 // none are ever valid in an id, state, verifier, code, URL, or token.

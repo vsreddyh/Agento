@@ -99,6 +99,22 @@ type OAuthConfig struct {
 	TokenURL string
 }
 
+// isDigits reports a non-empty all-ASCII-digit string: SplitHostPort does
+// not check numeracy, and strconv.Atoi accepts "+80"/leading-zero forms
+// that JoinHostPort would re-emit verbatim (validated != sent). The gate
+// below compares and re-emits on the numeric value instead.
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // validRedirectHost reports whether host is a registrable spelling:
 // ASCII labels of [a-z0-9-] with no empties and no leading/trailing
 // hyphens, at least one dot, and at least one letter unless the host is
@@ -203,24 +219,33 @@ func CanonicalRedirectURL(raw string) (string, error) {
 			// Bare host, no JoinHostPort: "host:" would canonicalise to a
 			// dangling colon no registration can hold.
 			parsed.Host = h
-		case (parsed.Scheme == "https" && p == "443") || (parsed.Scheme == "http" && p == "80"):
-			// Stripped: default port dropped. Bracket here (no
-			// JoinHostPort on this branch) so an IPv6 literal stays a
-			// valid host.
-			if strings.Contains(h, ":") {
-				h = "[" + h + "]"
-			}
-			parsed.Host = h
 		default:
-			// Ports must be numeric: SplitHostPort doesn't check, and no
-			// console registration can hold :abc — a non-numeric port
-			// passes validation yet mismatches Google exactly.
-			if n, convErr := strconv.Atoi(p); convErr != nil || n < 1 || n > 65535 {
+			// Strict digits-only: Atoi accepts "+80"/"080", and
+			// JoinHostPort re-emits the spelling verbatim — validated !=
+			// sent, Google exact-mismatches instead of failing fast here.
+			// Compare and re-emit on the numeric value so the stored
+			// string is always the canonical spelling.
+			if !isDigits(p) {
 				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
 			}
-			// Kept: JoinHostPort brackets IPv6 itself — pass it the bare
-			// host, or [::1]:8643 double-brackets to [[::1]]:8643.
-			parsed.Host = net.JoinHostPort(h, p)
+			n, convErr := strconv.Atoi(p)
+			if convErr != nil || n < 1 || n > 65535 {
+				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
+			}
+			if (parsed.Scheme == "https" && n == 443) || (parsed.Scheme == "http" && n == 80) {
+				// Stripped: default port dropped. Bracket here (no
+				// JoinHostPort on this branch) so an IPv6 literal stays a
+				// valid host.
+				if strings.Contains(h, ":") {
+					h = "[" + h + "]"
+				}
+				parsed.Host = h
+			} else {
+				// Kept: JoinHostPort brackets IPv6 itself — pass it the bare
+				// host, or [::1]:8643 double-brackets to [[::1]]:8643.
+				// Re-emitted from the number, so "080" sends as "80".
+				parsed.Host = net.JoinHostPort(h, strconv.Itoa(n))
+			}
 		}
 	}
 	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {
@@ -478,6 +503,15 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// the unconfigured log and everything after it observe the same
 	// spelling — stored == logged == sent by construction.
 	id = NormalizedID(id)
+	// Controls fail closed like every sibling input — same guard as
+	// Exchange, not just quoted logging: the echo below must never carry
+	// them.
+	if HasControl(id) || !utf8.ValidString(id) {
+		if logf != nil {
+			logf("connectors: auth URL build failed: invalid connector id")
+		}
+		return ""
+	}
 	if cfg == nil || TrimCredential(cfg.ClientID) == "" || TrimCredential(cfg.ClientSecret) == "" || TrimCredential(cfg.RedirectURL) == "" {
 		if logf != nil {
 			logf("connectors: auth URL build failed: unconfigured client (%q)", id)
@@ -574,7 +608,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	if HasControl(state) || HasControl(verifier) || !utf8.ValidString(state) || !utf8.ValidString(verifier) {
+	if HasControl(state) || HasControl(verifier) || !utf8.ValidString(state) || !utf8.ValidString(verifier) || HasWhitespace(state) || HasWhitespace(verifier) {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: invalid state or verifier", id)
 		}
@@ -606,6 +640,16 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 // write sites (gateway + both SetTokens), so callers that persist must go
 // through SetTokens — direct use of tok.Expiry sees the raw provider value.
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
+	// Bound the provider round-trip for direct callers: the gateway always
+	// passes its 30s callback ctx, but the helper is exported — an
+	// unbounded caller ctx plus a hung token endpoint must not hang a
+	// worker forever. A caller deadline stands; only the unbounded case
+	// gets the 15s default (under the gateway's 30s, over Google's P99).
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+	}
 	// Length before fold and before Known, matching AuthURL and every
 	// store verb: an oversized id is certainly unknown. Logged without
 	// the value: quoting megabytes would reintroduce the log alloc this
@@ -657,7 +701,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if len(code) > MaxStateFieldLen || len(verifier) > MaxStateFieldLen {
 		return nil, deny("oauth code or verifier too long")
 	}
-	if HasControl(code) || HasControl(verifier) || !utf8.ValidString(code) || !utf8.ValidString(verifier) {
+	if HasControl(code) || HasControl(verifier) || !utf8.ValidString(code) || !utf8.ValidString(verifier) || HasWhitespace(code) || HasWhitespace(verifier) {
 		return nil, deny("oauth code or verifier invalid")
 	}
 	// Config-shape before identity, matching AuthURL: a bad redirect or

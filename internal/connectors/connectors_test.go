@@ -1408,6 +1408,12 @@ func TestAuthURLRejectsControlBytes(t *testing.T) {
 	if got := AuthURL(cfg, "gmail", "s", "v\x00x", logf); got != "" || !strings.Contains(logged, "invalid") {
 		t.Errorf("got %q, logged %q; want empty with invalid-input reason", got, logged)
 	}
+	// A control-bearing id fails the same gate as Exchange: quoting alone
+	// is not the enforcement.
+	logged = ""
+	if got := AuthURL(cfg, "gm\x00ail", "s", "v", logf); got != "" || !strings.Contains(logged, "invalid") {
+		t.Errorf("got %q, logged %q; want empty with invalid-id reason", got, logged)
+	}
 	// Invalid UTF-8 fails the same gate: overlong sequences decode as
 	// RuneError (not control), so the control check alone would miss them.
 	logged = ""
@@ -1603,5 +1609,32 @@ func TestKeyFromEnvRejectsInteriorSpace(t *testing.T) {
 		t.Fatal("spaced key should fail closed")
 	} else if !strings.Contains(err.Error(), "spaces") {
 		t.Fatalf("spaced key should name the class, got %q", err)
+	}
+}
+
+// Interior whitespace in state/verifier fails like controls: server-minted
+// base64url never contains spaces, so a spaced input is paste or garbage —
+// deterministic 400 at every layer, never a 502 at Google after consent.
+func TestRejectsInteriorWhitespace(t *testing.T) {
+	ctx := context.Background()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", "s t", "v", nil); got != "" {
+		t.Errorf("spaced AuthURL state = %q, want empty", got)
+	}
+	if _, err := Exchange(ctx, cfg, Gmail, "co de", "verifier", nil); err == nil {
+		t.Fatal("spaced Exchange code should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("spaced code should be a deterministic 400, got %v", err)
+	}
+	s := NewMemoryStore()
+	if err := s.CreateState(ctx, OAuthState{State: "s 1", Connector: "gmail", Verifier: "v"}); err == nil {
+		t.Fatal("spaced CreateState should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("spaced state should be a deterministic 400, got %v", err)
+	}
+	if _, err := s.ConsumeState(ctx, "s 1"); err == nil {
+		t.Fatal("spaced ConsumeState should fail")
+	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
+		t.Fatalf("spaced consume should be NotFound, got %v", err)
 	}
 }

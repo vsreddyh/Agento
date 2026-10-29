@@ -347,8 +347,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			route := r.Method + " " + r.URL.EscapedPath()
 			detail := fmt.Sprintf("component: pi-gateway\nroute: %s\npanic: %v\nstack:\n%s",
 				route, rec, debug.Stack())
-			// PASSWORD may be a comma-separated token list: redact every
-			// token, not just the whole string.
+			// PASSWORD is a single token: redact the whole string. Splitting
+			// on commas is belt-and-braces for paste accidents, not a
+			// token list — authenticate() compares the whole value, so
+			// "a,b" never authenticates "a" alone.
 			secrets := []string{s.cfg.Password}
 			for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {
 				if t = strings.TrimSpace(t); t != "" {

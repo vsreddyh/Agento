@@ -270,6 +270,10 @@ All settings are configured in the single root `.env` file:
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string (used in prod) |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
 | `PASSWORD` | For Health + App | Single password for Agento Android chat + health-sync authentication |
+| `GOOGLE_CLIENT_ID` | For Connectors | OAuth client ID for Gmail/Calendar grants (public in the consent URL by design) |
+| `GOOGLE_CLIENT_SECRET` | For Connectors | OAuth client secret (VPS-only, never committed) |
+| `GOOGLE_REDIRECT_URL` | For Connectors | Exact registered callback URL (must match the console spelling byte-for-byte) |
+| `CONNECTORS_ENCRYPTION_KEY` | For Connectors | 64-hex-char envelope key for OAuth tokens at rest (`openssl rand -hex 32`) |
 
 ---
 

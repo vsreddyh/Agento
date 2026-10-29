@@ -290,6 +290,46 @@ func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("non-numeric port should fail closed")
 	}
+	// Atoi-accepted but non-canonical spellings fail too: "+80" is numeric
+	// to Atoi yet JoinHostPort would re-emit it verbatim (validated != sent).
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:+80/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("signed port should fail closed")
+	}
+}
+
+// Leading-zero ports re-emit canonically: ":080" validates numerically
+// and sends as ":80", so validated == sent by construction.
+func TestOAuthConfigCanonicalisesPaddedPort(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:080/p/api/connectors/callback")
+	cfg, err := OAuthConfigFromEnv()
+	if err != nil {
+		t.Fatalf("padded port should canonicalise, not fail: %v", err)
+	}
+	if cfg.RedirectURL != "https://host.example:80/p/api/connectors/callback" {
+		t.Errorf("RedirectURL = %q, want canonical :80 form", cfg.RedirectURL)
+	}
+}
+
+// Zero-padded defaults strip numerically: ":0443" is 443, the https
+// default, so the stored form carries no port.
+func TestOAuthConfigStripsPaddedDefaultPort(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:0443/p/api/connectors/callback")
+	cfg, err := OAuthConfigFromEnv()
+	if err != nil {
+		t.Fatalf("padded default port should canonicalise, not fail: %v", err)
+	}
+	if cfg.RedirectURL != "https://host.example/p/api/connectors/callback" {
+		t.Errorf("RedirectURL = %q, want canonical no-port form", cfg.RedirectURL)
+	}
 }
 
 // Length is capped before parsing: a multi-MB redirect must not pay the
