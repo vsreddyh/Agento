@@ -211,8 +211,10 @@ func RedactURL(raw string) string {
 	trimmed := TrimCredential(raw)
 	if len(trimmed) > MaxRedirectLen {
 		// Byte cap with a rune-boundary cut (same walk as truncateForLog):
-		// never slice through a multi-byte char, so the cut value stays
-		// parseable-shaped instead of failing Parse on a split encoding.
+		// never slice through a multi-byte char, so the cut value holds no
+		// split encoding. It may still fail Parse on a cut escape (trailing
+		// "%2") — that branch is fail-closed, so the cap trades a possible
+		// rejection for a bounded map + parse on every tap.
 		end := 0
 		for i := range trimmed {
 			if i > MaxRedirectLen {

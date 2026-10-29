@@ -731,7 +731,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// huge query would otherwise add, and unconfigured callers get the same
 	// parse protection as configured ones. Sized for escaping expansion:
 	// raw counts encoded bytes (up to 3x decoded: %00 is 3 raw bytes for 1
-	// decoded byte), so two max-size values at full expansion plus slack —
+	// decoded byte), so three max-size values at full expansion plus slack —
 	// never tighter than the decoded per-value gates below, which stay the
 	// real contract for legitimately large inputs. Budgets all three
 	// attacker-influenced values (code + state + scope) at full expansion,
