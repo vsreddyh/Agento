@@ -582,9 +582,11 @@ type TokenRow struct {
 	RefreshCipher string `bson:"refreshToken" json:"-"`
 	// AccessCipher is base64(nonce||ciphertext) of the short-lived access token.
 	// May be empty ("" literal, never a sealed empty — EncryptToken refuses
-	// those): the refresher treats empty as "renew now". The refresh cipher
-	// above must never be empty — same rule the store enforces — or the row
-	// strands at the first access-token expiry.
+	// those, as it refuses padded plaintext: stored ciphers are always
+	// trimmed base64url, so checked == stored end to end): the refresher
+	// treats empty as "renew now". The refresh cipher above must never be
+	// empty — same rule the store enforces — or the row strands at the
+	// first access-token expiry.
 	AccessCipher string `bson:"accessToken" json:"-"`
 	// AccessExpiryUnixMilli is when the access token stops working; the
 	// refresher renews before this, not after it fails. Zero means unknown

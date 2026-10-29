@@ -87,14 +87,18 @@ func Known(id string) bool {
 	return false
 }
 
-// HasControl reports inner control bytes (NUL/CR/LF and friends): never
-// valid in an id, state, verifier, or code. Checked on trimmed values —
-// TrimSpace strips edges, not interiors — so an embedded control fails
-// closed instead of becoming a DB filter or an outbound request.
-// Exported so the gateway reuses this single definition instead of
-// carrying its own copy.
+// HasControl reports inner control bytes (NUL/CR/LF and friends) plus
+// invisible format characters (zero-width spaces, BOM, bidi overrides):
+// none are ever valid in an id, state, verifier, code, URL, or token.
+// TrimSpace strips edges, not interiors — and RuneError-decoding means
+// invalid UTF-8 is caught by the separate utf8.ValidString gates, not
+// here — so an embedded byte fails closed instead of becoming a DB
+// filter or an outbound request. Exported so the gateway reuses this
+// single definition instead of carrying its own copy.
 func HasControl(s string) bool {
-	return strings.ContainsFunc(s, unicode.IsControl)
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+	})
 }
 
 // Status is a connector's lifecycle state.

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"unicode/utf8"
 )
 
 // Envelope encryption for OAuth tokens (ADR-0009: field-level envelope is
@@ -70,6 +71,12 @@ func EncryptToken(key [32]byte, plaintext string) (string, error) {
 		// to a value Google rejects. Checked == stored, all the way
 		// down (same contract as the caller-side trim-before-seal).
 		return "", errors.New("connectors: refusing to seal a padded token; trim before sealing")
+	}
+	// Controls and invalid UTF-8 fail here like every sibling input: a
+	// sealed-with-control plaintext is valid base64url the SetTokens
+	// gates cannot see, but decrypts to a value Google rejects.
+	if HasControl(plaintext) || !utf8.ValidString(plaintext) {
+		return "", errors.New("connectors: refusing to seal an invalid token")
 	}
 	// Length-capped before the alloc: gcm.Seal allocates the full output
 	// up front, so an unbounded plaintext buys a large alloc before the

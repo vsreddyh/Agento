@@ -895,6 +895,24 @@ func TestEncryptTokenRefusesPadded(t *testing.T) {
 	}
 }
 
+// Controls (and format characters) fail closed at seal time: a
+// sealed-with-control plaintext is valid base64url the SetTokens gates
+// cannot see, but decrypts to a value Google rejects. Invalid UTF-8
+// fails the same way (RuneError, not control).
+func TestEncryptTokenRefusesInvalid(t *testing.T) {
+	for _, tc := range []struct{ name, plaintext string }{
+		{"control", "sec\x7fret"},
+		{"zero-width", "sec\u200bret"},
+		{"invalid utf8", "sec\xc0\x80ret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := EncryptToken([32]byte{1}, tc.plaintext); err == nil {
+				t.Fatalf("sealing %s token should fail", tc.name)
+			}
+		})
+	}
+}
+
 // Oversized plaintext fails before the seal alloc, not after: the cap
 // fires here so the store never sees a multi-MB cipher from a direct
 // caller. Sealed grants stay well under the bound in prod.
