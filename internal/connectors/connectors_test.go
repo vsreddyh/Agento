@@ -1593,3 +1593,15 @@ func TestInvalidIDFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// A spaced envelope key fails with the specific discriminant, not the
+// generic 64-hex-chars message — same vocabulary as the client-credential
+// gates for the same operator-paste class.
+func TestKeyFromEnvRejectsInteriorSpace(t *testing.T) {
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", "0123456789abcdef 0123456789abcdef0123456789abcdef0123456789abcdef")
+	if _, err := KeyFromEnv(); err == nil {
+		t.Fatal("spaced key should fail closed")
+	} else if !strings.Contains(err.Error(), "spaces") {
+		t.Fatalf("spaced key should name the class, got %q", err)
+	}
+}

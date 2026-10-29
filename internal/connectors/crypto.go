@@ -39,6 +39,13 @@ func KeyFromEnv() ([32]byte, error) {
 	if raw == "" {
 		return zero, errors.New("connectors: " + encryptionKeyEnv + " is not set; OAuth token storage is unavailable")
 	}
+	// Same fail-fast vocabulary as the client-credential gates: an
+	// operator-pasted space/control fails here with the specific
+	// discriminant instead of the generic 64-hex-chars message the
+	// decode below would produce for the same input class.
+	if !validCredential(raw) {
+		return zero, errors.New("connectors: " + encryptionKeyEnv + " must not contain control characters, spaces, or invalid UTF-8")
+	}
 	// Accept bare hex only: no passwords, no passphrases, no KDF upgrade
 	// path hidden in a fallback. 64 hex chars or nothing.
 	b, err := hex.DecodeString(raw)

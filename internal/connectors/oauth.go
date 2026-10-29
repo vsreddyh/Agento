@@ -707,7 +707,10 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		if logf != nil {
 			logf("connectors: grant exchange refused: unknown connector %q", id)
 		}
-		return nil, &StoreError{Msg: "unknown connector " + id, NotFound: true}
+		// Static message: every other deny() in this helper is a fixed
+		// string, and the gateway already logs the id with %q — the domain
+		// message carries no caller-influenced text on any branch.
+		return nil, &StoreError{Msg: "unknown connector", NotFound: true}
 	}
 	cc.RedirectURL = redirect
 	tok, err := cc.oauth2(GoogleScopes(id)).Exchange(ctx, code,
