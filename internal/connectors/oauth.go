@@ -545,6 +545,9 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 // ("grant exchange failed") with the provider's error_description only in
 // the log — oauth2 errors echo the token endpoint verbatim, and the client
 // needs a retry signal, not provider internals. logf may be nil (tests).
+// The returned Expiry is unclamped: far-future values are clamped at the
+// write sites (gateway + both SetTokens), so callers that persist must go
+// through SetTokens — direct use of tok.Expiry sees the raw provider value.
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
 	// Length before fold and before Known, matching AuthURL and every
 	// store verb: an oversized id is certainly unknown. Logged without

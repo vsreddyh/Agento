@@ -806,7 +806,10 @@ func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error)
 	// Returned verbatim by design: size enforcement lives in DecryptToken
 	// (len > MaxCipherLen errors there), so an oversized artifact from
 	// before the cap fails at open time with a precise error instead of
-	// being masked as NotFound here.
+	// being masked as NotFound here. Same for expiry freshness: the
+	// MaxAccessLifetime clamp is a write-time invariant (gateway + both
+	// SetTokens), not re-checked on read — a hand-edited far-future expiry
+	// is served as-is until the row is next written.
 	return TokenRow{RefreshCipher: row.Refresh, AccessCipher: row.Access, AccessExpiryUnixMilli: row.Expiry}, nil
 }
 

@@ -577,6 +577,17 @@ func TestConnectorsCallbackRejectsOversizedQuery(t *testing.T) {
 	}
 }
 
+// The raw cap fires before the unconfigured 501: a huge query answers the
+// same dead-attempt 400 configured or not, so no config oracle is added —
+// and the unconfigured path gets the same parse protection.
+func TestConnectorsCallbackHugeQueryUnconfigured(t *testing.T) {
+	srv := connectorsServer(t)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 5000)+"&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unconfigured huge query: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+}
+
 // A dead attempt in a browser tab answers HTML, not JSON: the operator
 // just consented and needs close-this-tab guidance, not a raw error body.
 // API clients (no text/html Accept) keep the existing JSON shape.

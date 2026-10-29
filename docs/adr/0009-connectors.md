@@ -72,6 +72,19 @@ data — chat history — is NOT wiped: disconnect stops the tap,
 it does not rewrite the past (cf. Dots delete-the-Dot semantics, explicitly
 not adopted for history).
 
+Disconnect during the seconds-long exchange window loses to the in-flight
+callback — and that is accepted, not overlooked. The pending-state scrub
+(`DeleteMany` on disconnect) kills attempts still awaiting consent, but a
+callback that already consumed its state (`ConsumeState → Exchange →
+SetTokens → SetStatus(connected)`) holds no row for the scrub to reap: a
+disconnect landing mid-`Exchange` clears tokens, then the callback resumes
+and flips the row back to connected. No epoch closes this without
+conditional writes on both backends (a check-then-act re-read would only
+narrow the window, not close it), and the failure is operator-visible and
+self-healing — the app shows connected, one re-tap disconnects — so the
+window is documented, not engineered away. Triage must read a resurrect as
+this race, not a scrub regression.
+
 Expired retains the refresh token: expiry means the access token aged out,
 not that the grant is known-bad, and the follow-up's silent-refresh attempt
 needs the refresh to try with. The reader must never use an expired row's

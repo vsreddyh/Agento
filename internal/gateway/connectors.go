@@ -558,25 +558,27 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// single-use capability URL (?code=&state=), so nothing here may sit in
 	// a heuristic cache — success JSON and 400s alike.
 	w.Header().Set("Cache-Control", "no-store")
+	// Bound the raw query before anything else — including the unconfigured
+	// 501 below. The cap carries no config information (same 400 shape
+	// configured or not), so ordering it first removes the config oracle a
+	// huge query would otherwise add, and unconfigured callers get the same
+	// parse protection as configured ones.
+	if len(r.URL.RawQuery) > 2*connectors.MaxStateFieldLen+64 {
+		callbackDeadAttempt(w, r)
+		return
+	}
 	if s.cfg.ConnectorOAuth == nil {
 		callbackError(w, r, http.StatusNotImplemented, "invalid_request_error",
 			"callback is not configured on this server yet — never paste a token in chat")
 		return
 	}
-	// Bound the raw query before parsing it: url.Query() allocates the
-	// full map up front, so a multi-MB ?code=/state= from an
-	// unauthenticated caller would pay the parse before the per-value
-	// length gate below fires. Raw counts encoded bytes (percent-encoding
-	// expands: %00 is 3 raw bytes for 1 decoded byte), so this fires first
-	// by construction — 2x cap + slack covers both values plus separators,
-	// and anything past that is garbage, rejected before Parse.
-	if len(r.URL.RawQuery) > 2*connectors.MaxStateFieldLen+64 {
-		callbackDeadAttempt(w, r)
-		return
-	}
 	// Parse the query once and reuse it: each Query() call re-parses and
 	// re-allocates the full map, and this unauthenticated entry point
 	// pays that before any fast-path reject runs.
+	// (Raw length already gated above: url.Query() allocates the full map
+	// up front, and raw counts encoded bytes — percent-encoding expands,
+	// so %00-heavy payloads hit the raw 400 before the decoded per-value
+	// gates below ever run.)
 	query := r.URL.Query()
 	code := connectors.TrimCredential(query.Get("code"))
 	state := connectors.TrimCredential(query.Get("state"))
@@ -770,6 +772,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// servable-but-useless state this stack refuses to invent (see
 	// statusUpdateDoc's atomicity note). SetStatus(connected) carries no
 	// error text by contract.
+	// Known race, accepted (see ADR-0009): a disconnect landing during the
+	// Exchange above clears tokens, then this write flips the row back to
+	// connected — re-tap disconnect is the recovery, and triage must read
+	// a resurrect as that race, not a scrub regression.
 	// Triage note: if the process dies between SetTokens and SetStatus, the
 	// row holds ciphertext with status still disconnected — not a leak
 	// (ciphertext only, unreadable without the envelope key), and the next
