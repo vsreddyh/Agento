@@ -75,6 +75,11 @@ type Store interface {
 // MemoryStore is the in-process backend: rows die with the process, like
 // every other memory fallback. The gateway still serves the routes, which
 // keeps a development stack usable without pretending tokens survive.
+// Verbs take `_ context.Context` by design: map ops are instant (no IO to
+// bound), so there is no deadline to observe here — cancellation is
+// observed by the gateway's ctx.Err() checks around the verb, not inside
+// it. Do not "fix" the `_` back to `ctx`: an unused parameter is the
+// contract, matching the Store interface's caller-bounds-ctx note.
 type MemoryStore struct {
 	mu     sync.RWMutex
 	rows   map[string]Connector

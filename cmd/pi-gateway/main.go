@@ -401,11 +401,17 @@ func run() error {
 	} else {
 		memoryStore = store
 		store.Logf = logger.Printf
-		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
-		if err := store.EnsureIndexes(indexCtx); err != nil {
-			logger.Printf("memory: index setup failed: %v", err)
-		}
-		cancelIndex()
+		// Same scoped-cancel pattern as the connectors block below:
+		// free the 10s timer the moment EnsureIndexes returns, with a
+		// closure-level defer guarding any early return a future edit
+		// might add.
+		func() {
+			indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+			defer cancelIndex()
+			if err := store.EnsureIndexes(indexCtx); err != nil {
+				logger.Printf("memory: index setup failed: %v", err)
+			}
+		}()
 	}
 
 	// The test-fire runner is a bare model client: it needs the same key and

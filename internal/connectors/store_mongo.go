@@ -756,8 +756,12 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// Clamp absurd futures: a far-future expiry reads as "don't renew for
 	// decades". Capped like the state clamp (row still works, renews
 	// soon). Wall-clock by design; the injectable clock lives on the
-	// memory side, where state-expiry ticks are pinned.
-	if max := time.Now().Add(MaxAccessLifetime).UnixMilli(); tok.AccessExpiryUnixMilli > max {
+	// memory side, where state-expiry ticks are pinned. Single read for
+	// both the clamp and the backfill stamp below: two time.Now() calls
+	// can straddle a millisecond tick under the same single-now rationale
+	// as CreateState.
+	now := time.Now()
+	if max := now.Add(MaxAccessLifetime).UnixMilli(); tok.AccessExpiryUnixMilli > max {
 		tok.AccessExpiryUnixMilli = max
 	}
 	// Display defaults on insert only: a token write must never invent
@@ -769,7 +773,7 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// twin: display-only stamp, not a lifetime tick (injectable timeNow
 	// owns state-expiry ticks). Reads project only the display shape, so
 	// these columns are inert until the transition write lands the real row.
-	now := time.Now().UnixMilli()
+	nowMillis := now.UnixMilli()
 	_, err := s.coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: id}}, bson.D{
 		{Key: "$set", Value: bson.D{
 			{Key: refreshTokenField, Value: tok.RefreshCipher},
@@ -784,7 +788,7 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 			// carries Status disconnected): same interleaving, same
 			// repair/no-bump path on the next SetStatus(disconnected).
 			{Key: "status", Value: string(StatusDisconnected)},
-			{Key: "updatedAt", Value: now},
+			{Key: "updatedAt", Value: nowMillis},
 		}},
 	}, options.Update().SetUpsert(true))
 	if err != nil {
