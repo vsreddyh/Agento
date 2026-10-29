@@ -285,7 +285,7 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// (loopback-ness checked above). Hostname() already strips brackets
 		// and port, so h arrives bare — no Trim needed. Fail closed here
 		// instead of dying with redirect_uri_mismatch in the browser.
-		return "", errors.New("connectors: redirect URL host must be a dotted FQDN (single-label LAN names other than localhost are rejected; register the punycode form, never Unicode)")
+		return "", errors.New("connectors: redirect URL host must be a dotted FQDN with a lettered TLD (all-numeric, single-label non-localhost, and Unicode hosts are rejected; register the punycode form, never Unicode)")
 	}
 	if parsed.User != nil {
 		// Userinfo would be logged verbatim in the startup line and never
@@ -349,8 +349,11 @@ func validCredential(s string) bool {
 }
 
 // missingVars names the unset OAuth env vars for the config-error path,
-// so the startup log points at the gap instead of the whole set.
-func missingVars(clientID, clientSecret, redirectURL string) []string {
+// so the startup log points at the gap instead of the whole set. The key
+// is included: it is validated next (hex shape), so without it an operator
+// missing all four would fix three, restart, and hit the key error — one
+// trip instead of two.
+func missingVars(clientID, clientSecret, redirectURL string, keyPresent bool) []string {
 	var missing []string
 	if clientID == "" {
 		missing = append(missing, "GOOGLE_CLIENT_ID")
@@ -360,6 +363,9 @@ func missingVars(clientID, clientSecret, redirectURL string) []string {
 	}
 	if redirectURL == "" {
 		missing = append(missing, "GOOGLE_REDIRECT_URL")
+	}
+	if !keyPresent {
+		missing = append(missing, "CONNECTORS_ENCRYPTION_KEY")
 	}
 	return missing
 }
@@ -373,9 +379,10 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	clientSecret := TrimCredential(os.Getenv("GOOGLE_CLIENT_SECRET"))
 	redirectURL := TrimCredential(os.Getenv("GOOGLE_REDIRECT_URL"))
 	// Name the missing pieces, not just the set: the gateway logs this
-	// verbatim at startup, and an operator who set two of three should not
-	// have to re-read .env three times to find the gap.
-	if missing := missingVars(clientID, clientSecret, redirectURL); len(missing) > 0 {
+	// verbatim at startup, and an operator who set two of four should not
+	// have to restart twice to find both gaps (the key is validated next).
+	keyPresent := TrimCredential(os.Getenv(encryptionKeyEnv)) != ""
+	if missing := missingVars(clientID, clientSecret, redirectURL, keyPresent); len(missing) > 0 {
 		return nil, errors.New("connectors: missing OAuth config: " + strings.Join(missing, ", "))
 	}
 	// Credentials fail fast on control bytes and invalid UTF-8 like every
@@ -600,7 +607,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	if HasControl(trimmed.AuthURL) || HasControl(trimmed.TokenURL) || !utf8.ValidString(trimmed.AuthURL) || !utf8.ValidString(trimmed.TokenURL) {
+	if HasControl(trimmed.AuthURL) || HasControl(trimmed.TokenURL) || !utf8.ValidString(trimmed.AuthURL) || !utf8.ValidString(trimmed.TokenURL) || HasWhitespace(trimmed.AuthURL) || HasWhitespace(trimmed.TokenURL) {
 		// Same fail-fast class as the credential gate above: a control-
 		// bearing endpoint would mint a consent URL Google can only 400,
 		// after the user consented.
@@ -771,7 +778,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if cc.AuthURL == "" || cc.TokenURL == "" {
 		return nil, deny("oauth client endpoints are not configured")
 	}
-	if HasControl(cc.AuthURL) || HasControl(cc.TokenURL) || !utf8.ValidString(cc.AuthURL) || !utf8.ValidString(cc.TokenURL) {
+	if HasControl(cc.AuthURL) || HasControl(cc.TokenURL) || !utf8.ValidString(cc.AuthURL) || !utf8.ValidString(cc.TokenURL) || HasWhitespace(cc.AuthURL) || HasWhitespace(cc.TokenURL) {
 		return nil, deny("oauth client endpoint is invalid")
 	}
 	if !Known(id) {

@@ -588,3 +588,37 @@ func TestCanonicalRedirectRejectsSpaces(t *testing.T) {
 		t.Fatalf("spaced redirect should name the class, got %q", err)
 	}
 }
+
+// Interior spaces in endpoint URLs fail closed before any network call:
+// a hand-built cfg with a spaced endpoint would otherwise mint a consent
+// URL Google can only 400 after the user consented.
+func TestAuthURLRejectsSpacedEndpoint(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o x", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
+		t.Errorf("spaced endpoint URL = %q, want empty", got)
+	}
+	bad := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t x"}
+	if _, err := Exchange(context.Background(), bad, Gmail, "code", "verifier", nil); err == nil {
+		t.Fatal("spaced endpoint Exchange should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("spaced endpoint should be a deterministic 400, got %v", err)
+	}
+}
+
+// All four missing names, not three: the key is validated next, so name it
+// up front and save the operator a second restart.
+func TestOAuthConfigNamesAllMissingVars(t *testing.T) {
+	t.Setenv("GOOGLE_CLIENT_ID", "")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "")
+	t.Setenv("GOOGLE_REDIRECT_URL", "")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", "")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("empty config should fail closed")
+	} else {
+		for _, name := range []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URL", "CONNECTORS_ENCRYPTION_KEY"} {
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("missing-vars error should name %s, got %q", name, err)
+			}
+		}
+	}
+}

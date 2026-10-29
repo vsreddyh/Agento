@@ -233,6 +233,19 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, id string, logf func(
 	return canonical, nil
 }
 
+// writeCallbackPage answers a browser tab with the close-this-tab page:
+// no-store + nosniff + status + guidance body. Single place so the two
+// representation helpers cannot drift apart when the next one is added —
+// the "same status, same message, two envelopes" contract stays structural,
+// not disciplined. body must already be display-safe (static text or
+// html.EscapeString at the call site), like the apiError path below.
+func writeCallbackPage(w http.ResponseWriter, code int, title, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	_, _ = w.Write([]byte(`<!doctype html><html><head><title>` + title + `</title></head><body><p>` + body + `</p></body></html>`))
+}
+
 // callbackDeadAttempt answers a dead OAuth attempt (unknown, consumed, or
 // expired state) with the same 400 meaning as every other failure on this
 // unauthenticated path — one string, never an oracle on id validity. A
@@ -246,11 +259,8 @@ func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
 	// first-line header).
 	w.Header().Set("Cache-Control", "no-store")
 	if acceptsHTML(r) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connect expired</title></head>` +
-			`<body><p>This connect attempt expired or was already used. Close this tab and tap connect again in the Agento app.</p></body></html>`))
+		writeCallbackPage(w, http.StatusBadRequest, "Agento connect expired",
+			"This connect attempt expired or was already used. Close this tab and tap connect again in the Agento app.")
 		return
 	}
 	apiError(w, http.StatusBadRequest, "invalid_request_error", "",
@@ -271,11 +281,8 @@ func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg st
 	// cannot miss it.
 	w.Header().Set("Cache-Control", "no-store")
 	if acceptsHTML(r) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(code)
-		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Agento connect</title></head><body><p>` +
-			html.EscapeString(msg) + ` Close this tab and return to the Agento app.</p></body></html>`))
+		writeCallbackPage(w, code, "Agento connect",
+			html.EscapeString(msg)+" Close this tab and return to the Agento app.")
 		return
 	}
 	apiError(w, code, typ, "", msg)
