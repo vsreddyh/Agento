@@ -334,8 +334,10 @@ Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
 app to open in a browser; Google redirects to the single registered
 `GET /api/connectors/callback?code=&state=` — one registered string with
-two path shapes (bare direct, `/p/` via proxy); ports are variants of
-whichever path they attach to. Product constraint, not just validation:
+two path shapes (bare direct, `/p/` via proxy); non-default ports are
+variants of whichever path they attach to (default ports are not: `:443`
+and `:80` are stripped by canonicalisation, so register the stripped form
+— see `.env.example`). Product constraint, not just validation:
 registrations must be public spellings (dotted FQDN or loopback) — LAN,
 mDNS, and non-loopback-IP hosts fail closed here by design, because no
 public Google console entry can hold them. Homelab setups must serve (and

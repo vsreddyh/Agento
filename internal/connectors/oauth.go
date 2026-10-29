@@ -969,14 +969,19 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// Upper-bounded too: a caller deadline beyond the gateway budget is
 	// capped to it, so no direct/future caller can hang a worker longer
 	// than the callback path itself tolerates.
+	// boundName feeds the timeout log below: same 502 either way, but
+	// triage greps one wording for the fault and the name for the layer.
+	boundName := "caller"
 	if dl, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
+		boundName = "15s-internal"
 	} else if time.Until(dl) > 30*time.Second {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+		boundName = "30s-cap"
 	}
 	// Length before fold and before Known, matching AuthURL and every
 	// store verb: an oversized id is certainly unknown. Logged without
@@ -1105,9 +1110,13 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 			// the gateway's per-verb timeout wording, so the generic 502
 			// below would read as a store failure. Same string the gateway
 			// answers with ("did not answer in time"), so one grep finds
-			// both halves of the same slow-endpoint fault. The gateway's
+			// both halves of the same slow-endpoint fault — and the bound
+			// name says which timer fired (internal vs caller). The gateway's
 			// own ctx check fires first on its path, so this branch is for
 			// direct/future callers only.
+			if logf != nil {
+				logf("connectors: grant exchange timed out for %q (%s bound)", id, boundName)
+			}
 			return nil, NewStoreError("the grant exchange did not answer in time", true)
 		}
 		if ctx.Err() == context.Canceled {

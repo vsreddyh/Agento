@@ -479,11 +479,12 @@ func run() error {
 		if cfg, err := connectors.OAuthConfigFromEnv(); err != nil {
 			// Echo the attempted redirect: non-secret, and the triage
 			// pointer when the failure is a registration mismatch.
-			// Capped via truncateForLog: MaxRedirectLen bytes (not runes),
-			// cut at a rune boundary, so any storable value logs whole
-			// and the byte-for-byte comparison this line exists for never
-			// truncates a value the server would actually send.
-			redirect := truncateForLog(connectors.RedactURL(os.Getenv("GOOGLE_REDIRECT_URL")), connectors.MaxRedirectLen)
+			// Single owner: RedactURL already bounds (300 runes via ScrubError)
+			// and marks over-cap input itself — no second truncation here, so
+			// the startup line carries at most one marker. Any storable value
+			// logs whole, and the byte-for-byte comparison this line exists
+			// for never truncates a value the server would actually send.
+			redirect := connectors.RedactURL(os.Getenv("GOOGLE_REDIRECT_URL"))
 			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, redirect)
 		} else {
 			connectorOAuth = cfg
