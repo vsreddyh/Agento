@@ -215,6 +215,15 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 // profile branch left to mirror.)
 const callbackStateReject = "that connect attempt expired or was already used; start over from connect"
 
+// isDuplicateStateError reports the already-exists shape both stores
+// return when the state id collides with a live row: that row predates the
+// call, so the caller must not consume it. Typed via StoreError.Duplicate,
+// not the message — reword Msg freely without touching this contract.
+func isDuplicateStateError(err error) bool {
+	var se *connectors.StoreError
+	return err != nil && errors.As(err, &se) && se.Duplicate
+}
+
 // cleanupOrphanState best-effort consumes a just-minted state on a detached
 // budget (the verb ctx may be dead at exactly this point — cleanup must not
 // depend on it). Only real IO failures log: NotFound means no row was ever
@@ -225,15 +234,6 @@ const callbackStateReject = "that connect attempt expired or was already used; s
 // (the insert may land after this delete): the orphan then lives until
 // TTL/next-tap supersede — same accepted class as the disconnect-during-
 // exchange window, re-tap recovers. See ADR-0009.
-// isDuplicateStateError reports the already-exists shape both stores
-// return when the state id collides with a live row: that row predates the
-// call, so the caller must not consume it. Typed via StoreError.Duplicate,
-// not the message — reword Msg freely without touching this contract.
-func isDuplicateStateError(err error) bool {
-	var se *connectors.StoreError
-	return err != nil && errors.As(err, &se) && se.Duplicate
-}
-
 func (s *Server) cleanupOrphanState(id, state string) {
 	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cleanCancel()
@@ -541,8 +541,10 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// Normalise before Known: " GMail " addresses gmail (case and spacing
 	// fold), while a truly unknown id still 404s. The length guard measures
 	// the normalised form — what Known actually sees — so padding cannot
-	// turn a known id unknown.
-	norm := connectors.NormalizedID(id)
+	// turn a known id unknown. Single trim: id was already trimmed above,
+	// so fold directly instead of re-trimming via NormalizedID (whose trim
+	// would be a no-op here).
+	norm := strings.ToLower(id)
 	if norm == "" || connectors.HasControl(norm) || !utf8.ValidString(norm) {
 		// Empty after folding (" "): same bare 404 as the NUL path above,
 		// not the trailing-space echo the unknown branch would emit.
