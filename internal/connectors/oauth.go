@@ -98,8 +98,9 @@ type OAuthConfig struct {
 // validRedirectHost reports whether host is a registrable spelling:
 // ASCII labels of [a-z0-9-] with no empties and no leading/trailing
 // hyphens (the console registration is punycode, never Unicode).
-// Host is expected lowercased already; uppercase fails closed rather
-// than being folded here, so checked == sent by construction.
+// Takes the already-folded host: CanonicalRedirectURL lowercases before
+// calling, so checked == sent by construction and this predicate never
+// sees the raw spelling.
 func validRedirectHost(host string) bool {
 	if host == "" || len(host) > 253 {
 		return false
@@ -253,7 +254,10 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	// an operator-pasted control would otherwise embed in the minted
 	// AuthCodeURL and the token request and fail at Google after consent.
 	if HasControl(clientID) || HasControl(clientSecret) || !utf8.ValidString(clientID) || !utf8.ValidString(clientSecret) {
-		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters")
+		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters or invalid UTF-8")
+	}
+	if len(clientID) > MaxStateFieldLen || len(clientSecret) > MaxStateFieldLen {
+		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET too long")
 	}
 	// Fail closed on a misregistered redirect: Google matches the callback
 	// URL exactly, so a typo'd host/port/scheme or a missing
@@ -389,6 +393,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
+	if len(trimmed.ClientID) > MaxStateFieldLen || len(trimmed.ClientSecret) > MaxStateFieldLen {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: oversized client credential", id)
+		}
+		return ""
+	}
 	if trimmed.AuthURL == "" || trimmed.TokenURL == "" {
 		// A hand-built cfg with no endpoints mints a consent URL Google
 		// can only 400. OAuthConfigFromEnv always sets both to the
@@ -509,6 +519,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
 	if HasControl(cc.ClientID) || HasControl(cc.ClientSecret) || !utf8.ValidString(cc.ClientID) || !utf8.ValidString(cc.ClientSecret) {
 		return nil, NewStoreError("oauth client credential is invalid", false)
+	}
+	if len(cc.ClientID) > MaxStateFieldLen || len(cc.ClientSecret) > MaxStateFieldLen {
+		return nil, NewStoreError("oauth client credential too long", false)
 	}
 	// Length gate above covers the trimmed values copied here — keep the
 	// copy below the gate, or padding could push a real credential over

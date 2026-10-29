@@ -792,6 +792,26 @@ func TestCreateStateRejectsLongRedirect(t *testing.T) {
 	}
 }
 
+// Checked == stored: the row holds the canonicalised form, not the raw
+// input — trailing slash dropped, host folded. The raw length gate still
+// fires first on oversized input; the canonical gate behind it covers
+// growth during canonicalisation (e.g. re-bracketing).
+func TestCreateStateStoresCanonicalRedirect(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	raw := "https://HOST/p/api/connectors/callback/"
+	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", RedirectURI: raw}); err != nil {
+		t.Fatalf("canonicalisable redirect should store: %v", err)
+	}
+	st, err := s.ConsumeState(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://host/p/api/connectors/callback"; st.RedirectURI != want {
+		t.Errorf("stored redirect = %q, want canonical %q", st.RedirectURI, want)
+	}
+}
+
 // A misshapen redirect fails at creation, not after consent: the row would
 // otherwise supersede the live attempt and die only at Exchange.
 func TestCreateStateRejectsBadRedirect(t *testing.T) {

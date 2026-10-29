@@ -471,6 +471,12 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 			return NewStoreError("oauth redirect is invalid", false)
 		}
 		st.RedirectURI = canonical
+		// Checked == stored: canonicalisation can grow the string
+		// (IPv6 brackets), so the raw length gate above is not enough —
+		// a just-under-cap raw could land just-over-cap canonical.
+		if len(st.RedirectURI) > MaxStateFieldLen {
+			return NewStoreError("oauth redirect too long", false)
+		}
 	}
 	// Single clock read for the whole verb: default, clamp bound, and
 	// past-expiry check must agree on "now", or a tick between reads

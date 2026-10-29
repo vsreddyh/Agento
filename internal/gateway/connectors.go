@@ -544,7 +544,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-store")
 	if s.cfg.ConnectorOAuth == nil {
 		callbackError(w, r, http.StatusNotImplemented, "invalid_request_error",
-			"connect is not configured on this server yet — never paste a token in chat")
+			"callback is not configured on this server yet — never paste a token in chat")
 		return
 	}
 	code := strings.TrimSpace(r.URL.Query().Get("code"))

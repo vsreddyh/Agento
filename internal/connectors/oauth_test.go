@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -254,6 +255,20 @@ func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
 	t.Setenv("GOOGLE_REDIRECT_URL", "https://host:abc/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("non-numeric port should fail closed")
+	}
+}
+
+// Oversized client credentials fail closed at config load, matching the
+// state/code/verifier length gates: a multi-MB id would otherwise mint a
+// consent URL Google 414s.
+func TestOAuthConfigRejectsLongClient(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", strings.Repeat("x", MaxStateFieldLen+1))
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("oversized client id should fail closed")
 	}
 }
 
