@@ -97,13 +97,12 @@ type OAuthConfig struct {
 
 // validRedirectHost reports whether host is a registrable spelling:
 // ASCII labels of [a-z0-9-] with no empties and no leading/trailing
-// hyphens, and at least one dot unless loopback (the console registration
-// is punycode, never Unicode; a single-label public hostname can never
-// complete Google registration). "localhost" and IP literals bypass the
-// dot rule — loopback-ness is checked separately for the scheme gate.
-// Takes the already-folded host: CanonicalRedirectURL lowercases before
-// calling, so checked == sent by construction and this predicate never
-// sees the raw spelling.
+// hyphens, at least one dot, and at least one letter unless the host is
+// "localhost" or a valid IP (an all-numeric dotted quad that is not a
+// real IP can never be registered). The console registration is punycode,
+// never Unicode. Takes the already-folded host: CanonicalRedirectURL
+// lowercases before calling, so checked == sent by construction and this
+// predicate never sees the raw spelling.
 func validRedirectHost(host string) bool {
 	if host == "" || len(host) > 253 {
 		return false
@@ -114,6 +113,7 @@ func validRedirectHost(host string) bool {
 	if !strings.Contains(host, ".") {
 		return false
 	}
+	hasAlpha := false
 	for _, label := range strings.Split(host, ".") {
 		if len(label) == 0 || len(label) > 63 {
 			return false
@@ -123,12 +123,19 @@ func validRedirectHost(host string) bool {
 			if c >= 0x80 || !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
 				return false
 			}
+			if c >= 'a' && c <= 'z' {
+				hasAlpha = true
+			}
 		}
 		if label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 	}
-	return true
+	// All-numeric dotted quads that are not valid IPs (999.999.999.999)
+	// can never be registered: public DNS needs an alpha label somewhere.
+	// net.ParseIP already passed the real ones, so anything reaching here
+	// with no letter at all is a typo that would die at Google instead.
+	return hasAlpha
 }
 
 // CanonicalRedirectURL validates and canonicalises in one step so every

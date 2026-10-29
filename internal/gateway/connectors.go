@@ -559,17 +559,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	query := r.URL.Query()
 	code := connectors.TrimCredential(query.Get("code"))
 	state := connectors.TrimCredential(query.Get("state"))
-	if query.Get("code") == "" || query.Get("state") == "" {
+	// Absent and blank collapse to one branch: a whitespace-only value
+	// carries no credential, exactly like a missing one — and the message
+	// names what's missing rather than crying a dead attempt that never
+	// existed. One 400 body for both, so no branch distinguishes them.
+	if code == "" || state == "" {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			"callback needs ?code= and ?state=; start over from connect")
-		return
-	}
-	// Trimmed-to-empty is malformed, not missing: an invisible-only value
-	// was never server-minted, so it dead-attempts like unknown/consumed/
-	// expired instead of answering the missing-params branch (same status,
-	// one indistinguishable 400 either way).
-	if code == "" || state == "" {
-		callbackDeadAttempt(w, r)
 		return
 	}
 	// Length-gated before the store/Google calls (shared
@@ -646,12 +642,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// is already consumed at this point (verifier lives inside it, so the
 	// check cannot run first) — burning a hand-inserted row is intended;
 	// prod rows pass CreateState's own controls gate and never reach here.
-	// Both legs burn: controls and invalid UTF-8 alike (only code/state
-	// fail pre-consume; the verifier can only be checked after the read).
-	// Same for the pinned redirect below: CreateState shape-checks at
-	// mint, so only a hand-inserted row carries a bad redirect into
-	// Exchange — burning it is the same intentional fail-closed.
-	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) {
+	// All legs burn: controls, invalid UTF-8, and length alike (only
+	// code/state fail pre-consume; the verifier can only be checked after
+	// the read). Same for the pinned redirect below: CreateState
+	// shape-checks at mint, so only a hand-inserted row carries a bad
+	// redirect into Exchange — burning it is the same intentional fail-closed.
+	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || len(st.Verifier) > connectors.MaxStateFieldLen {
 		callbackDeadAttempt(w, r)
 		return
 	}

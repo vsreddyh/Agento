@@ -294,6 +294,29 @@ func (invalidUTF8Store) ConsumeState(context.Context, string) (connectors.OAuthS
 	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\xc0\x80x"}, nil
 }
 
+// An oversized verifier burns the same way: CreateState caps it, so only
+// a hand-inserted row reaches the post-consume length check.
+func TestConnectorsCallbackRejectsOversizedVerifier(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: oversizedVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized verifier: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("oversized verifier should dead-attempt, got: %s", rec.Body)
+	}
+}
+
+type oversizedVerifierStore struct {
+	connectors.Store
+}
+
+func (oversizedVerifierStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: strings.Repeat("v", connectors.MaxStateFieldLen+1)}, nil
+}
+
 func TestConnectorsCallbackRejectsControlVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
@@ -484,6 +507,9 @@ func TestConnectorsCallbackRejectsControlBytes(t *testing.T) {
 // Trimmed-to-empty is malformed, not missing: an invisible-only value was
 // never server-minted, so it dead-attempts like unknown/consumed/expired
 // instead of answering the missing-params branch (same status either way).
+// Whitespace-only params are missing, not malformed: a blank value
+// carries no credential, exactly like an absent one — one 400 body
+// for both, so no branch distinguishes them.
 func TestConnectorsCallbackTrimsToDeadAttempt(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
@@ -492,10 +518,10 @@ func TestConnectorsCallbackTrimsToDeadAttempt(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("whitespace-only code: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
-	if !strings.Contains(rec.Body.String(), "start over from connect") {
-		t.Fatalf("trimmed-empty code should dead-attempt, got: %s", rec.Body)
+	if !strings.Contains(rec.Body.String(), "callback needs") {
+		t.Fatalf("trimmed-empty code should name missing params, got: %s", rec.Body)
 	}
-	// Truly absent params keep the missing-params message.
+	// Truly absent params give the same message.
 	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?state=s1", "")
 	if !strings.Contains(rec.Body.String(), "callback needs") {
 		t.Fatalf("absent code should name missing params, got: %s", rec.Body)
