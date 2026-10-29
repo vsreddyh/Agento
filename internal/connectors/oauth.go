@@ -1168,7 +1168,10 @@ type TokenRow struct {
 	// are clamped to now+MaxAccessLifetime at write time — enforced in
 	// three places (gateway connect + both SetTokens) plus the Exchange
 	// return clamp for scheduling callers, so a stored expiry
-	// never reads as "don't renew for decades". A hand-edited far-future
+	// never reads as "don't renew for decades". The clamp runs on the
+	// writer's clock — wall everywhere except memory-test timeNow — so
+	// the three write sites never have to agree with each other, only to
+	// run the same helper (ClampAccessExpiry). A hand-edited far-future
 	// expiry is still served as-is until the next write (GetTokens does
 	// not re-clamp): the refresher must clamp on read
 	// (min(expiry, now+MaxAccessLifetime)) instead of trusting the stored

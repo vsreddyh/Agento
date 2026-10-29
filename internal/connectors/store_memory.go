@@ -29,6 +29,10 @@ type Store interface {
 	// and a shared in-verb default here would mask a caller that forgot
 	// cancellation propagation as well as one that forgot a deadline.
 	// Same contract as database/sql: the deadline is the caller's job.
+	// `ctx` must also be non-nil: nil panics on durable backends (the
+	// driver dereferences it), succeeds silently on memory, and 400s in
+	// Exchange — three answers for one caller bug. Pass a live (possibly
+	// already-cancelled) ctx; cancellation is the honest signal, nil is not.
 	// List returns the two v1 rows, synthesising disconnected rows for
 	// ids with no document yet (a fresh deploy lists two disconnected
 	// connectors, not an empty list).
