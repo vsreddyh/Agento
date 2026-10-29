@@ -633,7 +633,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// worst-case wall. Detached IO does not stop the verb clock, so the
 	// no-split handling below answers the detached Upstream as-is (not
 	// the timeout wording). That is honest either way — slow means
-	// retry, and re-tap supersedes.
+	// retry, and re-tap supersedes. Every mint has a cleanup: the two
+	// failure branches below plus the gone-client-before-200 branch share
+	// the same detached-budget ConsumeState (see cleanupOrphanState) — grep
+	// all three before assuming a path mints without cover.
 	if err := s.connectors.CreateState(ctx, connectors.OAuthState{
 		State:     state,
 		Connector: id,
@@ -941,7 +944,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// subset — blank == absent on every leg, so "  " never warns.
 	if granted := connectors.TrimCredential(query.Get("scope")); granted != "" && len(granted) <= connectors.MaxStateFieldLen && !connectors.HasControl(granted) && utf8.ValidString(granted) {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
-			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, missing, bounded(approvals.ScrubError(granted)))
+			// Bounded like every interpolated value on this path: missing
+			// holds server-side scope constants today, but the next scope
+			// string edit must not inherit an uncapped pattern.
+			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, bounded(strings.Join(missing, " ")), bounded(approvals.ScrubError(granted)))
 		}
 	} else if len(granted) > 0 {
 		// Oversized, control-bearing, or undecodable: skip the compare
