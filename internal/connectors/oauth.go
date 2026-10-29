@@ -1186,7 +1186,10 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if tok == nil {
 		// oauth2 contractually returns non-nil on success, but a nil token
 		// with nil error (test stub, future transport wrapper) must not
-		// panic the worker — fail closed like every other input leg.
+		// panic the worker. 400, not 502: this is a library contract
+		// violation, not a flaky upstream — and the state is already
+		// consumed, so retry dead-attempts either way; 502 would misread
+		// as "re-tap the consent".
 		return nil, deny("grant exchange returned no token")
 	}
 	if TrimCredential(tok.RefreshToken) == "" {
