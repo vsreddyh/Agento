@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1022,5 +1024,88 @@ func TestConnectorsConnectDeadlineIs502NotSilence(t *testing.T) {
 	}
 	if len(store.consumed) != 1 {
 		t.Fatalf("deadline cleanup consumed %d rows, want 1", len(store.consumed))
+	}
+}
+
+// NotFound cleanup is silent: a failed create minted no row, so there is
+// nothing to report - the log stays free of phantom-cleanup lines while
+// the abort line itself still fires.
+func TestConnectorsCleanupNotFoundIsSilent(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := &failCreateStore{Store: connectors.NewMemoryStore()}
+	var mu sync.Mutex
+	var logged []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodPost, "/api/connectors/gmail/connect", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, r)
+	if rec.Body.Len() != 0 {
+		t.Fatalf("gone-client connect wrote %d bytes, want none", rec.Body.Len())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, line := range logged {
+		if strings.Contains(line, "orphan state cleanup") {
+			t.Fatalf("NotFound cleanup must not log, got: %q (all: %q)", line, logged)
+		}
+	}
+	found := false
+	for _, line := range logged {
+		if strings.Contains(line, "connect aborted") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("abort line must still fire, got: %q", logged)
+	}
+}
+
+// Upstream cleanup failure does log: the row may have landed unseen, so
+// triage needs the line.
+type upstreamConsumeStore struct {
+	connectors.Store
+}
+
+func (upstreamConsumeStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
+	return connectors.OAuthState{}, connectors.NewStoreError("consume exploded", true)
+}
+
+func TestConnectorsCleanupUpstreamLogs(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := &upstreamConsumeStore{Store: connectors.NewMemoryStore()}
+	var mu sync.Mutex
+	var logged []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodPost, "/api/connectors/gmail/connect", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, r)
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, line := range logged {
+		if strings.Contains(line, "orphan state cleanup") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("upstream cleanup failure must log, got: %q", logged)
 	}
 }

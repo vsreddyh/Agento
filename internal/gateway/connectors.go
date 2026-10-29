@@ -190,6 +190,27 @@ func (s *Server) serveConnectorsList(w http.ResponseWriter, r *http.Request) {
 // profile branch left to mirror.)
 const callbackStateReject = "that connect attempt expired or was already used; start over from connect"
 
+// cleanupOrphanState best-effort consumes a just-minted state on a detached
+// budget (the verb ctx may be dead at exactly this point — cleanup must not
+// depend on it). Only real IO failures log: NotFound means no row was ever
+// minted (failed create) or the row already burned — both are the desired
+// end state, not a failure, and logging them would send triage grepping
+// phantom cleanups. Upstream failures log, since the row may have landed
+// unseen. Racy by construction against a still-in-flight detached insert
+// (the insert may land after this delete): the orphan then lives until
+// TTL/next-tap supersede — same accepted class as the disconnect-during-
+// exchange window, re-tap recovers. See ADR-0009.
+func (s *Server) cleanupOrphanState(id, state string) {
+	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cleanCancel()
+	if _, cerr := s.connectors.ConsumeState(cleanCtx, state); cerr != nil {
+		var se *connectors.StoreError
+		if errors.As(cerr, &se) && se.Upstream {
+			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
+		}
+	}
+}
+
 // canonicalRedirectForMint canonicalises the configured redirect for
 // pinning at mint time. FromEnv already enforces canonical shape, so an
 // error here means a hand-built cfg — fail fast with a 502 config error
@@ -596,11 +617,7 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			// detached budget (same single-use delete as the empty-auth_url
 			// branch). A failed or abandoned build mints nothing observable.
 			s.cfg.Logf("connectors: connect aborted, request ended (client gone, server stopping, or verb deadline): %v", ctx.Err())
-			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if _, cerr := s.connectors.ConsumeState(cleanCtx, state); cerr != nil {
-				s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
-			}
-			cleanCancel()
+			s.cleanupOrphanState(id, state)
 			if ctx.Err() != context.DeadlineExceeded {
 				return
 			}
@@ -624,12 +641,7 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// insert run detached, so the verb ctx can be near-deadline at
 		// exactly this point — a fired deadline must not turn the
 		// cleanup into a certain failure.
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, cerr := s.connectors.ConsumeState(cleanCtx, state)
-		cleanCancel()
-		if cerr != nil {
-			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
-		}
+		s.cleanupOrphanState(id, state)
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"connect is not configured correctly on this server")
 		return
@@ -642,11 +654,7 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// nothing either.
 	if ctx.Err() != nil {
 		s.cfg.Logf("connectors: connect aborted, request ended (client gone, server stopping, or verb deadline): %v", ctx.Err())
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if _, cerr := s.connectors.ConsumeState(cleanCtx, state); cerr != nil {
-			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
-		}
-		cleanCancel()
+		s.cleanupOrphanState(id, state)
 		if ctx.Err() == context.DeadlineExceeded {
 			// Same timeout 502 as the CreateState-failure branch: the row
 			// is already cleaned up above, so only the status is left to
@@ -684,7 +692,11 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// raw counts encoded bytes (up to 3x decoded: %00 is 3 raw bytes for 1
 	// decoded byte), so two max-size values at full expansion plus slack —
 	// never tighter than the decoded per-value gates below, which stay the
-	// real contract for legitimately large inputs.
+	// real contract for legitimately large inputs. DoS hygiene first: a
+	// junk-suffixed but otherwise valid attempt (?code=<valid>&x=<10k>)
+	// dead-attempts here instead of reaching those gates — same 400 shape,
+	// so no oracle, but the fast-path gate is deliberately coarser than
+	// the per-value contract.
 	if len(r.URL.RawQuery) > 3*(2*connectors.MaxStateFieldLen)+256 {
 		callbackDeadAttempt(w, r)
 		return

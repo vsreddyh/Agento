@@ -14,6 +14,13 @@ import (
 // this shape); the Mongo backend keeps refresh tokens in a separate field
 // that no read method selects into Connector.
 type Store interface {
+	// Contexts must be bounded by the caller: the memory backend ignores
+	// ctx (no IO to hang), but the Mongo backend runs every verb on the
+	// passed ctx verbatim — an unbounded caller ctx plus a hung Atlas
+	// hangs the verb forever. The gateway always passes a 5s/30s ctx;
+	// direct/future callers must do the same (context.WithTimeout), there
+	// is no in-verb default. Same contract as database/sql: the deadline
+	// is the caller's job.
 	// List returns the two v1 rows, synthesising disconnected rows for
 	// ids with no document yet (a fresh deploy lists two disconnected
 	// connectors, not an empty list).

@@ -73,14 +73,20 @@ it does not rewrite the past (cf. Dots delete-the-Dot semantics, explicitly
 not adopted for history).
 
 Disconnect during the seconds-long exchange window loses to the in-flight
-callback — and that is accepted, not overlooked. The pending-state scrub
+callback — and that is accepted, not overlooked. The same accepted race
+covers verb-deadline cleanup during `CreateState`: a detached insert still
+in flight may land after the best-effort `ConsumeState` that was supposed
+to remove it, leaving a live orphan until TTL/next-tap supersede reaps it.
+Neither window is closable with check-then-act (only conditional writes on
+both backends would order them, which the detached budgets deliberately
+avoid). Both resolve the same way: the row is unknown to any client, and
+re-tap supersedes it. Triage reads a post-deadline live row the same way
+it reads a resurrect — as this race, not a leak. The pending-state scrub
 (`DeleteMany` on disconnect) kills attempts still awaiting consent, but a
 callback that already consumed its state (`ConsumeState → Exchange →
 SetTokens → SetStatus(connected)`) holds no row for the scrub to reap: a
 disconnect landing mid-`Exchange` clears tokens, then the callback resumes
-and flips the row back to connected. No epoch closes this without
-conditional writes on both backends (a check-then-act re-read would only
-narrow the window, not close it), and the failure is operator-visible and
+and flips the row back to connected. The failure is operator-visible and
 self-healing — the app shows connected, one re-tap disconnects — so the
 window is documented, not engineered away. Triage must read a resurrect as
 this race, not a scrub regression.
