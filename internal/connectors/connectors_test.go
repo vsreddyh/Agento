@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"agento/internal/approvals"
 	"go.mongodb.org/mongo-driver/bson"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 )
@@ -16,6 +17,32 @@ import (
 func mongoErrNotFound() error { return mongoDrv.ErrNoDocuments }
 
 func errBoom() error { return errors.New("boom") }
+
+// TestConnectorPolicySync pins the rename-sync obligation: the tool names
+// the servers publish must match the relay refusal and the approval policy
+// exactly. A renamed server tool that misses either table holds for
+// approval (safe) instead of refusing with the draft message (wrong UX) —
+// or worse, runs free. The exposed lists live in ExposedTools (single
+// source of truth); this test fails loudly on drift instead of review
+// catching it.
+func TestConnectorPolicySync(t *testing.T) {
+	for _, server := range []string{Gmail, Calendar} {
+		for _, tool := range ExposedTools(server) {
+			refused := IsDraftOnlySend(server, tool)
+			holds := approvals.NeedsApproval(server, tool, nil)
+			switch {
+			case refused && holds:
+				// Refused write with gated-true backstop: correct.
+			case !refused && !holds:
+				// Free read/draft: correct.
+			case refused && !holds:
+				t.Errorf("%s/%s refused by relay but not gated: bypass runs it free", server, tool)
+			default:
+				t.Errorf("%s/%s holds for approval but is not a refused write: rename sync gap", server, tool)
+			}
+		}
+	}
+}
 
 // testVerifier is a valid-length PKCE verifier for tests: 64 chars,
 // inside the RFC 7636 43-128 window, so length gates pass and the test

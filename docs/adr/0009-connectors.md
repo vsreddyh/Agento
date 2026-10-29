@@ -132,12 +132,10 @@ retention pass must not add a TTL to this collection.
   pipeline (connect URL → single callback → exchange → sealed tokens →
   connected), with PKCE, single-use states, and tokens-before-status
   ordering.
-- NOT fixed: no connector MCP servers wired in `pi/mcp.json` yet (the agent
-  still cannot read mail/calendar — the grant pipeline lands first so
-  servers never touch an unsealed secret), no app Connect screen (Settings
-  opens the auth_url from the API today), no per-user auth (single PASSWORD
-  still authenticates everything), Pi built-in tools still ungated by the
-  relay.
+- NOT fixed: no app Connect screen (Settings opens the auth_url from the
+  API today), no per-user auth (single PASSWORD still authenticates
+  everything), Pi built-in tools still ungated by the relay. Connector MCP
+  servers are wired now — see ADR-0010.
 
 ## Consequences
 

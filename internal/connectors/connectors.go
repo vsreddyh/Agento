@@ -82,6 +82,24 @@ func ScopesFor(id string) []string {
 	}
 }
 
+// ExposedTools names every tool a connector MCP server publishes, by
+// server id. Single source of truth for the rename-sync contract: the
+// policy table (approvals.gatedTools), the relay refusal, the cmd
+// policy tests, and TestConnectorPolicySync all read this list.
+// Adding a server tool updates it here first, and every consumer fails
+// loudly until it follows — no two hand-written copies to drift apart.
+func ExposedTools(server string) []string {
+	switch NormalizedID(server) {
+	case Gmail:
+		return []string{"search_gmail", "read_gmail", "list_messages",
+			"create_draft", "send_message", "send_gmail"}
+	case Calendar:
+		return []string{"list_events", "get_event", "create_event_draft",
+			"create_event", "send_invite"}
+	}
+	return nil
+}
+
 // MaxConnectorIDLen bounds connector ids everywhere: ids are two short
 // fixed strings, so anything longer cannot match a known id. Single owner
 // for both packages — the gateway imports this package, so its member

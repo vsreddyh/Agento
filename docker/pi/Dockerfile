@@ -31,7 +31,8 @@ ARG NODE_IMAGE=node@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee99
 #
 # Two stages:
 #   gobuild — builds the in-repo MCP servers (money, cookbook, health-check,
-#             task-manager, project-manager, notes, memory) exactly as before.
+#             task-manager, project-manager, notes, memory, browser, gmail,
+#             calendar) exactly as before.
 #   runtime — Node for Pi (@earendil-works/pi-coding-agent) plus those
 #             binaries on PATH.
 #
@@ -47,7 +48,7 @@ ARG NODE_IMAGE=node@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee99
 # workspace is owned by host uid 10000, so a non-root process cannot write the
 # agent's session trees and repo checkouts there. See docker/pi/entrypoint.sh.
 #
-# Binary set: 8 MCP servers (browser is new) plus pi-gateway. Two binaries from the
+# Binary set: 10 MCP servers (gmail/calendar are new) plus pi-gateway. Two binaries from the
 # old image are intentionally omitted, and neither is agent-reachable:
 #   retention — a one-shot lifecycle job. It runs as its own compose service
 #               (`podman-compose run --rm retention`) on its own image
@@ -82,6 +83,8 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/miser-money ./cmd/miser-money \
  && go build -trimpath -ldflags="-s -w" -o /out/notes ./cmd/notes \
  && go build -trimpath -ldflags="-s -w" -o /out/memory ./cmd/memory \
  && go build -trimpath -ldflags="-s -w" -o /out/browser ./cmd/browser \
+ && go build -trimpath -ldflags="-s -w" -o /out/gmail ./cmd/gmail \
+ && go build -trimpath -ldflags="-s -w" -o /out/calendar ./cmd/calendar \
  && go build -trimpath -ldflags="-s -w" -o /out/mcp-gate ./cmd/mcp-gate \
  && go build -trimpath -ldflags="-s -w" -o /out/pi-gateway ./cmd/pi-gateway
 
@@ -206,10 +209,12 @@ COPY --from=gobuild /out/cookbook         /usr/local/bin/cookbook
 COPY --from=gobuild /out/health-check     /usr/local/bin/health-check
 COPY --from=gobuild /out/task-manager     /usr/local/bin/task-manager
 COPY --from=gobuild /out/project-manager  /usr/local/bin/project-manager
-COPY --from=gobuild /out/notes             /usr/local/bin/notes
-COPY --from=gobuild /out/memory            /usr/local/bin/memory
-COPY --from=gobuild /out/browser           /usr/local/bin/browser
-COPY --from=gobuild /out/mcp-gate          /usr/local/bin/mcp-gate
+COPY --from=gobuild /out/notes            /usr/local/bin/notes
+COPY --from=gobuild /out/memory           /usr/local/bin/memory
+COPY --from=gobuild /out/browser          /usr/local/bin/browser
+COPY --from=gobuild /out/gmail            /usr/local/bin/gmail
+COPY --from=gobuild /out/calendar         /usr/local/bin/calendar
+COPY --from=gobuild /out/mcp-gate         /usr/local/bin/mcp-gate
 
 # pi-gateway is the container's main process, not an optional extra. It serves the
 # OpenAI-compatible HTTP surface AND spawns one `pi --mode rpc` child per profile,
@@ -223,6 +228,7 @@ RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook \
              /usr/local/bin/health-check /usr/local/bin/task-manager \
              /usr/local/bin/project-manager /usr/local/bin/notes \
              /usr/local/bin/memory /usr/local/bin/browser \
+             /usr/local/bin/gmail /usr/local/bin/calendar \
              /usr/local/bin/mcp-gate /usr/local/bin/pi-gateway
 
 COPY docker/pi/entrypoint.sh /usr/local/bin/entrypoint.sh

@@ -37,7 +37,7 @@ Retention ───────────────► one-shot container (c
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
 - **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any of the eight MCP servers fails to connect.
+- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any of the ten MCP servers fails to connect.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Read-only web tasks via a headless-Chromium MCP server
@@ -106,7 +106,7 @@ disk, orphaned and unmanaged.)
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
-- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting all eight MCP servers, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
+- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting all ten MCP servers, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
 - This ensures discrete credential scoping without mixing secrets across bot instances.
 
 ---
@@ -322,13 +322,15 @@ Threat note — what this does and does not fix:
 - Residual: a held call occupies its turn until expiry; an approval shows
   tool + args + time but not which conversation asked.
 
-### First connectors — Gmail, Calendar (#316, OAuth grants)
+### First connectors — Gmail, Calendar (#316, OAuth grants + MCP servers)
 
 Two connectors with explicit read vs draft/write scopes, each
 connecting/disconnecting independently from the app:
 
-- Gmail: search/read + draft (sends refused with "create a draft instead").
-- Calendar: list/upcoming + draft event (creates/invites refused the same way).
+- Gmail: `search_gmail` / `read_gmail` / `list_messages` + `create_draft`
+  (sends refused with "create a draft instead").
+- Calendar: `list_events` / `get_event` + `create_event_draft` (an
+  agent-side draft, sent nowhere; creates/invites refused the same way).
 
 Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
@@ -388,7 +390,16 @@ hint with no error text — the app must branch on the hint, and a
 appears only on `connected` rows with a valid stamp (a connected row without
 one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
-Full design: `docs/adr/0009-connectors.md`.
+The MCP servers (`cmd/gmail`, `cmd/calendar`, wired in `pi/mcp.json`)
+call the official Google APIs with the stored grant: decrypt, refresh on
+expiry, seal the new pair back (lazy refresh-on-use, no background
+worker). No grant means every tool that calls Google answers reconnect
+guidance, never a secrets prompt. `create_event_draft` is the exception:
+purely local, so it works grant-less — the draft is exactly what the
+user needs while disconnected. It builds a validated draft the agent
+presents to the user — actual creation waits for the approval-gate flow
+that covers calendar writes.
+Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 
 ---
 
