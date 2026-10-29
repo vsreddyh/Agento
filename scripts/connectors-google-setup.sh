@@ -229,6 +229,10 @@ ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
 # the :- above never fires on a normal run — normalize that exact default to
 # the repo root, or running from /tmp reads /tmp/.env and stage 8 exits.
 if [[ "$ENV_FILE" == ".env" ]]; then ENV_FILE="$REPO_DIR/.env"; fi
+# An explicit relative export (ENV_FILE=throwaway.env) would otherwise
+# split-brain: stage 8 writes against the caller's cwd while the render
+# cd's to REPO_DIR first. Canonicalize once, against the invoking cwd.
+if [[ "$ENV_FILE" != /* ]]; then ENV_FILE="$PWD/$ENV_FILE"; fi
 TS_HOST="${TS_HOST:-}"  # defaulted to hostname -s in stage 3, after the hostname preflight below
 TS_DNS="${TS_DNS:-}"          # <name>.<tailnet>.ts.net, no trailing dot
 REDIRECT_URI="${REDIRECT_URI:-}"  # preset honoured; empty means derive from TS_DNS below
@@ -261,7 +265,7 @@ fi
 # critical one — without it every tailscale-status check misreads as down.
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
-for _dep in jq openssl curl podman-compose seq hostname timeout; do
+for _dep in jq openssl curl podman-compose seq hostname; do
   if ! command -v "$_dep" >/dev/null 2>&1; then _missing="$_missing $_dep"; fi
 done
 unset _dep
@@ -513,9 +517,16 @@ printf '\n'
 if (( ok )); then
   printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$TS_DNS"
   # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
-  # outlast the probe budget (timeout exits 124, swallowed by || true).
-  issuer=$(timeout 10 openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
-           | openssl x509 -noout -issuer 2>/dev/null || true)
+  # outlast the probe budget. timeout is coreutils-Linux-only (macOS ships
+  # gtimeout at best), so use it when present and run bare otherwise —
+  # same portability line as the tmp-file prune below.
+  if command -v timeout >/dev/null 2>&1; then
+    issuer=$(timeout 10 openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
+             | openssl x509 -noout -issuer 2>/dev/null || true)
+  else
+    issuer=$(openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
+             | openssl x509 -noout -issuer 2>/dev/null || true)
+  fi
   [[ -n "$issuer" ]] && note "$issuer" && note "Google accepts Let's Encrypt-issued certs."
 elif (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   # Preset/dry-run names were already reassured above — a fake name never
@@ -536,6 +547,12 @@ pause "Press Enter once you've copied it."
 
 # ── Stage 5: GCP project + APIs ───────────────────────────────────────────
 stage "Google Cloud: project + APIs"
+# Everything from here on is browser-driven: without a terminal EOF would
+# take the long create-project branch instead of exiting like other gates.
+if [[ ! -t 0 ]]; then
+  warn "stages 5-8 need an interactive terminal (Google console work) — re-run attached to a TTY"
+  exit 1
+fi
 if ! confirm "Have a Google Cloud project with the Gmail and Calendar APIs enabled?"; then
   step "Create a project (any name, e.g. agento-connectors)."
   open_url "https://console.cloud.google.com/projectcreate"
@@ -625,7 +642,11 @@ note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p 
 chmod 600 "$ENV_FILE" "$BACKUP"
 # Backups are full-secret copies — keep the 5 newest by mtime, prune the
 # rest. Pure bash (-ot comparison): no ls parsing, no GNU-only flags.
-_baks=(); shopt -s nullglob; _baks=("$ENV_FILE".bak.*); shopt -u nullglob
+# nullglob is restored afterwards — the wizard must not mutate shell
+# options it didn't own (matters if this file is ever sourced).
+_baks=(); _nullglob_off=0; shopt -q nullglob || _nullglob_off=1
+shopt -s nullglob; _baks=("$ENV_FILE".bak.*)
+(( _nullglob_off )) && shopt -u nullglob
 _pruned=0
 while (( ${#_baks[@]} > 5 )); do
   _oldest="${_baks[0]}"
@@ -641,7 +662,7 @@ while (( ${#_baks[@]} > 5 )); do
   _baks=("${_kept[@]}"); _pruned=1
 done
 (( _pruned )) && note "pruned .env backups to the last 5"
-unset _baks _b _oldest _kept _pruned
+unset _baks _b _oldest _kept _pruned _nullglob_off
 
 if v=$(_existing CONNECTORS_ENCRYPTION_KEY 2>/dev/null) && [[ -n "$v" ]]; then
   note "keeping the existing envelope key (rotating it would invalidate every stored grant)"

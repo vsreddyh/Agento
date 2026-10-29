@@ -413,9 +413,7 @@ It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `.env` and re-renders compose to prove they land in the rendered compose
 config. It never
 restarts the stack — the values are inert until the pi container is
-recreated (./scripts/hermes.sh restart recreates it; a plain container
-restart without recreation will not pick up .env changes).
-It is safe to re-run: existing values stay defaults, and an existing
+recreated (./scripts/hermes.sh restart recreates it; a plain container restart without recreation will not pick up .env changes). It is safe to re-run: existing values stay defaults, and an existing
 envelope key is kept, since rotating it invalidates every stored grant.
 Register the `/p/` spelling it prints (through the proxy `/p` is stripped
 before pi sees it); the bare `https://<host>/api/...` form routes to
