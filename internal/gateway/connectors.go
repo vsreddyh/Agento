@@ -254,12 +254,13 @@ func writeCallbackPage(w http.ResponseWriter, code int, title, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
-	// Both envelopes escaped inside the helper: body was already owned
-	// here by contract, title now too — every current title is a static
-	// literal, but the next caller passing a dynamic title (connector id,
-	// provider text) must not land unescaped in a browser-parsed page.
-	// Safe by construction, not by discipline.
-	_, _ = w.Write([]byte(`<!doctype html><html><head><title>` + html.EscapeString(title) + `</title></head><body><p>` + body + `</p></body></html>`))
+	// Both envelopes escaped inside the helper: title was already owned
+	// here, and body is now too — every caller passes raw text (static
+	// guidance or a scrubbed domain message) and the helper escapes it,
+	// so a future branch interpolating a connector id or provider string
+	// lands escaped in a browser-parsed page. Safe by construction, not
+	// by discipline; static strings escape to themselves.
+	_, _ = w.Write([]byte(`<!doctype html><html><head><title>` + html.EscapeString(title) + `</title></head><body><p>` + html.EscapeString(body) + `</p></body></html>`))
 }
 
 // callbackDeadAttempt answers a dead OAuth attempt (unknown, consumed, or
@@ -298,7 +299,7 @@ func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg st
 	w.Header().Set("Cache-Control", "no-store")
 	if acceptsHTML(r) {
 		writeCallbackPage(w, code, "Agento connect",
-			html.EscapeString(msg)+" Close this tab and return to the Agento app.")
+			msg+" Close this tab and return to the Agento app.")
 		return
 	}
 	apiError(w, code, typ, "", msg)
@@ -923,7 +924,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// Send the pinned redirect from mint time, not the live config: a
 	// rotation mid-consent would otherwise exact-mismatch Google.
 	// Empty means minted before this column existed: fall back to the
-	// live config rather than failing an otherwise valid attempt.
+	// live config rather than failing an otherwise valid attempt. That
+	// fallback is best-effort, not a pin: after a rotation the minted
+	// (old) redirect_uri can never equal the fallback (new config), so a
+	// pre-column row may pay a doomed Google round-trip instead of
+	// dead-attempting fast. Narrow window (deploy + rotation inside 10
+	// min, pre-column rows only); re-tap recovers either way — triage
+	// reads that 502 as rotation fallout, not a helper bug.
 	exCfg := s.cfg.ConnectorOAuth
 	if st.RedirectURI != "" {
 		pinned := *exCfg
@@ -959,6 +966,11 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			// string edit must not inherit an uncapped pattern.
 			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, bounded(strings.Join(missing, " ")), bounded(approvals.ScrubError(granted)))
 		}
+		// Clean path logs nothing by design: no missing scopes means the
+		// grant was full (or the param was absent — len==0 returns nil in
+		// missingScopes), so a later draft 403 on such a row traces to a
+		// downstream restriction, not to a skipped check. Only the skip
+		// branch below is silent-comparison, and it logs.
 	} else if len(granted) > 0 {
 		// Oversized, control-bearing, or undecodable: skip the compare
 		// like the oversized leg, never the grant. Same blank==absent

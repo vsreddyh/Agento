@@ -243,7 +243,25 @@ func RedactURL(raw string) string {
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return approvals.ScrubError(strip(trimmed))
+		s := strip(trimmed)
+		// Best-effort userinfo cut for the parse-failure branch too:
+		// userinfo (if any) sits between "://" and the first "/" after
+		// it, ending at "@". Drop through the "@" so credentials never
+		// log even when Parse fails — the contract ("never return the raw
+		// string, must strip userinfo") holds on the malformed branch the
+		// helper exists for, not just the clean one.
+		if schemeEnd := strings.Index(s, "://"); schemeEnd >= 0 {
+			schemeEnd += 3
+			rest := s[schemeEnd:]
+			seg := rest
+			if slash := strings.Index(rest, "/"); slash >= 0 {
+				seg = rest[:slash]
+			}
+			if at := strings.LastIndex(seg, "@"); at >= 0 {
+				s = s[:schemeEnd] + rest[at+1:]
+			}
+		}
+		return approvals.ScrubError(s)
 	}
 	if parsed.User == nil {
 		// No userinfo to strip, but the value is still operator-influenced:

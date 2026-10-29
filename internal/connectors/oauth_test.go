@@ -868,3 +868,13 @@ func TestExchangeRejectsShortCode(t *testing.T) {
 		t.Fatalf("short code should be a deterministic 400, got %v", err)
 	}
 }
+
+func TestRedactURLStripsUserinfoOnParseFailure(t *testing.T) {
+	// Malformed host with credentials: Parse fails, but userinfo must
+	// still be cut — the branch exists for malformed input, which is
+	// where a hand-typed user:pass@ is most likely to appear.
+	got := RedactURL("https://user:pass@ho st/p/api/connectors/callback")
+	if strings.Contains(got, "user") || strings.Contains(got, "pass@") {
+		t.Fatalf("userinfo must be stripped even when Parse fails, got %q", got)
+	}
+}
