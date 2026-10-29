@@ -320,12 +320,17 @@ if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/de
 else
   say "The machine name becomes the public hostname: <name>.<tailnet>.ts.net"
   step "Pick a short lowercase name (letters, digits, hyphen)."
+  # ask's Enter-keeps-current reads ENV_FILE, where TS_HOST never lives —
+  # so remember an env preset explicitly instead of losing it to hostname -s.
+  _ts_preset="${TS_HOST:-}"
   while true; do
-    ask TS_HOST "Machine name [$TS_HOST]:"
-    TS_HOST="${TS_HOST:-$(hostname -s)}"
+    ask TS_HOST "Machine name [${TS_HOST:-$(hostname -s)}]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+    TS_HOST="${TS_HOST:-${_ts_preset:-$(hostname -s)}}"
     if [[ "$TS_HOST" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then break; fi
     warn "invalid: use lowercase letters, digits, hyphens (no leading/trailing hyphen)"
+    TS_HOST=""
   done
+  unset _ts_preset
   printf '\n'
   say "Opening a login URL. Sign in with your Tailscale account (creating one"
   say "on the free Personal plan is fine) and approve this machine."
@@ -335,7 +340,7 @@ else
   tailscale up --hostname="$TS_HOST" >"$LOG" 2>&1 &
   TS_PID=$!
   URL=""
-  for _ in $(seq 1 60); do
+  for __i in $(seq 1 60); do
     URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" | head -n1 || true)
     [[ -n "$URL" ]] && break
     kill -0 "$TS_PID" 2>/dev/null || break
@@ -349,11 +354,19 @@ else
     sed 's/^/      /' "$LOG" || true
     pause "Fix the above, then press Enter to check again."
   fi
-  for _ in $(seq 1 60); do
+  for __i in $(seq 1 60); do
     tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && break
     sleep 2
   done
-  rm -f "$LOG"
+  # If the backgrounded `tailscale up` already exited, reap it now so the
+  # EXIT trap can't later kill a recycled PID. If it is still running (the
+  # Running check below failed), leave it for the trap to clean up on exit.
+  if ! kill -0 "$TS_PID" 2>/dev/null; then
+    wait "$TS_PID" 2>/dev/null || true
+    TS_PID=""
+  fi
+  # Clear the log path alongside the file itself so the trap goes quiet.
+  rm -f "$LOG"; LOG=""
 fi
 
 if ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
@@ -420,7 +433,7 @@ printf '\n'
 REDIRECT_URI="https://$TS_DNS/p/api/connectors/callback"
 say "Waiting for public DNS + certificate (can take a few minutes)…"
 ok=0
-for _ in $(seq 1 30); do
+for __i in $(seq 1 30); do
   if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then ok=1; break; fi
   printf '%s' '.'; sleep 10
 done
@@ -541,7 +554,12 @@ if ! grep -q '^# ── Google connectors' "$ENV_FILE"; then
   } >> "$ENV_FILE"
 else
   # Refresh the recorded hostname; keys below are fresh but this line is not.
-  sed -i "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$TS_DNS|" "$ENV_FILE"
+  # Same tmp-file + cat pattern as the library's write_env, so a symlinked
+  # .env stays a symlink (plain sed -i would replace it with a regular file).
+  _cb_tmp=$(mktemp)
+  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$TS_DNS|" "$ENV_FILE" > "$_cb_tmp"
+  cat "$_cb_tmp" > "$ENV_FILE"
+  rm -f "$_cb_tmp"; unset _cb_tmp
 fi
 
 write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID"
