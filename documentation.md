@@ -338,7 +338,9 @@ two serving spellings (the `:8443` port is a variant of the proxy spelling,
 not a third path): the bare spelling direct on the pi port and the `/p/`
 spelling through nginx, which strips `/p` before forwarding (port included
 in the match — the `:8443` spelling and the no-port spelling are different
-registrations). The server consumes the
+registrations). The callback bypasses profile routing entirely, so it
+answers either spelling anywhere — direct, proxied, any profile segment —
+while every other verb 404s a miscased or cross-profile path. The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope
 key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to
 connected. Tokens land before the status flips — a connected-with-no-tokens

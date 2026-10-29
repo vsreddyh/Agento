@@ -313,6 +313,30 @@ func (invalidUTF8Store) ConsumeState(context.Context, string) (connectors.OAuthS
 	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\xc0\x80x"}, nil
 }
 
+// Interior whitespace in a verifier burns the same way: never
+// server-minted, so the row dead-attempts like every other malformed
+// hand-inserted value.
+func TestConnectorsCallbackRejectsSpacedVerifier(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: spacedVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("spaced verifier: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("spaced verifier should dead-attempt, got: %s", rec.Body)
+	}
+}
+
+type spacedVerifierStore struct {
+	connectors.Store
+}
+
+func (spacedVerifierStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v x"}, nil
+}
+
 // An oversized verifier burns the same way: CreateState caps it, so only
 // a hand-inserted row reaches the post-consume length check.
 func TestConnectorsCallbackRejectsOversizedVerifier(t *testing.T) {
@@ -520,6 +544,21 @@ func TestConnectorsCallbackRejectsControlBytes(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "start over from connect") {
 		t.Fatalf("control bytes should use the dead-attempt message: %s", rec.Body)
+	}
+}
+
+// Interior whitespace fails the fast path like controls: never
+// server-minted, so it dead-attempts before any store or Google call.
+func TestConnectorsCallbackRejectsSpacedCode(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%20b&state=s1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("spaced code: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("spaced code should use the dead-attempt message: %s", rec.Body)
 	}
 }
 

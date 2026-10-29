@@ -548,7 +548,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// state exists to leak), so unknown-profile and known-profile callers
 	// take the identical path through handleConnectorCallback, including
 	// method, param-presence, and unconfigured checks. There is no branch
-	// left to distinguish them on.
+	// left to distinguish them on. splitProfile Cleans the path first, so
+	// /p/../api/connectors/callback (and decoded %2e%2e variants) collapse
+	// onto this same identical path — a traversal that lands here answers
+	// exactly what the canonical spelling answers, never a different
+	// status, so there is no auth bypass to re-file.
 	//
 	// Residual, accepted signal: unconfigured + callback answers 501 while
 	// configured answers 400/405 on the same path — config existence is

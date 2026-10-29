@@ -738,7 +738,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// before failing. Same dead-attempt shape as the oversized branch —
 	// the values are server-minted or Google-issued, so a control byte is
 	// never a legitimate credential.
-	if connectors.HasControl(code) || connectors.HasControl(state) {
+	if connectors.HasControl(code) || connectors.HasControl(state) || connectors.HasWhitespace(code) || connectors.HasWhitespace(state) {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			callbackStateReject)
 		return
@@ -800,7 +800,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// the read). Same for the pinned redirect below: CreateState
 	// shape-checks at mint, so only a hand-inserted row carries a bad
 	// redirect into Exchange — burning it is the same intentional fail-closed.
-	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || len(st.Verifier) > connectors.MaxStateFieldLen {
+	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || connectors.HasWhitespace(st.Verifier) || len(st.Verifier) > connectors.MaxStateFieldLen {
 		callbackDeadAttempt(w, r)
 		return
 	}
