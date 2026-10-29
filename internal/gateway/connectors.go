@@ -536,9 +536,13 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// the normalised form — what Known actually sees — so padding cannot
 	// turn a known id unknown.
 	norm := connectors.NormalizedID(id)
-	if norm == "" {
+	if norm == "" || connectors.HasControl(norm) || !utf8.ValidString(norm) {
 		// Empty after folding (" "): same bare 404 as the NUL path above,
 		// not the trailing-space echo the unknown branch would emit.
+		// Controls checked post-fold too: ToLower never introduces them,
+		// so a control-bearing norm is caller input, not a fold artifact
+		// — and the echo below must never carry it. Checked == logged:
+		// the Known branch beneath echoes this same norm.
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
 		return

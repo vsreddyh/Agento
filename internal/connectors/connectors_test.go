@@ -1757,3 +1757,19 @@ func TestSetTokensExpiryBeforeIdentity(t *testing.T) {
 		t.Fatalf("shape should beat identity: deterministic 400, got %v", err)
 	}
 }
+
+func TestEffectiveExpiry(t *testing.T) {
+	now := time.Now()
+	far := TokenRow{AccessExpiryUnixMilli: now.Add(2 * MaxAccessLifetime).UnixMilli()}
+	if got := far.EffectiveExpiry(now); got != now.Add(MaxAccessLifetime).UnixMilli() {
+		t.Errorf("far future should clamp, got %v", got)
+	}
+	past := TokenRow{AccessExpiryUnixMilli: now.Add(-time.Hour).UnixMilli()}
+	if got := past.EffectiveExpiry(now); got != now.Add(-time.Hour).UnixMilli() {
+		t.Errorf("past should pass through, got %v", got)
+	}
+	hand := TokenRow{AccessExpiryUnixMilli: 9999999999999}
+	if got := hand.EffectiveExpiry(now); got != now.Add(MaxAccessLifetime).UnixMilli() {
+		t.Errorf("hand-edited far future must not read as decades, got %v", got)
+	}
+}

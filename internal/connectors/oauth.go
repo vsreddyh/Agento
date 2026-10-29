@@ -59,6 +59,15 @@ const (
 // call it on read, since GetTokens serves hand-edited futures verbatim
 // (see TokenRow). Wall-clock by design; callers with an injectable clock
 // pass their own now.
+// EffectiveExpiry is the read-side bound every refresher must apply: the
+// stored value with now clamped to MaxAccessLifetime, so a hand-edited
+// far-future row reads as renew-soon instead of don't-renew-for-decades.
+// Testable without a store (pure function of two ints); GetTokens stays
+// verbatim by design, and this is the single owner callers use instead.
+func (t TokenRow) EffectiveExpiry(now time.Time) int64 {
+	return ClampAccessExpiry(t.AccessExpiryUnixMilli, now)
+}
+
 func ClampAccessExpiry(expiryUnixMilli int64, now time.Time) int64 {
 	// Floor negatives to zero first: any past timestamp renews immediately
 	// per TokenRow, so a negative (clock-skew stub, hand-edit) is past, not

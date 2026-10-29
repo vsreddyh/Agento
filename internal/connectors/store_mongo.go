@@ -669,6 +669,14 @@ func backfillDisplay(c Connector, id string) Connector {
 // Budget composition, stated so the follow-up doesn't copy the stacking:
 // worst case per verb is 5s pre-read + 5s scrub + 5s write (verb ctx) +
 // 5s readBack, sequential (~15-20s wall) with no overall gateway deadline.
+// The verb clock ticks through the detached steps: it starts at the verb,
+// not at the write — so a 4s probe + 4s scrub can starve the write to ~0s
+// and 502 a would-be-successful UpdateOne. Accepted, not overlooked: moving
+// the write detached would trade this for writes that outlive cancellation
+// and shutdown drain (the Background-rooted cost named below), and the write
+// must stay verb-bound so a stopping server stops writing. Re-tap recovers
+// either way — triage reads a slow-Atlas 502 here as clock starvation, not
+// a failed write.
 // Each step is cheap indexed reads/writes at two rows; heavier OAuth writes
 // and the real token exchange need one verb-level bound instead of stacked
 // per-call budgets. The verb ctx still bounds the write itself — only the
