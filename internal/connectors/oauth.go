@@ -117,6 +117,23 @@ func isDigits(s string) bool {
 	return true
 }
 
+// parsePort validates a SplitHostPort port string and returns its numeric
+// value for re-emit: strict digits-only, range-checked 1-65535. One helper
+// so isDigits + Atoi + range can never be separated by a "simplify to
+// Atoi-only" edit that re-opens the +/- spellings Atoi accepts or the
+// verbatim-emit trap (leading zeros canonicalise via Itoa on return;
+// "+"/"-"/space never validate).
+func parsePort(p string) (int, bool) {
+	if !isDigits(p) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n < 1 || n > 65535 {
+		return 0, false
+	}
+	return n, true
+}
+
 // validRedirectHost reports whether host is a registrable spelling:
 // ASCII labels of [a-z0-9-] with no empties and no leading/trailing
 // hyphens, at least one dot, a lettered TLD of length 2+, and no
@@ -158,23 +175,26 @@ func validRedirectHost(host string) bool {
 			return false
 		}
 	}
-	// The TLD itself must be a lettered, multi-char label: ICANN never
-	// issues all-numeric or single-char TLDs, so "myhost.123" and "a.b"
-	// are typos that would die at Google instead of here. A letter
-	// elsewhere is not enough ("123.com" stays valid).
+	// The TLD itself must be all letters, multi-char: ICANN never issues
+	// all-numeric, single-char, or digit-mixed TLDs, so "myhost.123",
+	// "a.b", and "myhost.c0m" are typos that would die at Google instead
+	// of here. A letter elsewhere is not enough ("123.com" stays valid).
+	// The "xn--" punycode prefix is the one legitimate mixer: its suffix
+	// is encoded Unicode, validated by the label rules above.
 	tld := labels[len(labels)-1]
 	if len(tld) < 2 {
 		return false
 	}
-	tldAlpha := false
-	for i := 0; i < len(tld); i++ {
-		if c := tld[i]; c >= 'a' && c <= 'z' {
-			tldAlpha = true
-			break
+	if strings.HasPrefix(tld, "xn--") {
+		if len(tld) == 4 {
+			return false
 		}
-	}
-	if !tldAlpha {
-		return false
+	} else {
+		for i := 0; i < len(tld); i++ {
+			if c := tld[i]; c < 'a' || c > 'z' {
+				return false
+			}
+		}
 	}
 	// RFC-2606 reserved names plus LAN/mDNS TLDs can never be public
 	// registrations (and the http loopback gate only whitelists bare
@@ -348,18 +368,14 @@ func CanonicalRedirectURL(raw string) (string, error) {
 			// dangling colon no registration can hold.
 			parsed.Host = h
 		default:
-			// Strict digits-only: Atoi accepts "+80"/"080", and
-			// JoinHostPort re-emits the spelling verbatim — validated !=
-			// sent, Google exact-mismatches instead of failing fast here.
-			// Compare and re-emit on the numeric value so the stored
-			// string is always the canonical spelling. Do not simplify
-			// to Atoi-only: the isDigits gate is what kills the +/-
-			// and leading-zero spellings Atoi itself accepts.
-			if !isDigits(p) {
-				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
-			}
-			n, convErr := strconv.Atoi(p)
-			if convErr != nil || n < 1 || n > 65535 {
+			// Strict digits-only via parsePort (not bare Atoi): "+80"/"080"
+			// would otherwise validate yet JoinHostPort re-emits the
+			// spelling verbatim — validated != sent, Google exact-mismatches
+			// instead of failing fast here. Compared and re-emitted on the
+			// numeric value so the stored string is always canonical ("080"
+			// sends as "80"; "+"/"-"/space never validate).
+			n, ok := parsePort(p)
+			if !ok {
 				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
 			}
 			if (parsed.Scheme == "https" && n == 443) || (parsed.Scheme == "http" && n == 80) {
@@ -697,7 +713,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// Controls fail closed like every sibling input — same guard as
 	// Exchange, not just quoted logging: the echo below must never carry
 	// them.
-	if HasControl(id) || !utf8.ValidString(id) {
+	if HasControl(id) || !utf8.ValidString(id) || HasWhitespace(id) {
 		if logf != nil {
 			logf("connectors: auth URL build failed: invalid connector id %q", id)
 		}
@@ -922,7 +938,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// check: a control-bearing id would otherwise ride the NotFound echo
 	// below into the response body. Checked post-fold so edge Cf forgiven
 	// by TrimCredential still folds instead of 400ing.
-	if HasControl(id) || !utf8.ValidString(id) {
+	if HasControl(id) || !utf8.ValidString(id) || HasWhitespace(id) {
 		return nil, deny("invalid connector id")
 	}
 	// Config shape after the dead-ctx guard above (both deterministic,

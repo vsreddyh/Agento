@@ -175,7 +175,7 @@ func (s *MemoryStore) Get(_ context.Context, id string) (Connector, error) {
 	// id would otherwise ride the "unknown connector" echo below into
 	// the JSON body and the scrubbed log line. Checked post-fold so
 	// edge Cf forgiven by TrimCredential still folds instead of 400ing.
-	if HasControl(id) || !utf8.ValidString(id) {
+	if HasControl(id) || !utf8.ValidString(id) || HasWhitespace(id) {
 		return Connector{}, NewStoreError("invalid connector id", false)
 	}
 	if !Known(id) {
@@ -202,7 +202,7 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// id would otherwise ride the "unknown connector" echo below into
 	// the JSON body and the scrubbed log line. Checked post-fold so
 	// edge Cf forgiven by TrimCredential still folds instead of 400ing.
-	if HasControl(id) || !utf8.ValidString(id) {
+	if HasControl(id) || !utf8.ValidString(id) || HasWhitespace(id) {
 		return Connector{}, NewStoreError("invalid connector id", false)
 	}
 	if !Known(id) {
@@ -330,7 +330,7 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 	// id would otherwise ride the "unknown connector" echo below into
 	// the JSON body and the scrubbed log line. Checked post-fold so
 	// edge Cf forgiven by TrimCredential still folds instead of 400ing.
-	if HasControl(id) || !utf8.ValidString(id) {
+	if HasControl(id) || !utf8.ValidString(id) || HasWhitespace(id) {
 		return Connector{}, NewStoreError("invalid connector id", false)
 	}
 	if !Known(id) {
@@ -404,7 +404,7 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	id = NormalizedID(id)
 	// Controls fail closed like the id verbs above: a control-bearing id
 	// would otherwise ride the "unknown connector" echo below.
-	if HasControl(id) || !utf8.ValidString(id) {
+	if HasControl(id) || !utf8.ValidString(id) || HasWhitespace(id) {
 		return NewStoreError("invalid connector id", false)
 	}
 	// Length before identity, matching CreateState/ConsumeState/Exchange:
@@ -508,7 +508,7 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 	// id would otherwise ride the "unknown connector" echo below into
 	// the JSON body and the scrubbed log line. Checked post-fold so
 	// edge Cf forgiven by TrimCredential still folds instead of 400ing.
-	if HasControl(id) || !utf8.ValidString(id) {
+	if HasControl(id) || !utf8.ValidString(id) || HasWhitespace(id) {
 		return TokenRow{}, NewStoreError("invalid connector id", false)
 	}
 	if !Known(id) {
@@ -543,7 +543,7 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	st.Connector = NormalizedID(st.Connector)
 	// Controls fail closed like the id verbs: a control-bearing connector
 	// would otherwise ride the "unknown connector" echo below.
-	if HasControl(st.Connector) || !utf8.ValidString(st.Connector) {
+	if HasControl(st.Connector) || !utf8.ValidString(st.Connector) || HasWhitespace(st.Connector) {
 		return NewStoreError("invalid connector id", false)
 	}
 	// Trimmed before storing: the callback trims query params before

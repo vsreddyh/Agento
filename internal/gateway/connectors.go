@@ -969,8 +969,19 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// values joined first: a duplicated ?scope= compares the union, not
 	// just the first, so a junk second value cannot suppress the warning
 	// (same pointer class as the duplicate-params length log above).
-	granted := connectors.TrimCredential(strings.Join(query["scope"], " "))
-	if granted != "" && len(granted) <= connectors.MaxStateFieldLen && !connectors.HasControl(granted) && utf8.ValidString(granted) {
+	// Length before the join (same bound): sum the parts plus separators
+	// so a junk-suffixed multi-value scope skips without paying the
+	// Join + Fields alloc — matching the raw-query fast-path intent above.
+	scopeTotal := 0
+	for _, v := range query["scope"] {
+		scopeTotal += len(v) + 1
+	}
+	if scopeTotal > 0 {
+		scopeTotal-- // separators join n values with n-1 spaces
+	}
+	if scopeTotal > connectors.MaxStateFieldLen+1 {
+		s.cfg.Logf("connectors: grant for %q scope params oversized (%d bytes), subset check skipped (grant stored; drafts may 403)", id, scopeTotal)
+	} else if granted := connectors.TrimCredential(strings.Join(query["scope"], " ")); granted != "" && len(granted) <= connectors.MaxStateFieldLen && !connectors.HasControl(granted) && utf8.ValidString(granted) {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
 			// Bounded like every interpolated value on this path: missing
 			// holds server-side scope constants today, but the next scope

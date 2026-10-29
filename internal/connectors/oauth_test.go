@@ -878,3 +878,30 @@ func TestRedactURLStripsUserinfoOnParseFailure(t *testing.T) {
 		t.Fatalf("userinfo must be stripped even when Parse fails, got %q", got)
 	}
 }
+
+func TestIDWhitespaceFailsLikeControl(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	// Interior space: always unknown, so deterministic 400 like the
+	// control leg — never a 404 that depends on character class.
+	if got := AuthURL(cfg, "gm ail", testState, testVerifier, nil); got != "" {
+		t.Errorf("spaced-id AuthURL = %q, want empty", got)
+	}
+	if _, err := Exchange(context.Background(), cfg, "gm ail", "codecodecodecodecode1", testVerifier, nil); err == nil {
+		t.Fatal("spaced-id Exchange should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("spaced id should be a deterministic 400, got %v", err)
+	}
+}
+
+func TestValidRedirectHostAllAlphaTLD(t *testing.T) {
+	for _, h := range []string{"myhost.c0m", "myhost.123a", "myhost.1a"} {
+		if validRedirectHost(h) {
+			t.Errorf("%q should fail closed (digit-mixed or single-char TLD)", h)
+		}
+	}
+	for _, h := range []string{"myhost.xn--p1ai", "host.example.com", "123.com"} {
+		if !validRedirectHost(h) {
+			t.Errorf("%q should stay valid", h)
+		}
+	}
+}
