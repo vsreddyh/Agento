@@ -360,11 +360,11 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// Oversized answers 400, not 404 — matching every store verb: length
 	// fails before identity on all layers, so the same input reports the
 	// same code wherever it is checked. No echo (the value is megabytes).
-	if len(id) > connectors.MaxStateFieldLen {
+	if len(id) > connectors.MaxSegmentAllocLen {
 		connectorsError(w, connectors.NewStoreError("oversized connector id", false))
 		return
 	}
-	if len(action) > connectors.MaxStateFieldLen {
+	if len(action) > connectors.MaxSegmentAllocLen {
 		connectorsError(w, connectors.NewStoreError("oversized path segment", false))
 		return
 	}

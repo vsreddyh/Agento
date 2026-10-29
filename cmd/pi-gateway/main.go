@@ -419,11 +419,19 @@ func run() error {
 		// sweeper (memory relies on the CreateState opportunistic sweep,
 		// Mongo relies on THIS index), so triage must hear about it at
 		// every startup, not once in a scrolled-past line.
-		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
-		if err := store.EnsureIndexes(indexCtx); err != nil {
-			logger.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
-		}
-		cancelIndex()
+		//
+		// Scoped so the 10s budget cannot outlive this block: an explicit
+		// cancel at this scope frees the timer the moment EnsureIndexes
+		// returns (unlike a function-level defer, which would hold it to
+		// shutdown), and a closure-level defer still guards the early
+		// returns a future edit might add.
+		func() {
+			indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+			defer cancelIndex()
+			if err := store.EnsureIndexes(indexCtx); err != nil {
+				logger.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
+			}
+		}()
 	}
 
 	// Google OAuth client (#316, second layer). ANY piece missing (client

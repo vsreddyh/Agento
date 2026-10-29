@@ -90,6 +90,16 @@ func ScopesFor(id string) []string {
 // for the 404 it was always going to get.
 const maxConnectorIDLen = 64
 
+// MaxSegmentAllocLen bounds raw gateway path segments before any fold or
+// scan. Deliberately separate from both maxConnectorIDLen (64, the
+// identity contract) and MaxStateFieldLen (the OAuth-input bound): it
+// guards allocs only, and must merely exceed the contract gate — so
+// raising the OAuth-input bound for a future long code must never
+// silently move this path gate. Same value as MaxStateFieldLen today,
+// independent name on purpose (see MaxCipherLen/MaxPlaintextLen for the
+// same split pattern).
+const MaxSegmentAllocLen = 2048
+
 // maxToolNameLen bounds tool names below the fold: ids and tool names are
 // different namespaces with different length realities (tool names are
 // operator-defined and longer), so the tool cap is deliberately roomier
@@ -213,11 +223,12 @@ func IsDraftOnlySend(server, tool string) bool {
 	// NormalizedID, not a local fold: same composition as every sibling,
 	// so the next fold change cannot strand this one. Both parts gated
 	// (separate caps: ids are two fixed strings, tool names are
-	// operator-defined): a multi-MB either pays the same fold alloc.
-	// Oversize defers to identity: an unknown server cannot own a send
-	// path, so it falls through to the gated backstop like any other
-	// unknown name; a known server with a garbage tool refuses outright,
-	// since no legit tool of that server is that long.
+	// operator-defined). Oversize defers to identity: an unknown server
+	// cannot own a send path, so it falls through to the gated backstop;
+	// a known server with a garbage tool refuses outright, since no legit
+	// tool of that server is that long. Precisely: known servers refuse,
+	// unknown servers gate — a genuinely-long future read tool is refused
+	// as a send only on a known server (rename, don't widen).
 	if len(server) > maxConnectorIDLen || len(tool) > maxToolNameLen {
 		return Known(server)
 	}
