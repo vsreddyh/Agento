@@ -278,6 +278,7 @@ for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_EN
   if v=$(_existing "$k" 2>/dev/null) && [[ -n "$v" ]]; then note "  $k: set"
   else note "  $k: MISSING"; fi
 done
+unset v
 say "  tailscale: $(command -v tailscale >/dev/null 2>&1 && echo installed || echo 'not installed')"
 if curl -fsS --max-time 5 http://127.0.0.1:8080/ping >/dev/null 2>&1; then
   note "  proxy :8080: listening"
@@ -295,7 +296,7 @@ fi
 # critical one — without it every tailscale-status check misreads as down.
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
-for _dep in jq openssl curl podman podman-compose seq hostname date; do
+for _dep in jq openssl curl podman podman-compose hostname date; do
   if ! command -v "$_dep" >/dev/null 2>&1; then _missing="${_missing:+$_missing }$_dep"; fi
 done
 unset _dep
@@ -320,7 +321,8 @@ note "a plain container restart without recreation will not pick up .env)."
 note "Nothing is restarted by this wizard."
 note "Dry-run knobs (all optional): TS_DNS presets skip discovery and the"
 note "probe wait, REDIRECT_URI presets skip derivation (and set the recorded"
-note "comment host), ENV_FILE points at another file, SKIP_PROBE=1 skips the wait."
+note "comment host), TS_HOST presets skip the hostname default, ENV_FILE"
+note "points at another file, SKIP_PROBE=1 skips the wait."
 printf '\n'
 if ! confirm "Proceed with Tailscale Funnel setup on this host?"; then
   say "Stopped. Nothing changed."
@@ -405,7 +407,7 @@ else
   URL=""
   # Current login-URL shape; if Tailscale ever changes domains, the "no
   # login URL appeared" fallback below still fires after 60s of dots.
-  for __i in $(seq 1 60); do
+  for ((__i = 1; __i <= 60; __i++)); do
     URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" | head -n1 || true)
     [[ -n "$URL" ]] && break
     kill -0 "$TS_PID" 2>/dev/null || break
@@ -428,7 +430,7 @@ else
   if (( _up_alive == 0 )) && ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
     note "setup process already exited and daemon not Running — skipping the wait"
   else
-    for __i in $(seq 1 60); do
+    for ((__i = 1; __i <= 60; __i++)); do
       tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && break
       printf '%s' '.'; sleep 2
     done
@@ -580,7 +582,7 @@ if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
     note "not reachable from here right now (expected for a dry-run name)"
   fi
 else
-  for __i in $(seq 1 30); do
+  for ((__i = 1; __i <= 30; __i++)); do
     if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then ok=1; break; fi
     printf '%s' '.'; sleep 10
   done
@@ -611,6 +613,7 @@ else
   warn "not reachable yet (DNS can take up to 10 min to propagate)."
   warn "You can continue — the URI below is still correct; re-run the probe later if needed."
 fi
+unset ok issuer
 printf '\n'
 say "This is the exact string to register in Google (copy it verbatim):"
 printf '\n  %s%s%s\n\n' "$BOLD" "$REDIRECT_URI" "$RESET"
@@ -761,6 +764,7 @@ else
   CONNECTORS_ENCRYPTION_KEY=$(openssl rand -hex 32)
   note "generated a new envelope key (AES-256-GCM, 32 bytes hex)"
 fi
+unset v
 
 # A comment block once, refreshed on re-runs (the tailnet name can change);
 # write_env only replaces key lines, so this survives re-runs either way.
