@@ -1479,11 +1479,12 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	// Oversized inputs refuse outright (fail-closed like every sibling
 	// length gate): an unknown-shaped send must not fall through to the
 	// approval backstop — that path stays for unknown-but-normal-sized
-	// tools only.
+	// tools only. Separate caps: a too-long server id and a too-long tool
+	// name refuse on their own bound.
 	if !IsDraftOnlySend(strings.Repeat("x", maxConnectorIDLen+1), "send_message") {
 		t.Error("oversized server should be refused")
 	}
-	if !IsDraftOnlySend("gmail", strings.Repeat("x", maxConnectorIDLen+1)) {
+	if !IsDraftOnlySend("gmail", strings.Repeat("x", maxToolNameLen+1)) {
 		t.Error("oversized tool should be refused")
 	}
 }

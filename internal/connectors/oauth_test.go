@@ -566,3 +566,13 @@ func TestExchangeRejectsSpacedToken(t *testing.T) {
 		t.Fatalf("spaced token should be a deterministic 400, got %v", err)
 	}
 }
+
+// Interior spaces in the redirect fail the explicit gate, not just the
+// suffix check: every rejected class is named up front.
+func TestCanonicalRedirectRejectsSpaces(t *testing.T) {
+	if _, err := CanonicalRedirectURL("https://host.example/p/api/connectors/call back"); err == nil {
+		t.Fatal("spaced path should fail closed")
+	} else if !strings.Contains(err.Error(), "spaces") {
+		t.Fatalf("spaced redirect should name the class, got %q", err)
+	}
+}

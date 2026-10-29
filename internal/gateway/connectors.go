@@ -403,8 +403,8 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// on a garbage path before the inevitable 404.
 	action = strings.ToLower(action)
 	if len(action) > maxConnectorIDLen {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown path "+bounded(approvals.ScrubError(path)))
+		// Same length-before-identity as the id legs: 400, not 404.
+		connectorsError(w, connectors.NewStoreError("oversized path segment", false))
 		return
 	}
 	// Normalise before Known: " GMail " addresses gmail (case and spacing
@@ -420,8 +420,11 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		return
 	}
 	if len(norm) > maxConnectorIDLen {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown connector")
+		// Length before identity, matching every store verb and helper:
+		// the same oversized input 400s in the stores, so it 400s here
+		// too instead of reading as unknown. No echo — the value is
+		// megabytes-scale by construction of this branch.
+		connectorsError(w, connectors.NewStoreError("oversized connector id", false))
 		return
 	}
 	if !connectors.Known(norm) {

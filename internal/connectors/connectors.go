@@ -90,6 +90,14 @@ func ScopesFor(id string) []string {
 // for the 404 it was always going to get.
 const maxConnectorIDLen = 64
 
+// maxToolNameLen bounds tool names below the fold: ids and tool names are
+// different namespaces with different length realities (tool names are
+// operator-defined and longer), so the tool cap is deliberately roomier
+// than the id cap. Either way oversized refuses outright — a genuinely-long
+// future read tool would refuse as a send here; that is the documented
+// cost of a shared fail-closed bound. Rename, don't widen.
+const maxToolNameLen = 128
+
 // Known reports whether id is a v1 connector. Folds like every sibling
 // helper: same logical id, same answer — the fold lives here instead of
 // relying on every caller to pre-fold before branching on it.
@@ -203,13 +211,14 @@ func TrimCredential(s string) string {
 // connector MCP servers land.
 func IsDraftOnlySend(server, tool string) bool {
 	// NormalizedID, not a local fold: same composition as every sibling,
-	// so the next fold change cannot strand this one. Both parts gated:
-	// a multi-MB tool pays the same fold alloc as a multi-MB server.
+	// so the next fold change cannot strand this one. Both parts gated
+	// (separate caps: ids are two fixed strings, tool names are
+	// operator-defined): a multi-MB either pays the same fold alloc.
 	// Oversized refuses outright (fail-closed like every sibling length
 	// gate): an unknown-shaped send must not fall through to the approval
 	// backstop — that path is for unknown-but-normal-sized tools, which
 	// still return false below.
-	if len(server) > maxConnectorIDLen || len(tool) > maxConnectorIDLen {
+	if len(server) > maxConnectorIDLen || len(tool) > maxToolNameLen {
 		return true
 	}
 	server = NormalizedID(server)

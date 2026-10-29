@@ -951,9 +951,14 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	// and re-tap is the recovery either way.
 	// One shared detached budget for dup-check + delete + insert: the
 	// three run sequentially under a single 5s quickCtx instead of three
-	// stacked ones (~15s wall before). A slow Atlas still exhausts it and
-	// 502s, but the verb ctx never bounded this IO anyway (validation
-	// only) — re-tap recovers either way. Duplicate-key tolerant below.
+	// stacked ones (~15s wall before). Deliberately tighter than the sum:
+	// the verb clock bounds the user-visible wall at ~5s regardless (see
+	// the gateway budget note), so detached work that outlives the verb
+	// only ever lands-then-cleans-up — a wider budget would burn more
+	// slow-Atlas time for no user benefit. A slow Atlas exhausts the
+	// shared budget and 502s faster than separate budgets would, but the
+	// verb ctx never bounded this IO anyway (validation only) — re-tap
+	// recovers either way. Duplicate-key tolerant below.
 	// Order matters: the duplicate check runs BEFORE the supersede, so a
 	// reused state id 400s instead of silently overwriting after the
 	// delete removes the row it collides with.

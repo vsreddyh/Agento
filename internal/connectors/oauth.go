@@ -303,9 +303,11 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// Raw covers literals; the decoded path covers %00-style encodings
 	// that Parse decodes before Clean/String re-encodes. The host needs
 	// no unescape step: % is rejected outright above, so no encoded
-	// sequence survives to decode.
-	if HasControl(trimmed) || !utf8.ValidString(trimmed) || HasControl(parsed.Path) || !utf8.ValidString(parsed.Path) {
-		return "", errors.New("connectors: redirect URL must not contain control characters or invalid UTF-8")
+	// sequence survives to decode. Whitespace is gated explicitly rather
+	// than left to the suffix check below: interior spaces fail today via
+	// the suffix, but the contract names every rejected class up front.
+	if HasControl(trimmed) || !utf8.ValidString(trimmed) || HasControl(parsed.Path) || !utf8.ValidString(parsed.Path) || HasWhitespace(trimmed) || HasWhitespace(parsed.Path) {
+		return "", errors.New("connectors: redirect URL must not contain control characters, spaces, or invalid UTF-8")
 	}
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
 	if !strings.HasSuffix(parsed.Path, "/api/connectors/callback") {
