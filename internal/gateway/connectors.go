@@ -40,6 +40,19 @@ import (
 // anything longer matches nothing. Same no-oracle 404 contract as runs.
 const maxConnectorIDLen = 64
 
+// acceptsHTML reports text/html negotiation without lowercasing an
+// unbounded header: unauthenticated callers control Accept, and Go allows
+// ~1MB of it — a megabyte value would buy a megabyte alloc before any gate
+// runs. Legit browser values are ~100 chars, so anything past 512 answers
+// JSON. Same alloc-before-cap class as the raw-query and segment prefilters.
+func acceptsHTML(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	if len(accept) > 512 {
+		return false
+	}
+	return strings.Contains(strings.ToLower(accept), "text/html")
+}
+
 func connectorWire(c connectors.Connector) map[string]any {
 	scopes := c.Scopes
 	if scopes == nil {
@@ -175,14 +188,15 @@ const callbackStateReject = "that connect attempt expired or was already used; s
 // pinning at mint time. FromEnv already enforces canonical shape, so an
 // error here means a hand-built cfg — fail fast with a 502 config error
 // instead of storing raw and letting the store 400 it as bad state input.
-func canonicalRedirectForMint(cfg *connectors.OAuthConfig, logf func(string, ...any)) (string, error) {
+func canonicalRedirectForMint(cfg *connectors.OAuthConfig, id string, logf func(string, ...any)) (string, error) {
 	canonical, err := connectors.CanonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
 		if logf != nil {
 			// Echo the attempted value: redirect is non-secret (logged
 			// verbatim on success), and triage needs the mismatch
-			// candidate without re-reading .env.
-			logf("connectors: connect redirect invalid (want %q): %v", bounded(cfg.RedirectURL), err)
+			// candidate without re-reading .env. Id named like every
+			// sibling log on this path, so triage greps single-term.
+			logf("connectors: connect redirect invalid for %q (want %q): %v", id, bounded(cfg.RedirectURL), err)
 		}
 		return "", err
 	}
@@ -201,7 +215,7 @@ func callbackDeadAttempt(w http.ResponseWriter, r *http.Request) {
 	// relying on each caller (the 405 branch bypasses the handler's
 	// first-line header).
 	w.Header().Set("Cache-Control", "no-store")
-	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+	if acceptsHTML(r) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusBadRequest)
@@ -226,7 +240,7 @@ func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg st
 	// at each call site, so the next branch added beside the 405 check
 	// cannot miss it.
 	w.Header().Set("Cache-Control", "no-store")
-	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+	if acceptsHTML(r) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(code)
@@ -458,7 +472,7 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// enforces canonical shape, so this fires only for a hand-built cfg —
 	// exactly when triage needs the discriminant. Ordering rationale in
 	// the file's own terms: config fails fast with no dead attempt minted.
-	pinnedRedirect, err := canonicalRedirectForMint(s.cfg.ConnectorOAuth, s.cfg.Logf)
+	pinnedRedirect, err := canonicalRedirectForMint(s.cfg.ConnectorOAuth, id, s.cfg.Logf)
 	if err != nil {
 		apiError(w, http.StatusBadGateway, "upstream_error", "",
 			"connect is not configured correctly on this server")
@@ -582,8 +596,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// 501 below. The cap carries no config information (same 400 shape
 	// configured or not), so ordering it first removes the config oracle a
 	// huge query would otherwise add, and unconfigured callers get the same
-	// parse protection as configured ones.
-	if len(r.URL.RawQuery) > 2*connectors.MaxStateFieldLen+64 {
+	// parse protection as configured ones. Sized for escaping expansion:
+	// raw counts encoded bytes (up to 3x decoded: %00 is 3 raw bytes for 1
+	// decoded byte), so two max-size values at full expansion plus slack —
+	// never tighter than the decoded per-value gates below, which stay the
+	// real contract for legitimately large inputs.
+	if len(r.URL.RawQuery) > 3*(2*connectors.MaxStateFieldLen)+256 {
 		callbackDeadAttempt(w, r)
 		return
 	}
@@ -813,7 +831,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// clients (the app polls GET /api/connectors instead of reading this
 	// body) get the existing JSON shape unchanged. no-store was already set
 	// at the top of the handler for every branch on this path.
-	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+	if acceptsHTML(r) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)

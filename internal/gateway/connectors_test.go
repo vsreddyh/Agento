@@ -568,7 +568,7 @@ func TestConnectorsCallbackRejectsOversizedQuery(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 5000)+"&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 13000)+"&state=s1", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized query: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -582,7 +582,7 @@ func TestConnectorsCallbackRejectsOversizedQuery(t *testing.T) {
 // and the unconfigured path gets the same parse protection.
 func TestConnectorsCallbackHugeQueryUnconfigured(t *testing.T) {
 	srv := connectorsServer(t)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 5000)+"&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 13000)+"&state=s1", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unconfigured huge query: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -824,5 +824,24 @@ func TestConnectorsMemberCaseSensitive(t *testing.T) {
 	rec := do(t, srv, http.MethodPost, "/API/connectors/gmail/disconnect", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("miscased member: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+}
+
+// Unbounded Accept answers JSON, not HTML: negotiation never allocates
+// over the header.
+func TestConnectorsAcceptHeaderBounded(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	r := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nope", nil)
+	r.Header.Set("Authorization", "Bearer test-token")
+	r.Header.Set("Accept", strings.Repeat("text/html;", 200))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("huge accept: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); strings.Contains(ct, "text/html") {
+		t.Fatalf("huge accept must answer JSON, got %q", ct)
 	}
 }
