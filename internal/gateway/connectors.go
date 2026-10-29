@@ -788,6 +788,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	query := r.URL.Query()
 	code := connectors.TrimCredential(query.Get("code"))
 	state := connectors.TrimCredential(query.Get("state"))
+	// Duplicates first-win by design (see above), but a junk-suffixed
+	// duplicate leaves no trace of the second value — log lengths only
+	// (never values), same pointer class as the oversized-scope skip.
+	if len(query["code"]) > 1 || len(query["state"]) > 1 {
+		s.cfg.Logf("connectors: callback with duplicate params (code=%d, state=%d values), using first", len(query["code"]), len(query["state"]))
+	}
 	// Absent and blank collapse to one branch: a whitespace-only value
 	// carries no credential, exactly like a missing one — and the message
 	// names what's missing rather than crying a dead attempt that never

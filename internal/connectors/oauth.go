@@ -1090,7 +1090,12 @@ type TokenRow struct {
 	// are clamped to now+MaxAccessLifetime at write time — enforced in
 	// three places (gateway connect + both SetTokens) plus the Exchange
 	// return clamp for scheduling callers, so a stored expiry
-	// never reads as "don't renew for decades". Readers must treat
+	// never reads as "don't renew for decades". A hand-edited far-future
+	// expiry is still served as-is until the next write (GetTokens does
+	// not re-clamp): the refresher must clamp on read
+	// (min(expiry, now+MaxAccessLifetime)) instead of trusting the stored
+	// value — same single-owner rationale as DecryptToken-is-read-enforcement.
+	// Readers must treat
 	// AccessCipher == "" as missing regardless of Expiry: the write path
 	// guarantees the pair (expiry-without-access is rejected), the read
 	// path does not re-enforce it — a pre-cap/hand-edited timestamp on a

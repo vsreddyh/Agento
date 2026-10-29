@@ -715,6 +715,11 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// Controls fail closed like every sibling input: a control-bearing
 	// cipher is undecryptable (DecryptToken only fails later, generically),
 	// so reject the shape here that the read side cannot name.
+	// TrimCredential inside HasWhitespace is the interior-only idiom, not
+	// double-handling: edges are already owned by the blank gate below
+	// and the padded gate further down, so only interior whitespace can
+	// fire here. Do not "simplify" the wrap away — raw HasWhitespace
+	// would re-label blank/padded inputs with this gate's message.
 	if HasControl(tok.RefreshCipher) || HasControl(tok.AccessCipher) || !utf8.ValidString(tok.RefreshCipher) || !utf8.ValidString(tok.AccessCipher) || HasWhitespace(TrimCredential(tok.RefreshCipher)) || (tok.AccessCipher != "" && HasWhitespace(TrimCredential(tok.AccessCipher))) {
 		return NewStoreError("connector grant token is invalid", false)
 	}

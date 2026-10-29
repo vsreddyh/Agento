@@ -1308,3 +1308,44 @@ func TestConnectorsFallthroughEchoesNormalised(t *testing.T) {
 		t.Fatalf("fallthrough must not echo raw encoding, got: %s", rec.Body)
 	}
 }
+
+// Duplicate params first-win with a trace: the second value leaves a
+// lengths-only log line, never its bytes.
+func TestConnectorsCallbackDuplicateParamsLog(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := connectors.NewMemoryStore()
+	var mu sync.Mutex
+	var logged []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	authURL, _ := decodeBody(t, rec)["auth_url"].(string)
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := u.Query().Get("state")
+	if state == "" {
+		t.Fatalf("no state in %s", authURL)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&code=junk&state="+state, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("duplicate-code valid attempt: %d (%s)", rec.Code, rec.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, line := range logged {
+		if strings.Contains(line, "duplicate params") && !strings.Contains(line, "junk") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("duplicate params should log lengths only, got: %q", logged)
+	}
+}
