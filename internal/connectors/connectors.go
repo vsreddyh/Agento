@@ -45,10 +45,10 @@ func ListIDs() []string {
 	return append([]string(nil), listIDs[:]...)
 }
 
-// DisplayName names a connector for the app. Unknown ids echo back: the
-// gateway 404s them first, so this is a display fallback, not a lookup.
-// Folds like every store verb and OAuth helper: same logical id, same
-// answer, wherever the caller normalised.
+// DisplayName names a connector for the app. Unknown ids answer "Unknown":
+// the gateway 404s them first, so this is a display fallback, never an
+// echo of caller text. Folds like every store verb and OAuth helper: same
+// logical id, same answer, wherever the caller normalised.
 func DisplayName(id string) string {
 	id = NormalizedID(id)
 	switch id {
@@ -57,7 +57,7 @@ func DisplayName(id string) string {
 	case Calendar:
 		return "Calendar"
 	default:
-		return id
+		return "Unknown"
 	}
 }
 

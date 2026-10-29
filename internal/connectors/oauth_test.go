@@ -299,6 +299,30 @@ func TestOAuthConfigRejectsLongClient(t *testing.T) {
 	}
 }
 
+// Oversized helper inputs fail closed the same way: a multi-KB client id
+// would otherwise mint a consent URL Google 414s, and a multi-KB provider
+// token would 502 at seal time after the state is consumed.
+func TestAuthURLRejectsLongClient(t *testing.T) {
+	cfg := &OAuthConfig{ClientID: strings.Repeat("x", MaxStateFieldLen+1), ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
+		t.Errorf("oversized client id URL = %q, want empty", got)
+	}
+}
+
+func TestExchangeRejectsOversizedToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"access_token":"a123","refresh_token":%q,"expires_in":3600,"token_type":"Bearer"}`, strings.Repeat("y", MaxPlaintextLen+1))
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
+		t.Fatal("oversized provider token should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("oversized token should be a deterministic 400, got %v", err)
+	}
+}
+
 // Hostnames no console registration can hold fail closed: underscores,
 // leading/trailing hyphens, empty labels, non-ASCII (punycode at the
 // console, never Unicode).

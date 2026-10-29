@@ -178,15 +178,12 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// IPv6 literals, or the stripped host stops parsing as a URL.
 	if h, p, err := net.SplitHostPort(parsed.Host); err == nil {
 		h = strings.TrimRight(h, ".")
-		if p != "" {
-			// Ports must be numeric: SplitHostPort doesn't check, and no
-			// console registration can hold :abc — a non-numeric port
-			// passes validation yet mismatches Google exactly.
-			if n, convErr := strconv.Atoi(p); convErr != nil || n < 1 || n > 65535 {
-				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
-			}
-		}
-		if (parsed.Scheme == "https" && p == "443") || (parsed.Scheme == "http" && p == "80") {
+		switch {
+		case p == "":
+			// Bare host, no JoinHostPort: "host:" would canonicalise to a
+			// dangling colon no registration can hold.
+			parsed.Host = h
+		case (parsed.Scheme == "https" && p == "443") || (parsed.Scheme == "http" && p == "80"):
 			// Stripped: default port dropped. Bracket here (no
 			// JoinHostPort on this branch) so an IPv6 literal stays a
 			// valid host.
@@ -194,7 +191,13 @@ func CanonicalRedirectURL(raw string) (string, error) {
 				h = "[" + h + "]"
 			}
 			parsed.Host = h
-		} else {
+		default:
+			// Ports must be numeric: SplitHostPort doesn't check, and no
+			// console registration can hold :abc — a non-numeric port
+			// passes validation yet mismatches Google exactly.
+			if n, convErr := strconv.Atoi(p); convErr != nil || n < 1 || n > 65535 {
+				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
+			}
 			// Kept: JoinHostPort brackets IPv6 itself — pass it the bare
 			// host, or [::1]:8643 double-brackets to [[::1]]:8643.
 			parsed.Host = net.JoinHostPort(h, p)
@@ -222,11 +225,13 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// than storing credentials in the service log.
 		return "", errors.New("connectors: redirect URL must not contain userinfo (user:pass@)")
 	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" {
+	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery {
 		// Google compares the full redirect_uri exactly: a registered
 		// query or fragment would never match what the gateway sends
 		// (bare path), so fail here with a pointer at the registration,
-		// not in the browser with redirect_uri_mismatch.
+		// not in the browser with redirect_uri_mismatch. ForceQuery
+		// counts: ".../callback?" carries an empty-but-present query
+		// that String() preserves and Google compares.
 		return "", errors.New("connectors: redirect URL must have no query or fragment; register the bare callback URL")
 	}
 	// Inner controls fail closed like every sibling input (state/code/
@@ -242,6 +247,12 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
 	if !strings.HasSuffix(parsed.Path, "/api/connectors/callback") {
 		return "", errors.New("connectors: redirect URL path must end in /api/connectors/callback (the single registered endpoint)")
+	}
+	// The sent form must match too: EscapedPath re-emits RawPath verbatim,
+	// so %2F spellings decode to the suffix above yet send encoded —
+	// validated != sent. Suffix-check the escaped form as well.
+	if !strings.HasSuffix(parsed.EscapedPath(), "/api/connectors/callback") {
+		return "", errors.New("connectors: redirect URL path must not contain encoded slashes; register the decoded spelling")
 	}
 	return parsed.String(), nil
 }
@@ -379,7 +390,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// log below must observe the same spelling every downstream branch
 	// logs — stored == logged == sent by construction.
 	id = NormalizedID(id)
-	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
+	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.ClientSecret) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
 		if logf != nil {
 			logf("connectors: auth URL build failed: unconfigured client (%q)", id)
 		}
@@ -586,6 +597,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// instead of 400ing here as the deterministic answer it is.
 	if HasControl(tok.RefreshToken) || HasControl(tok.AccessToken) || !utf8.ValidString(tok.RefreshToken) || !utf8.ValidString(tok.AccessToken) {
 		return nil, NewStoreError("grant exchange returned an invalid token", false)
+	}
+	// Length-capped like the ciphertext it will become: a multi-MB token
+	// would otherwise 502 at seal time after the state is consumed.
+	// Same MaxPlaintextLen the seal gate enforces, checked here first.
+	if len(tok.RefreshToken) > MaxPlaintextLen || len(tok.AccessToken) > MaxPlaintextLen {
+		return nil, NewStoreError("grant exchange returned an oversized token", false)
 	}
 	return tok, nil
 }

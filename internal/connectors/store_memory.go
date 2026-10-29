@@ -392,20 +392,15 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	defer s.mu.Unlock()
 	s.tokens[id] = tok
 	// Display-default row alongside the tokens, mirroring the Mongo
-	// $setOnInsert: a crash between SetTokens and SetStatus must read as
-	// explicit-off (updated_at set), not never-touched, on both backends.
-	// Status stays whatever the row already says — this write invents no
-	// transition, it only backfills display shape.
-	c := s.rows[id]
-	if c.ID == "" {
-		c = DefaultRow(id)
-	}
-	c.DisplayName = DisplayName(id)
-	c.Scopes = ScopesFor(id)
-	if c.UpdatedAt == 0 {
+	// $setOnInsert exactly: insert-only. An existing row keeps its display
+	// (even if stale — the next SetStatus heals it, same as Mongo); a
+	// crash between SetTokens and SetStatus still reads as explicit-off
+	// (updated_at set at insert), not never-touched, on both backends.
+	if c, ok := s.rows[id]; !ok || c.ID == "" {
+		c := DefaultRow(id)
 		c.UpdatedAt = time.Now().UnixMilli()
+		s.rows[id] = c
 	}
-	s.rows[id] = c
 	return nil
 }
 

@@ -829,16 +829,18 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	// as generic 502, not the timeout wording. Both clocks are 5s from a
 	// near-simultaneous start, so the mistriage window is milliseconds,
 	// and re-tap is the recovery either way.
-	// Duplicate check BEFORE the supersede below: reusing the same state
-	// string must 400 like the memory backend, not silently overwrite
-	// after the supersede deletes the row it collides with. A detached
-	// read like the scrub: advisory-shaped, but a failed check fails
-	// closed — proceeding blind would risk the silent overwrite this
-	// check exists to prevent.
-	dupCtx, dupCancel := quickCtx()
+	// One shared detached budget for dup-check + delete + insert: the
+	// three run sequentially under a single 5s quickCtx instead of three
+	// stacked ones (~15s wall before). A slow Atlas still exhausts it and
+	// 502s, but the verb ctx never bounded this IO anyway (validation
+	// only) — re-tap recovers either way. Duplicate-key tolerant below.
+	// Order matters: the duplicate check runs BEFORE the supersede, so a
+	// reused state id 400s instead of silently overwriting after the
+	// delete removes the row it collides with.
+	opCtx, opCancel := quickCtx()
+	defer opCancel()
 	var dup OAuthState
-	dupErr := s.states.FindOne(dupCtx, bson.D{{Key: "_id", Value: st.State}}).Decode(&dup)
-	dupCancel()
+	dupErr := s.states.FindOne(opCtx, bson.D{{Key: "_id", Value: st.State}}).Decode(&dup)
 	if dupErr == nil {
 		return NewStoreError("oauth state already exists", false)
 	}
@@ -846,22 +848,11 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 		s.logf("connectors: state duplicate check %q failed: %v", st.State, dupErr)
 		return NewStoreError("oauth state create failed", true)
 	}
-	supCtx, supCancel := quickCtx()
-	_, serr := s.states.DeleteMany(supCtx, bson.D{{Key: "connector", Value: st.Connector}})
-	supCancel()
+	_, serr := s.states.DeleteMany(opCtx, bson.D{{Key: "connector", Value: st.Connector}})
 	if serr != nil {
 		s.logf("connectors: state supersede %q failed: %v", st.Connector, serr)
 	}
-	// The insert runs detached too: a slow delete above must not eat the
-	// verb budget and turn this write into a 502. Duplicate-key tolerant
-	// — and note the composition: dup-check + delete + insert each run a
-	// 5s detached budget, sequential, so one tap costs ~15s worst-case
-	// wall. Harmless at this cardinality; re-tap recovers either way.
-	// (concurrent tap), and a verb-deadline 502 after a landed insert
-	// recovers via re-tap supersede — same idempotency story as ever.
-	insCtx, insCancel := quickCtx()
-	_, err := s.states.InsertOne(insCtx, st)
-	insCancel()
+	_, err := s.states.InsertOne(opCtx, st)
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
 			return NewStoreError("oauth state already exists", false)
