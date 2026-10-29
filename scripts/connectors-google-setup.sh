@@ -283,7 +283,7 @@ fi
 # critical one — without it every tailscale-status check misreads as down.
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
-for _dep in jq openssl curl podman-compose seq hostname; do
+for _dep in jq openssl curl podman podman-compose seq hostname; do
   if ! command -v "$_dep" >/dev/null 2>&1; then _missing="${_missing:+$_missing }$_dep"; fi
 done
 unset _dep
@@ -354,7 +354,7 @@ fi
 stage "Join your tailnet"
 if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
   note "already connected"
-  TS_HOST=$(tailscale status --json | jq -r '.Self.HostName // empty')
+  TS_HOST=$(tailscale status --json | jq -r '.Self.HostName // empty' || true)
 else
   say "The machine name becomes the public hostname: <name>.<tailnet>.ts.net"
   step "Pick a short lowercase name (letters, digits, hyphen)."
@@ -364,7 +364,7 @@ else
   # Computed once: hostname -s can emit a dotted FQDN on minimal images —
   # cut to the first label so the strict regex below doesn't loop-reject
   # the default.
-  _host_default=$(hostname -s | cut -d. -f1)
+  _host_default=$(hostname -s | cut -d. -f1 || true)
   # An unset hostname yields an empty default, an empty fallback, and a
   # regex that rejects empty — an endless warn loop with no way forward
   # except Ctrl-C. Fail fast instead.
@@ -440,6 +440,7 @@ fi
 # TS_DNS honours a caller preset (dry-runs) instead of silently discarding
 # it — same contract as ENV_FILE. Empty means discover from the daemon.
 _DNS_FROM_PRESET=0
+_URI_FROM_PRESET=0
 if [[ -n "$TS_DNS" ]]; then
   # Presets are trusted for dry-runs but not for sed: validate the shape
   # before it reaches the stage-8 hostname refresh (|/&/newline injection).
@@ -480,7 +481,13 @@ FOUT=$(mktemp)
 # Re-runs are safe: if 443 already forwards to this proxy, keep it instead
 # of erroring out of the wizard.
 _funnel_status=$(tailscale funnel status 2>/dev/null || true)
-if echo "$_funnel_status" | grep -qE '443.*8080|8080.*443'; then
+# Real `funnel status` prints the public URL and the target on separate
+# lines (https://<host>… on one, "|-- / proxy http://127.0.0.1:8080" on
+# another — port 443 is implied by https://, never printed next to 8080),
+# so match across the whole output: our target port plus a public-https
+# marker. A short note on why not one ordered grep: that form never fires
+# on real output and silently disables this fast path.
+if echo "$_funnel_status" | grep -q "8080" && echo "$_funnel_status" | grep -qiE "https://|443"; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
   rm -f "$FOUT"; FOUT=""
@@ -609,6 +616,7 @@ if (( _have_yes == 0 )); then
 else
   note "skipped (already enabled)"
 fi
+unset _have_yes
 
 # ── Stage 6: consent screen ───────────────────────────────────────────────
 stage "Google Cloud: consent screen + scopes"
