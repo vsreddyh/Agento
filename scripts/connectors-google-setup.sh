@@ -278,6 +278,13 @@ if curl -fsS --max-time 5 http://127.0.0.1:8080/ping >/dev/null 2>&1; then
   note "  proxy :8080: listening"
 else
   note "  proxy :8080: NOT answering (/ping)"
+  warn "the funnel forwards to this proxy — a stopped stack means minutes"
+  warn "of stage-3/4 waits before anything fails. Start the stack first"
+  warn "(./scripts/hermes.sh start) or continue anyway."
+  if ! confirm "Continue without a listening proxy?"; then
+    say "Stopped. Nothing changed."
+    exit 1
+  fi
 fi
 # Dependency preflight: every external the stages shell out to. jq is the
 # critical one — without it every tailscale-status check misreads as down.
@@ -460,6 +467,14 @@ if [[ -z "$TS_DNS" ]]; then
   warn "could not read the tailnet DNS name (is MagicDNS enabled?)"
   exit 1
 fi
+# Defense in depth: the daemon is trusted, but the value feeds the same
+# three sinks the preset guards protect (REDIRECT_URI derivation, the
+# stage-8 sed refresh, s_client) — and this also fail-fasts truncated
+# MagicDNS-off output at the same point as typos.
+if ! _valid_tsdns "$TS_DNS"; then
+  warn "daemon-reported TS_DNS=$TS_DNS is not a <name>.<tailnet>.ts.net hostname; check MagicDNS, then re-run"
+  exit 1
+fi
 printf '\n'
 printf '  %s✓%s %s\n' "$GREEN" "$RESET" "https://$TS_DNS"
 
@@ -484,10 +499,10 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # Real `funnel status` prints the public URL and the target on separate
 # lines (https://<host>… on one, "|-- / proxy http://127.0.0.1:8080" on
 # another — port 443 is implied by https://, never printed next to 8080),
-# so match across the whole output: our target port plus a public-https
-# marker. A short note on why not one ordered grep: that form never fires
-# on real output and silently disables this fast path.
-if echo "$_funnel_status" | grep -q "8080" && echo "$_funnel_status" | grep -qiE "https://|443"; then
+# so match across the whole output — but bind the port to the proxy word
+# on its own line, or hint text mentioning a URL and the port elsewhere
+# would take the fast path without the binding existing.
+if echo "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && echo "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
   rm -f "$FOUT"; FOUT=""
@@ -601,7 +616,9 @@ stage "Google Cloud: project + APIs"
 # discipline on a terminal, friendly stop anywhere else.
 ask _HAVE_PROJ "Have a Google Cloud project with the Gmail and Calendar APIs enabled? [y/N]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
 _have_yes=0
-if [[ "$_HAVE_PROJ" =~ ^[Yy] ]]; then _have_yes=1; fi
+# Strict yes (not confirm's ^[Yy] class): a typo'd "yn" must fall into the
+# guided create-project branch, not skip it.
+if [[ "$_HAVE_PROJ" =~ ^[Yy]([Ee][Ss])?$ ]]; then _have_yes=1; fi
 unset _HAVE_PROJ
 if (( _have_yes == 0 )); then
   step "Create a project (any name, e.g. agento-connectors)."
