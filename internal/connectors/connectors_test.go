@@ -1688,7 +1688,7 @@ func TestRejectsInteriorWhitespace(t *testing.T) {
 	if got := AuthURL(cfg, "gmail", testState[:10]+" "+testState[11:], testVerifier, nil); got != "" {
 		t.Errorf("spaced AuthURL state = %q, want empty", got)
 	}
-	if _, err := Exchange(ctx, cfg, Gmail, "co de", testVerifier, nil); err == nil {
+	if _, err := Exchange(ctx, cfg, Gmail, "co dexxxxxxxxxxxxxx", testVerifier, nil); err == nil {
 		t.Fatal("spaced Exchange code should fail")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("spaced code should be a deterministic 400, got %v", err)

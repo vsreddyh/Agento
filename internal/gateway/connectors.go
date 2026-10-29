@@ -821,6 +821,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			callbackStateReject)
 		return
 	}
+	// Floor like state: Google codes are hundreds of chars, so anything
+	// under MinStateLen is hand-minted junk — dead-attempt before it can
+	// burn the single-use state on a Google round-trip that only 502s.
+	if len(code) < connectors.MinStateLen {
+		callbackDeadAttempt(w, r)
+		return
+	}
 	if len(state) < connectors.MinStateLen {
 		callbackDeadAttempt(w, r)
 		return

@@ -298,7 +298,7 @@ func TestConnectorsCallbackRejectsInvalidUTF8Verifier(t *testing.T) {
 	defer close()
 	store := invalidUTF8Store{connectors.NewMemoryStore()}
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid-utf8 verifier: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -322,7 +322,7 @@ func TestConnectorsCallbackRejectsSpacedVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: spacedVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("spaced verifier: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -345,7 +345,7 @@ func TestConnectorsCallbackRejectsOversizedVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: oversizedVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized verifier: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -366,7 +366,7 @@ func TestConnectorsCallbackRejectsControlVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: controlVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("control verifier: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -410,7 +410,7 @@ func TestConnectorsCallbackFullFlow(t *testing.T) {
 		t.Fatalf("no state in %s", authURL)
 	}
 	// Exchange through the callback.
-	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=code1&state="+state, "")
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=codecodecodecodecode1&state="+state, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("callback: %d %s", rec.Code, rec.Body)
 	}
@@ -434,7 +434,7 @@ func TestConnectorsCallbackFullFlow(t *testing.T) {
 		t.Fatalf("decrypt = %q, %v", open, err)
 	}
 	// Replaying the same state fails: single-use.
-	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=code1&state="+state, "")
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=codecodecodecodecode1&state="+state, "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("replay: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -466,7 +466,7 @@ func TestConnectorsCallbackRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec := do(t, srvFail, http.MethodGet, "/api/connectors/callback?code=bad&state="+uf.Query().Get("state"), ""); rec.Code != http.StatusBadGateway {
+	if rec := do(t, srvFail, http.MethodGet, "/api/connectors/callback?code=badbadbadbadbadbad01&state="+uf.Query().Get("state"), ""); rec.Code != http.StatusBadGateway {
 		t.Fatalf("bad exchange: %d, want 502 (%s)", rec.Code, rec.Body)
 	}
 }
@@ -540,7 +540,7 @@ func TestConnectorsCallbackRejectsControlBytes(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%00b&state=ssssssssssssssssssssss", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%00bxxxxxxxxxxxxxxxxxxxx&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("control-byte code: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -555,7 +555,7 @@ func TestConnectorsCallbackRejectsSpacedCode(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%20b&state=ssssssssssssssssssssss", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%20bxxxxxxxxxxxxxxxxxxxx&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("spaced code: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -595,7 +595,7 @@ func TestConnectorsCallbackRejectsInvalidUTF8(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=%C0%80&state=ssssssssssssssssssssss", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=%C0%80xxxxxxxxxxxxxxxxxxxx&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid-utf8 code: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -771,7 +771,7 @@ func TestConnectorsCallbackWhitespaceAccessStaysEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec = do(t, gsrv, http.MethodGet, "/api/connectors/callback?code=x&state="+u.Query().Get("state"), "")
+	rec = do(t, gsrv, http.MethodGet, "/api/connectors/callback?code=xxxxxxxxxxxxxxxxxxxxxx&state="+u.Query().Get("state"), "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("callback: %d %s", rec.Code, rec.Body)
 	}
@@ -797,7 +797,7 @@ func TestConnectorsCallbackServesHTMLToBrowsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state="+u.Query().Get("state"), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=xxxxxxxxxxxxxxxxxxxxxx&state="+u.Query().Get("state"), nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	req.Header.Set("Accept", "text/html")
 	rec2 := httptest.NewRecorder()
@@ -1117,7 +1117,7 @@ func TestConnectorsCallbackRejectsBadRedirect(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: badRedirectStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad redirect: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -1160,7 +1160,7 @@ func TestConnectorsCallbackSubsetScopeWarns(t *testing.T) {
 	}
 	// Grant read-only only: compose is missing.
 	scope := url.QueryEscape("https://www.googleapis.com/auth/gmail.readonly")
-	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state+"&scope="+scope, "")
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state="+state+"&scope="+scope, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("subset grant should still connect: %d (%s)", rec.Code, rec.Body)
 	}
@@ -1201,7 +1201,7 @@ func TestConnectorsCallbackHugeScopeStillConnects(t *testing.T) {
 	if state == "" {
 		t.Fatalf("no state in %s", authURL)
 	}
-	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state+"&scope="+strings.Repeat("s", 3000), "")
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state="+state+"&scope="+strings.Repeat("s", 3000), "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("huge-scope valid attempt: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
@@ -1242,7 +1242,7 @@ func TestConnectorsCallbackLogsPinnedDivergence(t *testing.T) {
 	}
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
 	_ = verifier
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state, "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state="+state, "")
 	_ = rec
 	mu.Lock()
 	defer mu.Unlock()
@@ -1280,7 +1280,7 @@ func TestConnectorsCallbackBlankScopeIsAbsent(t *testing.T) {
 	if state == "" {
 		t.Fatalf("no state in %s", authURL)
 	}
-	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state+"&scope=%20%20", "")
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&state="+state+"&scope=%20%20", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("blank-scope grant should still connect: %d (%s)", rec.Code, rec.Body)
 	}
@@ -1333,7 +1333,7 @@ func TestConnectorsCallbackDuplicateParamsLog(t *testing.T) {
 	if state == "" {
 		t.Fatalf("no state in %s", authURL)
 	}
-	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&code=junk&state="+state, "")
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=cccccccccccccccccccccc&code=junk&state="+state, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("duplicate-code valid attempt: %d (%s)", rec.Code, rec.Body)
 	}
@@ -1347,5 +1347,20 @@ func TestConnectorsCallbackDuplicateParamsLog(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("duplicate params should log lengths only, got: %q", logged)
+	}
+}
+
+// A junk-short code dead-attempts before burning the state on a Google
+// round-trip: no mint produces a 1-char code.
+func TestConnectorsCallbackRejectsShortCode(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	srv := oauthServer(t, cfg)
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state="+strings.Repeat("s", 22), "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("short code: %d, want 400 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "start over from connect") {
+		t.Fatalf("short code should dead-attempt, got: %s", rec.Body)
 	}
 }

@@ -352,7 +352,8 @@ The refusal is enforced in the relay before the approval check, audited as
 `connector_draft_only`, and parks no approval card. Token placement: OAuth
 refresh tokens live **server-side in Mongo** (`connectors` collection,
 envelope-encrypted), never in the app and never pasted in chat — the API
-returns status + scopes only, and disconnect `$unset`s the token columns.
+returns status + scopes only, and disconnect clears the tokens (`$unset`
+of the token columns on Mongo, whole-row delete on memory).
 Already-fetched data (chat history) is not wiped on
 disconnect; disconnect stops future access. Without Mongo the list still
 answers from memory but nothing survives a restart and no token can be
