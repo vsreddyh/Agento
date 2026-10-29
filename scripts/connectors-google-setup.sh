@@ -225,7 +225,7 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # ${ENV_FILE:-...} keeps the library contract: callers (and dry-run renders
 # against a throwaway copy) can point this elsewhere.
 ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
-TS_HOST="${TS_HOST:-$(hostname -s)}"
+TS_HOST="${TS_HOST:-}"  # defaulted to hostname -s in stage 3, after the hostname preflight below
 TS_DNS="${TS_DNS:-}"          # <name>.<tailnet>.ts.net, no trailing dot
 REDIRECT_URI="${REDIRECT_URI:-}"  # preset honoured; empty means derive from TS_DNS below
 _redirect_preset="${REDIRECT_URI:-}"
@@ -280,8 +280,9 @@ note "This host is the live stack. Writing .env is safe (inert until the"
 note "pi container is recreated — ./scripts/hermes.sh restart recreates it;"
 note "a plain container restart without recreation will not pick up .env)."
 note "Nothing is restarted by this wizard."
-note "Dry-run knobs (all optional): TS_DNS / REDIRECT_URI presets skip"
-note "discovery, ENV_FILE points at another file, SKIP_PROBE=1 skips the wait."
+note "Dry-run knobs (all optional): TS_DNS presets skip discovery and the"
+note "probe wait, REDIRECT_URI presets skip derivation, ENV_FILE points at"
+note "another file, SKIP_PROBE=1 skips the wait."
 printf '\n'
 if ! confirm "Proceed with Tailscale Funnel setup on this host?"; then
   say "Stopped. Nothing changed."
@@ -568,25 +569,25 @@ note "One URI only. A typo here surfaces later as redirect_uri_mismatch in the"
 note "browser while every server-side check still passes."
 printf '\n'
 pause "Press Enter once the client is created and the dialog shows ID + secret."
-step "Copy the Client ID (…apps.googleusercontent.com)."
-ask GOOGLE_CLIENT_ID "Client ID:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
-step "Copy the Client secret (starts GOCSPX-). It is shown once."
-ask_secret GOOGLE_CLIENT_SECRET "Client secret (hidden):" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
-# Console copy-paste trails whitespace; strip it before the shape checks so
-# a trailing space doesn't burn the whole stage-7 progress.
-GOOGLE_CLIENT_ID=$(printf '%s' "$GOOGLE_CLIENT_ID" | tr -d '[:space:]')
-GOOGLE_CLIENT_SECRET=$(printf '%s' "$GOOGLE_CLIENT_SECRET" | tr -d '[:space:]')
-
-printf '\n'
-say "Checking the two values look like what Google issues…"
-if [[ "$GOOGLE_CLIENT_ID" != *".apps.googleusercontent.com" ]]; then
-  warn "client id doesn't end in .apps.googleusercontent.com — double-check it"
-  if ! confirm "Keep it anyway?"; then exit 1; fi
-fi
-if [[ "$GOOGLE_CLIENT_SECRET" != GOCSPX-* ]]; then
-  warn "client secret doesn't start with GOCSPX- — double-check it"
-  if ! confirm "Keep it anyway?"; then exit 1; fi
-fi
+# Retry loop like TS_HOST above: a wrong paste must not burn the console
+# work that led here. EOF still exits (a wizard needs a terminal).
+while true; do
+  step "Copy the Client ID (…apps.googleusercontent.com)."
+  ask GOOGLE_CLIENT_ID "Client ID:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+  step "Copy the Client secret (starts GOCSPX-). It is shown once."
+  ask_secret GOOGLE_CLIENT_SECRET "Client secret (hidden):" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+  # Console copy-paste trails whitespace; strip it before the shape checks so
+  # a trailing space doesn't fail a good paste (tokens never contain any).
+  GOOGLE_CLIENT_ID=$(printf '%s' "$GOOGLE_CLIENT_ID" | tr -d '[:space:]')
+  GOOGLE_CLIENT_SECRET=$(printf '%s' "$GOOGLE_CLIENT_SECRET" | tr -d '[:space:]')
+  _bad=""
+  [[ "$GOOGLE_CLIENT_ID" != *".apps.googleusercontent.com" ]] && _bad="client id (want …apps.googleusercontent.com)"
+  [[ "$GOOGLE_CLIENT_SECRET" != GOCSPX-* ]] && _bad="${_bad:+$_bad and }client secret (want GOCSPX-…)"
+  if [[ -z "$_bad" ]]; then unset _bad; break; fi
+  warn "doesn't look like what Google issues: $_bad — check the paste"
+  unset _bad
+  if ! confirm "Re-enter both values?"; then exit 1; fi
+done
 
 # ── Stage 8: write .env + verify ──────────────────────────────────────────
 stage "Write .env and verify"
@@ -595,15 +596,28 @@ BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
 cp -p "$ENV_FILE" "$BACKUP"
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
 # Secrets are about to land in this file: 0600 regardless of what the
-# checkout/editor left behind (a fresh file already gets 0600 in write_env).
-chmod 600 "$ENV_FILE"
-# Backups are full-secret copies — keep the last 5, prune the rest.
+# checkout/editor left behind (a fresh file already gets 0600 in write_env) —
+# and the backup holds the same secrets, so it gets 0600 too.
+chmod 600 "$ENV_FILE" "$BACKUP"
+# Backups are full-secret copies — keep the 5 newest by mtime, prune the
+# rest. Pure bash (-ot comparison): no ls parsing, no GNU-only flags.
 _baks=(); shopt -s nullglob; _baks=("$ENV_FILE".bak.*); shopt -u nullglob
-if (( ${#_baks[@]} > 5 )); then
-  printf '%s\n' "${_baks[@]}" | sort -r | tail -n +6 | xargs -r rm -f --
-  note "pruned .env backups to the last 5"
-fi
-unset _baks
+_pruned=0
+while (( ${#_baks[@]} > 5 )); do
+  _oldest="${_baks[0]}"
+  for _b in "${_baks[@]}"; do
+    if [[ "$_b" -ot "$_oldest" ]]; then _oldest="$_b"; fi
+  done
+  rm -f -- "$_oldest"
+  _kept=()
+  for _b in "${_baks[@]}"; do
+    [[ "$_b" != "$_oldest" ]] || continue
+    _kept+=("$_b")
+  done
+  _baks=("${_kept[@]}"); _pruned=1
+done
+(( _pruned )) && note "pruned .env backups to the last 5"
+unset _baks _b _oldest _kept _pruned
 
 if v=$(_existing CONNECTORS_ENCRYPTION_KEY 2>/dev/null) && [[ -n "$v" ]]; then
   note "keeping the existing envelope key (rotating it would invalidate every stored grant)"
@@ -680,7 +694,7 @@ printf '     container is recreated — ./scripts/hermes.sh restart recreates\n'
 printf '     it (a plain container restart without recreation will not pick\n'
 printf '     up .env changes).\n'
 printf '  2. Compare the canonical string the gateway logs at boot:\n'
-printf '       podman-compose -f docker/docker-compose.yml logs pi | grep "OAuth configured"\n'
+printf '       %s -f docker/docker-compose.yml logs pi | grep "OAuth configured"\n' "${_compose[*]}"
 printf '     with what is registered in Google. They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
 printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
