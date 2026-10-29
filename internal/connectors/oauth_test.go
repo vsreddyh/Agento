@@ -305,7 +305,7 @@ func TestCanonicalRedirectRejectsOversized(t *testing.T) {
 // consent URL Google 414s.
 func TestOAuthConfigRejectsLongClient(t *testing.T) {
 	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	t.Setenv("GOOGLE_CLIENT_ID", strings.Repeat("x", MaxStateFieldLen+1))
+	t.Setenv("GOOGLE_CLIENT_ID", strings.Repeat("x", MaxCredentialLen+1))
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
 	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
@@ -318,7 +318,7 @@ func TestOAuthConfigRejectsLongClient(t *testing.T) {
 // would otherwise mint a consent URL Google 414s, and a multi-KB provider
 // token would 502 at seal time after the state is consumed.
 func TestAuthURLRejectsLongClient(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: strings.Repeat("x", MaxStateFieldLen+1), ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	cfg := &OAuthConfig{ClientID: strings.Repeat("x", MaxCredentialLen+1), ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("oversized client id URL = %q, want empty", got)
 	}

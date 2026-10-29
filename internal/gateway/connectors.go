@@ -196,7 +196,10 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, id string, logf func(
 			// verbatim on success), and triage needs the mismatch
 			// candidate without re-reading .env. Id named like every
 			// sibling log on this path, so triage greps single-term.
-			logf("connectors: connect redirect invalid for %q (want %q): %v", id, bounded(cfg.RedirectURL), err)
+			// Error quoted: canonicaliser errors are static strings today,
+			// but quoting keeps the every-value-quoted contract total if
+			// one ever interpolates input.
+			logf("connectors: connect redirect invalid for %q (want %q): %q", id, bounded(cfg.RedirectURL), err.Error())
 		}
 		return "", err
 	}

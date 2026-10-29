@@ -302,7 +302,7 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	if HasControl(clientID) || HasControl(clientSecret) || !utf8.ValidString(clientID) || !utf8.ValidString(clientSecret) {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters or invalid UTF-8")
 	}
-	if len(clientID) > MaxStateFieldLen || len(clientSecret) > MaxStateFieldLen {
+	if len(clientID) > MaxCredentialLen || len(clientSecret) > MaxCredentialLen {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET too long")
 	}
 	// Fail closed on a misregistered redirect: Google matches the callback
@@ -395,6 +395,16 @@ const MaxCipherLen = 4096
 // bound, which has nothing to do with token size.
 const MaxPlaintextLen = 2048
 
+// MaxCredentialLen bounds the OAuth client id/secret at load and at every
+// helper copy. Same value as MaxStateFieldLen today, deliberately a
+// separate name: the 2048 here is about credential size (client ids and
+// secrets are ~30-70 chars; this cap only ever fires on garbage or
+// operator paste error), while MaxStateFieldLen is about OAuth input size
+// (codes, states, verifiers, redirects). If Google lengthens secrets past
+// 2048, raise this — not the OAuth-input bound, which has nothing to do
+// with credential size.
+const MaxCredentialLen = 2048
+
 // AuthURL builds the Google consent URL for one connector attempt. Offline
 // access (a refresh token) + consent prompt every time: without
 // prompt=consent Google returns a refresh token only on the FIRST grant,
@@ -448,7 +458,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
-	if len(trimmed.ClientID) > MaxStateFieldLen || len(trimmed.ClientSecret) > MaxStateFieldLen {
+	if len(trimmed.ClientID) > MaxCredentialLen || len(trimmed.ClientSecret) > MaxCredentialLen {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: oversized client credential", id)
 		}
@@ -628,7 +638,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if HasControl(cc.ClientID) || HasControl(cc.ClientSecret) || !utf8.ValidString(cc.ClientID) || !utf8.ValidString(cc.ClientSecret) {
 		return nil, deny("oauth client credential is invalid")
 	}
-	if len(cc.ClientID) > MaxStateFieldLen || len(cc.ClientSecret) > MaxStateFieldLen {
+	if len(cc.ClientID) > MaxCredentialLen || len(cc.ClientSecret) > MaxCredentialLen {
 		return nil, deny("oauth client credential too long")
 	}
 	// Length gate above covers the trimmed values copied here — keep the

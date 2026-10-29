@@ -136,6 +136,7 @@ retention pass must not add a TTL to this collection.
   callback); `cmd/pi-gateway` wires the store with the same memory
   fallback + index pattern as the siblings.
 - `cmd/mcp-gate` refuses draft-only sends before the approval check.
-- App Connect UI and `mcp.json` wiring arrive stacked on top — this PR
-  is the shape they fill in (grant pipeline included: AuthURL →
-  callback → exchange → sealed tokens → connected).
+- App Connect UI and `mcp.json` wiring arrive stacked on top — this PR is
+  the shape they fill in. Remaining follow-ups are exactly those two; the
+  grant pipeline lands here (AuthURL → callback → exchange → sealed
+  tokens → connected).
