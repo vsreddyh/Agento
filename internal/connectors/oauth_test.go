@@ -802,3 +802,19 @@ func TestExchangeClampsFarFutureExpiry(t *testing.T) {
 		t.Fatalf("returned expiry should be clamped, got %v", tok.Expiry)
 	}
 }
+
+func TestExchangeZeroesExpiryWithoutAccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"   ","refresh_token":"r123","expires_in":3600,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	tok, err := Exchange(context.Background(), cfg, Gmail, "code", testVerifier, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tok.Expiry.IsZero() {
+		t.Fatalf("expiry without access should be zeroed, got %v", tok.Expiry)
+	}
+}

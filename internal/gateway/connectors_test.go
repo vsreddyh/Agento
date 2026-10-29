@@ -1292,3 +1292,19 @@ func TestConnectorsCallbackBlankScopeIsAbsent(t *testing.T) {
 		}
 	}
 }
+
+// Fallthrough echoes the normalised verb, not the raw path: padding the
+// verb forgives routing but must not leak the raw spelling into the body.
+func TestConnectorsFallthroughEchoesNormalised(t *testing.T) {
+	srv := connectorsServer(t)
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/%20nosuch%20", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("padded verb: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "nosuch") {
+		t.Fatalf("fallthrough should echo normalised verb, got: %s", rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "%20") {
+		t.Fatalf("fallthrough must not echo raw encoding, got: %s", rec.Body)
+	}
+}

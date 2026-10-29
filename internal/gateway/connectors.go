@@ -455,9 +455,10 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		// Honest noun: the connector is fine, the verb is garbage. Same
 		// 404 with no echo and no oracle — only the noun changes, so the
 		// next triage grep for a bad-verb 404 lands on the verb, not the
-		// connector. Echo matches the unknown-path fallthrough below.
+		// connector. Echoes the normalised action (what the switch below
+		// sees), not the raw path — stored == logged by construction.
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown path "+bounded(approvals.ScrubError(path)))
+			"unknown path "+bounded(approvals.ScrubError(action)))
 		return
 	}
 	// Verbs fold like ids: "Gmail/Disconnect" from a hand test lands on the
@@ -534,14 +535,15 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			"no verb on /api/connectors/{id}; use /disconnect or /connect")
 		return
 	}
-	// Fallthrough: echo the cleaned connector segment the router rejected,
-	// not the raw URL (which still carries the profile prefix and
-	// percent-encoding). Note the gateway-wide decoding underneath:
+	// Fallthrough: echo the normalised action (what the switch saw), not
+	// the raw URL (which still carries the profile prefix and
+	// percent-encoding). Stored == logged: triage greps the spelling the
+	// store would have seen. Note the gateway-wide decoding underneath:
 	// splitProfile reads r.URL.Path (decoded), so %2F folds to / before the
 	// Cut — fail-closed either way (both parts are validated), consistent
 	// with every other route in this server.
 	apiError(w, http.StatusNotFound, "invalid_request_error", "",
-		"unknown path "+bounded(approvals.ScrubError(path)))
+		"unknown path "+bounded(approvals.ScrubError(action)))
 }
 
 // handleConnectorConnect starts one OAuth attempt: mints state+verifier,

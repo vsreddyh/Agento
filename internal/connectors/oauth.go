@@ -828,10 +828,10 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// Dead caller before the fallback wrap below (same ordering as the
 	// gateway fast paths): a cancelled parent with no deadline must not
 	// arm a timer that fires immediately, nor pay the guards below.
-	// Deterministic 400, not a 502 — nothing was sent. Supersedes the
-	// config-first ordering for the cancel case specifically: a dead ctx
-	// is cheaper to report than a config shape to diagnose, and the timer
-	// must never arm on a dead parent.
+	// Deterministic 400, not a 502 — nothing was sent. Intentionally ahead
+	// of even config-shape (unlike AuthURL's config-first): timer safety
+	// outranks config diagnosis — a dead ctx must never arm the fallback
+	// timer, while a config error is still logged on the next live tap.
 	if ctx.Err() != nil {
 		if logf != nil {
 			logf("connectors: grant exchange refused: aborted, ended context")
@@ -1025,6 +1025,14 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// Same MaxPlaintextLen the seal gate enforces, checked here first.
 	if len(tok.RefreshToken) > MaxPlaintextLen || len(tok.AccessToken) > MaxPlaintextLen {
 		return nil, deny("grant exchange returned an oversized token")
+	}
+	// Single-representation like the gateway and both SetTokens: an
+	// expiry-without-access pair is rejected downstream, so zero the clock
+	// when the cipher is empty — before the clamp below — instead of
+	// delivering a pair no store accepts. Checked == delivered end to end:
+	// readers key off the cipher (TokenRow), never a bare timestamp.
+	if tok.AccessToken == "" {
+		tok.Expiry = time.Time{}
 	}
 	// Clamp the returned Expiry too: the write sites re-clamp on their own
 	// clocks (single owners), but a scheduling caller that uses tok.Expiry
