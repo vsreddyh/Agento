@@ -3,6 +3,8 @@
 # ────────────────────────────────────────────────────────
 .env
 !.env.example
+# Timestamped .env backups written by setup wizards (full secret copies).
+.env.bak.*
 
 # ────────────────────────────────────────────────────────
 # Containers

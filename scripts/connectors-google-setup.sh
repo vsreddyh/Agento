@@ -234,7 +234,7 @@ banner "Google connectors over Tailscale Funnel"
 
 # ── Stage 1: preflight ────────────────────────────────────────────────────
 stage "Preflight: what this will change"
-say "This sets up the OAuth callback for Gmail/Calendar connectors (#367/#371)."
+say "This sets up the OAuth callback for the Gmail/Calendar connectors."
 say "Plan: Tailscale Funnel terminates public TLS on 443 and forwards to the"
 say "      existing nginx proxy on localhost:8080. No ports are opened, no"
 say "      domain is bought. The app keeps its current Server URL."
@@ -302,7 +302,10 @@ else
   fi
   # Intentionally the upstream installer (no pinning): Tailscale's documented
   # install path; the repo otherwise avoids pipe-to-shell for its own code.
-  curl -fsSL https://tailscale.com/install.sh | sh
+  curl -fsSL https://tailscale.com/install.sh | sh || {
+    warn "Tailscale download/install failed (network?). Re-run the wizard when it works."
+    exit 1
+  }
   printf '\n'
   printf '  %s✓%s installed %s\n' "$GREEN" "$RESET" "$(tailscale version 2>/dev/null | head -n1 || true)"
 fi
@@ -355,17 +358,25 @@ else
     sed 's/^/      /' "$LOG" || true
     pause "Fix the above, then press Enter to check again."
   fi
-  for __i in $(seq 1 60); do
-    tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && break
-    printf '%s' '.'; sleep 2
-  done
-  printf '\n'
+  # If the setup process already exited (bad hostname, no root, daemon down),
+  # the wait below can never succeed — check state once and fall through to
+  # the "not Running yet" exit instead of two minutes of dots.
+  _up_alive=0; kill -0 "$TS_PID" 2>/dev/null && _up_alive=1
+  if (( _up_alive == 0 )) && ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
+    note "setup process already exited and daemon not Running — skipping the wait"
+  else
+    for __i in $(seq 1 60); do
+      tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && break
+      printf '%s' '.'; sleep 2
+    done
+    printf '\n'
+  fi
+  unset _up_alive
   # `tailscale up` exits once the node is up, so by the time Running is
-  # confirmed it is already reaped-or-reapable: wait unconditionally so the
-  # EXIT trap can never fire on a recycled PID. (wait on an exited child
-  # returns at once; the still-connecting case exits 1 just below, where a
-  # live process is genuinely still ours to clean up via the trap.)
-  if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
+  # confirmed it is already reaped-or-reapable: wait so the EXIT trap can
+  # never fire on a recycled PID. (Already-connected takes this path with
+  # TS_PID empty — wait on "" is suppressed, hence the guard.)
+  if [[ -n "$TS_PID" ]] && tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
     wait "$TS_PID" 2>/dev/null || true
     TS_PID=""
   fi
@@ -383,6 +394,12 @@ fi
 # it — same contract as ENV_FILE. Empty means discover from the daemon.
 _DNS_FROM_PRESET=0
 if [[ -n "$TS_DNS" ]]; then
+  # Presets are trusted for dry-runs but not for sed: validate the shape
+  # before it reaches the stage-8 hostname refresh (|/&/newline injection).
+  if [[ ! "$TS_DNS" =~ ^[A-Za-z0-9.-]+\.ts\.net$ ]]; then
+    warn "preset TS_DNS=$TS_DNS is not a <name>.<tailnet>.ts.net hostname; unset it to discover from the daemon"
+    exit 1
+  fi
   note "using preset TS_DNS=$TS_DNS (skipping discovery)"
   _DNS_FROM_PRESET=1
 else
@@ -546,6 +563,10 @@ step "Copy the Client ID (…apps.googleusercontent.com)."
 ask GOOGLE_CLIENT_ID "Client ID:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
 step "Copy the Client secret (starts GOCSPX-). It is shown once."
 ask_secret GOOGLE_CLIENT_SECRET "Client secret (hidden):" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+# Console copy-paste trails whitespace; strip it before the shape checks so
+# a trailing space doesn't burn the whole stage-7 progress.
+GOOGLE_CLIENT_ID=$(printf '%s' "$GOOGLE_CLIENT_ID" | tr -d '[:space:]')
+GOOGLE_CLIENT_SECRET=$(printf '%s' "$GOOGLE_CLIENT_SECRET" | tr -d '[:space:]')
 
 printf '\n'
 say "Checking the two values look like what Google issues…"
