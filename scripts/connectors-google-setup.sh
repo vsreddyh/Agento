@@ -223,8 +223,12 @@ trap wizard_cleanup EXIT INT TERM
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # ${ENV_FILE:-...} keeps the library contract: callers (and dry-run renders
-# against a throwaway copy) can point this elsewhere.
+# against a throwaway copy) can point it elsewhere.
 ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
+# The library already defaulted ENV_FILE to the relative ".env" at load, so
+# the :- above never fires on a normal run — normalize that exact default to
+# the repo root, or running from /tmp reads /tmp/.env and stage 8 exits.
+if [[ "$ENV_FILE" == ".env" ]]; then ENV_FILE="$REPO_DIR/.env"; fi
 TS_HOST="${TS_HOST:-}"  # defaulted to hostname -s in stage 3, after the hostname preflight below
 TS_DNS="${TS_DNS:-}"          # <name>.<tailnet>.ts.net, no trailing dot
 REDIRECT_URI="${REDIRECT_URI:-}"  # preset honoured; empty means derive from TS_DNS below
@@ -257,7 +261,7 @@ fi
 # critical one — without it every tailscale-status check misreads as down.
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
-for _dep in jq openssl curl podman-compose seq hostname; do
+for _dep in jq openssl curl podman-compose seq hostname timeout; do
   if ! command -v "$_dep" >/dev/null 2>&1; then _missing="$_missing $_dep"; fi
 done
 unset _dep
@@ -299,6 +303,12 @@ else
   unset _codename
   note "This adds /etc/apt/sources.list.d/tailscale.list and the tailscaled service."
   printf '\n'
+  # The stage-1 EUID gate lets non-root continue; the install itself cannot
+  # succeed without root, so stop here instead of burning a doomed download.
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    warn "cannot install as non-root — re-run with sudo, then re-run this wizard"
+    exit 1
+  fi
   if ! confirm "Install Tailscale now?"; then
     warn "skipped install; re-run this wizard when ready"
     exit 1
@@ -399,7 +409,9 @@ _DNS_FROM_PRESET=0
 if [[ -n "$TS_DNS" ]]; then
   # Presets are trusted for dry-runs but not for sed: validate the shape
   # before it reaches the stage-8 hostname refresh (|/&/newline injection).
-  if [[ ! "$TS_DNS" =~ ^[A-Za-z0-9.-]+\.ts\.net$ ]]; then
+  # Same strictness as TS_HOST (lowercase, label-bound) plus no ".." — a
+  # typo like -foo..ts.net must fail here, not at the probe in stage 4.
+  if [[ ! "$TS_DNS" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.ts\.net$ ]] || [[ "$TS_DNS" == *".."* ]]; then
     warn "preset TS_DNS=$TS_DNS is not a <name>.<tailnet>.ts.net hostname; unset it to discover from the daemon"
     exit 1
   fi
@@ -408,7 +420,8 @@ if [[ -n "$TS_DNS" ]]; then
 else
   TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)
 fi
-if [[ -z "$TS_DNS" || "$TS_DNS" == "null" ]]; then
+# (no "null" check: jq -r ... // empty never emits the literal string.)
+if [[ -z "$TS_DNS" ]]; then
   warn "could not read the tailnet DNS name (is MagicDNS enabled?)"
   exit 1
 fi
@@ -465,7 +478,7 @@ if [[ -n "$_redirect_preset" ]]; then
   # Same treatment as the TS_DNS preset: write_env single-quote-escapes but
   # does not stop newlines, so a multiline preset would write a second line
   # into .env. read-based input can't contain one — only presets can.
-  if [[ ! "$_redirect_preset" =~ ^https://[A-Za-z0-9.-]+\.ts\.net/p/api/connectors/callback$ ]]; then
+  if [[ ! "$_redirect_preset" =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.ts\.net/p/api/connectors/callback$ ]] || [[ "$_redirect_preset" == *".."* ]]; then
     warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/p/api/connectors/callback URL; unset it to derive from TS_DNS"
     exit 1
   fi
@@ -497,7 +510,9 @@ fi
 printf '\n'
 if (( ok )); then
   printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$TS_DNS"
-  issuer=$(openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
+  # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
+  # outlast the probe budget (timeout exits 124, swallowed by || true).
+  issuer=$(timeout 10 openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
            | openssl x509 -noout -issuer 2>/dev/null || true)
   [[ -n "$issuer" ]] && note "$issuer" && note "Google accepts Let's Encrypt-issued certs."
 else
@@ -591,7 +606,7 @@ done
 
 # ── Stage 8: write .env + verify ──────────────────────────────────────────
 stage "Write .env and verify"
-[[ -f "$ENV_FILE" ]] || { warn "no $ENV_FILE at $REPO_DIR"; exit 1; }
+[[ -f "$ENV_FILE" ]] || { warn "no $ENV_FILE at $REPO_DIR — fresh checkout? run ./scripts/hermes.sh init first (or cp .env.example .env)"; exit 1; }
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
 cp -p "$ENV_FILE" "$BACKUP"
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
@@ -667,7 +682,7 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
   _render_missing=""
   for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
     if grep -qE "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[^\"'[:space:]]" "$RENDER_OUT"; then
-      printf '  %s✓%s %s reaches the pi service\n' "$GREEN" "$RESET" "$k"
+      printf '  %s✓%s %s present in rendered compose config\n' "$GREEN" "$RESET" "$k"
     else
       printf '  %s✗%s %s renders EMPTY — fix it before restarting\n' "$YELLOW" "$RESET" "$k"
       _render_missing="$_render_missing $k"
