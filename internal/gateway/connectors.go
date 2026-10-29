@@ -323,26 +323,27 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	}
 
 	id, action, _ := strings.Cut(path, "/")
-	// Control bytes checked on the RAW segments, before any trim: TrimSpace
-	// strips \n/\r/\t, so checking after folding would turn " \n " into ""
-	// (no-verb 405) while the id path rejects the same bytes with a bare
-	// 404. Same bare echoless 404 for both — JSON-escaping keeps the app
-	// safe, but line-oriented log tailing must never see an injected break,
-	// and no valid id or verb contains one. UTF-8 checked too: invalid
-	// bytes decode as RuneError, not control — same half the OAuth legs
-	// gate explicitly.
+	// Trim first, then check — matching the code/state legs and every store
+	// verb: edge whitespace and invisible Cf (zero-width, BOM) are forgiven
+	// at the edges, so a zero-width-prefixed id folds to gmail here instead
+	// of 404ing what the store would accept. Interior controls still fail closed, and
+	// empty-after-trim stays on its natural branch (blank id 404s below,
+	// blank verb hits the same no-verb 405 as a missing verb) — blank ==
+	// absent on both segments, so no branch distinguishes them.
+	id = connectors.TrimCredential(id)
+	action = connectors.TrimCredential(action)
 	if id == "" || connectors.HasControl(id) || connectors.HasControl(action) || !utf8.ValidString(id) || !utf8.ValidString(action) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
 		return
 	}
 	// Verbs fold like ids: "Gmail/Disconnect" from a hand test lands on the
-	// verb instead of 404ing as an unknown path. Trimmed like the id — a
+	// verb instead of 404ing as an unknown path. Already trimmed above — a
 	// padded verb is client noise, not a different resource. Length-capped
 	// like the id: bounded() keeps any echo safe and the server caps total
 	// header size anyway, but there is no reason to pay rune-scan + alloc
 	// on a garbage path before the inevitable 404.
-	action = strings.ToLower(connectors.TrimCredential(action))
+	action = strings.ToLower(action)
 	if len(action) > maxConnectorIDLen {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown path "+bounded(approvals.ScrubError(path)))

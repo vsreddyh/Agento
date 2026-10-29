@@ -191,8 +191,9 @@ func TrimCredential(s string) string {
 // connector MCP servers land.
 func IsDraftOnlySend(server, tool string) bool {
 	// NormalizedID, not a local fold: same composition as every sibling,
-	// so the next fold change cannot strand this one.
-	if len(server) > maxConnectorIDLen {
+	// so the next fold change cannot strand this one. Both parts gated:
+	// a multi-MB tool pays the same fold alloc as a multi-MB server.
+	if len(server) > maxConnectorIDLen || len(tool) > maxConnectorIDLen {
 		return false
 	}
 	server = NormalizedID(server)

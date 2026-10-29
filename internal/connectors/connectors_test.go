@@ -1462,6 +1462,13 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	if !IsDraftOnlySend("gmail⁠", "send_message⁠") {
 		t.Error("Cf-suffixed send should still be refused")
 	}
+	// Oversized inputs fail closed before the fold alloc, on both parts.
+	if IsDraftOnlySend(strings.Repeat("x", maxConnectorIDLen+1), "send_message") {
+		t.Error("oversized server must not be refused")
+	}
+	if IsDraftOnlySend("gmail", strings.Repeat("x", maxConnectorIDLen+1)) {
+		t.Error("oversized tool must not be refused")
+	}
 }
 
 // Guard order is a contract: empty → length → control → shape → Known

@@ -184,6 +184,24 @@ func TestConnectorsNoVerbIs405WithAllow(t *testing.T) {
 	}
 }
 
+// Trim-then-check on the id/action segments: an edge zero-width id folds
+// and routes (matching what the store accepts), and a blank verb answers
+// the same no-verb 405 as a missing one — blank == absent, no oracle.
+func TestConnectorsSegmentsTrimBeforeCheck(t *testing.T) {
+	srv := connectorsServer(t)
+	// U+200B zero-width space is Cf: TrimCredential forgives it at the
+	// edge, so the Cf-prefixed id reaches the verb instead of 404ing.
+	rec := do(t, srv, http.MethodPost, "/api/connectors/%E2%80%8Bgmail/disconnect", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Cf-prefixed id: %d, want 200 (%s)", rec.Code, rec.Body)
+	}
+	// Whitespace-only verb is no verb: same 405 as the missing-verb branch.
+	rec = do(t, srv, http.MethodPost, "/api/connectors/gmail/%0A", "")
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("blank verb: %d, want 405 (%s)", rec.Code, rec.Body)
+	}
+}
+
 func TestConnectorsCollectionWrongMethod(t *testing.T) {
 	srv := connectorsServer(t)
 	// Collection with wrong method: 405 with Allow, on both spellings.
