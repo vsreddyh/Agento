@@ -475,7 +475,7 @@ func run() error {
 			// cut at a rune boundary, so any storable value logs whole
 			// and the byte-for-byte comparison this line exists for never
 			// truncates a value the server would actually send.
-			redirect := truncateForLog(os.Getenv("GOOGLE_REDIRECT_URL"), connectors.MaxRedirectLen)
+			redirect := truncateForLog(connectors.RedactURL(os.Getenv("GOOGLE_REDIRECT_URL")), connectors.MaxRedirectLen)
 			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, redirect)
 		} else {
 			connectorOAuth = cfg

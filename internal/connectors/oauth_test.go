@@ -36,7 +36,7 @@ func TestExchangeAgainstStub(t *testing.T) {
 	mkcfg := func() *OAuthConfig {
 		return &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
 	}
-	tok, err := Exchange(context.Background(), mkcfg(), Gmail, "code1", "verifier1", nil)
+	tok, err := Exchange(context.Background(), mkcfg(), Gmail, "code1", testVerifier, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,14 +49,14 @@ func TestExchangeAgainstStub(t *testing.T) {
 	if tok.Expiry.IsZero() || time.Until(tok.Expiry) > time.Hour {
 		t.Errorf("expiry = %v", tok.Expiry)
 	}
-	if _, err := Exchange(context.Background(), mkcfg(), Gmail, "no-refresh", "v", nil); err == nil {
+	if _, err := Exchange(context.Background(), mkcfg(), Gmail, "no-refresh", testVerifier, nil); err == nil {
 		t.Fatal("missing refresh token should fail")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		// Deterministic provider answer, not a flaky upstream: 400 so triage
 		// reads misconfigured consent, not an outage.
 		t.Fatalf("no-refresh should be a non-upstream error, got %v", err)
 	}
-	if _, err := Exchange(context.Background(), mkcfg(), "slack", "code1", "v", nil); err == nil {
+	if _, err := Exchange(context.Background(), mkcfg(), "slack", "code1", testVerifier, nil); err == nil {
 		t.Fatal("unknown connector should fail")
 	}
 }
@@ -71,7 +71,7 @@ func TestExchangeTrimsTokens(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
-	tok, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil)
+	tok, err := Exchange(context.Background(), cfg, Gmail, "code1", testVerifier, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestExchangeRejectsControlToken(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", testVerifier, nil); err == nil {
 		t.Fatal("control-bearing provider token should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("control token should be a deterministic 400, got %v", err)
@@ -103,7 +103,7 @@ func TestExchangeRejectsControlToken(t *testing.T) {
 // config missing AuthURL/TokenURL must not reach the token endpoint.
 func TestExchangeRejectsEmptyEndpoints(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback"}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "verifier", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", testVerifier, nil); err == nil {
 		t.Fatal("empty endpoints should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("empty endpoints should be a deterministic 400, got %v", err)
@@ -128,7 +128,7 @@ func TestExchangeLogsGuard(t *testing.T) {
 // AuthURL: a hand-built cfg with blank id/secret can only 400 at Google.
 func TestExchangeRejectsEmptyClient(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "   ", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "verifier", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", testVerifier, nil); err == nil {
 		t.Fatal("blank client id should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("blank client should be a deterministic 400, got %v", err)
@@ -140,12 +140,12 @@ func TestExchangeRejectsEmptyClient(t *testing.T) {
 // the control gate alone would miss them.
 func TestExchangeRejectsControlBytes(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "co\rde", "verifier", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, Gmail, "co\rde", testVerifier, nil); err == nil {
 		t.Fatal("control-byte code should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("control code should be a deterministic 400, got %v", err)
 	}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "v\xc0\x80erifier", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", testVerifierBadUTF8, nil); err == nil {
 		t.Fatal("invalid-utf8 verifier should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("invalid utf8 should be a deterministic 400, got %v", err)
@@ -156,7 +156,7 @@ func TestExchangeRejectsControlBytes(t *testing.T) {
 // id 400s on shape, not 404s on identity — matching AuthURL's order.
 func TestExchangeShapeBeforeIdentity(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://evil.example/x", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if _, err := Exchange(context.Background(), cfg, "slack", "code", "verifier", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, "slack", "code", testVerifier, nil); err == nil {
 		t.Fatal("bad redirect should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("bad-redirect unknown-id should be a deterministic 400, got %v", err)
@@ -390,7 +390,7 @@ func TestExchangeRejectsOversizedToken(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", testVerifier, nil); err == nil {
 		t.Fatal("oversized provider token should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("oversized token should be a deterministic 400, got %v", err)
@@ -517,7 +517,7 @@ func TestRedirectBeforeEndpointsInBothHelpers(t *testing.T) {
 		t.Fatalf("dual-bad AuthURL should fail on redirect, logged %q", logged)
 	}
 	logged = ""
-	if _, err := Exchange(context.Background(), cfg, "gmail", "code", "verifier", logf); err == nil {
+	if _, err := Exchange(context.Background(), cfg, "gmail", "code", testVerifier, logf); err == nil {
 		t.Fatal("dual-bad Exchange should fail")
 	} else if !strings.Contains(logged, "redirect") {
 		t.Fatalf("dual-bad Exchange should fail on redirect, logged %q", logged)
@@ -557,7 +557,7 @@ func TestOAuthConfigRejectsInteriorSpace(t *testing.T) {
 	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
 		t.Errorf("spaced client id URL = %q, want empty", got)
 	}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "verifier", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", testVerifier, nil); err == nil {
 		t.Fatal("spaced client id Exchange should fail")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("spaced client id should be a deterministic 400, got %v", err)
@@ -574,7 +574,7 @@ func TestExchangeRejectsSpacedToken(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", testVerifier, nil); err == nil {
 		t.Fatal("spaced provider token should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("spaced token should be a deterministic 400, got %v", err)
@@ -600,7 +600,7 @@ func TestAuthURLRejectsSpacedEndpoint(t *testing.T) {
 		t.Errorf("spaced endpoint URL = %q, want empty", got)
 	}
 	bad := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t x"}
-	if _, err := Exchange(context.Background(), bad, Gmail, "code", "verifier", nil); err == nil {
+	if _, err := Exchange(context.Background(), bad, Gmail, "code", testVerifier, nil); err == nil {
 		t.Fatal("spaced endpoint Exchange should fail")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("spaced endpoint should be a deterministic 400, got %v", err)

@@ -287,7 +287,7 @@ type controlVerifierStore struct {
 }
 
 func (controlVerifierStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
-	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\x00x"}, nil
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: strings.Repeat("v", 60) + "\x00x"}, nil
 }
 
 // Invalid UTF-8 in a verifier fails the same way: overlong sequences
@@ -312,7 +312,7 @@ type invalidUTF8Store struct {
 }
 
 func (invalidUTF8Store) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
-	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v\xc0\x80x"}, nil
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: strings.Repeat("v", 60) + "\xc0\x80"}, nil
 }
 
 // Interior whitespace in a verifier burns the same way: never
@@ -336,7 +336,7 @@ type spacedVerifierStore struct {
 }
 
 func (spacedVerifierStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
-	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v x"}, nil
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: strings.Repeat("v", 30) + " " + strings.Repeat("v", 30)}, nil
 }
 
 // An oversized verifier burns the same way: CreateState caps it, so only
@@ -1131,7 +1131,7 @@ type badRedirectStore struct {
 }
 
 func (badRedirectStore) ConsumeState(context.Context, string) (connectors.OAuthState, error) {
-	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: "v", RedirectURI: "not-a-url"}, nil
+	return connectors.OAuthState{State: "s1", Connector: "gmail", Verifier: strings.Repeat("v", 64), RedirectURI: "not-a-url"}, nil
 }
 
 // A granted subset still connects (reads keep working) but logs the gap:

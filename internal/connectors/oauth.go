@@ -182,6 +182,22 @@ func validRedirectHost(host string) bool {
 	return true
 }
 
+// RedactURL strips any userinfo for logging: a hand-typed redirect with
+// credentials must never land verbatim in a container log, even on the
+// rejection path that exists to keep credentials out of the log in the
+// first place. Unparseable input logs as-is (trimmed): it failed Parse,
+// so no structured userinfo could be extracted from it — and what remains
+// is the operator's own typo, needed for triage.
+func RedactURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.User == nil {
+		return trimmed
+	}
+	parsed.User = nil
+	return parsed.String()
+}
+
 // CanonicalRedirectURL validates and canonicalises in one step so every
 // caller sends the exact registered shape: absolute http(s), https unless
 // loopback, no userinfo/query/fragment, path ending in the single
@@ -516,6 +532,12 @@ const MaxCredentialLen = 2048
 // MaxStateFieldLen (no RFC bound); only the verifier gets the RFC cap.
 const MaxVerifierLen = 128
 
+// MinVerifierLen is the RFC 7636 floor matching the ceiling above: a
+// shorter verifier mints a challenge Google can only 400, stranding the
+// consent the same way an oversized one does. Enforced alongside the
+// ceiling at every verifier gate.
+const MinVerifierLen = 43
+
 // MaxRedirectLen bounds the registered redirect URL at parse and at every
 // canonical-output check. Same value as MaxStateFieldLen today, deliberately
 // a separate name: the 2048 here is about URL size (registrations are ~60
@@ -661,6 +683,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
+	if len(verifier) < MinVerifierLen {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: undersized verifier", id)
+		}
+		return ""
+	}
 	if HasControl(state) || HasControl(verifier) || !utf8.ValidString(state) || !utf8.ValidString(verifier) || HasWhitespace(state) || HasWhitespace(verifier) {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: invalid state or verifier", id)
@@ -770,6 +798,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	}
 	if len(code) > MaxStateFieldLen || len(verifier) > MaxVerifierLen {
 		return nil, deny("oauth code or verifier too long")
+	}
+	if len(verifier) < MinVerifierLen {
+		return nil, deny("oauth verifier too short")
 	}
 	if HasControl(code) || HasControl(verifier) || !utf8.ValidString(code) || !utf8.ValidString(verifier) || HasWhitespace(code) || HasWhitespace(verifier) {
 		return nil, deny("oauth code or verifier invalid")

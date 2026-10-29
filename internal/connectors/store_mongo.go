@@ -884,6 +884,9 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxVerifierLen {
 		return NewStoreError("oauth state or verifier too long", false)
 	}
+	if len(st.Verifier) < MinVerifierLen {
+		return NewStoreError("oauth verifier too short", false)
+	}
 	if HasControl(st.State) || HasControl(st.Verifier) || !utf8.ValidString(st.State) || !utf8.ValidString(st.Verifier) || HasWhitespace(st.State) || HasWhitespace(st.Verifier) {
 		return NewStoreError("oauth state or verifier invalid", false)
 	}

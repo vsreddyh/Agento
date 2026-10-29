@@ -222,7 +222,7 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, id string, logf func(
 			// Error quoted: canonicaliser errors are static strings today,
 			// but quoting keeps the every-value-quoted contract total if
 			// one ever interpolates input.
-			logf("connectors: connect redirect invalid for %q (want %q): %q", id, bounded(cfg.RedirectURL), err.Error())
+			logf("connectors: connect redirect invalid for %q (want %q): %q", id, bounded(connectors.RedactURL(cfg.RedirectURL)), err.Error())
 		}
 		return "", err
 	}
@@ -837,7 +837,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// All legs burn: controls, invalid UTF-8, whitespace, and length alike
 	// (only code/state fail pre-consume; the verifier can only be checked
 	// after the read).
-	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || connectors.HasWhitespace(st.Verifier) || len(st.Verifier) > connectors.MaxVerifierLen {
+	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) || connectors.HasWhitespace(st.Verifier) || len(st.Verifier) > connectors.MaxVerifierLen || len(st.Verifier) < connectors.MinVerifierLen {
 		callbackDeadAttempt(w, r)
 		return
 	}
