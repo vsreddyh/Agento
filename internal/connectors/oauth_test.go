@@ -80,6 +80,25 @@ func TestExchangeTrimsTokens(t *testing.T) {
 	}
 }
 
+// A control-bearing refresh from the provider fails closed as a
+// deterministic 400 — not as a 502 at seal time with the state already
+// burned. Same no-refresh branch contract one screen up.
+func TestExchangeRejectsControlToken(t *testing.T) {
+	// A literal NUL would break JSON parsing itself; \u0001 is valid JSON
+	// that decodes to a control character, exercising the token gate.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"a123","refresh_token":"r\u0001123","expires_in":3600,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code1", "verifier1", nil); err == nil {
+		t.Fatal("control-bearing provider token should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("control token should be a deterministic 400, got %v", err)
+	}
+}
+
 // Empty endpoints fail closed before any network call: a hand-built
 // config missing AuthURL/TokenURL must not reach the token endpoint.
 func TestExchangeRejectsEmptyEndpoints(t *testing.T) {

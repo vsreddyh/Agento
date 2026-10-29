@@ -339,6 +339,12 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	if len(tok.RefreshCipher) > MaxCipherLen || len(tok.AccessCipher) > MaxCipherLen {
 		return NewStoreError("connector grant token too long", false)
 	}
+	// Controls fail closed like every sibling input: a control-bearing
+	// cipher is undecryptable (DecryptToken only fails later, generically),
+	// so reject the shape here that the read side cannot name.
+	if HasControl(tok.RefreshCipher) || HasControl(tok.AccessCipher) || !utf8.ValidString(tok.RefreshCipher) || !utf8.ValidString(tok.AccessCipher) {
+		return NewStoreError("connector grant token is invalid", false)
+	}
 	if !Known(id) {
 		return &StoreError{Msg: "unknown connector " + id, NotFound: true}
 	}

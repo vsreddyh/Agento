@@ -1180,6 +1180,18 @@ func TestSetTokensRejectsPaddedCipher(t *testing.T) {
 	}
 }
 
+// Control-bearing ciphers fail closed at write time, not at decrypt:
+// they would otherwise store as present and fail generically at open.
+func TestSetTokensRejectsControlCipher(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r\x00x"}); err == nil {
+		t.Fatal("control-byte cipher should fail closed")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("control cipher should be a deterministic 400, got %v", err)
+	}
+}
+
 // Unknown ids with oversized input 400 on length, not 404 on identity:
 // length is checked before Known so the two inputs are indistinguishable
 // from the known-id oversized path.

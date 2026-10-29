@@ -146,7 +146,7 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	// 4 docs. Sorted so two log lines for the same stray id diff clean.
 	sort.Strings(ignored)
 	if len(ignored) > 0 {
-		s.logf("connectors: ignoring %d unknown row(s): %q", len(ignored), ignored)
+		s.logf("connectors: ignoring %d unknown row(s): %s", len(ignored), strings.Join(ignored, ", "))
 	}
 	for _, id := range listIDs {
 		if c, ok := byID[id]; ok {
@@ -573,7 +573,10 @@ func backfillDisplay(c Connector, id string) Connector {
 // instead of spending the verb's deadline: a slow read must never starve a
 // would-be-successful write into a 502. Detached from request cancellation
 // by design — no tracing in this stack to lose, and budgets are short so
-// orphaned IO from a hung-up client stays bounded at 5s. Do not copy this for
+// orphaned IO from a hung-up client stays bounded at 5s. Accepted
+// consequence: a hung-up client still blocks on detached IO (the gateway's
+// gone-client check after a detached call can only skip the work that
+// hasn't started). Do not copy this for
 // non-idempotent work (the OAuth follow-up's token writes stay on the
 // request ctx).
 //
@@ -606,6 +609,12 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// fires first. Same order as the memory twin.
 	if len(tok.RefreshCipher) > MaxCipherLen || len(tok.AccessCipher) > MaxCipherLen {
 		return NewStoreError("connector grant token too long", false)
+	}
+	// Controls fail closed like every sibling input: a control-bearing
+	// cipher is undecryptable (DecryptToken only fails later, generically),
+	// so reject the shape here that the read side cannot name.
+	if HasControl(tok.RefreshCipher) || HasControl(tok.AccessCipher) || !utf8.ValidString(tok.RefreshCipher) || !utf8.ValidString(tok.AccessCipher) {
+		return NewStoreError("connector grant token is invalid", false)
 	}
 	if !Known(id) {
 		return &StoreError{Msg: "unknown connector " + id, NotFound: true}

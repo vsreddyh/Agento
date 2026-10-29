@@ -569,6 +569,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// no caller has to remember it).
 	tok.RefreshToken = strings.TrimSpace(tok.RefreshToken)
 	tok.AccessToken = strings.TrimSpace(tok.AccessToken)
+	// Controls fail closed like every sibling input: a control-bearing
+	// provider token would 502 at seal time (state already consumed)
+	// instead of 400ing here as the deterministic answer it is.
+	if HasControl(tok.RefreshToken) || HasControl(tok.AccessToken) || !utf8.ValidString(tok.RefreshToken) || !utf8.ValidString(tok.AccessToken) {
+		return nil, NewStoreError("grant exchange returned an invalid token", false)
+	}
 	return tok, nil
 }
 
