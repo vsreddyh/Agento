@@ -459,7 +459,6 @@ var ReservedProfileNames = []string{reservedPathSegment, "api"}
 const reservedPathSegment = "v1"
 
 // IsReservedProfileName reports whether name may not be used as a profile directory.
-// IsReservedProfileName reports whether name may not be used as a profile directory.
 // Case-insensitive: "API" reserves like "api" — fixed protocol segments,
 // not user names, so casing must not distinguish callers (the same
 // rationale as the callback bypass). Routing and discovery share this
