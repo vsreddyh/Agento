@@ -946,3 +946,19 @@ func (f *failCreateStore) ConsumeState(ctx context.Context, state string) (conne
 	f.consumed = append(f.consumed, state)
 	return f.Store.ConsumeState(ctx, state)
 }
+
+// Verb garbage names the verb, not the connector: same 404 either way,
+// but triage greps the right noun.
+func TestConnectorsControlVerbNamesPath(t *testing.T) {
+	srv := connectorsServer(t)
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/%00", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("control verb: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "unknown path") {
+		t.Fatalf("control verb should name the path, got: %s", rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "unknown connector") {
+		t.Fatalf("control verb must not blame the connector, got: %s", rec.Body)
+	}
+}

@@ -563,7 +563,11 @@ func disconnectTransition(probeErr error, status Status) (transition, preReadOK 
 // disconnected path. One document, one write — a future edit must not split
 // it again (see the atomicity note on SetStatus). lastErr must already be
 // normalised (only the expired path carries text); connectedAt must already
-// be resolved (first-connect preserved by the caller).
+// be resolved (first-connect preserved by the caller). Upserted: a missing
+// row is created by this write, so the tokens-before-status ordering in the
+// callback assumes no concurrent doc delete between SetTokens and this call
+// — nothing deletes connectors docs today (no API deletes, retention never
+// prunes them), which is exactly what makes that assumption hold.
 func statusUpdateDoc(id string, st Status, lastErr string, now, connectedAt int64) bson.D {
 	set := bson.D{
 		{Key: "displayName", Value: DisplayName(id)},

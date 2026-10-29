@@ -367,8 +367,11 @@ display-default row), so the crash-window shape agrees on both. The
 backfill is first-write-only (`updated_at` stays the first touch when
 tokens rotate later): token freshness is not timestamped, so triage
 reads the stamp as "touched at least once", never "touched now". `last_error` appears only on `expired` rows: connected
-and disconnected rows never carry it (enforced on write, repaired on read),
-so the app can branch on its presence for the reconnect case. `connected_at`
+and disconnected rows never carry it (enforced on write, repaired on read).
+The reconnect signal is `status` + the `reconnect` hint, not `last_error`:
+`SetStatus(expired, "")` is a legal write, so an expired row can carry the
+hint with no error text — the app must branch on the hint, and a
+`last_error`-less expired row is mid-reconnect, not healthy. `connected_at`
 appears only on `connected` rows with a valid stamp (a connected row without
 one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.

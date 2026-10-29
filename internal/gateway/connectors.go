@@ -390,9 +390,18 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		connectorsError(w, connectors.NewStoreError("oversized path segment", false))
 		return
 	}
-	if id == "" || connectors.HasControl(id) || connectors.HasControl(action) || !utf8.ValidString(id) || !utf8.ValidString(action) {
+	if id == "" || connectors.HasControl(id) || !utf8.ValidString(id) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
+		return
+	}
+	if connectors.HasControl(action) || !utf8.ValidString(action) {
+		// Honest noun: the connector is fine, the verb is garbage. Same
+		// 404 with no echo and no oracle — only the noun changes, so the
+		// next triage grep for a bad-verb 404 lands on the verb, not the
+		// connector. Echo matches the unknown-path fallthrough below.
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown path "+bounded(approvals.ScrubError(path)))
 		return
 	}
 	// Verbs fold like ids: "Gmail/Disconnect" from a hand test lands on the
