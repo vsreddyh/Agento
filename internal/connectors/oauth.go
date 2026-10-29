@@ -205,8 +205,23 @@ func RedactURL(raw string) string {
 	// Same trim as every sibling gate (TrimCredential, not TrimSpace): an
 	// edge Cf forgiven by CanonicalRedirectURL must not survive here, so
 	// checked == logged by construction. Interior strip matches HasControl
-	// (Cc plus Cf), for the same reason.
+	// (Cc plus Cf), for the same reason. Length-capped before the
+	// rune-map + Parse below, matching CanonicalRedirectURL: a multi-MB
+	// misconfigured value must not pay map + parse on every tap.
 	trimmed := TrimCredential(raw)
+	if len(trimmed) > MaxRedirectLen {
+		// Byte cap with a rune-boundary cut (same walk as truncateForLog):
+		// never slice through a multi-byte char, so the cut value stays
+		// parseable-shaped instead of failing Parse on a split encoding.
+		end := 0
+		for i := range trimmed {
+			if i > MaxRedirectLen {
+				break
+			}
+			end = i
+		}
+		trimmed = trimmed[:end]
+	}
 	strip := func(s string) string {
 		return strings.Map(func(r rune) rune {
 			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {

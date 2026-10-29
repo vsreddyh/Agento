@@ -697,8 +697,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		if ctx.Err() == context.DeadlineExceeded {
 			// Same timeout 502 as the CreateState-failure branch: the row
 			// is already cleaned up above, so only the status is left to
-			// answer — never an empty 200 the app cannot triage.
-			storeTimeoutOrGone(w, s, ctx, nil, "connect")
+			// answer — never an empty 200 the app cannot triage. Typed
+			// error, not nil: storeTimeoutOrGone must never receive a nil
+			// err it could deref on a non-deadline fallthrough.
+			storeTimeoutOrGone(w, s, ctx, connectors.NewStoreError("connect aborted", false), "connect")
 		}
 		return
 	}
@@ -865,10 +867,18 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// this dead-attempts exactly like the verifier leg above instead of
 	// failing later inside Exchange after the Google round-trip.
 	if st.RedirectURI != "" {
-		if _, rerr := connectors.CanonicalRedirectURL(st.RedirectURI); rerr != nil {
+		// Re-canonicalise and send the output, not the verbatim row:
+		// CreateState canonicalise-and-stores today, but a row minted by
+		// an older build (or a canonicaliser change) could hold a value
+		// that validates yet is not byte-identical to fresh output — and
+		// Google exact-matches the sent bytes. Stored == sent ==
+		// validated by construction on every path, not just mint.
+		redirect, rerr := connectors.CanonicalRedirectURL(st.RedirectURI)
+		if rerr != nil {
 			callbackDeadAttempt(w, r)
 			return
 		}
+		st.RedirectURI = redirect
 	}
 	// Send the pinned redirect from mint time, not the live config: a
 	// rotation mid-consent would otherwise exact-mismatch Google.
@@ -902,7 +912,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// its own trace, or a later draft 403 has no line to trace back to.
 	if granted := query.Get("scope"); granted != "" && len(granted) <= connectors.MaxStateFieldLen {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
-			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, strings.Join(missing, " "), bounded(approvals.ScrubError(granted)))
+			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, missing, bounded(approvals.ScrubError(granted)))
 		}
 	} else if len(granted) > connectors.MaxStateFieldLen {
 		s.cfg.Logf("connectors: grant for %q scope param oversized (%d bytes), subset check skipped (grant stored; drafts may 403)", id, len(granted))
