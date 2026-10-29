@@ -9,7 +9,7 @@ state (see `.gitignore`).
 | path | committed | purpose |
 |---|---|---|
 | `settings.json` | yes | Pi's own knobs — tool selection, retry, cache warming. **Not** personality. |
-| `mcp.json` | yes | the eight in-repo Go MCP servers: miser-money, cookbook, health-check, task-manager, project-manager, notes, memory, browser. |
+| `mcp.json` | yes | the ten MCP servers: miser-money, cookbook, health-check, task-manager, project-manager, notes, memory, browser, gmail, calendar. |
 | `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all of them. |
 | `profiles/<name>/AGENTS.md` | yes | one per profile (`chat` only since #289). Each profile's own instructions and personality. |
 | `profiles/<name>/skills/` | yes | Per-profile skills. **Not discovered as laid out** — see the profile-skills finding below; loaded by an explicit `--skill` path per profile. |
@@ -40,7 +40,7 @@ even for an untrusted directory. Treat the content of one as untrusted input.
 **calls `die` if any server fails to connect**. That check only became active when
 this PR added `mcp.json`, so the pi service must carry:
 
-- `MONGODB_URI` and `MONGODB_DB` — every one of the eight servers opens the shared
+- `MONGODB_URI` and `MONGODB_DB` — every one of the ten servers opens the shared
   Atlas database on startup and fails to connect without them
 - `OPENCODE_API_KEY` — already enforced by the entrypoint
 
@@ -99,7 +99,7 @@ things about it are deliberate, and both were got wrong while writing it:
 
 Verified end to end in the real container (three-profile era; single-profile
 since #289 — kept as the method record): the entrypoint registers three repos as
-`safe.directory`, `pi mcp list` connects all eight MCP servers (11/11/9/8/5/6/2/4), all
+`safe.directory`, `pi mcp list` connects all ten MCP servers (11/11/9/8/5/6/2/4/6/5), all
 three profiles are discovered, `/healthz` answers 200, auth rejects both a missing
 and a wrong bearer token with 401, and each profile answers from its own
 `AGENTS.md`:
@@ -395,7 +395,7 @@ compose service; the fifth landed with the cutover.
 |---|---|
 | **Auth** | done. The `pi` service takes `PASSWORD=${PASSWORD:-}`, the same value the Hermes gateway did, so a tab can be repointed without re-entering it. Verified: both a missing and a wrong bearer token answer 401. |
 | **SSH mounts** | done (retired #289 with the side profiles). Same three keypair mounts and the same fail-closed `GIT_SSH_COMMAND` as `gateway`, so story/resumes pushed their repos unchanged while they existed. |
-| **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all eight MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
+| **Healthcheck** | done. `curl -fsS http://localhost:8643/healthz` inside the container, with a 60s `start_period` because the entrypoint connects all ten MCP servers first. The entrypoint's `pi mcp list` is the connectivity gate; this is the port check on top of it. |
 | **`depends_on`** | done, in the short list form (`- pi`). The long form is not available on this stack at all: podman-compose builds its dependency graph with `deps = {x: {} for x in deps}`, so any `condition:` value is an unhashable dict and it dies with `TypeError: cannot use 'dict' as a dict key` before reading a service. Verified in both spellings. The short form still means *start pi first* — podman-compose's own `config` output renders it as `condition: service_started` — and ordering is all this needs, because nginx re-resolves `pi` per request. Deliberately **not** gated on pi's *health*: that healthcheck fails whenever its MCP check does, and a proxy held back by it would take health-api's `/api/*` routes down too — health sync has nothing to do with the agent. |
 | **nginx prefix stripping** | done, in the cutover PR. `rewrite ^/p(/.*)$ $1 break;` before `proxy_pass $chat`, and it is load-bearing rather than tidying. Measured against nginx 1.31.8 with echo upstreams: with the rewrite `/p/chat/v1/chat/completions` arrives as `/chat/v1/chat/completions`; without it the original path arrives unchanged, and pi-gateway reads the first segment `p` as a profile name and 404s. |
 
@@ -698,7 +698,7 @@ with the real code (`cannot use cwd <path>: EACCES`).
 
 ### One at a time, not in parallel
 
-Each delegation is one `pi` process plus eight MCP servers, so parallel calls fan out
+Each delegation is one `pi` process plus ten MCP servers, so parallel calls fan out
 linearly. The tool description says to call them serially rather than shipping a
 semaphore: a hard cap would throttle legitimate parallel work, and Pi already runs a
 tool batch in order by default. This is a prompt-level guard, not an enforced one —

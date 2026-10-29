@@ -1,4 +1,4 @@
-# ADR-0009: First connectors (Gmail, Calendar, Drive)
+# ADR-0009: First connectors (Gmail, Calendar)
 
 - Status: accepted (2026-10, v1 foundation)
 - Issue: #316
@@ -6,22 +6,16 @@
 ## Context
 
 Health Connect sensor sync is the only integration. Grok/Dots/Claude all
-reach user data stores; Agento cannot read an email, check a calendar, or
-touch a Drive doc. The auth model is one shared PASSWORD with no
+reach user data stores; Agento cannot read an email or check a calendar.
+The auth model is one shared PASSWORD with no
 per-connector OAuth and no read vs write scopes.
 
 ## Decision
 
-### v1 scope: three connectors, draft-only where it matters
+### v1 scope: two connectors, draft-only where it matters
 
 - Gmail: search/read + draft. Sends refused outright.
 - Calendar: list/upcoming + draft event. Creates/invites refused outright.
-- Drive: read/list + save agent-produced file. Deletes gate (backstop).
-  Ungated-save scope: create-only stays free; if the wired server's save can
-  overwrite an existing file by id/path, that is a destructive write and the
-  follow-up must gate it (`save_file: true`) — overwrite slips between the
-  free-read and gated-delete rules otherwise. Confirm against the real tool
-  semantics when the connector MCP servers land.
 
 Draft-only is a refusal, not a gate: the relay (`cmd/mcp-gate`) answers Pi
 with `connectors.RefusalMessage` ("create a draft instead") and audits a
@@ -29,20 +23,26 @@ with `connectors.RefusalMessage` ("create a draft instead") and audits a
 The `approvals.gatedTools` rows for the same tools are `true` as a backstop
 for any caller that bypasses the relay check: a send must never run free.
 
-Reads and Drive saves are intentionally ungated (`false`): reads never gate
+Reads are intentionally ungated (`false`): reads never gate
 anywhere in this stack (ADR-0002 — gating search would make the agent ask
-permission to look, which is approval fatigue, not safety), and a Drive save
-is the routine-create side of the same rule (like `log_meal` or
-`create_task`: the agent writing at the user's direction, not moving money
-or deleting). The dangerous directions — sends, invites, deletes — refuse
+permission to look, which is approval fatigue, not safety).
+The dangerous directions — sends, invites, deletes — refuse
 or gate. If exfiltration-via-read becomes a concern, it belongs to a
 scoping/per-connector-approval pass, not to gating search in v1.
 
 `Disconnect` upserts rather than no-ops on never-connected ids: List
 synthesises disconnected rows anyway, so the stored row just makes the rest
-state explicit. Harmless at three rows; creating rows is accepted.
+state explicit. Harmless at two rows; creating rows is accepted.
 
 ### Token placement
+
+The PKCE verifier rests **plaintext** in `oauth_states` by necessity — the token
+exchange must present the exact verifier, so it cannot be hashed at rest, and a
+hash would add no security against anyone who can already read the row's sibling
+columns. The mitigation is lifetime, not secrecy: 10-minute TTL, single-use
+consume-on-read, and no API surface returns it (only the server that created it
+ever reads it back). Treat a leaked verifier like a leaked pending state: it can
+only complete a consent the user is already finishing.
 
 OAuth refresh tokens live **server-side in Mongo** (`connectors`
 collection, sibling to `approvals`/`runs`/`memory`), never in the app and
@@ -53,20 +53,43 @@ selected into API responses. Without Mongo both sides fall back to memory
 that cannot meet — same contract as approvals: the list still answers, but
 nothing survives a restart and no token can be stored.
 
-Encryption: v1 stores no tokens (connect 501s), so the only cover is Atlas
-at-rest encryption — there is NO field-level envelope in this PR. The OAuth
-follow-up must add envelope encryption before the first token write; real
-refresh tokens must never land under cover of this sentence without it.
+Encryption: envelope is implemented (AES-256-GCM, random nonce per
+value, base64(nonce||ciphertext) in Mongo). The key lives in
+CONNECTORS_ENCRYPTION_KEY (64 hex chars, server-side only); without it the
+OAuth config refuses to build and connect 501s — tokens can never land
+unencrypted by omission. Atlas at-rest is the second layer, not the cover
+story.
 
 Write confirmation: the confirming read-after-write runs on a fresh budget,
 but if it fails after a landed write the verb still 502s while the state
 landed. That is retry-safe (a second verb succeeds idempotently), not a
 divergence — worth stating so triage doesn't read it as one.
 
-Disconnect stops future access (token columns `$unset`) with no audit row: the 90-day audit trail covers relayed tool calls, not connector lifecycle, so `updated_at` + container logs (`disconnected (tokens cleared)`, transition-only) are the intended "who turned it off and when" trail in v1. The OAuth follow-up — which writes real grants on these same verbs — must add grant lifecycle to the audit trail rather than copy this gap. Already-fetched
-data — chat history, saved files — is NOT wiped: disconnect stops the tap,
+Anonymous callback load is accepted, not overlooked: the unauthenticated `GET /api/connectors/callback` lets any bearer-less caller spend one indexed `FindOneAndDelete` on an attacker-chosen id. 128-bit single-use states make exchange-on-guess infeasible, so this is DB-load-only, never a grant risk — and a per-IP throttle would add more unauthenticated surface than it removes at this cardinality. Revisit if callback traffic ever stops looking like taps.
+
+Disconnect stops future access (token columns `$unset`) with no audit row: the 90-day audit trail covers relayed tool calls, not connector lifecycle, so `updated_at` + container logs (`disconnected (tokens cleared)`, transition-only) are the intended "who turned it off and when" trail in v1. This PR (the OAuth follow-up named above) lands the grants on these same verbs; per-grant audit rows are explicitly deferred to a stacked follow-up (see the PR body), so until then the interim trail is `updated_at` + the transition-only container logs — a tracked gap, not a regression. Already-fetched
+data — chat history — is NOT wiped: disconnect stops the tap,
 it does not rewrite the past (cf. Dots delete-the-Dot semantics, explicitly
 not adopted for history).
+
+Disconnect during the seconds-long exchange window loses to the in-flight
+callback — and that is accepted, not overlooked. The same accepted race
+covers verb-deadline cleanup during `CreateState`: a detached insert still
+in flight may land after the best-effort `ConsumeState` that was supposed
+to remove it, leaving a live orphan until TTL/next-tap supersede reaps it.
+Neither window is closable with check-then-act (only conditional writes on
+both backends would order them, which the detached budgets deliberately
+avoid). Both resolve the same way: the row is unknown to any client, and
+re-tap supersedes it. Triage reads a post-deadline live row the same way
+it reads a resurrect — as this race, not a leak. The pending-state scrub
+(`DeleteMany` on disconnect) kills attempts still awaiting consent, but a
+callback that already consumed its state (`ConsumeState → Exchange →
+SetTokens → SetStatus(connected)`) holds no row for the scrub to reap: a
+disconnect landing mid-`Exchange` clears tokens, then the callback resumes
+and flips the row back to connected. The failure is operator-visible and
+self-healing — the app shows connected, one re-tap disconnects — so the
+window is documented, not engineered away. Triage must read a resurrect as
+this race, not a scrub regression.
 
 Expired retains the refresh token: expiry means the access token aged out,
 not that the grant is known-bad, and the follow-up's silent-refresh attempt
@@ -77,36 +100,54 @@ retention pass must not add a TTL to this collection.
 
 ### Surfaces
 
-- `GET /api/connectors` — three rows, disconnected synthesised when no
-  document exists (a fresh deploy lists three disconnected connectors, not
+- `GET /api/connectors` — two rows, disconnected synthesised when no
+  document exists (a fresh deploy lists two disconnected connectors, not
   an empty list).
 - `POST /api/connectors/{id}/disconnect` — clears tokens server-side.
-- `POST /api/connectors/{id}/connect` — v1 answers **501**: OAuth lands in
-  the follow-up. The app treats it as "needs setup", never as a prompt to
-  paste a secret. Expired rows carry a `reconnect` hint with the same
-  no-secrets wording — but no v1 writer sets expired (only Disconnect and the
-  501 connect exist; SetStatus has no route), so the hint path is wired and
-  covered but dormant until the OAuth follow-up drives it.
-- `@-mention` in-chat attach and the real OAuth exchange are follow-ups, not
-  this PR. The relay refusal and the list/disconnect shapes are what they
-  build on.
+- `POST /api/connectors/{id}/connect` — mints a one-time state+PKCE pair,
+  records the pending attempt (10-minute TTL), and returns the Google
+  consent `auth_url`. Without full OAuth config answers **501** like the v1
+  foundation. The app opens the URL in a browser and polls; it never sees a
+  code, verifier, or token.
+- `GET /api/connectors/callback?code=&state=` — single registered redirect
+  URI for both connectors (the connector travels inside the state row,
+  not the path). Consumes the state (single-use: no code exchanged twice),
+  exchanges server-side, seals tokens with the envelope key, flips the row
+  to connected. Tokens land before the status flips — a
+  connected-with-no-tokens row is never servable. Granted scopes are
+  logged, not enforced: granular consent can return a subset (the
+  ?scope= param names what Google actually granted), and the row still
+  flips — read paths keep working, and a later draft 403 traces back to
+  the subset warning in the log, not to the relay. Consumers that need a
+  missing scope enforce it at use time (follow-up MCP servers).
+- `@-mention` in-chat attach, connector MCP servers, and the app Connect
+  screen are follow-ups, not this PR. The relay refusal, list/disconnect
+  shapes, and now the grant pipeline are what they build on.
 
 ### What this does and does not fix
 
 - Fixed: per-connector status/scopes, independent disconnect, send paths
-  that cannot run, a documented token home, and an expired state that
-  prompts a reconnect instead of a password in chat.
-- NOT fixed: no real Google OAuth yet (connect 501s), no connector MCP
-  servers wired in `pi/mcp.json`, no app Connect screen, no per-user auth
-  (single PASSWORD still authenticates everything), Pi built-in tools still
-  ungated by the relay.
+  that cannot run, a documented token home, an expired state that prompts a
+  reconnect instead of a password in chat, and now the real OAuth grant
+  pipeline (connect URL → single callback → exchange → sealed tokens →
+  connected), with PKCE, single-use states, and tokens-before-status
+  ordering.
+- NOT fixed: no app Connect screen (Settings opens the auth_url from the
+  API today), no per-user auth (single PASSWORD still authenticates
+  everything), Pi built-in tools still ungated by the relay. Connector MCP
+  servers are wired now — see ADR-0010.
 
 ## Consequences
 
 - `internal/connectors` owns ids/scopes/status/Store (memory + Mongo,
   `FromEnv`, display-only projection).
-- `internal/gateway` serves the three routes; `cmd/pi-gateway` wires the
-  store with the same memory fallback + index pattern as the siblings.
+- `internal/gateway` serves the four routes (list, disconnect, connect,
+  callback); `cmd/pi-gateway` wires the store with the same memory
+  fallback + index pattern as the siblings.
 - `cmd/mcp-gate` refuses draft-only sends before the approval check.
-- App Connect UI, OAuth exchange, and `mcp.json` wiring arrive stacked on
-  top — this PR is the shape they fill in.
+- App Connect UI and `mcp.json` wiring arrive stacked on top — this PR is
+  the shape they fill in. Remaining follow-ups are the stacked set named
+  in the PR body (connector MCP servers, app Connect screen, refresh-on-
+  expiry worker, per-grant audit rows); `@-mention` in-chat attach stays
+  out of scope here. The grant pipeline lands in this PR (AuthURL →
+  callback → exchange → sealed tokens → connected).

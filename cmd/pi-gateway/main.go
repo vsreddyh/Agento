@@ -48,10 +48,37 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/gateway"
 	"agento/internal/pi"
 )
+
+// truncateForLog caps log content at maxContentBytes bytes without splitting a
+// multi-byte char: range over a string yields rune-start byte indices, so
+// accumulating whole runes while the total stays within budget always ends
+// on a boundary. maxContentBytes caps the content only — the marker below
+// rides ~30 bytes past it, so never size a buffer from this bound; it is a
+// log line, not a field limit. Values at or under budget pass through
+// untouched, so the byte-for-byte comparison this log line exists for never
+// truncates a value the server would actually send. Different units from the
+// gateway's bounded() on purpose: this is bytes-capped like every len()
+// gate on the surface, bounded() is display-capped at 128 runes for
+// UI/API echoes — do not unify the two truncators.
+func truncateForLog(s string, maxContentBytes int) string {
+	if len(s) <= maxContentBytes {
+		return s
+	}
+	cut := 0
+	for _, r := range s {
+		if w := utf8.RuneLen(r); cut+w > maxContentBytes {
+			break
+		} else {
+			cut += w
+		}
+	}
+	return fmt.Sprintf("%s\u2026 (truncated from %d bytes)", s[:cut], len(s))
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -376,11 +403,17 @@ func run() error {
 	} else {
 		memoryStore = store
 		store.Logf = logger.Printf
-		indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
-		if err := store.EnsureIndexes(indexCtx); err != nil {
-			logger.Printf("memory: index setup failed: %v", err)
-		}
-		cancelIndex()
+		// Same scoped-cancel pattern as the connectors block below:
+		// free the 10s timer the moment EnsureIndexes returns, with a
+		// closure-level defer guarding any early return a future edit
+		// might add.
+		func() {
+			indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+			defer cancelIndex()
+			if err := store.EnsureIndexes(indexCtx); err != nil {
+				logger.Printf("memory: index setup failed: %v", err)
+			}
+		}()
 	}
 
 	// The test-fire runner is a bare model client: it needs the same key and
@@ -404,8 +437,7 @@ func run() error {
 
 	// First connectors (#316). Same database, sibling collection. Without
 	// Mongo the routes still answer from memory, but statuses die with the
-	// process and no OAuth token can be stored anyway — the connect verb
-	// 501s until the OAuth follow-up lands either way.
+	// process and no OAuth token can be stored anyway.
 	var connectorStore connectors.Store
 	if store, err := connectors.FromEnv(); err != nil {
 		logger.Printf("connectors: falling back to in-process (statuses do not survive restart): %v", err)
@@ -413,11 +445,67 @@ func run() error {
 	} else {
 		connectorStore = store
 		store.Logf = logger.Printf
-		// No EnsureIndexes call: three fixed rows keyed by _id need no
-		// secondary index, and the method is an explicit no-op. The call
-		// (with its 10s ctx and "index setup failed" branch) is dropped
-		// rather than retained as dead ceremony; the OAuth follow-up
-		// re-adds it alongside the first real index.
+		// The states TTL: pending OAuth attempts reap themselves. Kept
+		// explicit (not a no-op): without this index consumed-but-unread
+		// rows would linger past their window. A failure here is loud on
+		// purpose — without the TTL, abandoned states accumulate with no
+		// sweeper (memory relies on the CreateState opportunistic sweep,
+		// Mongo relies on THIS index), so triage must hear about it at
+		// every startup, not once in a scrolled-past line.
+		//
+		// Scoped so the 10s budget cannot outlive this block: an explicit
+		// cancel at this scope frees the timer the moment EnsureIndexes
+		// returns (unlike a function-level defer, which would hold it to
+		// shutdown), and a closure-level defer still guards the early
+		// returns a future edit might add.
+		func() {
+			indexCtx, cancelIndex := context.WithTimeout(ctx, 10*time.Second)
+			defer cancelIndex()
+			if err := store.EnsureIndexes(indexCtx); err != nil {
+				logger.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
+			}
+		}()
+	}
+
+	// Google OAuth client (#316, second layer). ANY piece missing (client
+	// id, secret, redirect URL, envelope key) leaves this nil and connect
+	// answers 501 exactly like the v1 foundation — a half-open flow would
+	// strand the user mid-consent. The store gate uses the Store.Durable()
+	// contract, not a concrete type-assert: OAuth without durability would
+	// store grants in memory that dies with the process, so a non-durable
+	// store forces nil here too.
+	var connectorOAuth *connectors.OAuthConfig
+	if connectorStore.Durable() {
+		if cfg, err := connectors.OAuthConfigFromEnv(); err != nil {
+			// Echo the attempted redirect: non-secret, and the triage
+			// pointer when the failure is a registration mismatch.
+			// Single owner: RedactURL already bounds (300 runes via ScrubError)
+			// and marks over-cap input itself — no second truncation here, so
+			// the startup line carries at most one marker. Any storable value
+			// logs whole, and the byte-for-byte comparison this line exists
+			// for never truncates a value the server would actually send.
+			// A marked-truncated line is not comparable: shorten
+			// GOOGLE_REDIRECT_URL and restart, never register the prefix.
+			redirect := connectors.RedactURL(os.Getenv("GOOGLE_REDIRECT_URL"))
+			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, redirect)
+		} else {
+			connectorOAuth = cfg
+			// The redirect URL is not a secret — log it so the operator can
+			// compare byte-for-byte against the Cloud console registration.
+			// RedactURL keeps it scrubbed + bounded like every other logged
+			// redirect; the comparison holds because storable values log
+			// whole (registrations are ~60 chars) — only a >300-rune value
+			// would carry the truncation marker, and such a value is never
+			// a real registration. A mismatch dies in the browser
+			// (redirect_uri_mismatch), not here, so this line is the
+			// triage pointer.
+			// The connector list derives from the package source of truth,
+			// not a literal, so this triage line cannot drift the next time
+			// an id lands or drops.
+			logger.Printf("connectors: OAuth configured for %s (callback %q)", strings.Join(connectors.ListIDs(), ", "), connectors.RedactURL(cfg.RedirectURL))
+		}
+	} else {
+		logger.Printf("connectors: OAuth unavailable (no durable store); connect answers 501")
 	}
 
 	defaultProfile := envOr("PI_DEFAULT_PROFILE", "default")
@@ -436,7 +524,7 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, teachStore, teachRunner, connectorStore, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, teachStore, teachRunner, connectorStore, connectorOAuth, logger.Printf), agents)
 	if err != nil {
 		return err
 	}
@@ -667,7 +755,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, teachStore teach.Store, teachRunner gateway.TeachRunner, connectorStore connectors.Store, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, teachStore teach.Store, teachRunner gateway.TeachRunner, connectorStore connectors.Store, connectorOAuth *connectors.OAuthConfig, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -699,8 +787,10 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 			return teach.Materialize(teach.RuntimeDir(agentDir, profile), skills)
 		},
 		// First connectors (#316), owned by run() for the same reason.
-		// Nil means gateway.New falls back to memory.
+		// Nil store means gateway.New falls back to memory; nil OAuth
+		// means connect answers 501 like the v1 foundation.
 		ConnectorStore: connectorStore,
+		ConnectorOAuth: connectorOAuth,
 		// Each budget is configurable for the same reason: the right value depends on
 		// the host, and changing it should not mean rebuilding the binary.
 		TurnTimeout:       secondsEnv("PI_TURN_TIMEOUT", 600),

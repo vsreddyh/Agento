@@ -208,13 +208,18 @@ var gatedTools = map[string]map[string]bool{
 		"browser_goto": true, "browser_read": false,
 		"browser_screenshot": false, "browser_save_evidence": false,
 	},
-	// First connectors, v1 (#316). Reads and drafts run under the normal
-	// gate; send paths are refused outright by the relay (see
-	// connectors.IsDraftOnlySend), and the true here is the backstop for a
-	// caller that bypasses that check: a send must never run free.
+	// First connectors, v1 (#316): gmail + calendar only — Drive was
+	// dropped from the connector set, so it has no policy row: an
+	// unknown server holds every call fail-closed by default, which is
+	// the correct posture for a server with no classification. (If Drive
+	// ever returns, its PR re-adds the row with its tools.) Reads and
+	// drafts run under the normal gate; write paths are refused outright
+	// by the relay (see connectors.IsDraftOnlySend), and the true here
+	// is the backstop for a caller that bypasses that check: a write
+	// must never run free.
 	// Follow-up sync obligation (both sides): the draft allowlist here
-	// (create_draft/create_event_draft/save_file:false) depends on exact
-	// tool names exactly like the refusal list does. A renamed draft tool
+	// (create_draft/create_event_draft:false) depends on exact tool
+	// names exactly like the refusal list does. A renamed draft tool
 	// misses the free rule and holds for approval instead — safe, but a
 	// stall on the exact flow v1 sells ("create a draft instead"). Sync
 	// both lists with the wired servers' real names when they land.
@@ -227,10 +232,6 @@ var gatedTools = map[string]map[string]bool{
 		"list_events": false, "get_event": false,
 		"create_event_draft": false,
 		"create_event":       true, "send_invite": true,
-	},
-	"drive": {
-		"list_files": false, "read_file": false,
-		"save_file": false, "delete_file": true,
 	},
 }
 

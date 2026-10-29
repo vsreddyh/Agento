@@ -1,11 +1,10 @@
 // Package connectors is the first-connectors foundation behind #316.
 //
-// v1 covers three connectors only: Gmail (search/read + draft), Calendar
-// (list/upcoming + draft event) and Drive (read/list + save agent-produced
-// file). Each connects/disconnects independently from the app, with explicit
-// read vs draft/write scopes. Disconnect stops future access; already-fetched
-// copies already in chat history or saved files are not retroactively
-// deleted (cf. Dots delete-the-Dot semantics: stopping the tap, not wiping
+// v1 covers two connectors only: Gmail (search/read + draft) and Calendar
+// (list/upcoming + draft event). Each connects/disconnects independently
+// from the app, with explicit read vs draft/write scopes.
+// Disconnect stops future access; already-fetched copies already in chat
+// history are not retroactively deleted (cf. Dots delete-the-Dot semantics: stopping the tap, not wiping
 // history).
 //
 // Token placement (acceptance: docs state it): OAuth refresh tokens live
@@ -22,23 +21,23 @@ package connectors
 
 import (
 	"strings"
+	"unicode"
 )
 
 // Collection holds one document per connector id. Fixed ids, so the table
-// has at most three rows — no TTL, no per-profile split (connectors are
+// has at most two rows — no TTL, no per-profile split (connectors are
 // deployment-wide like approvals, unlike memory/teach).
 const Collection = "connectors"
 
-// Known connector ids (v1 scope: these three, nothing else).
+// Known connector ids (v1 scope: these two, nothing else).
 const (
 	Gmail    = "gmail"
 	Calendar = "calendar"
-	Drive    = "drive"
 )
 
 // listIDs is the fixed v1 set, in display order. Unexported so no importer
 // can mutate the API shape: ListIDs() returns a fresh copy on every call.
-var listIDs = [3]string{Gmail, Calendar, Drive}
+var listIDs = [2]string{Gmail, Calendar}
 
 // ListIDs returns the fixed v1 connector ids in display order. A copy, so
 // callers cannot mutate the package set.
@@ -46,44 +45,135 @@ func ListIDs() []string {
 	return append([]string(nil), listIDs[:]...)
 }
 
-// DisplayName names a connector for the app. Unknown ids echo back: the
-// gateway 404s them first, so this is a display fallback, not a lookup.
+// DisplayName names a connector for the app. Unknown ids answer "Unknown":
+// the gateway 404s them first, so this is a display fallback, never an
+// echo of caller text. Folds like every store verb and OAuth helper: same
+// logical id, same answer, wherever the caller normalised.
 func DisplayName(id string) string {
+	if len(id) > MaxConnectorIDLen {
+		return "Unknown"
+	}
+	id = NormalizedID(id)
 	switch id {
 	case Gmail:
 		return "Gmail"
 	case Calendar:
 		return "Calendar"
-	case Drive:
-		return "Drive"
 	default:
-		return id
+		return "Unknown"
 	}
 }
 
-// ScopesFor names the explicit scopes a connector requests. Read vs
-// draft/write is the point: the app shows these at connect time, and
-// disconnect revokes them together.
+// ScopesFor names the explicit scopes a connector requests — app-display
+// vocabulary, not Google scope strings. Read vs draft/write is the point:
+// the app shows these at connect time, and disconnect revokes them
+// together. Folds like every store verb: same logical id, same answer.
 func ScopesFor(id string) []string {
-	switch id {
+	if len(id) > MaxConnectorIDLen {
+		return nil
+	}
+	switch NormalizedID(id) {
 	case Gmail:
 		return []string{"gmail.read", "gmail.draft"}
 	case Calendar:
 		return []string{"calendar.read", "calendar.draft"}
-	case Drive:
-		return []string{"drive.read", "drive.write"}
 	default:
 		return nil
 	}
 }
 
-// Known reports whether id is a v1 connector.
+// ExposedTools names every tool a connector MCP server publishes, by
+// server id. Single source of truth for the rename-sync contract: the
+// policy table (approvals.gatedTools), the relay refusal, the cmd
+// policy tests, and TestConnectorPolicySync all read this list.
+// Adding a server tool updates it here first, and every consumer fails
+// loudly until it follows — no two hand-written copies to drift apart.
+func ExposedTools(server string) []string {
+	switch NormalizedID(server) {
+	case Gmail:
+		return []string{"search_gmail", "read_gmail", "list_messages",
+			"create_draft", "send_message", "send_gmail"}
+	case Calendar:
+		return []string{"list_events", "get_event", "create_event_draft",
+			"create_event", "send_invite"}
+	}
+	return nil
+}
+
+// MaxConnectorIDLen bounds connector ids everywhere: ids are two short
+// fixed strings, so anything longer cannot match a known id. Single owner
+// for both packages — the gateway imports this package, so its member
+// dispatch uses this const instead of carrying a second copy that could
+// drift. Checked before Normalise/fold so a multi-MB id fails without a
+// lowercase+trim alloc or a quoted log line for the 404 it was always
+// going to get.
+const MaxConnectorIDLen = 64
+
+// MaxSegmentAllocLen bounds raw gateway path segments before any fold or
+// scan. Deliberately separate from both MaxConnectorIDLen (64, the
+// identity contract) and MaxStateFieldLen (the OAuth-input bound): it
+// guards allocs only, and must merely exceed the contract gate — so
+// raising the OAuth-input bound for a future long code must never
+// silently move this path gate. Same value as MaxStateFieldLen today,
+// independent name on purpose (see MaxCipherLen/MaxPlaintextLen for the
+// same split pattern).
+const MaxSegmentAllocLen = 2048
+
+// maxToolNameLen bounds tool names below the fold: ids and tool names are
+// different namespaces with different length realities (tool names are
+// operator-defined and longer), so the tool cap is deliberately roomier
+// than the id cap. Either way oversized refuses outright — fail-closed,
+// like every sibling length gate. Upstream-owned names are the known
+// exception to "rename, don't widen": a wired MCP server whose tool names
+// come from upstream cannot be renamed here, so widening the cap (with a
+// test update) is the fix for a name this repo doesn't own.
+const maxToolNameLen = 128
+
+// Known reports whether id is a v1 connector. Folds like every sibling
+// helper: same logical id, same answer — the fold lives here instead of
+// relying on every caller to pre-fold before branching on it.
 func Known(id string) bool {
-	switch id {
-	case Gmail, Calendar, Drive:
+	if len(id) > MaxConnectorIDLen {
+		return false
+	}
+	switch NormalizedID(id) {
+	case Gmail, Calendar:
 		return true
 	}
 	return false
+}
+
+// isKnownRawID reports exact membership without folding: the mongo List
+// stray scan needs the raw spelling ("Gmail" is stray; Known("Gmail") is
+// true). Every other call site wants the folded predicate.
+func isKnownRawID(id string) bool {
+	return id == Gmail || id == Calendar
+}
+
+// HasWhitespace reports any Unicode whitespace in s. Server-minted
+// base64url values (states, verifiers) and Google-issued codes never
+// contain whitespace, so an interior space is operator-paste or garbage:
+// fail closed as a deterministic 400, not a 502 at Google after consent.
+// Checked on trimmed values (edges already forgiven by TrimCredential),
+// so any hit here is interior by construction. Tab is already control-
+// caught by HasControl; this covers the rest (plain space, no-break
+// space, and friends).
+func HasWhitespace(s string) bool {
+	return strings.IndexFunc(s, unicode.IsSpace) >= 0
+}
+
+// HasControl reports inner control bytes (NUL/CR/LF and friends) plus
+// invisible format characters (zero-width spaces, BOM, bidi overrides):
+// none are ever valid in an id, state, verifier, code, URL, or token.
+// TrimSpace strips edges, not interiors — and RuneError-decoding means
+// invalid UTF-8 is caught by the separate utf8.ValidString gates, not
+// here — so an embedded byte fails closed instead of becoming a DB
+// filter or an outbound request. Exported so the gateway reuses this
+// single definition instead of carrying its own copy.
+func HasControl(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+	})
 }
 
 // Status is a connector's lifecycle state.
@@ -127,7 +217,18 @@ type Connector struct {
 // 404 after this (see Known): normalisation only folds spellings of a real
 // connector, it never invents one.
 func NormalizedID(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
+	return strings.ToLower(TrimCredential(raw))
+}
+
+// TrimCredential trims edge whitespace AND invisible format characters
+// (zero-width spaces, BOM): an operator-pasted id/secret with a trailing
+// zero-width char fails HasControl otherwise, reading as a control
+// violation for what TrimSpace was supposed to forgive. Interior controls
+// still fail closed — trimming is edges-only, like TrimSpace.
+func TrimCredential(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.Is(unicode.Cf, r)
+	})
 }
 
 // IsDraftOnlySend reports whether (server, tool) is a send path that v1
@@ -139,22 +240,65 @@ func NormalizedID(raw string) string {
 // bypass both this refusal and the approval backstop. Same hardening the
 // follow-up mcp.json wiring must keep (pin lowercase names).
 //
-// Follow-up obligation: keep this list in sync with the wired servers' real
-// tool names. The approvals completeness test pins gatedTools, but nothing
-// pins THIS list — a renamed tool (sendMessage, send_email) misses the
-// refusal and falls through to the gated backstop (fail-closed: holds for
-// approval instead of refusing with the draft message). Safe, but a UX
-// divergence worth a sync check when the connector MCP servers land.
+// Follow-up obligation: keep this list in sync with the wired servers'
+// real tool names. Pinned by TestIsDraftOnlySendMatchesServers alongside
+// the scope test — a renamed tool fails loudly instead of silently
+// missing the refusal and falling through to the gated backstop
+// (fail-closed: holds for approval instead of refusing with the draft
+// message). Safe, but a UX divergence worth a sync check when the
+// connector MCP servers land.
 func IsDraftOnlySend(server, tool string) bool {
-	server = strings.ToLower(strings.TrimSpace(server))
-	tool = strings.ToLower(strings.TrimSpace(tool))
+	// NormalizedID, not a local fold: same composition as every sibling,
+	// so the next fold change cannot strand this one. Both parts gated
+	// (separate caps: ids are two fixed strings, tool names are
+	// operator-defined). Oversize defers to identity, split by part:
+	// servers fail closed to the backstop (an oversized id is unknown by
+	// construction), tools fail closed to refusal on known servers.
+	if len(server) > MaxConnectorIDLen {
+		// Unknown by construction: Known length-checks first, so an
+		// oversized server can never be a known id — fall through to the
+		// gated backstop like any other unknown name. No Known() call
+		// here: it could never return true, and calling it would imply
+		// the branch is live for some input.
+		return false
+	}
+	if len(tool) > maxToolNameLen {
+		// Oversized tools fall through like oversized servers: a garbage
+		// tool name can never be a real send path, and the gated backstop
+		// (approval hold) is the honest answer — not a refusal text naming
+		// a draft workflow for a tool that cannot exist. Unknown by
+		// construction, like servers: length fails before identity, so no
+		// Known() call here either. A future legit upstream tool longer
+		// than this cap flips from gated to gated (not gated to refused),
+		// so widening the cap stays a UX change, never a security one.
+		return false
+	}
+	server = NormalizedID(server)
+	tool = NormalizedID(tool)
+	// Hyphens, dots, spaces, slashes, colons, pluses, and backslashes
+	// fold to underscores: a wired send-message, send.message,
+	// "send message", send/message, send:message, send+message, or
+	// send\message is the same tool as send_message — without this the
+	// refusal list drifts on punctuation the way the scope test guards
+	// against renames. NormalizedID already trimmed the edges, so any
+	// separator folded here is interior by construction. Covered set:
+	// "-", ".", " ", "/", ":", "+", "\\" — any other separator falls to
+	// the gated backstop by design. Runs collapse: "send--message" folds
+	// to the same single-underscore form instead of a "send__message"
+	// that matches nothing — punctuation repetition never changes identity.
+	for _, sep := range []string{"-", ".", " ", "/", ":", "+", "\\"} {
+		tool = strings.ReplaceAll(tool, sep, "_")
+	}
+	for strings.Contains(tool, "__") {
+		tool = strings.ReplaceAll(tool, "__", "_")
+	}
 	switch server {
-	case "gmail":
+	case Gmail:
 		switch tool {
 		case "send_message", "send_gmail":
 			return true
 		}
-	case "calendar":
+	case Calendar:
 		switch tool {
 		case "create_event", "send_invite":
 			return true
@@ -173,7 +317,7 @@ const RefusalMessage = "sending is disabled for this connector in v1; create a d
 // 4xx (NotFound when NotFound, else BadRequest). Get the bool right at the
 // call site: it is the status code.
 //
-// Trust boundary: the GATEWAY is the control-byte boundary (hasControl
+// Trust boundary: the GATEWAY is the control-byte boundary (HasControl
 // rejects before the store). Msg may carry caller-influenced text (e.g.
 // "unknown connector a\nb" from a direct store caller); gateway echoes are
 // scrubbed+bounded, but store callers must not log Msg raw.
@@ -181,6 +325,11 @@ type StoreError struct {
 	Msg      string
 	NotFound bool
 	Upstream bool
+	// Duplicate marks the already-exists shape: a CreateState whose state
+	// id collides with a live row. The gateway's cleanup-skip branches on
+	// this bit, not on the message — reword Msg freely without touching
+	// the contract.
+	Duplicate bool
 }
 
 func (e *StoreError) Error() string { return e.Msg }

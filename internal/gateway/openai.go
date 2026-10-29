@@ -315,7 +315,11 @@ func newSSEWriter(w http.ResponseWriter) *sseWriter {
 
 func (s *sseWriter) headers() {
 	s.w.Header().Set("Content-Type", "text/event-stream")
-	s.w.Header().Set("Cache-Control", "no-cache")
+	// no-store like every other branch: SSE carries assistant deltas
+	// (sensitive, per-tab) — no-cache would permit storage with
+	// revalidation, which is the weaker contract this surface just
+	// unified away from.
+	s.w.Header().Set("Cache-Control", "no-store")
 	s.w.Header().Set("Connection", "keep-alive")
 	// Nginx buffers proxied responses by default, which would hold the whole turn
 	// until it completed. This disables it for the streaming route.
@@ -420,6 +424,10 @@ func apiError(w http.ResponseWriter, status int, kind, param, message string) {
 	resp.Error.Type = kind
 	resp.Error.Param = param
 	resp.Error.Code = strconv.Itoa(status)
+	// Same default as writeJSONResponse: errors never cache, and JSON
+	// responses are never sniffed as HTML.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(resp)

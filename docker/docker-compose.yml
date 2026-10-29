@@ -99,7 +99,7 @@ services:
       #
       # Not waiting on pi's *health* is also the right behaviour independently: that
       # healthcheck is a real connectivity gate (its entrypoint refuses to start if
-      # any of the eight MCP servers will not connect), so a proxy gated on it would
+      # any of the ten MCP servers will not connect), so a proxy gated on it would
       # take health-api's /api/* routes down with it — and health sync has nothing
       # to do with the agent.
       - pi
@@ -218,6 +218,16 @@ services:
       # change when the provider key's name does. `OPENCODE_API_KEY` is also the name
       # Pi itself reads, so one value serves both.
       #
+      # Google connectors OAuth (#316): all four or nothing. Any piece missing
+      # leaves ConnectorOAuth nil and connect answers 501 — a half-open flow
+      # would strand the user mid-consent. Secrets arrive from the root .env
+      # (git-ignored); the client ID is public-ish but lives there too so all
+      # four travel together and rotate together.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-}
+      CONNECTORS_ENCRYPTION_KEY: ${CONNECTORS_ENCRYPTION_KEY:-}
+      #
       # Fail-closed SSH for agent-run git: only the mounted key is ever offered,
       # never prompt, never trust unknown hosts (a GitHub key rotation fails loudly
       # until known_hosts is updated on the VPS).
@@ -232,7 +242,7 @@ services:
       timeout: 5s
       retries: 10
       # Generous: the entrypoint runs `pi mcp list` before handing off, which
-      # connects all eight MCP servers. A short start_period reports unhealthy while
+      # connects all ten MCP servers. A short start_period reports unhealthy while
       # that is still in progress.
       start_period: 60s
     restart: unless-stopped

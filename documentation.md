@@ -37,7 +37,7 @@ Retention ───────────────► one-shot container (c
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
 - **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any of the eight MCP servers fails to connect.
+- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any of the ten MCP servers fails to connect.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Read-only web tasks via a headless-Chromium MCP server
@@ -106,7 +106,7 @@ disk, orphaned and unmanaged.)
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
-- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting all eight MCP servers, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
+- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting all ten MCP servers, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
 - This ensures discrete credential scoping without mixing secrets across bot instances.
 
 ---
@@ -157,7 +157,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `tasks_changes` | Permanent | **Never pruned** — one single-document counter, not a log (#178) |
 | `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
 | `story` / `resumes` (retired #289) | Git history | No database retention operations |
-| `connectors` (#316) | Permanent | **Never pruned** — 3 fixed rows, no TTL (tokens live until disconnect/revoke) |
+| `connectors` (#316) | Permanent | **Never pruned** — 2 fixed rows, no TTL on `connectors` itself (grants live until disconnect/revoke; `expired` retains the refresh token for renewal and only bars data reads — disconnect is what clears tokens; the separate `oauth_states` collection carries its own 10-minute TTL) |
 
 Run manual dry-runs via:
 ```bash
@@ -270,6 +270,10 @@ All settings are configured in the single root `.env` file:
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string (used in prod) |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
 | `PASSWORD` | For Health + App | Single password for Agento Android chat + health-sync authentication |
+| `GOOGLE_CLIENT_ID` | For Connectors | OAuth client ID for Gmail/Calendar grants (public in the consent URL by design) |
+| `GOOGLE_CLIENT_SECRET` | For Connectors | OAuth client secret (VPS-only, never committed) |
+| `GOOGLE_REDIRECT_URL` | For Connectors | Exact registered callback URL (must match the console spelling byte-for-byte) |
+| `CONNECTORS_ENCRYPTION_KEY` | For Connectors | 64-hex-char envelope key for OAuth tokens at rest (`openssl rand -hex 32`) |
 
 ---
 
@@ -318,36 +322,84 @@ Threat note — what this does and does not fix:
 - Residual: a held call occupies its turn until expiry; an approval shows
   tool + args + time but not which conversation asked.
 
-### First connectors — Gmail, Calendar, Drive (#316, v1 foundation)
+### First connectors — Gmail, Calendar (#316, OAuth grants + MCP servers)
 
-Three connectors with explicit read vs draft/write scopes, each
+Two connectors with explicit read vs draft/write scopes, each
 connecting/disconnecting independently from the app:
 
-- Gmail: search/read + draft (sends refused with "create a draft instead").
-- Calendar: list/upcoming + draft event (creates/invites refused the same way).
-- Drive: read/list + save agent-produced file (deletes gate as a backstop). Ungated-save scope is create-only: if the wired server's save can overwrite an existing file, that is a destructive write and the follow-up must gate it.
+- Gmail: `search_gmail` / `read_gmail` / `list_messages` + `create_draft`
+  (sends refused with "create a draft instead").
+- Calendar: `list_events` / `get_event` + `create_event_draft` (an
+  agent-side draft, sent nowhere; creates/invites refused the same way).
+
+Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
+(PKCE S256 + offline access + per-connector least-privilege scopes) for the
+app to open in a browser; Google redirects to the single registered
+`GET /api/connectors/callback?code=&state=` — one registered string with
+two path shapes (bare direct, `/p/` via proxy); non-default ports are
+variants of whichever path they attach to (default ports are not: `:443`
+and `:80` are stripped by canonicalisation, so register the stripped form
+— see `.env.example`). Product constraint, not just validation:
+registrations must be public spellings (dotted FQDN or loopback) — LAN,
+mDNS, and non-loopback-IP hosts fail closed here by design, because no
+public Google console entry can hold them. Homelab setups must serve (and
+register) a dotted name or loopback address: use a nip.io-style wildcard,
+Tailscale funnel, or reverse proxy for a public name — or an SSH tunnel to
+localhost for direct-only access. Bare `*.local`/LAN names are out of scope
+by intent, not by omission. The bare spelling works direct on the pi
+port and the `/p/` spelling through nginx, which strips `/p` before
+forwarding (port included in the match — the `:8443` spelling and the
+no-port spelling are different registrations). The callback bypasses
+profile routing entirely, so any first segment serves — bare, `/p/`, or
+`/p/<anything>/` — direct or proxied, while every other verb 404s a
+miscased or cross-profile path. The server consumes the
+single-use state, exchanges the code, seals both tokens with the envelope
+key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to
+connected. Tokens land before the status flips — a connected-with-no-tokens
+row is never servable. Without full OAuth config (client id/secret,
+redirect URL, envelope key, durable store) connect answers 501.
 
 The refusal is enforced in the relay before the approval check, audited as
 `connector_draft_only`, and parks no approval card. Token placement: OAuth
-refresh tokens live **server-side in Mongo** (`connectors` collection),
-never in the app and never pasted in chat — the API returns status + scopes
-only, and disconnect `$unset`s the token columns. Already-fetched data
-(chat history, saved files) is not wiped on disconnect; disconnect stops
-future access. Without Mongo the list still answers from memory but nothing
-survives a restart and no token can be stored. API: `GET /api/connectors`,
-`POST /api/connectors/{id}/disconnect`; `POST .../connect` answers 501
-until the OAuth follow-up lands (the app treats it as "needs setup"). An
-expired row carries a `reconnect` hint instead of asking for a secret.
+refresh tokens live **server-side in Mongo** (`connectors` collection,
+envelope-encrypted), never in the app and never pasted in chat — the API
+returns status + scopes only, and disconnect clears the tokens (`$unset`
+of the token columns on Mongo, whole-row delete on memory).
+Already-fetched data (chat history) is not wiped on
+disconnect; disconnect stops future access. Without Mongo the list still
+answers from memory but nothing survives a restart and no token can be
+stored. An expired row carries a `reconnect` hint instead of asking for a
+secret.
 Wire shape note: a row with no `updated_at` was never touched; an explicit
 disconnect sets it. Same status, different shape — the difference is the
 signal (explicit-off vs never-touched), so a future shape-normalisation
-must not erase it. `last_error` appears only on `expired` rows: connected
-and disconnected rows never carry it (enforced on write, repaired on read),
-so the app can branch on its presence for the reconnect case. `connected_at`
+must not erase it. Caveat: a token write landing without a status write
+(crash between the two writes) also carries `updated_at` — that row reads
+as explicit-off but means interrupted setup, not an operator action; only
+the disconnect path carries real human intent. Both backends backfill
+display + `updated_at` on `SetTokens` (Mongo `$setOnInsert`, memory
+display-default row), so the crash-window shape agrees on both. The
+backfill is first-write-only (`updated_at` stays the first touch when
+tokens rotate later): token freshness is not timestamped, so triage
+reads the stamp as "touched at least once", never "touched now". `last_error` appears only on `expired` rows: connected
+and disconnected rows never carry it (enforced on write, repaired on read).
+The reconnect signal is `status` + the `reconnect` hint, not `last_error`:
+`SetStatus(expired, "")` is a legal write, so an expired row can carry the
+hint with no error text — the app must branch on the hint, and a
+`last_error`-less expired row is mid-reconnect, not healthy. `connected_at`
 appears only on `connected` rows with a valid stamp (a connected row without
 one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
-Full design: `docs/adr/0009-connectors.md`.
+The MCP servers (`cmd/gmail`, `cmd/calendar`, wired in `pi/mcp.json`)
+call the official Google APIs with the stored grant: decrypt, refresh on
+expiry, seal the new pair back (lazy refresh-on-use, no background
+worker). No grant means every tool that calls Google answers reconnect
+guidance, never a secrets prompt. `create_event_draft` is the exception:
+purely local, so it works grant-less — the draft is exactly what the
+user needs while disconnected. It builds a validated draft the agent
+presents to the user — actual creation waits for the approval-gate flow
+that covers calendar writes.
+Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 
 ---
 

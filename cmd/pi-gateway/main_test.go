@@ -314,7 +314,7 @@ func TestGatewayConfigPassesEveryBudgetThrough(t *testing.T) {
 	} {
 		t.Run(tc.env, func(t *testing.T) {
 			t.Setenv(tc.env, tc.value)
-			cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
+			cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
 			if got := tc.get(cfg); got != tc.want {
 				t.Fatalf("%s=%s did not reach the config: got %v, want %v",
 					tc.env, tc.value, got, tc.want)
@@ -326,7 +326,7 @@ func TestGatewayConfigPassesEveryBudgetThrough(t *testing.T) {
 	for _, k := range []string{"PI_TURN_TIMEOUT", "PI_KEEPALIVE", "PI_INVENTORY_TIMEOUT"} {
 		os.Unsetenv(k)
 	}
-	cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
+	cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
 	for label, got := range map[string]time.Duration{
 		"TurnTimeout":       cfg.TurnTimeout,
 		"KeepaliveInterval": cfg.KeepaliveInterval,
@@ -347,10 +347,16 @@ func TestGatewayConfigPassesEveryBudgetThrough(t *testing.T) {
 	}
 	// The wired store must reach the field: the old two-constructor shape
 	// silently pinned nil here, so this path was untested by construction.
+	// Same for the OAuth client: nil stays nil (connect 501s), non-nil
+	// reaches the field.
 	wired := connectors.NewMemoryStore()
-	cfg = gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, nil, nil, nil, nil, wired, func(string, ...any) {})
+	wiredOAuth := &connectors.OAuthConfig{ClientID: "cid"}
+	cfg = gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, nil, nil, nil, nil, wired, wiredOAuth, func(string, ...any) {})
 	if cfg.ConnectorStore == nil {
 		t.Error("connector store did not reach the config")
+	}
+	if cfg.ConnectorOAuth == nil || cfg.ConnectorOAuth.ClientID != "cid" {
+		t.Error("connector OAuth config did not reach the config")
 	}
 	if cfg.Logf == nil {
 		t.Error("Logf was dropped by the extraction; a nil Logf would panic in New")
@@ -361,7 +367,7 @@ func TestGatewayConfigPassesEveryBudgetThrough(t *testing.T) {
 // through secondsEnvAllowDisabled in isolation.
 func TestGatewayConfigKeepaliveZeroStaysDisabled(t *testing.T) {
 	t.Setenv("PI_KEEPALIVE", "0")
-	cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
+	cfg := gatewayConfig("pw", "/opt/pi", "god", "/opt/pi/logs", nil, nil, nil, nil, nil, nil, nil, nil, nil, func(string, ...any) {})
 	if cfg.KeepaliveInterval != gateway.KeepaliveDisabled {
 		t.Fatalf("PI_KEEPALIVE=0 gave %v, want KeepaliveDisabled", cfg.KeepaliveInterval)
 	}
@@ -628,5 +634,29 @@ func TestSkillArgsReportsBrokenSkillAfterAHealthyOne(t *testing.T) {
 	if !strings.Contains(logged.String(), "b-broken") {
 		t.Fatalf("the broken skill sorting after the healthy one was not reported: %q",
 			logged.String())
+	}
+}
+
+// truncateForLog caps bytes, never runes: values at or under budget pass
+// through untouched (so byte-for-byte comparisons never truncate a value
+// the server would send), and over-budget values cut at a rune boundary.
+func TestTruncateForLog(t *testing.T) {
+	if got := truncateForLog("abc", 2048); got != "abc" {
+		t.Errorf("short value = %q, want untouched", got)
+	}
+	exact := strings.Repeat("x", 2048)
+	if got := truncateForLog(exact, 2048); got != exact {
+		t.Errorf("exact-budget value must log whole, got len %d", len(got))
+	}
+	big := strings.Repeat("x", 2050)
+	got := truncateForLog(big, 2048)
+	if !strings.HasSuffix(got, "… (truncated from 2050 bytes)") {
+		t.Fatalf("over-budget value should name original length, got %q", got[len(got)-40:])
+	}
+	// Multi-byte rune straddling the cap: cut before it, never through it.
+	multi := strings.Repeat("x", 2047) + "é" + "rest"
+	got = truncateForLog(multi, 2048)
+	if !strings.HasSuffix(got, "… (truncated from 2053 bytes)") {
+		t.Fatalf("straddling rune must cut before it with length, got len %d suffix=%q", len(got), got[len(got)-40:])
 	}
 }

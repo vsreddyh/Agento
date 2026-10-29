@@ -153,6 +153,13 @@ type Config struct {
 	// process. main sets a Mongo store when the database is reachable.
 	ConnectorStore connectors.Store
 
+	// ConnectorOAuth is the server-side Google OAuth client. Nil means
+	// unconfigured: connect answers 501 exactly like the v1 foundation,
+	// and no token can be stored. main sets it from
+	// GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL plus the
+	// envelope key; any piece missing leaves it nil.
+	ConnectorOAuth *connectors.OAuthConfig
+
 	// Logf receives operational messages. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -340,8 +347,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			route := r.Method + " " + r.URL.EscapedPath()
 			detail := fmt.Sprintf("component: pi-gateway\nroute: %s\npanic: %v\nstack:\n%s",
 				route, rec, debug.Stack())
-			// PASSWORD may be a comma-separated token list: redact every
-			// token, not just the whole string.
+			// PASSWORD is a single token: redact the whole string. Splitting
+			// on commas is belt-and-braces for paste accidents, not a
+			// token list — authenticate() compares the whole value, so
+			// "a,b" never authenticates "a" alone.
 			secrets := []string{s.cfg.Password}
 			for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {
 				if t = strings.TrimSpace(t); t != "" {
@@ -397,6 +406,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusMethodNotAllowed, "invalid_request_error", "", "GET or HEAD only")
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	// A HEAD response carries headers only; writing a body violates the method's
@@ -448,9 +459,13 @@ var ReservedProfileNames = []string{reservedPathSegment, "api"}
 const reservedPathSegment = "v1"
 
 // IsReservedProfileName reports whether name may not be used as a profile directory.
+// Case-insensitive: "API" reserves like "api" — fixed protocol segments,
+// not user names, so casing must not distinguish callers (the same
+// rationale as the callback bypass). Routing and discovery share this
+// predicate so the two can never disagree.
 func IsReservedProfileName(name string) bool {
 	for _, r := range ReservedProfileNames {
-		if name == r {
+		if strings.EqualFold(name, r) {
 			return true
 		}
 	}
@@ -521,7 +536,39 @@ func (s *Server) splitProfile(urlPath string) (profile, rest string) {
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	profile, rest := s.splitProfile(r.URL.Path)
 
-	// Every route except healthz sits behind the bearer token.
+	// Every route except healthz sits behind the bearer token — with one
+	// exception: the Google OAuth callback. A Google-redirected browser GET
+	// carries no Authorization header (the proxy injects nothing), and the
+	// state query param is itself the 128-bit single-use 10-minute
+	// capability. Unknown/consumed/expired states answer identically, and
+	// the handler leaks no codes, verifiers, or tokens, so no bearer is
+	// needed to knock. Everything else stays gated.
+	//
+	// No oracle by construction: the callback bypasses profile routing
+	// entirely (connectors are global, like approvals — no per-profile
+	// state exists to leak), so unknown-profile and known-profile callers
+	// take the identical path through handleConnectorCallback, including
+	// method, param-presence, and unconfigured checks. There is no branch
+	// left to distinguish them on. Case is folded once, here: EqualFold
+	// admits any casing past auth, but downstream (canonicaliser suffix,
+	// member dispatch) is exact-case — so carry the canonical spelling
+	// forward instead of the raw one, and the bypass and the handler agree
+	// on what "the callback path" is. splitProfile Cleans the path first, so
+	// /p/../api/connectors/callback (and decoded %2e%2e variants) collapse
+	// onto this same identical path — a traversal that lands here answers
+	// exactly what the canonical spelling answers, never a different
+	// status, so there is no auth bypass to re-file.
+	//
+	// Residual, accepted signal: unconfigured + callback answers 501 while
+	// configured answers 400/405 on the same path — config existence is
+	// visible without a bearer. Low-value (any authenticated connect call
+	// reveals it anyway), so documented as intentional rather than
+	// mirrored: lying with a 400 here would misdirect triage about server
+	// setup.
+	if strings.EqualFold(rest, "api/connectors/callback") {
+		s.handleConnectors(w, r, "api/connectors/callback")
+		return
+	}
 	if err := s.authenticate(r); err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
 		apiError(w, http.StatusUnauthorized, "authentication_error", "",
