@@ -829,13 +829,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			callbackStateReject, s.cfg.Logf)
 		return
 	}
-	// Floor like state: Google codes are hundreds of chars, so anything
-	// under MinStateLen is hand-minted junk — dead-attempt before it can
-	// burn the single-use state on a Google round-trip that only 502s.
-	if len(code) < connectors.MinStateLen {
-		callbackDeadAttempt(w, r, s.cfg.Logf)
-		return
-	}
+	// Floor on state only: states are server-minted (22-char 128-bit), so a
+	// short state is hand-minted junk — dead-attempt before it can burn the
+	// single-use row on a Google round-trip. Codes carry no minimum
+	// (Google defines no floor): a short code reaches ConsumeState/Exchange
+	// and fails there with its own discriminant instead of burning as an
+	// "unknown attempt".
 	if len(state) < connectors.MinStateLen {
 		callbackDeadAttempt(w, r, s.cfg.Logf)
 		return

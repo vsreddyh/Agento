@@ -335,7 +335,12 @@ Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 app to open in a browser; Google redirects to the single registered
 `GET /api/connectors/callback?code=&state=` — one registered string with
 two path shapes (bare direct, `/p/` via proxy); ports are variants of
-whichever path they attach to. The bare spelling works direct on the pi
+whichever path they attach to. Product constraint, not just validation:
+registrations must be public spellings (dotted FQDN or loopback) — LAN,
+mDNS, and non-loopback-IP hosts fail closed here by design, because no
+public Google console entry can hold them. Homelab setups must serve (and
+register) a dotted name or loopback address; bare `*.local`/LAN names are
+out of scope by intent, not by omission. The bare spelling works direct on the pi
 port and the `/p/` spelling through nginx, which strips `/p` before
 forwarding (port included in the match — the `:8443` spelling and the
 no-port spelling are different registrations). The callback bypasses

@@ -965,12 +965,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if len(code) > MaxStateFieldLen || len(verifier) > MaxVerifierLen {
 		return nil, deny("oauth code or verifier too long")
 	}
-	// Floor like state: Google codes are hundreds of chars, so anything
-	// under MinStateLen is hand-minted junk — fail closed before the token
-	// round-trip instead of burning the consumed state on a generic 502.
-	if len(code) < MinStateLen {
-		return nil, deny("oauth code too short")
-	}
+	// No floor on code (unlike state/verifier): Google defines no minimum,
+	// so a short code reaches the token endpoint and fails there with its
+	// own discriminant instead of burning as a shape reject.
 	if len(verifier) < MinVerifierLen {
 		return nil, deny("oauth verifier too short")
 	}

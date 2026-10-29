@@ -438,6 +438,20 @@ func TestConnectorsCallbackFullFlow(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("replay: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
+	// List shows the grant as connected: the full pipeline lands.
+	rec = do(t, srv, http.MethodGet, "/api/connectors", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d (%s)", rec.Code, rec.Body)
+	}
+	found := false
+	for _, row := range decodeBody(t, rec)["connectors"].([]any) {
+		if m := row.(map[string]any); m["id"] == "gmail" && m["status"] == "connected" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("list should show gmail connected, got %s", rec.Body)
+	}
 }
 
 func TestConnectorsCallbackRejects(t *testing.T) {
@@ -1350,17 +1364,22 @@ func TestConnectorsCallbackDuplicateParamsLog(t *testing.T) {
 	}
 }
 
-// A junk-short code dead-attempts before burning the state on a Google
-// round-trip: no mint produces a 1-char code.
-func TestConnectorsCallbackRejectsShortCode(t *testing.T) {
+// Codes carry no minimum: a short code with a live state reaches the
+// token endpoint (stub success here) instead of dead-attempting up front.
+func TestConnectorsCallbackShortCodeReachesExchange(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
-	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state="+strings.Repeat("s", 22), "")
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("short code: %d, want 400 (%s)", rec.Code, rec.Body)
+	store := connectors.NewMemoryStore()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	state, verifier, err := connectors.NewState()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(rec.Body.String(), "start over from connect") {
-		t.Fatalf("short code should dead-attempt, got: %s", rec.Body)
+	if err := store.CreateState(context.Background(), connectors.OAuthState{State: state, Connector: "gmail", Verifier: verifier}); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state="+state, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("short code with live state: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
 }

@@ -548,7 +548,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// state exists to leak), so unknown-profile and known-profile callers
 	// take the identical path through handleConnectorCallback, including
 	// method, param-presence, and unconfigured checks. There is no branch
-	// left to distinguish them on. splitProfile Cleans the path first, so
+	// left to distinguish them on. Case is folded once, here: EqualFold
+	// admits any casing past auth, but downstream (canonicaliser suffix,
+	// member dispatch) is exact-case — so carry the canonical spelling
+	// forward instead of the raw one, and the bypass and the handler agree
+	// on what "the callback path" is. splitProfile Cleans the path first, so
 	// /p/../api/connectors/callback (and decoded %2e%2e variants) collapse
 	// onto this same identical path — a traversal that lands here answers
 	// exactly what the canonical spelling answers, never a different
@@ -561,7 +565,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// mirrored: lying with a 400 here would misdirect triage about server
 	// setup.
 	if strings.EqualFold(rest, "api/connectors/callback") {
-		s.handleConnectors(w, r, rest)
+		s.handleConnectors(w, r, "api/connectors/callback")
 		return
 	}
 	if err := s.authenticate(r); err != nil {

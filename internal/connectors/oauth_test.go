@@ -860,12 +860,17 @@ func TestExchangeMidFlightCancelIsAborted(t *testing.T) {
 	}
 }
 
-func TestExchangeRejectsShortCode(t *testing.T) {
-	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if _, err := Exchange(context.Background(), cfg, Gmail, "x", testVerifier, nil); err == nil {
-		t.Fatal("short code should fail closed")
-	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
-		t.Fatalf("short code should be a deterministic 400, got %v", err)
+func TestExchangeAcceptsShortCode(t *testing.T) {
+	// Codes carry no minimum (Google defines no floor): a short code
+	// reaches the token endpoint instead of failing closed up front.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"a","refresh_token":"r","expires_in":3600,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "x", testVerifier, nil); err != nil {
+		t.Fatalf("short code should reach the endpoint, got %v", err)
 	}
 }
 
