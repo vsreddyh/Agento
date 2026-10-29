@@ -230,6 +230,11 @@ _valid_tsdns() {
   local rest="$1" label
   [[ "$rest" == *.ts.net ]] || return 1
   rest="${rest%.ts.net}"
+  # A doubled suffix (foo.ts.net.ts.net) would otherwise strip once and
+  # pass label checks — reject any residual that is or ends in .ts.net
+  # (note: "*.ts.net" alone also matches bare "ts.net" via empty *, so
+  # both arms are needed).
+  if [[ "$rest" == ts.net || "$rest" == *".ts.net" ]]; then return 1; fi
   [[ "$rest" == *.* ]] || return 1
   while [[ "$rest" == *.* ]]; do
     label="${rest%%.*}"
@@ -314,8 +319,8 @@ note "pi container is recreated — ./scripts/hermes.sh restart recreates it;"
 note "a plain container restart without recreation will not pick up .env)."
 note "Nothing is restarted by this wizard."
 note "Dry-run knobs (all optional): TS_DNS presets skip discovery and the"
-note "probe wait, REDIRECT_URI presets skip derivation, ENV_FILE points at"
-note "another file, SKIP_PROBE=1 skips the wait."
+note "probe wait, REDIRECT_URI presets skip derivation (and set the recorded"
+note "comment host), ENV_FILE points at another file, SKIP_PROBE=1 skips the wait."
 printf '\n'
 if ! confirm "Proceed with Tailscale Funnel setup on this host?"; then
   say "Stopped. Nothing changed."
@@ -396,6 +401,8 @@ else
   tailscale up --hostname="$TS_HOST" </dev/null >"$LOG" 2>&1 &
   TS_PID=$!
   URL=""
+  # Current login-URL shape; if Tailscale ever changes domains, the "no
+  # login URL appeared" fallback below still fires after 60s of dots.
   for __i in $(seq 1 60); do
     URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" | head -n1 || true)
     [[ -n "$URL" ]] && break
@@ -504,7 +511,9 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # would take the fast path without the binding existing. Also require the
 # served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
 # keeps host A while the URI, comment, and probe all use host B.
-if echo "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && echo "$_funnel_status" | grep -qiE 'https://|443' && echo "$_funnel_status" | grep -qF "$TS_DNS"; then
+# Hostname first: most selective on the common mismatch path, so the two
+# broader greps are skipped unless it hits.
+if echo "$_funnel_status" | grep -qF "$TS_DNS" && echo "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && echo "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
   rm -f "$FOUT"; FOUT=""
@@ -771,7 +780,10 @@ else
   # Same tmp-file + cat pattern as the library's write_env, so a symlinked
   # .env stays a symlink (plain sed -i would replace it with a regular file).
   _cb_tmp=$(mktemp)
-  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" "$ENV_FILE" > "$_cb_tmp"
+  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" "$ENV_FILE" > "$_cb_tmp" || {
+    warn "hostname comment refresh failed — restore with: cp -p $BACKUP $ENV_FILE"
+    exit 1
+  }
   cat "$_cb_tmp" > "$ENV_FILE"
   rm -f "$_cb_tmp"; _cb_tmp=""
 fi
