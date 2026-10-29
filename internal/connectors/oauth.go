@@ -407,8 +407,14 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		h = strings.TrimRight(h, ".")
 		switch {
 		case p == "":
-			// Bare host, no JoinHostPort: "host:" would canonicalise to a
-			// dangling colon no registration can hold.
+			// Bare host only — no JoinHostPort, nothing to re-emit. A
+			// dangling colon ("host:") splits cleanly with an empty port,
+			// but no registration can hold it: reject like the
+			// non-numeric branch instead of canonicalising the colon
+			// away (validated != sent, same class as every other gate).
+			if strings.Contains(parsed.Host, ":") {
+				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
+			}
 			parsed.Host = h
 		default:
 			// Strict digits-only via parsePort (not bare Atoi): "+80"/"080"
@@ -774,7 +780,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	}
 	if cfg == nil || TrimCredential(cfg.ClientID) == "" || TrimCredential(cfg.ClientSecret) == "" || TrimCredential(cfg.RedirectURL) == "" {
 		if logf != nil {
-			logf("connectors: auth URL build failed: unconfigured client (%q)", id)
+			logf("connectors: auth URL build failed: oauth client is not configured (%q)", id)
 		}
 		return ""
 	}

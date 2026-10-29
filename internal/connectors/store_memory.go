@@ -698,6 +698,9 @@ func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState,
 		// Floor like every sibling leg: a short state is unmintable
 		// (NewState mints 22 chars), so it answers the same NotFound as
 		// unknown/expired instead of reaching the store as a filter.
+		// Direct callers only: the gateway pre-checks this floor and
+		// dead-attempts first, so it owns the wire shape — this branch
+		// fires for direct/store callers, never on the callback path.
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
 	if HasControl(state) || !utf8.ValidString(state) || HasWhitespace(state) {

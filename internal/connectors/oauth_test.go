@@ -950,3 +950,9 @@ func TestExchangeNegativeExpiryIsZero(t *testing.T) {
 		t.Fatalf("negative offset should deliver a past timestamp, got %v", tok.Expiry)
 	}
 }
+
+func TestCanonicalRedirectRejectsDanglingColon(t *testing.T) {
+	if _, err := CanonicalRedirectURL("https://host.example.com:/p/api/connectors/callback"); err == nil {
+		t.Fatal("dangling-colon port should fail closed, not canonicalise away")
+	}
+}

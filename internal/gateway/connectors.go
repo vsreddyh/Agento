@@ -644,7 +644,10 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// CreateState call below — so a slow start (depleted entropy, cold
 	// container) debits the same 5s the detached IO is sized against
 	// instead of running off-budget. (The mint itself is ~µs of rand and
-	// needs no deadline; the composition does.)
+	// needs no deadline; the composition does.) Validation + mint only:
+	// CreateState ignores the verb ctx (detached quickCtx inside the
+	// store), so this 5s is not an IO budget — the ctx.Err() checks below
+	// still need a verb clock to observe.
 	ctx, cancel := connectorCtx(r)
 	defer cancel()
 	state, verifier, err := connectors.NewState()
