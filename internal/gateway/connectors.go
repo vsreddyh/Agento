@@ -302,6 +302,13 @@ func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg st
 // Google sent none — treated as "nothing to compare", not a total miss,
 // since some flows omit the param on full grants.
 func missingScopes(want []string, granted string) []string {
+	// Nothing to compare: GoogleScopes is non-nil on every path that
+	// reaches here today (hand-inserted unknown rows dead-attempt
+	// earlier), but an empty want must not pay the map alloc on the
+	// unauthenticated fast path — or rely on the caller to guarantee it.
+	if len(want) == 0 {
+		return nil
+	}
 	fields := strings.Fields(granted)
 	have := make(map[string]bool, len(fields))
 	for _, s := range fields {

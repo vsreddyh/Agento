@@ -993,6 +993,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		}
 		return nil, NewStoreError("grant exchange failed", true)
 	}
+	if tok == nil {
+		// oauth2 contractually returns non-nil on success, but a nil token
+		// with nil error (test stub, future transport wrapper) must not
+		// panic the worker — fail closed like every other input leg.
+		return nil, deny("grant exchange returned no token")
+	}
 	if TrimCredential(tok.RefreshToken) == "" {
 		// No refresh token means no renewal path: storing this row as
 		// connected would strand it at the first access-token expiry.
