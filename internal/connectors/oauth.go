@@ -823,7 +823,11 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		if logf != nil {
 			logf("connectors: grant exchange refused: nil context")
 		}
-		return nil, NewStoreError("grant exchange aborted, nil context", false)
+		// Upstream, not a 400: nil never comes from the wire — it is a
+		// direct-caller programmer bug, same "nothing was sent" class as
+		// the timeout branch below. Triage must read it as a caller
+		// defect, not "re-tap the consent".
+		return nil, NewStoreError("grant exchange aborted, nil context", true)
 	}
 	// Dead caller before the fallback wrap below (same ordering as the
 	// gateway fast paths): a cancelled parent with no deadline must not
@@ -980,10 +984,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		if ctx.Err() == context.DeadlineExceeded {
 			// Name the timeout at the source: direct callers never see
 			// the gateway's per-verb timeout wording, so the generic 502
-			// below would read as a store failure. The gateway's own ctx
-			// check fires first on its path, so this branch is for
+			// below would read as a store failure. Same string the gateway
+			// answers with ("did not answer in time"), so one grep finds
+			// both halves of the same slow-endpoint fault. The gateway's
+			// own ctx check fires first on its path, so this branch is for
 			// direct/future callers only.
-			return nil, NewStoreError("grant exchange timed out", true)
+			return nil, NewStoreError("the grant exchange did not answer in time", true)
 		}
 		if logf != nil {
 			// Scrubbed + capped like the domain mapper below — and
@@ -1081,7 +1087,8 @@ type TokenRow struct {
 	// a stubby test token lands here, and the refresher cannot tell it
 	// from a genuinely stale row — nor does it need to. Far-future values
 	// are clamped to now+MaxAccessLifetime at write time — enforced in
-	// three places (gateway connect + both SetTokens), so a stored expiry
+	// three places (gateway connect + both SetTokens) plus the Exchange
+	// return clamp for scheduling callers, so a stored expiry
 	// never reads as "don't renew for decades". Readers must treat
 	// AccessCipher == "" as missing regardless of Expiry: the write path
 	// guarantees the pair (expiry-without-access is rejected), the read

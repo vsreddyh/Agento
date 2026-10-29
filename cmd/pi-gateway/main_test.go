@@ -650,16 +650,13 @@ func TestTruncateForLog(t *testing.T) {
 	}
 	big := strings.Repeat("x", 2050)
 	got := truncateForLog(big, 2048)
-	if len(got) != 2048+len("… (truncated)") || !strings.HasSuffix(got, "… (truncated)") {
-		t.Fatalf("over-budget value = len %d, want 2048 + marker", len(got))
+	if !strings.HasSuffix(got, "… (truncated from 2050 bytes)") {
+		t.Fatalf("over-budget value should name original length, got %q", got[len(got)-40:])
 	}
 	// Multi-byte rune straddling the cap: cut before it, never through it.
 	multi := strings.Repeat("x", 2047) + "é" + "rest"
 	got = truncateForLog(multi, 2048)
-	if got != strings.Repeat("x", 2047)+"… (truncated)" {
-		t.Fatalf("straddling rune must cut before it, got len %d valid=%v", len(got), strings.HasSuffix(got, "… (truncated)"))
-	}
-	if !strings.HasSuffix(got, "… (truncated)") {
-		t.Fatalf("marker must survive, got %q", got)
+	if !strings.HasSuffix(got, "… (truncated from 2053 bytes)") {
+		t.Fatalf("straddling rune must cut before it with length, got len %d suffix=%q", len(got), got[len(got)-40:])
 	}
 }

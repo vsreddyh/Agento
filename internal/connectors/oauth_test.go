@@ -647,8 +647,8 @@ func TestExchangeRejectsNilContext(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	if _, err := Exchange(nil, cfg, Gmail, "code", "verifier", nil); err == nil { //nolint:staticcheck // intentional nil ctx: the contract under test
 		t.Fatal("nil ctx should fail closed")
-	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
-		t.Fatalf("nil ctx should be a deterministic 400, got %v", err)
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || !se.Upstream {
+		t.Fatalf("nil ctx is a caller bug: 502, got %v", err)
 	} else if !strings.Contains(err.Error(), "nil context") {
 		t.Fatalf("nil ctx should name the contract, got %q", err)
 	}

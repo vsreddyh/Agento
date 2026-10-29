@@ -75,7 +75,7 @@ func truncateForLog(s string, maxBytes int) string {
 			cut += w
 		}
 	}
-	return s[:cut] + "\u2026 (truncated)"
+	return fmt.Sprintf("%s\u2026 (truncated from %d bytes)", s[:cut], len(s))
 }
 
 func main() {
