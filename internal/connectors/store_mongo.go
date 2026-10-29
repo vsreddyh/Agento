@@ -890,6 +890,11 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	// ConsumeState, so a padded value stored verbatim would never match a
 	// lookup — and a padded verifier would break Exchange at Google after
 	// the user already consented. Normalise here, not at read time.
+	// Raw length first: the trims below walk the whole input. Same bound
+	// and error as the trimmed gate — trimming only shrinks.
+	if len(st.State) > MaxStateFieldLen || len(st.Verifier) > MaxVerifierLen {
+		return NewStoreError("oauth state or verifier too long", false)
+	}
 	st.State = TrimCredential(st.State)
 	st.Verifier = TrimCredential(st.Verifier)
 	if st.State == "" {
@@ -1049,6 +1054,11 @@ func (s *MongoStore) ConsumeState(ctx context.Context, state string) (OAuthState
 	// Length-gated like the gateway: oversized input answers the same
 	// NotFound as unknown, never reaching Mongo as a filter. Control-gated
 	// like CreateState: a control-bearing id must not reach the filter.
+	// Raw length first like the write path: same NotFound, fires before
+	// paying the trim walk on unbounded input.
+	if len(state) > MaxStateFieldLen {
+		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
+	}
 	state = TrimCredential(state)
 	if len(state) > MaxStateFieldLen {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}

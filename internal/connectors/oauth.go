@@ -64,6 +64,10 @@ const (
 // far-future row reads as renew-soon instead of don't-renew-for-decades.
 // Testable without a store (pure function of two ints); GetTokens stays
 // verbatim by design, and this is the single owner callers use instead.
+// Negatives floor to 0 while positive past timestamps return as-is: both
+// mean renew-now per TokenRow, but only negatives lack any other spelling —
+// a past timestamp stays addressable (when), a negative becomes the
+// sentinel (missing).
 func (t TokenRow) EffectiveExpiry(now time.Time) int64 {
 	return ClampAccessExpiry(t.AccessExpiryUnixMilli, now)
 }
@@ -366,6 +370,13 @@ func RedactURL(raw string) string {
 // by construction — Google exact-matches redirect_uri, and a mismatch
 // dies in the browser with nothing in the server log pointing at it.
 func CanonicalRedirectURL(raw string) (string, error) {
+	// Raw length first: TrimCredential walks the whole input, so an
+	// unbounded hand-built value pays the walk before any gate. Same bound
+	// and error as the trimmed gate below — trimming only shrinks, so this
+	// fires first on the same inputs (plus pathological padding, same 400).
+	if len(raw) > MaxRedirectLen {
+		return "", errors.New("connectors: redirect URL too long")
+	}
 	// Trimmed once, parsed once: every check below sees the same string,
 	// so a future edit cannot split checked-vs-parsed by re-deriving one.
 	trimmed := TrimCredential(raw)
@@ -866,6 +877,16 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// show for it. The gateway mints fixed-size values via NewState, so
 	// this guards direct callers. (id already folded at the top; the
 	// state/verifier trims below are the per-call normalisation.)
+	// Raw length first: the trims below walk the whole input, so an
+	// unbounded hand-built value pays two walks before any gate. Same bound
+	// and log as the trimmed gate — trimming only shrinks, so this fires
+	// first on the same inputs (plus pathological padding, same "").
+	if len(state) > MaxStateFieldLen || len(verifier) > MaxVerifierLen {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: oversized state or verifier", id)
+		}
+		return ""
+	}
 	state = TrimCredential(state)
 	verifier = TrimCredential(verifier)
 	// Empty → length → Known, matching Exchange/CreateState/ConsumeState/
@@ -1027,6 +1048,11 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// real credential over the cap (or slip whitespace through to Google).
 	// Deterministic input reject (400), not a flaky upstream — same shape
 	// as the missing-refresh branch below.
+	// Raw length first like AuthURL: the trims below walk the whole input.
+	// Same bound and deny as the trimmed gate — trimming only shrinks.
+	if len(code) > MaxStateFieldLen || len(verifier) > MaxVerifierLen {
+		return nil, deny("oauth code or verifier too long")
+	}
 	code = TrimCredential(code)
 	verifier = TrimCredential(verifier)
 	if code == "" || verifier == "" {

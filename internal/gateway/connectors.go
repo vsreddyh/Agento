@@ -1063,10 +1063,13 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, bounded(strings.Join(missing, " ")), bounded(approvals.ScrubError(granted)))
 		}
 		// Clean path logs nothing by design: no missing scopes means the
-		// grant was full (or the param was absent — len==0 returns nil in
-		// missingScopes), so a later draft 403 on such a row traces to a
-		// downstream restriction, not to a skipped check. Only the skip
-		// branch below is silent-comparison, and it logs.
+		// grant was full — or the param was absent, which reads as assumed
+		// full (Google omits scope on some full grants, so absence cannot
+		// fail). A subset delivered without the param is therefore invisible
+		// by design: no log line distinguishes it from a true full grant,
+		// and a later draft 403 on such a row traces to a downstream
+		// restriction, not to a skipped check. Only the skip branch below
+		// is silent-comparison, and it logs.
 	} else if len(granted) > 0 {
 		// Oversized, control-bearing, or undecodable: skip the compare
 		// like the oversized leg, never the grant. Same blank==absent
