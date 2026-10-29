@@ -1809,3 +1809,17 @@ func TestIsKnownRawID(t *testing.T) {
 		t.Error("Known must still fold (stray scan is the only raw caller)")
 	}
 }
+
+func TestDecryptTokenRejectsBlankPadded(t *testing.T) {
+	key := [32]byte{1}
+	if _, err := DecryptToken(key, "   "); err == nil {
+		t.Fatal("blank cipher should fail closed")
+	} else if !strings.Contains(err.Error(), "blank or padded") {
+		t.Fatalf("blank should name its shape, got %q", err)
+	}
+	if _, err := DecryptToken(key, " abcd"); err == nil {
+		t.Fatal("padded cipher should fail closed")
+	} else if !strings.Contains(err.Error(), "padded") {
+		t.Fatalf("padded should name its shape, got %q", err)
+	}
+}

@@ -554,6 +554,15 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	if !strings.HasSuffix(parsed.EscapedPath(), "/api/connectors/callback") {
 		return "", errors.New("connectors: redirect URL path must not contain encoded slashes; register the decoded spelling")
 	}
+	// No escapes at all beyond what Clean already normalised: %20, %09,
+	// or double-encoding (%2520) decode past the control/space gates on
+	// parsed.Path yet String() re-emits different bytes — another
+	// validated != sent shape. Registrations are plain ASCII with no
+	// encoding needed, so require the escaped form to equal the decoded
+	// form outright.
+	if parsed.EscapedPath() != parsed.Path {
+		return "", errors.New("connectors: redirect URL path must not contain percent-encoding; register the plain spelling")
+	}
 	// Length-cap the canonical output, not just the raw input: growth
 	// through canonicalisation (brackets, unescaping) must not mint a
 	// stored/sent string the write paths would 400. Same MaxRedirectLen
@@ -958,7 +967,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// would panic on the first use instead of 400ing. A nil Context is a
 	// caller bug — fail closed with the discriminant instead of
 	// substituting Background (which would silently drop cancellation
-	// propagation).
+	// propagation). Untyped nil only: a typed-nil ctx (non-nil interface
+	// holding a nil pointer) still panics on first use like the driver —
+	// pass a live (possibly cancelled) ctx, never a nil of either kind.
 	if ctx == nil {
 		if logf != nil {
 			logf("connectors: grant exchange refused: nil context")

@@ -139,6 +139,16 @@ func DecryptToken(key [32]byte, sealed string) (string, error) {
 	if len(sealed) > MaxCipherLen {
 		return "", errors.New("connectors: token is too long")
 	}
+	// Whitespace/padded input fails here with its own discriminant, like
+	// the write-side padded gate: "" reads as truncated (missing), but a
+	// blank or padded cipher is the "present but unopenable" shape the
+	// refresher must never mistake for a grant.
+	if sealed != "" && TrimCredential(sealed) == "" {
+		return "", errors.New("connectors: refusing to open a blank or padded token; trim before opening")
+	}
+	if sealed != TrimCredential(sealed) {
+		return "", errors.New("connectors: refusing to open a padded token; trim before opening")
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(sealed)
 	if err != nil {
 		return "", errors.New("connectors: token is not valid base64")

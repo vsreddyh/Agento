@@ -956,3 +956,14 @@ func TestCanonicalRedirectRejectsDanglingColon(t *testing.T) {
 		t.Fatal("dangling-colon port should fail closed, not canonicalise away")
 	}
 }
+
+func TestCanonicalRedirectRejectsEncodedPath(t *testing.T) {
+	for _, u := range []string{
+		"https://host.example.com/%20/api/connectors/callback",
+		"https://host.example.com/%2520/api/connectors/callback",
+	} {
+		if _, err := CanonicalRedirectURL(u); err == nil {
+			t.Fatalf("%q should fail closed (encoded path)", u)
+		}
+	}
+}
