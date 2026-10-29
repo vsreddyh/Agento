@@ -444,7 +444,10 @@ func run() error {
 			// never truncates a value the server would actually send.
 			// Bytes for the bound (rune counts over-admit multi-byte
 			// values up to ~4x), cut at a rune boundary by walking the
-			// byte string — never slicing it — so no char splits.
+			// byte string — never slicing it — so no char splits. range
+			// over a string yields the byte index of each rune start
+			// (not a rune count), so redirect[:end] is safe exactly
+			// because end only ever holds one of those start indices.
 			redirect := os.Getenv("GOOGLE_REDIRECT_URL")
 			if len(redirect) > connectors.MaxStateFieldLen {
 				end := 0

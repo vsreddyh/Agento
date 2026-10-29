@@ -258,6 +258,18 @@ func TestOAuthConfigRejectsNonLocalhostHTTP(t *testing.T) {
 	if _, err := OAuthConfigFromEnv(); err != nil {
 		t.Fatalf("loopback http redirect should pass: %v", err)
 	}
+	// The allowlist is exactly three spellings, not all of loopback:
+	// 127/8 siblings and mapped forms fail closed even though they are
+	// loopback addresses — the registered set is the documented set.
+	for _, url := range []string{
+		"http://127.0.0.2:8643/api/connectors/callback",
+		"http://[::ffff:127.0.0.1]:8643/api/connectors/callback",
+	} {
+		t.Setenv("GOOGLE_REDIRECT_URL", url)
+		if _, err := OAuthConfigFromEnv(); err == nil {
+			t.Fatalf("non-allowlisted loopback %q should fail closed", url)
+		}
+	}
 }
 
 // Control bytes in client credentials fail closed at config load, not

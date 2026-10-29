@@ -267,10 +267,15 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		}
 	}
 	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {
-		// Google only permits http for loopback: a non-localhost http
-		// registration can never complete, and the failure surfaces as
-		// redirect_uri_mismatch in the browser, not as a config error —
-		// so fail closed here with a pointer at the scheme.
+		// http is loopback-only, and only in these three spellings — the
+		// same set .env.example names, no wider. A general IsLoopback
+		// check would also accept 127/8 siblings and mapped forms, but
+		// every accepted spelling must be registered verbatim in the
+		// console, so the allowlist stays exactly the documented set. A
+		// non-listed http registration can never complete, and the
+		// failure surfaces as redirect_uri_mismatch in the browser, not
+		// as a config error — so fail closed here with a pointer at the
+		// scheme.
 		return "", errors.New("connectors: redirect URL must use https (http loopback-only)")
 	}
 	if h := parsed.Hostname(); net.ParseIP(h) == nil && !validRedirectHost(h) {
