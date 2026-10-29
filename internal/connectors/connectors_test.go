@@ -1407,6 +1407,13 @@ func TestAuthURLRejectsControlBytes(t *testing.T) {
 	if got := AuthURL(cfg, "gmail", "s", "v\xc0\x80x", logf); got != "" || !strings.Contains(logged, "invalid") {
 		t.Errorf("got %q, logged %q; want empty with invalid-input reason", got, logged)
 	}
+	// Trailing zero-width from a console copy-paste is forgiven like
+	// whitespace (trimmed at the edges), not rejected as a control:
+	// TrimCredential covers Cf where TrimSpace stopped.
+	logged = ""
+	if got := AuthURL(cfg, "gmail", "s\u200b", "v", logf); got == "" {
+		t.Errorf("got empty, want trimmed Cf to build; log: %q", logged)
+	}
 }
 
 // DecryptToken("") errors by design: "" is the documented missing-token

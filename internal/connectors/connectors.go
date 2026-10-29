@@ -142,7 +142,18 @@ type Connector struct {
 // 404 after this (see Known): normalisation only folds spellings of a real
 // connector, it never invents one.
 func NormalizedID(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
+	return strings.ToLower(TrimCredential(raw))
+}
+
+// TrimCredential trims edge whitespace AND invisible format characters
+// (zero-width spaces, BOM): an operator-pasted id/secret with a trailing
+// zero-width char fails HasControl otherwise, reading as a control
+// violation for what TrimSpace was supposed to forgive. Interior controls
+// still fail closed — trimming is edges-only, like TrimSpace.
+func TrimCredential(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.Is(unicode.Cf, r)
+	})
 }
 
 // IsDraftOnlySend reports whether (server, tool) is a send path that v1

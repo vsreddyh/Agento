@@ -132,7 +132,7 @@ func storeTimeoutOrGone(w http.ResponseWriter, s *Server, ctx context.Context, e
 		// Observe-only: writing a domain error on a dead connection only
 		// buys a second log line at the http layer for a hangup. Log and
 		// return without a body.
-		s.cfg.Logf("connectors: %s aborted, client gone: %v", verb, ctx.Err())
+		s.cfg.Logf("connectors: %s aborted, request ended (client gone or server stopping): %v", verb, ctx.Err())
 		return
 	}
 	connectorsError(w, err)
@@ -247,7 +247,7 @@ func callbackTimeoutOrGone(w http.ResponseWriter, s *Server, r *http.Request, ct
 		return
 	}
 	if ctx.Err() != nil {
-		s.cfg.Logf("connectors: %s aborted, client gone: %v", verb, ctx.Err())
+		s.cfg.Logf("connectors: %s aborted, request ended (client gone or server stopping): %v", verb, ctx.Err())
 		return
 	}
 	code, typ, msg := connectorsErrorMapped(err)
@@ -328,8 +328,10 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// (no-verb 405) while the id path rejects the same bytes with a bare
 	// 404. Same bare echoless 404 for both — JSON-escaping keeps the app
 	// safe, but line-oriented log tailing must never see an injected break,
-	// and no valid id or verb contains one.
-	if id == "" || connectors.HasControl(id) || connectors.HasControl(action) {
+	// and no valid id or verb contains one. UTF-8 checked too: invalid
+	// bytes decode as RuneError, not control — same half the OAuth legs
+	// gate explicitly.
+	if id == "" || connectors.HasControl(id) || connectors.HasControl(action) || !utf8.ValidString(id) || !utf8.ValidString(action) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
 		return
@@ -340,7 +342,7 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// like the id: bounded() keeps any echo safe and the server caps total
 	// header size anyway, but there is no reason to pay rune-scan + alloc
 	// on a garbage path before the inevitable 404.
-	action = strings.ToLower(strings.TrimSpace(action))
+	action = strings.ToLower(connectors.TrimCredential(action))
 	if len(action) > maxConnectorIDLen {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown path "+bounded(approvals.ScrubError(path)))
@@ -493,7 +495,7 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// honest answer. Gone clients still short-circuit: writing on a
 		// dead conn buys only a second log line for a hangup.
 		if ctx.Err() != nil && ctx.Err() != context.DeadlineExceeded {
-			s.cfg.Logf("connectors: connect aborted, client gone: %v", ctx.Err())
+			s.cfg.Logf("connectors: connect aborted, request ended (client gone or server stopping): %v", ctx.Err())
 			return
 		}
 		connectorsError(w, err)
@@ -551,8 +553,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			"callback is not configured on this server yet — never paste a token in chat")
 		return
 	}
-	code := strings.TrimSpace(r.URL.Query().Get("code"))
-	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	code := connectors.TrimCredential(r.URL.Query().Get("code"))
+	state := connectors.TrimCredential(r.URL.Query().Get("state"))
 	if code == "" || state == "" {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			"callback needs ?code= and ?state=; start over from connect")
@@ -602,7 +604,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if ctx.Err() != nil {
-			s.cfg.Logf("connectors: callback aborted, client gone: %v", ctx.Err())
+			s.cfg.Logf("connectors: callback aborted, request ended (client gone or server stopping): %v", ctx.Err())
 			return
 		}
 		// Unknown, consumed, or expired: same dead-attempt answer, "try
@@ -665,7 +667,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if ctx.Err() != nil {
-			s.cfg.Logf("connectors: callback aborted, client gone: %v", ctx.Err())
+			s.cfg.Logf("connectors: callback aborted, request ended (client gone or server stopping): %v", ctx.Err())
 			return
 		}
 		var se *connectors.StoreError
@@ -686,8 +688,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// pass the non-empty checks and seal with padding the refresher cannot
 	// use (same class as the whitespace cases fixed earlier — check and
 	// stored bytes must be the same string).
-	refreshToken := strings.TrimSpace(tok.RefreshToken)
-	accessToken := strings.TrimSpace(tok.AccessToken)
+	refreshToken := connectors.TrimCredential(tok.RefreshToken)
+	accessToken := connectors.TrimCredential(tok.AccessToken)
 	refreshSealed, err := connectors.EncryptToken(cfg.Key, refreshToken)
 	if err != nil {
 		// Logged, not answered in detail: seal failures are server-side

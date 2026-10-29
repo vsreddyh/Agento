@@ -141,7 +141,7 @@ func validRedirectHost(host string) bool {
 func CanonicalRedirectURL(raw string) (string, error) {
 	// Trimmed once, parsed once: every check below sees the same string,
 	// so a future edit cannot split checked-vs-parsed by re-deriving one.
-	trimmed := strings.TrimSpace(raw)
+	trimmed := TrimCredential(raw)
 	// Length-capped before Parse: a multi-MB hand-built value would
 	// otherwise pay the full parse + Clean + String alloc before any
 	// 400. Same MaxStateFieldLen the CreateState redirect cap uses —
@@ -279,9 +279,9 @@ func CanonicalRedirectURL(raw string) (string, error) {
 // flow — auth URL without exchange, exchange without storage key — would
 // strand the user mid-consent with no honest error to show.
 func OAuthConfigFromEnv() (*OAuthConfig, error) {
-	clientID := strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
-	clientSecret := strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET"))
-	redirectURL := strings.TrimSpace(os.Getenv("GOOGLE_REDIRECT_URL"))
+	clientID := TrimCredential(os.Getenv("GOOGLE_CLIENT_ID"))
+	clientSecret := TrimCredential(os.Getenv("GOOGLE_CLIENT_SECRET"))
+	redirectURL := TrimCredential(os.Getenv("GOOGLE_REDIRECT_URL"))
 	if clientID == "" || clientSecret == "" || redirectURL == "" {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL must all be set for OAuth")
 	}
@@ -324,14 +324,14 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 }
 
 func (c *OAuthConfig) endpoint() oauth2.Endpoint {
-	return oauth2.Endpoint{AuthURL: strings.TrimSpace(c.AuthURL), TokenURL: strings.TrimSpace(c.TokenURL)}
+	return oauth2.Endpoint{AuthURL: TrimCredential(c.AuthURL), TokenURL: TrimCredential(c.TokenURL)}
 }
 
 func (c *OAuthConfig) oauth2(scopes []string) *oauth2.Config {
 	return &oauth2.Config{
-		ClientID:     strings.TrimSpace(c.ClientID),
-		ClientSecret: strings.TrimSpace(c.ClientSecret),
-		RedirectURL:  strings.TrimSpace(c.RedirectURL),
+		ClientID:     TrimCredential(c.ClientID),
+		ClientSecret: TrimCredential(c.ClientSecret),
+		RedirectURL:  TrimCredential(c.RedirectURL),
 		Scopes:       scopes,
 		Endpoint:     c.endpoint(),
 	}
@@ -407,7 +407,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// log below must observe the same spelling every downstream branch
 	// logs — stored == logged == sent by construction.
 	id = NormalizedID(id)
-	if cfg == nil || strings.TrimSpace(cfg.ClientID) == "" || strings.TrimSpace(cfg.ClientSecret) == "" || strings.TrimSpace(cfg.RedirectURL) == "" {
+	if cfg == nil || TrimCredential(cfg.ClientID) == "" || TrimCredential(cfg.ClientSecret) == "" || TrimCredential(cfg.RedirectURL) == "" {
 		if logf != nil {
 			logf("connectors: auth URL build failed: unconfigured client (%q)", id)
 		}
@@ -418,11 +418,11 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// even though AuthCodeURL never sends it — the copy contract is
 	// "everything trimmed", so the next edit copies one pattern.
 	trimmed := *cfg
-	trimmed.ClientID = strings.TrimSpace(trimmed.ClientID)
-	trimmed.ClientSecret = strings.TrimSpace(trimmed.ClientSecret)
-	trimmed.RedirectURL = strings.TrimSpace(trimmed.RedirectURL)
-	trimmed.AuthURL = strings.TrimSpace(trimmed.AuthURL)
-	trimmed.TokenURL = strings.TrimSpace(trimmed.TokenURL)
+	trimmed.ClientID = TrimCredential(trimmed.ClientID)
+	trimmed.ClientSecret = TrimCredential(trimmed.ClientSecret)
+	trimmed.RedirectURL = TrimCredential(trimmed.RedirectURL)
+	trimmed.AuthURL = TrimCredential(trimmed.AuthURL)
+	trimmed.TokenURL = TrimCredential(trimmed.TokenURL)
 	if HasControl(trimmed.ClientID) || HasControl(trimmed.ClientSecret) || !utf8.ValidString(trimmed.ClientID) || !utf8.ValidString(trimmed.ClientSecret) {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: invalid client credential", id)
@@ -464,8 +464,8 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	// show for it. The gateway mints fixed-size values via NewState, so
 	// this guards direct callers. (id already folded at the top; the
 	// state/verifier trims below are the per-call normalisation.)
-	state = strings.TrimSpace(state)
-	verifier = strings.TrimSpace(verifier)
+	state = TrimCredential(state)
+	verifier = TrimCredential(verifier)
 	// Empty → length → Known, matching Exchange/CreateState/ConsumeState/
 	// SetTokens: an oversized input for an unknown id 400s on length, so
 	// the unknown-id path cannot be told apart by which error fires first.
@@ -519,8 +519,8 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// real credential over the cap (or slip whitespace through to Google).
 	// Deterministic input reject (400), not a flaky upstream — same shape
 	// as the missing-refresh branch below.
-	code = strings.TrimSpace(code)
-	verifier = strings.TrimSpace(verifier)
+	code = TrimCredential(code)
+	verifier = TrimCredential(verifier)
 	if code == "" || verifier == "" {
 		// Deterministic caller error, not an upstream failure: nothing was
 		// sent anywhere. Same 400 shape as the length and no-refresh
@@ -554,10 +554,10 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		return nil, NewStoreError("oauth client redirect URL too long", false)
 	}
 	cc := *cfg
-	cc.ClientID = strings.TrimSpace(cc.ClientID)
-	cc.ClientSecret = strings.TrimSpace(cc.ClientSecret)
-	cc.AuthURL = strings.TrimSpace(cc.AuthURL)
-	cc.TokenURL = strings.TrimSpace(cc.TokenURL)
+	cc.ClientID = TrimCredential(cc.ClientID)
+	cc.ClientSecret = TrimCredential(cc.ClientSecret)
+	cc.AuthURL = TrimCredential(cc.AuthURL)
+	cc.TokenURL = TrimCredential(cc.TokenURL)
 	if HasControl(cc.ClientID) || HasControl(cc.ClientSecret) || !utf8.ValidString(cc.ClientID) || !utf8.ValidString(cc.ClientSecret) {
 		return nil, NewStoreError("oauth client credential is invalid", false)
 	}
@@ -591,7 +591,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 		}
 		return nil, NewStoreError("grant exchange failed", true)
 	}
-	if strings.TrimSpace(tok.RefreshToken) == "" {
+	if TrimCredential(tok.RefreshToken) == "" {
 		// No refresh token means no renewal path: storing this row as
 		// connected would strand it at the first access-token expiry.
 		// Fail the connect loudly instead of a slow-burn disconnect.
@@ -607,8 +607,8 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// tok.RefreshToken raw cannot seal padding the refresher can't use
 	// (same class as the gateway's trim-before-seal, enforced here so
 	// no caller has to remember it).
-	tok.RefreshToken = strings.TrimSpace(tok.RefreshToken)
-	tok.AccessToken = strings.TrimSpace(tok.AccessToken)
+	tok.RefreshToken = TrimCredential(tok.RefreshToken)
+	tok.AccessToken = TrimCredential(tok.AccessToken)
 	// Controls fail closed like every sibling input: a control-bearing
 	// provider token would 502 at seal time (state already consumed)
 	// instead of 400ing here as the deterministic answer it is.

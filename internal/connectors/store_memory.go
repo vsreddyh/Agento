@@ -435,15 +435,15 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	// ConsumeState, so a padded value stored verbatim would never match a
 	// lookup — and a padded verifier would break Exchange at Google after
 	// the user already consented. Normalise here, not at read time.
-	st.State = strings.TrimSpace(st.State)
-	st.Verifier = strings.TrimSpace(st.Verifier)
+	st.State = TrimCredential(st.State)
+	st.Verifier = TrimCredential(st.Verifier)
 	if st.State == "" {
 		return NewStoreError("oauth state needs an id", false)
 	}
 	// Empty → length → Known, matching Exchange: an empty or oversized
 	// input 400s the same way whether the id is known or not, so the
 	// unknown-id path cannot be told apart by which error fires first.
-	if strings.TrimSpace(st.Verifier) == "" {
+	if TrimCredential(st.Verifier) == "" {
 		// Fail fast at creation, not after the user completed consent: a
 		// verifier-less attempt can never survive Exchange.
 		return NewStoreError("oauth state needs a verifier", false)
@@ -558,7 +558,7 @@ func (s *MemoryStore) ConsumeState(_ context.Context, state string) (OAuthState,
 	// NotFound as unknown, never reaching the map. Control-gated like
 	// CreateState: a control-bearing id must not reach even a map lookup
 	// as anything but NotFound.
-	state = strings.TrimSpace(state)
+	state = TrimCredential(state)
 	if len(state) > MaxStateFieldLen {
 		return OAuthState{}, &StoreError{Msg: "unknown or expired oauth state", NotFound: true}
 	}
