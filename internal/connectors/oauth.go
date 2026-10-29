@@ -284,6 +284,22 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	return out, nil
 }
 
+// missingVars names the unset OAuth env vars for the config-error path,
+// so the startup log points at the gap instead of the whole set.
+func missingVars(clientID, clientSecret, redirectURL string) []string {
+	var missing []string
+	if clientID == "" {
+		missing = append(missing, "GOOGLE_CLIENT_ID")
+	}
+	if clientSecret == "" {
+		missing = append(missing, "GOOGLE_CLIENT_SECRET")
+	}
+	if redirectURL == "" {
+		missing = append(missing, "GOOGLE_REDIRECT_URL")
+	}
+	return missing
+}
+
 // OAuthConfigFromEnv builds the OAuth client from the environment. ANY
 // missing piece is an error (nil config, connect stays 501): a half-open
 // flow — auth URL without exchange, exchange without storage key — would
@@ -292,8 +308,11 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	clientID := TrimCredential(os.Getenv("GOOGLE_CLIENT_ID"))
 	clientSecret := TrimCredential(os.Getenv("GOOGLE_CLIENT_SECRET"))
 	redirectURL := TrimCredential(os.Getenv("GOOGLE_REDIRECT_URL"))
-	if clientID == "" || clientSecret == "" || redirectURL == "" {
-		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URL must all be set for OAuth")
+	// Name the missing pieces, not just the set: the gateway logs this
+	// verbatim at startup, and an operator who set two of three should not
+	// have to re-read .env three times to find the gap.
+	if missing := missingVars(clientID, clientSecret, redirectURL); len(missing) > 0 {
+		return nil, errors.New("connectors: missing OAuth config: " + strings.Join(missing, ", "))
 	}
 	// Credentials fail fast on control bytes and invalid UTF-8 like every
 	// sibling input (redirect below, state/code/verifier at every layer):

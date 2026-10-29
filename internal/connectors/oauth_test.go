@@ -467,3 +467,20 @@ func TestRedirectBeforeEndpointsInBothHelpers(t *testing.T) {
 		t.Fatalf("dual-bad Exchange should fail on redirect, logged %q", logged)
 	}
 }
+
+// Missing pieces are named, not grouped: the startup log points at the
+// gap instead of the whole set.
+func TestOAuthConfigNamesMissingVars(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "cid")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("missing secret should fail closed")
+	} else if !strings.Contains(err.Error(), "GOOGLE_CLIENT_SECRET") {
+		t.Fatalf("error should name the missing var, got %q", err)
+	} else if strings.Contains(err.Error(), "GOOGLE_CLIENT_ID") {
+		t.Fatalf("error must not name the set var, got %q", err)
+	}
+}
