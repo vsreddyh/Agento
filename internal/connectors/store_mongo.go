@@ -772,9 +772,7 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 	// can straddle a millisecond tick under the same single-now rationale
 	// as CreateState.
 	now := time.Now()
-	if max := now.Add(MaxAccessLifetime).UnixMilli(); tok.AccessExpiryUnixMilli > max {
-		tok.AccessExpiryUnixMilli = max
-	}
+	tok.AccessExpiryUnixMilli = ClampAccessExpiry(tok.AccessExpiryUnixMilli, now)
 	// Display defaults on insert only: a token write must never invent
 	// status (backfill synthesises disconnected for a status-less doc
 	// on read), and without these a crash between SetTokens and

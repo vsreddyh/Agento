@@ -47,8 +47,24 @@ const (
 
 	// StatesCollection holds pending connect attempts. Short-lived by TTL;
 	// consumed (deleted) on first use, so a code can never be exchanged twice.
+
 	StatesCollection = "oauth_states"
 )
+
+// ClampAccessExpiry bounds an access-token expiry timestamp against now:
+// anything past now+MaxAccessLifetime reads as renew-soon, never as
+// don't-renew-for-decades. Single owner for the bound: the gateway write
+// site, both SetTokens, and the Exchange return all call this instead of
+// inlining now.Add(MaxAccessLifetime) — and any future refresher must
+// call it on read, since GetTokens serves hand-edited futures verbatim
+// (see TokenRow). Wall-clock by design; callers with an injectable clock
+// pass their own now.
+func ClampAccessExpiry(expiryUnixMilli int64, now time.Time) int64 {
+	if max := now.Add(MaxAccessLifetime).UnixMilli(); expiryUnixMilli > max {
+		return max
+	}
+	return expiryUnixMilli
+}
 
 // GoogleScopes maps a connector to the Google OAuth scopes its auth URL
 // requests. Least privilege per connector, and deliberately NOT the
@@ -150,6 +166,9 @@ func validRedirectHost(host string) bool {
 	// rejects c >= 0x80, making bytes == runes on every accepted input.
 	// Ordering is deliberate only in outcome — the gates reject the same
 	// set either way — so a future Unicode widening must fix the units
+	// first. Discriminant note: a 200-rune Unicode host (~600 bytes) trips
+	// the length gate before ASCII names the real cause — triage a length
+	// reject on a long host by checking for non-ASCII (register punycode)
 	// first.
 	if host == "" || len(host) > 253 {
 		return false
@@ -1114,9 +1133,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// skewed provider value. Same unbounded-lifetime class as the state
 	// clamp — fail safe (renew soon), never far.
 	if !tok.Expiry.IsZero() {
-		if max := time.Now().Add(MaxAccessLifetime); tok.Expiry.After(max) {
-			tok.Expiry = max
-		}
+		tok.Expiry = time.UnixMilli(ClampAccessExpiry(tok.Expiry.UnixMilli(), time.Now()))
 	}
 	// Persist via SetTokens (the write sites own the stored clamp); this
 	// return is now clamped for scheduling callers too.

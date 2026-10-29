@@ -877,6 +877,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// Unknown, consumed, or expired: same dead-attempt answer, "try
 		// connect again". The store already refuses to distinguish; the
 		// gateway must not add an oracle on top by varying the message.
+		// Layer discriminant note: short states answer NotFound at the
+		// store ("unknown or expired") but dead-attempt here — same 400
+		// meaning on the wire either way, since this pre-check runs first.
+		// Only direct store callers ever see the store string.
 		// Upstream store failures are the exception: those 502 via the
 		// domain mapper (transient, retryable) instead of burning the
 		// user's live state with a "start over" that would supersede it.
@@ -964,7 +968,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// junk-suffixed scope that suppresses the subset warning must leave
 	// its own trace, or a later draft 403 has no line to trace back to.
 	// Trimmed first like code/state: whitespace-only is absent, not a
-	// subset — blank == absent on every leg, so "  " never warns. All
+	// subset — blank == absent on every leg, so "  " never warns.
+	// Total gate implies the per-value gate: joined form only shrinks
+	// under TrimCredential, so anything clearing the total necessarily
+	// clears the length check below — the two gates cannot disagree no
+	// matter how the separator changes. Only clean, in-budget values are
+	// compared. All
 	// values joined first: a duplicated ?scope= compares the union, not
 	// just the first, so a junk second value cannot suppress the warning
 	// (same pointer class as the duplicate-params length log above).
@@ -1076,9 +1085,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// write time, so a stepped fake clock and this gate never have
 		// to agree; agreement is not required because the store is the
 		// single owner and this gate is advisory.
-		if max := time.Now().Add(connectors.MaxAccessLifetime).UnixMilli(); expiry > max {
-			expiry = max
-		}
+		expiry = connectors.ClampAccessExpiry(expiry, time.Now())
 	}
 	if err := s.connectors.SetTokens(ctx, id, connectors.TokenRow{
 		RefreshCipher:         refreshSealed,

@@ -1718,3 +1718,16 @@ func TestBoundLayering(t *testing.T) {
 		t.Errorf("MaxSegmentAllocLen (%d) must clear MaxStateFieldLen (%d)", MaxSegmentAllocLen, MaxStateFieldLen)
 	}
 }
+
+// ClampAccessExpiry is the single owner for the bound: far futures clamp
+// to now+max, everything else passes through — including past values,
+// which the refresher treats as renew-now.
+func TestClampAccessExpiry(t *testing.T) {
+	now := time.Now()
+	if got := ClampAccessExpiry(now.Add(2*MaxAccessLifetime).UnixMilli(), now); got != now.Add(MaxAccessLifetime).UnixMilli() {
+		t.Errorf("far future should clamp to now+max, got %v", time.UnixMilli(got).Sub(now))
+	}
+	if got := ClampAccessExpiry(now.Add(-time.Hour).UnixMilli(), now); got != now.Add(-time.Hour).UnixMilli() {
+		t.Errorf("past should pass through, got %v", got)
+	}
+}
