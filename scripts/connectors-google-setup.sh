@@ -264,7 +264,10 @@ _valid_tsdns() {
   [[ "$rest" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]
 }
 
-REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+REPO_DIR="${REPO_DIR:-}"
+if [[ -z "$REPO_DIR" ]]; then
+  REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd) || REPO_DIR=""
+fi
 # ${ENV_FILE:-...} keeps the library contract: callers (and dry-run renders
 # against a throwaway copy) can point it elsewhere.
 ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
@@ -328,7 +331,7 @@ if [[ -n "$_missing" ]]; then
   exit 1
 fi
 unset _missing
-if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+if [[ "${EUID:-$(id -u 2>/dev/null || true)}" -ne 0 ]]; then
   warn "not running as root: tailscale install/up/funnel typically need root"
   warn "(upstream examples use 'sudo tailscale ...'). Re-run with sudo if"
   warn "those steps fail."
@@ -355,7 +358,7 @@ fi
 # ── Stage 2: install ──────────────────────────────────────────────────────
 stage "Install Tailscale"
 if command -v tailscale >/dev/null 2>&1; then
-  note "already installed: $(tailscale version 2>/dev/null | head -n1 || true)"
+  note "already installed: $(tailscale version 2>/dev/null | head -n1 2>/dev/null || true)"
 else
   _codename=""
   if [[ -f /etc/os-release ]]; then
@@ -367,7 +370,7 @@ else
   printf '\n'
   # The stage-1 EUID gate lets non-root continue; the install itself cannot
   # succeed without root, so stop here instead of burning a doomed download.
-  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  if [[ "${EUID:-$(id -u 2>/dev/null || true)}" -ne 0 ]]; then
     warn "cannot install as non-root — re-run with sudo, then re-run this wizard"
     exit 1
   fi
@@ -382,7 +385,7 @@ else
     exit 1
   }
   printf '\n'
-  printf '  %s✓%s installed %s\n' "$GREEN" "$RESET" "$(tailscale version 2>/dev/null | head -n1 || true)"
+  printf '  %s✓%s installed %s\n' "$GREEN" "$RESET" "$(tailscale version 2>/dev/null | head -n1 2>/dev/null || true)"
 fi
 if command -v systemctl >/dev/null 2>&1; then
   say "Service: $(systemctl is-active tailscaled 2>/dev/null || true)"
@@ -437,7 +440,7 @@ else
   # Current login-URL shape; if Tailscale ever changes domains, the "no
   # login URL appeared" fallback below still fires after 60s of dots.
   for ((__i = 1; __i <= 60; __i++)); do
-    URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" | head -n1 || true)
+    URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" | head -n1 2>/dev/null || true)
     [[ -n "$URL" ]] && break
     _alive "$TS_PID" || break
     printf '%s' '.'; sleep 1
@@ -781,11 +784,13 @@ if [[ ! -w "$ENV_FILE" ]]; then
   warn "no write permission on $ENV_FILE — fix ownership/permissions, then re-run"
   exit 1
 fi
-if [[ ! -w "$(dirname -- "$ENV_FILE")" ]]; then
-  warn "no write permission in $(dirname -- "$ENV_FILE") (backups land there) — fix ownership/permissions, then re-run"
+_env_dir=$(dirname -- "$ENV_FILE" || true)
+if [[ ! -w "$_env_dir" ]]; then
+  warn "no write permission in $_env_dir (backups land there) — fix ownership/permissions, then re-run"
   exit 1
 fi
-BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
+unset _env_dir
+BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S || true).$$"
 cp -p -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
 # cp -p preserves the source mtime, which would tie-break the -ot prune
 # below by glob order on rapid re-runs — re-stamp so filename order and
@@ -802,6 +807,10 @@ chmod 600 -- "$ENV_FILE" "$BACKUP" || { warn "chmod 600 failed — stopping befo
 # options it didn't own (matters if this file is ever sourced).
 _baks=(); _nullglob_off=0; shopt -q nullglob || _nullglob_off=1
 shopt -s nullglob; _baks=("$ENV_FILE".bak.*)
+# A switched ENV_FILE orphans the other name's backups (full-secret copies,
+# gitignored but never pruned) — sweep the default name too when it differs.
+# No dedup needed: the prefixes differ, so no file matches both patterns.
+if [[ "$ENV_FILE" != "$REPO_DIR/.env" ]]; then _baks+=("$REPO_DIR"/.env.bak.*); fi
 if (( _nullglob_off )); then shopt -u nullglob; fi
 _pruned=0
 while (( ${#_baks[@]} > 5 )); do
