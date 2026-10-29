@@ -918,3 +918,9 @@ func TestValidRedirectHostExtendedReserved(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalRedirectRejectsNonASCIIPath(t *testing.T) {
+	if _, err := CanonicalRedirectURL("https://host.example.com/é/api/connectors/callback"); err == nil {
+		t.Fatal("non-ASCII path should fail closed (validated != sent)")
+	}
+}

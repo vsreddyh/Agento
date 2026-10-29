@@ -86,7 +86,10 @@ type Store interface {
 // bound), so there is no deadline to observe here — cancellation is
 // observed by the gateway's ctx.Err() checks around the verb, not inside
 // it. Do not "fix" the `_` back to `ctx`: an unused parameter is the
-// contract, matching the Store interface's caller-bounds-ctx note.
+// contract, matching the Store interface's caller-bounds-ctx note. `_` is
+// intentionally unchecked (nil succeeds here): memory never dereferences
+// ctx, so unlike Mongo/Exchange there is no panic/400 to fail closed with —
+// callers still pass live ctx per the interface.
 type MemoryStore struct {
 	mu     sync.RWMutex
 	rows   map[string]Connector
@@ -462,13 +465,6 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 	// enforces the same rule instead of relying on the one prod caller.
 	if tok.AccessCipher == "" && tok.AccessExpiryUnixMilli != 0 {
 		return NewStoreError("connector grant expiry without access token", false)
-	}
-	// Negative expiries are a third missing representation: UnixMilli is
-	// never negative for a real token, and the refresher treats any past
-	// value as renew-now — so reject instead of storing a second spelling
-	// of "already expired".
-	if tok.AccessCipher != "" && tok.AccessExpiryUnixMilli < 0 {
-		return NewStoreError("connector grant expiry is negative", false)
 	}
 	// Clamp absurd futures: a far-future expiry reads as "don't renew for
 	// decades". Capped like the state clamp (row still works, renews

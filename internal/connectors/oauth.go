@@ -60,6 +60,13 @@ const (
 // (see TokenRow). Wall-clock by design; callers with an injectable clock
 // pass their own now.
 func ClampAccessExpiry(expiryUnixMilli int64, now time.Time) int64 {
+	// Floor negatives to zero first: any past timestamp renews immediately
+	// per TokenRow, so a negative (clock-skew stub, hand-edit) is past, not
+	// a third missing representation — one rule for both signs. Zero is the
+	// single spelling of "already expired".
+	if expiryUnixMilli < 0 {
+		return 0
+	}
 	if max := now.Add(MaxAccessLifetime).UnixMilli(); expiryUnixMilli > max {
 		return max
 	}
@@ -484,6 +491,16 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	// the suffix, but the contract names every rejected class up front.
 	if HasControl(trimmed) || !utf8.ValidString(trimmed) || HasControl(parsed.Path) || !utf8.ValidString(parsed.Path) || HasWhitespace(trimmed) || HasWhitespace(parsed.Path) {
 		return "", errors.New("connectors: redirect URL must not contain control characters, spaces, or invalid UTF-8")
+	}
+	// Host is ASCII-gated by validRedirectHost; the path is not — but the
+	// console holds the decoded spelling while String() sends the
+	// percent-encoded form, so validated != sent by construction on any
+	// non-ASCII path. Reject it here like userinfo/query: validated ==
+	// sent, or fail closed.
+	for _, r := range parsed.Path {
+		if r >= 0x80 {
+			return "", errors.New("connectors: redirect URL path must be ASCII (register the exact sent spelling, never Unicode)")
+		}
 	}
 	parsed.Path = strings.TrimRight(path.Clean(parsed.Path), "/")
 	if !strings.HasSuffix(parsed.Path, "/api/connectors/callback") {

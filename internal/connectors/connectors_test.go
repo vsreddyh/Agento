@@ -1164,16 +1164,21 @@ func TestSetTokensRejectsExpiryWithoutAccess(t *testing.T) {
 	}
 }
 
-// Negative expiries are a third missing representation: UnixMilli is never
-// negative for a real token. Reject instead of storing a second spelling
-// of "already expired".
-func TestSetTokensRejectsNegativeExpiry(t *testing.T) {
+// Negative expiries floor to zero like any past timestamp: UnixMilli is
+// never negative for a real token, and the refresher treats any past value
+// as renew-now — so past and pre-epoch share one rule, not two answers.
+func TestSetTokensFloorsNegativeExpiry(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a", AccessExpiryUnixMilli: -1}); err == nil {
-		t.Fatal("negative expiry should fail closed")
-	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
-		t.Fatalf("negative expiry should be a deterministic 400, got %v", err)
+	if err := s.SetTokens(ctx, "gmail", TokenRow{RefreshCipher: "r", AccessCipher: "a", AccessExpiryUnixMilli: -1}); err != nil {
+		t.Fatalf("negative expiry should floor, not fail: %v", err)
+	}
+	tok, err := s.GetTokens(ctx, "gmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.AccessExpiryUnixMilli != 0 {
+		t.Fatalf("negative expiry should store as 0, got %v", tok.AccessExpiryUnixMilli)
 	}
 }
 
