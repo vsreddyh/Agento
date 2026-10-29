@@ -17,7 +17,10 @@ type Store interface {
 	// Contexts must be bounded by the caller: the memory backend ignores
 	// ctx (no IO to hang), but the Mongo backend runs every verb on the
 	// passed ctx verbatim — an unbounded caller ctx plus a hung Atlas
-	// hangs the verb forever. The gateway always passes a 5s/30s ctx;
+	// hangs the verb forever — with one exception: CreateState runs
+	// detached by design (dup-check + delete + insert share one internal
+	// 5s quickCtx), so the verb ctx bounds validation only there. Size a
+	// CreateState timeout from its own note, not from this promise. The gateway always passes a 5s/30s ctx;
 	// direct/future callers must do the same (context.WithTimeout).
 	// Deliberately stricter than Exchange, which self-bounds when the
 	// caller passes none: an outbound HTTPS round-trip has unbounded

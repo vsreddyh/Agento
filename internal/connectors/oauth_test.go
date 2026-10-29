@@ -744,3 +744,37 @@ func TestStateFloor(t *testing.T) {
 		t.Fatalf("undersized state should be a deterministic 400, got %v", err)
 	}
 }
+
+func TestCanonicalRedirectRejectsNonLoopbackIP(t *testing.T) {
+	for _, u := range []string{
+		"https://192.168.1.10/p/api/connectors/callback",
+		"https://10.0.0.5:8443/p/api/connectors/callback",
+		"https://[fd00::1]/p/api/connectors/callback",
+		"https://8.8.8.8/p/api/connectors/callback",
+	} {
+		if _, err := CanonicalRedirectURL(u); err == nil {
+			t.Fatalf("%q should fail closed (non-loopback IP)", u)
+		}
+	}
+	for _, u := range []string{
+		"http://127.0.0.1:8643/api/connectors/callback",
+		"http://[::1]:8643/api/connectors/callback",
+	} {
+		if _, err := CanonicalRedirectURL(u); err != nil {
+			t.Fatalf("%q loopback IP should pass, got %v", u, err)
+		}
+	}
+}
+
+func TestRedactURLCapsExactly(t *testing.T) {
+	big := strings.Repeat("x", MaxRedirectLen+100)
+	got := RedactURL("https://" + big + "/p/api/connectors/callback")
+	if len(got) > 400 {
+		t.Fatalf("over-cap redact should be bounded, got len %d", len(got))
+	}
+	exact := strings.Repeat("y", MaxRedirectLen)
+	got = RedactURL("https://h/" + exact)
+	if len(got) == 0 {
+		t.Fatal("exact-cap redact should return something")
+	}
+}

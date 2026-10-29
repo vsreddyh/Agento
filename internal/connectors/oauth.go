@@ -102,7 +102,9 @@ type OAuthConfig struct {
 // isDigits reports a non-empty all-ASCII-digit string: SplitHostPort does
 // not check numeracy, and strconv.Atoi accepts "+80"/leading-zero forms
 // that JoinHostPort would re-emit verbatim (validated != sent). The gate
-// below compares and re-emits on the numeric value instead.
+// below canonicalises leading-zero spellings ("080" sends as "80") and
+// rejects the +/- spellings Atoi itself accepts — isDigits is what kills
+// the latter, not the former.
 func isDigits(s string) bool {
 	if s == "" {
 		return false
@@ -211,16 +213,18 @@ func RedactURL(raw string) string {
 	trimmed := TrimCredential(raw)
 	if len(trimmed) > MaxRedirectLen {
 		// Byte cap with a rune-boundary cut (same walk as truncateForLog):
-		// never slice through a multi-byte char, so the cut value holds no
-		// split encoding. It may still fail Parse on a cut escape (trailing
-		// "%2") — that branch is fail-closed, so the cap trades a possible
-		// rejection for a bounded map + parse on every tap.
+		// never slice through a multi-byte char. Inclusive: end lands past
+		// the last whole rune that fits, so a max-length value logs at the
+		// cap instead of one rune short. It may still fail Parse on a cut
+		// escape (trailing "%2") — that branch is fail-closed, so the cap
+		// trades a possible rejection for a bounded map + parse on every tap.
 		end := 0
-		for i := range trimmed {
-			if i > MaxRedirectLen {
+		for i, r := range trimmed {
+			if w := utf8.RuneLen(r); i+w > MaxRedirectLen {
 				break
+			} else {
+				end = i + w
 			}
-			end = i
 		}
 		trimmed = trimmed[:end]
 	}
@@ -354,6 +358,16 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// as a config error — so fail closed here with a pointer at the
 		// scheme.
 		return "", errors.New("connectors: redirect URL must use https (http loopback-only)")
+	}
+	if h := parsed.Hostname(); net.ParseIP(h) != nil && !net.ParseIP(h).IsLoopback() {
+		// IPs other than loopback can never hold a public Google
+		// registration (private/LAN, Tailscale, or public alike): the
+		// flow would die with redirect_uri_mismatch in the browser after
+		// passing every server-side check. Fail closed here, same class
+		// as the userinfo/query/port-strip gates. Loopback stays for
+		// direct-serve development (localhost/127.0.0.1/::1, any scheme
+		// the scheme gate above already narrowed).
+		return "", errors.New("connectors: redirect URL must use a registrable hostname, not a non-loopback IP (use a dotted FQDN; direct-serve with localhost, 127.0.0.1, or [::1])")
 	}
 	if h := parsed.Hostname(); net.ParseIP(h) == nil && !validRedirectHost(h) {
 		// Hostname syntax no console registration can hold: underscores,

@@ -302,8 +302,9 @@ func callbackError(w http.ResponseWriter, r *http.Request, code int, typ, msg st
 // Google sent none — treated as "nothing to compare", not a total miss,
 // since some flows omit the param on full grants.
 func missingScopes(want []string, granted string) []string {
-	have := make(map[string]bool, len(want))
-	for _, s := range strings.Fields(granted) {
+	fields := strings.Fields(granted)
+	have := make(map[string]bool, len(fields))
+	for _, s := range fields {
 		have[s] = true
 	}
 	var missing []string
