@@ -176,6 +176,11 @@ func validRedirectHost(host string) bool {
 	case "test", "example", "invalid":
 		return false
 	}
+	// Bare "localhost" only, no subdomains: "*.localhost" resolves
+	// loopback locally, but no public registration can hold it and the
+	// http gate above whitelists bare "localhost" alone — accepting
+	// subdomains here would validate spellings nothing else in the
+	// pipeline accepts. Local-CA subdomain setups stay out of scope.
 	if strings.HasSuffix(host, ".localhost") {
 		return false
 	}
@@ -185,9 +190,11 @@ func validRedirectHost(host string) bool {
 // RedactURL strips any userinfo for logging: a hand-typed redirect with
 // credentials must never land verbatim in a container log, even on the
 // rejection path that exists to keep credentials out of the log in the
-// first place. Unparseable input logs as-is (trimmed): it failed Parse,
-// so no structured userinfo could be extracted from it — and what remains
-// is the operator's own typo, needed for triage.
+// first place. Unparseable input logs as-is (trimmed, always inside %q at
+// the call sites): it failed Parse, so no structured userinfo could be
+// extracted from it — and what remains is the operator's own typo, needed
+// for triage. Do not "fix" this into a blind [unparseable] marker: the
+// value is only ever the operator's own env, and triage needs to see it.
 func RedactURL(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	parsed, err := url.Parse(trimmed)
@@ -264,7 +271,9 @@ func CanonicalRedirectURL(raw string) (string, error) {
 			// JoinHostPort re-emits the spelling verbatim — validated !=
 			// sent, Google exact-mismatches instead of failing fast here.
 			// Compare and re-emit on the numeric value so the stored
-			// string is always the canonical spelling.
+			// string is always the canonical spelling. Do not simplify
+			// to Atoi-only: the isDigits gate is what kills the +/-
+			// and leading-zero spellings Atoi itself accepts.
 			if !isDigits(p) {
 				return "", errors.New("connectors: redirect URL port must be numeric 1-65535")
 			}

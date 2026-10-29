@@ -874,7 +874,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// check instead of paying the split on megabytes.
 	if granted := query.Get("scope"); granted != "" && len(granted) <= connectors.MaxStateFieldLen {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
-			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, strings.Join(missing, " "), bounded(granted))
+			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, strings.Join(missing, " "), bounded(approvals.ScrubError(granted)))
 		}
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, s.cfg.Logf)
