@@ -1199,3 +1199,42 @@ func TestConnectorsCallbackHugeScopeStillConnects(t *testing.T) {
 		t.Fatalf("huge-scope valid attempt: %d, want 200 (%s)", rec.Code, rec.Body)
 	}
 }
+
+// A pinned redirect differing from live config logs the divergence: the
+// operator sees which string was sent (rotation confirmation) and a
+// foreign hand-inserted value is visible instead of silently sent.
+func TestConnectorsCallbackLogsPinnedDivergence(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := connectors.NewMemoryStore()
+	ctx := context.Background()
+	state, verifier, err := connectors.NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateState(ctx, connectors.OAuthState{State: state, Connector: "gmail", Verifier: verifier, RedirectURI: "https://other.example.com/p/api/connectors/callback"}); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var logged []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
+	_ = verifier
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state, "")
+	_ = rec
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, line := range logged {
+		if strings.Contains(line, "pinned redirect") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pinned divergence should log, got: %q", logged)
+	}
+}

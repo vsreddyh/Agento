@@ -225,6 +225,10 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, id string, logf func(
 			// compare against the success-path `callback %q` line for the
 			// exact sent bytes (a scrub-shaped substring would log
 			// differently here than what AuthURL/Exchange would send).
+			// Double-bounded by design (RedactURL scrubs+bounds, bounded()
+			// display-caps): idempotent, and each layer owns one job —
+			// helper owns scrub, caller owns display cap — so removing
+			// either bound re-opens the other class. Do not "dedupe".
 			logf("connectors: connect redirect invalid for %q (want %q): %q", id, bounded(connectors.RedactURL(cfg.RedirectURL)), err.Error())
 		}
 		return "", err
@@ -864,6 +868,14 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		pinned := *exCfg
 		pinned.RedirectURL = st.RedirectURI
 		exCfg = &pinned
+		// Log the divergence when pinned != live: an operator rotation
+		// gets confirmation which string was sent, and a hand-inserted
+		// row carrying a foreign redirect is visible here instead of
+		// silently sent to Google. Same warn-pattern as the subset-scope
+		// line below (mint requires bearer, so not an anonymous vector).
+		if st.RedirectURI != s.cfg.ConnectorOAuth.RedirectURL {
+			s.cfg.Logf("connectors: callback for %q uses pinned redirect %q (live config differs; rotation or hand-inserted row)", id, st.RedirectURI)
+		}
 	}
 	// Granted-scope subset warns, not fails: Google appends the granted
 	// scopes (?scope=, space-delimited) and granular consent or admin

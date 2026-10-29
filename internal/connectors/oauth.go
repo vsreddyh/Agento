@@ -773,6 +773,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// unbounded caller ctx plus a hung token endpoint must not hang a
 	// worker forever. A caller deadline stands; only the unbounded case
 	// gets the 15s default (under the gateway's 30s, over Google's P99).
+	// Deliberately shorter than the gateway budget: direct callers fail
+	// fast on a hung endpoint, the gateway owns the patient path — the
+	// callback ctx is the one place a slow Google P99 is worth waiting for.
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
@@ -986,7 +989,12 @@ type TokenRow struct {
 	// from a genuinely stale row — nor does it need to. Far-future values
 	// are clamped to now+MaxAccessLifetime at write time — enforced in
 	// three places (gateway connect + both SetTokens), so a stored expiry
-	// never reads as "don't renew for decades".
+	// never reads as "don't renew for decades". Readers must treat
+	// AccessCipher == "" as missing regardless of Expiry: the write path
+	// guarantees the pair (expiry-without-access is rejected), the read
+	// path does not re-enforce it — a pre-cap/hand-edited timestamp on a
+	// missing token is served as-is, and the refresher keys off the cipher,
+	// not the clock.
 	AccessExpiryUnixMilli int64 `bson:"accessExpiry" json:"-"`
 }
 
