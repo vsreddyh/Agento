@@ -801,8 +801,10 @@ while true; do
   unset _bad
   # Escape hatch: today's shapes are GOCSPX- / …apps.googleusercontent.com,
   # but a Google-side rotation must not brick the wizard and burn the
-  # console work above. Same confirm discipline as the TS_HOST loop.
-  if confirm "Keep these values anyway?"; then break; fi
+  # console work above. Same confirm discipline as the TS_HOST loop —
+  # except empties: keeping two blank pastes is never a rotation, so
+  # that loops back to re-entry instead of travelling to the render check.
+  if [[ -n "$GOOGLE_CLIENT_ID$GOOGLE_CLIENT_SECRET" ]] && confirm "Keep these values anyway?"; then break; fi
   if ! confirm "Re-enter both values?"; then
     warn "stopping — re-run the wizard to try again (console work above is unaffected)"
     exit 1
@@ -891,10 +893,13 @@ _comment_host="$TS_DNS"
 if (( _URI_FROM_PRESET )); then
   _comment_host="${REDIRECT_URI#https://}"; _comment_host="${_comment_host%%/*}"
 fi
-if ! grep -q -- '^# ── Google connectors' "$ENV_FILE"; then
+# ASCII sentinel in one variable: non-ASCII dashes would silently fork the
+# block if an editor normalized them, and two spellings would drift.
+_marker='# -- Google connectors'
+if ! grep -qF -- "$_marker" "$ENV_FILE"; then
   {
     printf '\n'
-    printf '# ── Google connectors (#316) — added by setup wizard ──\n'
+    printf '# -- Google connectors (#316) — added by setup wizard ──\n'
     printf '# Callback is served over Tailscale Funnel: https://%s\n' "$_comment_host"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
   } >> "$ENV_FILE" || { warn "comment block append failed — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
@@ -975,7 +980,7 @@ printf '     container is recreated — ./scripts/hermes.sh restart recreates\n'
 printf '     it (a plain container restart without recreation will not pick\n'
 printf '     up .env changes).\n'
 printf '  2. Compare the canonical string the gateway logs at boot:\n'
-printf '       %s -f %s/docker/docker-compose.yml logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$REPO_DIR"
+printf '       %s -f "%s/docker/docker-compose.yml" logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$REPO_DIR"
 printf '     (if the render step above used sudo, prefix sudo here too)\n'
 printf '     with what is registered in Google. They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
