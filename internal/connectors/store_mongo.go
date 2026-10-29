@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -146,7 +147,11 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 	// 4 docs. Sorted so two log lines for the same stray id diff clean.
 	sort.Strings(ignored)
 	if len(ignored) > 0 {
-		s.logf("connectors: ignoring %d unknown row(s): %s", len(ignored), strings.Join(ignored, ", "))
+		quoted := make([]string, 0, len(ignored))
+		for _, id := range ignored {
+			quoted = append(quoted, fmt.Sprintf("%q", id))
+		}
+		s.logf("connectors: ignoring %d unknown row(s): %s", len(ignored), strings.Join(quoted, ", "))
 	}
 	for _, id := range listIDs {
 		if c, ok := byID[id]; ok {

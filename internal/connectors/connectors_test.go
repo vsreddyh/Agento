@@ -1457,4 +1457,9 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	if IsDraftOnlySend("gmail", "unknown_tool_xyz") {
 		t.Error("unknown tools must not be refused")
 	}
+	// Cf-suffixed inputs fold like clean ones: a zero-width-suffixed pair
+	// must hit the same refusal, not slip to the gated backstop.
+	if !IsDraftOnlySend("gmail⁠", "send_message⁠") {
+		t.Error("Cf-suffixed send should still be refused")
+	}
 }

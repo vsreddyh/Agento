@@ -173,8 +173,11 @@ func TrimCredential(s string) string {
 // message). Safe, but a UX divergence worth a sync check when the
 // connector MCP servers land.
 func IsDraftOnlySend(server, tool string) bool {
-	server = strings.ToLower(strings.TrimSpace(server))
-	tool = strings.ToLower(strings.TrimSpace(tool))
+	// TrimCredential like NormalizedID and every other fold: a Cf-suffixed
+	// id must hit the same refusal as the clean one, not slip to the
+	// gated backstop with a different UX.
+	server = strings.ToLower(TrimCredential(server))
+	tool = strings.ToLower(TrimCredential(tool))
 	switch server {
 	case "gmail":
 		switch tool {
