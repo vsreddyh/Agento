@@ -911,7 +911,9 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// check instead of paying the split on megabytes. The skip logs: a
 	// junk-suffixed scope that suppresses the subset warning must leave
 	// its own trace, or a later draft 403 has no line to trace back to.
-	if granted := query.Get("scope"); granted != "" && len(granted) <= connectors.MaxStateFieldLen {
+	// Trimmed first like code/state: whitespace-only is absent, not a
+	// subset — blank == absent on every leg, so "  " never warns.
+	if granted := connectors.TrimCredential(query.Get("scope")); granted != "" && len(granted) <= connectors.MaxStateFieldLen {
 		if missing := missingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
 			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, missing, bounded(approvals.ScrubError(granted)))
 		}

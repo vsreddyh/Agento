@@ -1256,3 +1256,39 @@ func TestConnectorsCallbackLogsPinnedDivergence(t *testing.T) {
 		t.Fatalf("pinned divergence should log, got: %q", logged)
 	}
 }
+
+// Whitespace-only scope is absent, not a subset: no warning, no skip line.
+func TestConnectorsCallbackBlankScopeIsAbsent(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	store := connectors.NewMemoryStore()
+	var mu sync.Mutex
+	var logged []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg, Logf: logf})
+	rec := do(t, srv, http.MethodPost, "/api/connectors/gmail/connect", "")
+	authURL, _ := decodeBody(t, rec)["auth_url"].(string)
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := u.Query().Get("state")
+	if state == "" {
+		t.Fatalf("no state in %s", authURL)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state="+state+"&scope=%20%20", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("blank-scope grant should still connect: %d (%s)", rec.Code, rec.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, line := range logged {
+		if strings.Contains(line, "missing requested scopes") || strings.Contains(line, "subset check skipped") {
+			t.Fatalf("blank scope must warn about nothing, got: %q", line)
+		}
+	}
+}

@@ -808,9 +808,11 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 // ("grant exchange failed") with the provider's error_description only in
 // the log — oauth2 errors echo the token endpoint verbatim, and the client
 // needs a retry signal, not provider internals. logf may be nil (tests).
-// The returned Expiry is unclamped: far-future values are clamped at the
-// write sites (gateway + both SetTokens), so callers that persist must go
-// through SetTokens — direct use of tok.Expiry sees the raw provider value.
+// The returned Expiry is clamped to now+MaxAccessLifetime (wall clock):
+// far-future or skewed provider values renew soon instead of sleeping
+// decades — safe for scheduling callers that never persist. The write
+// sites re-clamp on their own clocks as the stored owners; callers that
+// persist must still go through SetTokens.
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
 	// Nil guard first: everything below touches ctx, and a nil Context
 	// would panic on the first use instead of 400ing. A nil Context is a
@@ -1024,9 +1026,18 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if len(tok.RefreshToken) > MaxPlaintextLen || len(tok.AccessToken) > MaxPlaintextLen {
 		return nil, deny("grant exchange returned an oversized token")
 	}
-	// Do not persist tok.Expiry directly; use SetTokens — the write sites
-	// own the MaxAccessLifetime clamp, and this return is unclamped by
-	// design (raw provider value for non-persisting callers).
+	// Clamp the returned Expiry too: the write sites re-clamp on their own
+	// clocks (single owners), but a scheduling caller that uses tok.Expiry
+	// without persisting would otherwise sleep decades on a far-future or
+	// skewed provider value. Same unbounded-lifetime class as the state
+	// clamp — fail safe (renew soon), never far.
+	if !tok.Expiry.IsZero() {
+		if max := time.Now().Add(MaxAccessLifetime); tok.Expiry.After(max) {
+			tok.Expiry = max
+		}
+	}
+	// Persist via SetTokens (the write sites own the stored clamp); this
+	// return is now clamped for scheduling callers too.
 	return tok, nil
 }
 

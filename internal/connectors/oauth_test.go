@@ -786,3 +786,19 @@ func TestCanonicalRedirectRejectsLocalhostSubdomain(t *testing.T) {
 		t.Fatalf("should name the subdomain rule, got %q", err)
 	}
 }
+
+func TestExchangeClampsFarFutureExpiry(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"a123","refresh_token":"r123","expires_in":999999999,"token_type":"Bearer"}`)
+	}))
+	defer srv.Close()
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: srv.URL + "/o", TokenURL: srv.URL + "/t"}
+	tok, err := Exchange(context.Background(), cfg, Gmail, "code", testVerifier, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if max := time.Now().Add(MaxAccessLifetime); tok.Expiry.After(max.Add(time.Minute)) {
+		t.Fatalf("returned expiry should be clamped, got %v", tok.Expiry)
+	}
+}

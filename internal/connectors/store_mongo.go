@@ -674,6 +674,12 @@ func backfillDisplay(c Connector, id string) Connector {
 // per-call budgets. The verb ctx still bounds the write itself — only the
 // advisory pre-work runs detached.
 func quickCtx() (context.Context, context.CancelFunc) {
+	// Background-rooted by design, not by leak: detaching from the verb
+	// ctx keeps slow Atlas off the verb deadline (validation-only there),
+	// but it also detaches from shutdown drain — a SIGTERM mid-verb can
+	// wait out the sequential detached budgets (~5s each) before the
+	// process exits. Accepted: shutdown delay, never lost work, and the
+	// verb ctx still bounds the write itself.
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
