@@ -523,6 +523,14 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			"unknown connector "+bounded(approvals.ScrubError(id)))
 		return
 	}
+	// Verb budget opens before use, not after mint: the budget should cover
+	// the whole attempt the app waits on — validation, mint, and the
+	// CreateState call below — so a slow start (depleted entropy, cold
+	// container) debits the same 5s the detached IO is sized against
+	// instead of running off-budget. (The mint itself is ~µs of rand and
+	// needs no deadline; the composition does.)
+	ctx, cancel := connectorCtx(r)
+	defer cancel()
 	state, verifier, err := connectors.NewState()
 	if err != nil {
 		// Logged like every other server-side failure on this path, as a
@@ -541,8 +549,6 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// dead attempt minted. The empty-auth_url guard below stays the only
 	// post-store branch, and it best-effort consumes the just-minted row
 	// so a failed build leaves nothing observable behind.
-	ctx, cancel := connectorCtx(r)
-	defer cancel()
 	// No ExpiresAt: the store owns the default (memory injectable clock,
 	// Mongo TTL-indexed). Passing wall-clock time here would bypass the
 	// injectable default and pin a boundary no test covers — single clock
@@ -631,12 +637,18 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 	// single-use delete), so a successful build observed by nobody mints
 	// nothing either.
 	if ctx.Err() != nil {
-		s.cfg.Logf("connectors: connect aborted, request ended (client gone or server stopping): %v", ctx.Err())
+		s.cfg.Logf("connectors: connect aborted, request ended (client gone, server stopping, or verb deadline): %v", ctx.Err())
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if _, cerr := s.connectors.ConsumeState(cleanCtx, state); cerr != nil {
 			s.cfg.Logf("connectors: orphan state cleanup for %q failed: %v", id, cerr)
 		}
 		cleanCancel()
+		if ctx.Err() == context.DeadlineExceeded {
+			// Same timeout 502 as the CreateState-failure branch: the row
+			// is already cleaned up above, so only the status is left to
+			// answer — never an empty 200 the app cannot triage.
+			storeTimeoutOrGone(w, s, ctx, nil, "connect")
+		}
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, map[string]any{
@@ -866,8 +878,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		// token, clock skew) would otherwise read as "don't renew for
 		// decades". Same unbounded-lifetime class as the state clamp;
 		// the stores re-enforce the same bound. Wall-clock deliberately:
-		// a display-adjacent bound, not an expiry input — the injectable
-		// clock (see connectors timeNow) owns state-expiry ticks.
+		// this is a display-adjacent bound, not an expiry input — the
+		// injectable clock (see connectors timeNow) owns state-expiry
+		// ticks, and the store re-clamps on its own clock at write time,
+		// so a stepped fake clock and this gate never have to agree.
 		if max := time.Now().Add(connectors.MaxAccessLifetime).UnixMilli(); expiry > max {
 			expiry = max
 		}

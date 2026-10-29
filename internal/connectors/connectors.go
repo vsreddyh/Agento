@@ -214,10 +214,13 @@ func IsDraftOnlySend(server, tool string) bool {
 	// so the next fold change cannot strand this one. Both parts gated
 	// (separate caps: ids are two fixed strings, tool names are
 	// operator-defined): a multi-MB either pays the same fold alloc.
-	// Oversized refuses outright (fail-closed like every sibling length
-	// gate): an unknown-shaped send must not fall through to the approval
-	// backstop — that path is for unknown-but-normal-sized tools, which
-	// still return false below.
+	// Oversize defers to identity: an unknown server cannot own a send
+	// path, so it falls through to the gated backstop like any other
+	// unknown name; a known server with a garbage tool refuses outright,
+	// since no legit tool of that server is that long.
+	if len(server) > maxConnectorIDLen || len(tool) > maxToolNameLen {
+		return Known(server)
+	}
 	if len(server) > maxConnectorIDLen || len(tool) > maxToolNameLen {
 		return true
 	}
