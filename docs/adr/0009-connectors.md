@@ -148,6 +148,8 @@ retention pass must not add a TTL to this collection.
   fallback + index pattern as the siblings.
 - `cmd/mcp-gate` refuses draft-only sends before the approval check.
 - App Connect UI and `mcp.json` wiring arrive stacked on top — this PR is
-  the shape they fill in. Remaining follow-ups are exactly those two; the
-  grant pipeline lands here (AuthURL → callback → exchange → sealed
-  tokens → connected).
+  the shape they fill in. Remaining follow-ups are the stacked set named
+  in the PR body (connector MCP servers, app Connect screen, refresh-on-
+  expiry worker, per-grant audit rows); `@-mention` in-chat attach stays
+  out of scope here. The grant pipeline lands in this PR (AuthURL →
+  callback → exchange → sealed tokens → connected).
