@@ -202,29 +202,29 @@ func validRedirectHost(host string) bool {
 // never returning the raw string. What remains is the operator's own
 // typo, needed for triage.
 func RedactURL(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		cleaned := strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) {
+	// Same trim as every sibling gate (TrimCredential, not TrimSpace): an
+	// edge Cf forgiven by CanonicalRedirectURL must not survive here, so
+	// checked == logged by construction. Interior strip matches HasControl
+	// (Cc plus Cf), for the same reason.
+	trimmed := TrimCredential(raw)
+	strip := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 				return -1
 			}
 			return r
-		}, trimmed)
-		return approvals.ScrubError(cleaned)
+		}, s)
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return approvals.ScrubError(strip(trimmed))
 	}
 	if parsed.User == nil {
 		// No userinfo to strip, but the value is still operator-influenced:
 		// strip controls and scrub+bound so the helper is safe under any
 		// verb, not just the %q call sites use today. Clean short URLs
 		// pass through unchanged (nothing to scrub, under the bound).
-		cleaned := strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) {
-				return -1
-			}
-			return r
-		}, trimmed)
-		return approvals.ScrubError(cleaned)
+		return approvals.ScrubError(strip(trimmed))
 	}
 	parsed.User = nil
 	return parsed.String()

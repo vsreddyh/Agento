@@ -221,7 +221,10 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, id string, logf func(
 			// sibling log on this path, so triage greps single-term.
 			// Error quoted: canonicaliser errors are static strings today,
 			// but quoting keeps the every-value-quoted contract total if
-			// one ever interpolates input.
+			// one ever interpolates input. `want` is scrubbed for logging;
+			// compare against the success-path `callback %q` line for the
+			// exact sent bytes (a scrub-shaped substring would log
+			// differently here than what AuthURL/Exchange would send).
 			logf("connectors: connect redirect invalid for %q (want %q): %q", id, bounded(connectors.RedactURL(cfg.RedirectURL)), err.Error())
 		}
 		return "", err

@@ -718,3 +718,14 @@ func TestValidRedirectHostRejectsLANTLDs(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactURLMatchesCanonicalTrim(t *testing.T) {
+	// Edge Cf forgiven by CanonicalRedirectURL must not survive RedactURL:
+	// checked == logged by construction.
+	if got := RedactURL("\u200bhttps://host.example.com/p/api/connectors/callback\u200b"); got != "https://host.example.com/p/api/connectors/callback" {
+		t.Fatalf("edge Cf should be trimmed like TrimCredential, got %q", got)
+	}
+	if got := RedactURL("https://host.example.com/p/api/connectors/callback"); got != "https://host.example.com/p/api/connectors/callback" {
+		t.Fatalf("clean URL should pass through, got %q", got)
+	}
+}
