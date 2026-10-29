@@ -223,11 +223,14 @@ trap wizard_cleanup EXIT INT TERM
 
 # _valid_tsdns HOST: strict tailnet-hostname check for preset paths —
 # every dot-separated label must satisfy the TS_HOST shape (lowercase,
-# label-bound), so foo.-bar.ts.net fails here instead of at the probe.
+# label-bound), and at least two labels must precede .ts.net (real
+# tailnet DNS is always <host>.<tailnet> — a truncated paste like
+# a.ts.net must fail here, not at the probe).
 _valid_tsdns() {
   local rest="$1" label
   [[ "$rest" == *.ts.net ]] || return 1
   rest="${rest%.ts.net}"
+  [[ "$rest" == *.* ]] || return 1
   while [[ "$rest" == *.* ]]; do
     label="${rest%%.*}"
     [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
@@ -281,7 +284,7 @@ fi
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
 for _dep in jq openssl curl podman-compose seq hostname; do
-  if ! command -v "$_dep" >/dev/null 2>&1; then _missing="$_missing $_dep"; fi
+  if ! command -v "$_dep" >/dev/null 2>&1; then _missing="${_missing:+$_missing }$_dep"; fi
 done
 unset _dep
 if [[ -n "$_missing" ]]; then
@@ -362,6 +365,13 @@ else
   # cut to the first label so the strict regex below doesn't loop-reject
   # the default.
   _host_default=$(hostname -s | cut -d. -f1)
+  # An unset hostname yields an empty default, an empty fallback, and a
+  # regex that rejects empty — an endless warn loop with no way forward
+  # except Ctrl-C. Fail fast instead.
+  if [[ -z "$_ts_preset" && -z "$_host_default" ]]; then
+    warn "hostname is empty and no TS_HOST preset — set the hostname or export TS_HOST, then re-run"
+    exit 1
+  fi
   while true; do
     ask TS_HOST "Machine name [${TS_HOST:-$_host_default}]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
     TS_HOST="${TS_HOST:-${_ts_preset:-$_host_default}}"
@@ -665,7 +675,16 @@ done
 
 # ── Stage 8: write .env + verify ──────────────────────────────────────────
 stage "Write .env and verify"
-[[ -f "$ENV_FILE" ]] || { warn "no $ENV_FILE at $REPO_DIR — fresh checkout? run ./scripts/hermes.sh init first (or cp .env.example .env)"; exit 1; }
+if [[ ! -f "$ENV_FILE" ]]; then
+  # Branch the hint: overrides resolve outside the repo root, so "at
+  # $REPO_DIR" would send override users looking in the wrong place.
+  if [[ "$ENV_FILE" == "$REPO_DIR/.env" ]]; then
+    warn "no $ENV_FILE — fresh checkout? run ./scripts/hermes.sh init first (or cp .env.example .env)"
+  else
+    warn "no $ENV_FILE (ENV_FILE override) — create it first, then re-run"
+  fi
+  exit 1
+fi
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
 cp -p "$ENV_FILE" "$BACKUP"
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
