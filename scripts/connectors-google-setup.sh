@@ -221,6 +221,21 @@ wizard_cleanup() {
 }
 trap wizard_cleanup EXIT INT TERM
 
+# _valid_tsdns HOST: strict tailnet-hostname check for preset paths —
+# every dot-separated label must satisfy the TS_HOST shape (lowercase,
+# label-bound), so foo.-bar.ts.net fails here instead of at the probe.
+_valid_tsdns() {
+  local rest="$1" label
+  [[ "$rest" == *.ts.net ]] || return 1
+  rest="${rest%.ts.net}"
+  while [[ "$rest" == *.* ]]; do
+    label="${rest%%.*}"
+    [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+    rest="${rest#*.}"
+  done
+  [[ "$rest" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]
+}
+
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # ${ENV_FILE:-...} keeps the library contract: callers (and dry-run renders
 # against a throwaway copy) can point it elsewhere.
@@ -343,16 +358,18 @@ else
   # ask's Enter-keeps-current reads ENV_FILE, where TS_HOST never lives —
   # so remember an env preset explicitly instead of losing it to hostname -s.
   _ts_preset="${TS_HOST:-}"
+  # Computed once: hostname -s can emit a dotted FQDN on minimal images —
+  # cut to the first label so the strict regex below doesn't loop-reject
+  # the default.
+  _host_default=$(hostname -s | cut -d. -f1)
   while true; do
-    # hostname -s can emit a dotted FQDN on minimal images — cut to the
-    # first label so the strict regex below doesn't loop-reject the default.
-    ask TS_HOST "Machine name [${TS_HOST:-$(hostname -s | cut -d. -f1)}]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
-    TS_HOST="${TS_HOST:-${_ts_preset:-$(hostname -s | cut -d. -f1)}}"
+    ask TS_HOST "Machine name [${TS_HOST:-$_host_default}]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+    TS_HOST="${TS_HOST:-${_ts_preset:-$_host_default}}"
     if [[ "$TS_HOST" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then break; fi
     warn "invalid: use lowercase letters, digits, hyphens (no leading/trailing hyphen)"
     TS_HOST=""; _ts_preset=""
   done
-  unset _ts_preset
+  unset _ts_preset _host_default
   printf '\n'
   say "Opening a login URL. Sign in with your Tailscale account (creating one"
   say "on the free Personal plan is fine) and approve this machine."
@@ -380,7 +397,8 @@ else
   # If the setup process already exited (bad hostname, no root, daemon down),
   # the wait below can never succeed — check state once and fall through to
   # the "not Running yet" exit instead of two minutes of dots.
-  _up_alive=0; kill -0 "$TS_PID" 2>/dev/null && _up_alive=1
+  _up_alive=0
+  if kill -0 "$TS_PID" 2>/dev/null; then _up_alive=1; fi
   if (( _up_alive == 0 )) && ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
     note "setup process already exited and daemon not Running — skipping the wait"
   else
@@ -415,9 +433,9 @@ _DNS_FROM_PRESET=0
 if [[ -n "$TS_DNS" ]]; then
   # Presets are trusted for dry-runs but not for sed: validate the shape
   # before it reaches the stage-8 hostname refresh (|/&/newline injection).
-  # Same strictness as TS_HOST (lowercase, label-bound) plus no ".." — a
-  # typo like -foo..ts.net must fail here, not at the probe in stage 4.
-  if [[ ! "$TS_DNS" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.ts\.net$ ]] || [[ "$TS_DNS" == *".."* ]]; then
+  # Same strictness as TS_HOST, label by label (a typo like -foo..ts.net
+  # must fail here, not at the probe in stage 4).
+  if ! _valid_tsdns "$TS_DNS"; then
     warn "preset TS_DNS=$TS_DNS is not a <name>.<tailnet>.ts.net hostname; unset it to discover from the daemon"
     exit 1
   fi
@@ -484,10 +502,17 @@ if [[ -n "$_redirect_preset" ]]; then
   # Same treatment as the TS_DNS preset: write_env single-quote-escapes but
   # does not stop newlines, so a multiline preset would write a second line
   # into .env. read-based input can't contain one — only presets can.
-  if [[ ! "$_redirect_preset" =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.ts\.net/p/api/connectors/callback$ ]] || [[ "$_redirect_preset" == *".."* ]]; then
+  # Host part validated label by label, like TS_DNS above.
+  _uri_host=""
+  if [[ "$_redirect_preset" == https://*/p/api/connectors/callback ]]; then
+    _uri_host="${_redirect_preset#https://}"
+    _uri_host="${_uri_host%/p/api/connectors/callback}"
+  fi
+  if [[ -z "$_uri_host" ]] || ! _valid_tsdns "$_uri_host"; then
     warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/p/api/connectors/callback URL; unset it to derive from TS_DNS"
     exit 1
   fi
+  unset _uri_host
   REDIRECT_URI="$_redirect_preset"
   _URI_FROM_PRESET=1
   note "using preset REDIRECT_URI (skipping derivation from TS_DNS)"
@@ -501,6 +526,7 @@ say "Waiting for public DNS + certificate (can take a few minutes)…"
 # would burn ~5 min of timeouts before the .env write. One opportunistic
 # probe still reports status without the wait.
 ok=0
+issuer=""
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
   if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then
@@ -551,13 +577,16 @@ pause "Press Enter once you've copied it."
 
 # ── Stage 5: GCP project + APIs ───────────────────────────────────────────
 stage "Google Cloud: project + APIs"
-# Everything from here on is browser-driven: without a terminal EOF would
-# take the long create-project branch instead of exiting like other gates.
-if [[ ! -t 0 ]]; then
-  warn "stages 5-8 need an interactive terminal (Google console work) — re-run attached to a TTY"
-  exit 1
-fi
-if ! confirm "Have a Google Cloud project with the Gmail and Calendar APIs enabled?"; then
+# Everything from here on is browser-driven. confirm can't tell EOF from
+# "no" (read || true, then a regex test) — and here "no" is the long
+# create-project branch, so EOF-on-a-TTY would walk it instead of exiting
+# like every other gate. ask fails loudly on EOF instead: same y/N line
+# discipline on a terminal, friendly stop anywhere else.
+ask _HAVE_PROJ "Have a Google Cloud project with the Gmail and Calendar APIs enabled? [y/N]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+_have_yes=0
+if [[ "$_HAVE_PROJ" =~ ^[Yy] ]]; then _have_yes=1; fi
+unset _HAVE_PROJ
+if (( _have_yes == 0 )); then
   step "Create a project (any name, e.g. agento-connectors)."
   open_url "https://console.cloud.google.com/projectcreate"
   pause "Press Enter once the project exists and is selected in the top bar."
@@ -650,7 +679,7 @@ chmod 600 "$ENV_FILE" "$BACKUP"
 # options it didn't own (matters if this file is ever sourced).
 _baks=(); _nullglob_off=0; shopt -q nullglob || _nullglob_off=1
 shopt -s nullglob; _baks=("$ENV_FILE".bak.*)
-(( _nullglob_off )) && shopt -u nullglob
+if (( _nullglob_off )); then shopt -u nullglob; fi
 _pruned=0
 while (( ${#_baks[@]} > 5 )); do
   _oldest="${_baks[0]}"
@@ -665,7 +694,7 @@ while (( ${#_baks[@]} > 5 )); do
   done
   _baks=("${_kept[@]}"); _pruned=1
 done
-(( _pruned )) && note "pruned .env backups to the last 5"
+if (( _pruned )); then note "pruned .env backups to the last 5"; fi
 unset _baks _b _oldest _kept _pruned _nullglob_off
 
 if v=$(_existing CONNECTORS_ENCRYPTION_KEY 2>/dev/null) && [[ -n "$v" ]]; then
