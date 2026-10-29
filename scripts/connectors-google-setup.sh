@@ -310,8 +310,11 @@ else
     exit 1
   fi
 fi
-# Dependency preflight: every external the stages shell out to. jq is the
-# critical one — without it every tailscale-status check misreads as down.
+# Dependency preflight: every external the stages shell out to that must
+# exist. jq is the critical one — without it every tailscale-status check
+# misreads as down. Deliberately unlisted: ps (has a kill -0 fallback),
+# tput (colors degrade), timeout (documented optional), grep/sed/tr/cut
+# (universal).
 # (tailscale itself is installed in stage 2, so its absence here is expected.)
 _missing=""
 for _dep in jq openssl curl podman podman-compose hostname date; do
@@ -411,6 +414,9 @@ else
   fi
   while true; do
     ask TS_HOST "Machine name [${TS_HOST:-$_host_default}]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+    # Pasted hostnames trail whitespace like stage-7 pastes; strip before
+    # the strict regex so a trailing space doesn't fail a good paste.
+    TS_HOST=$(printf '%s' "$TS_HOST" | tr -d '[:space:]' || true)
     TS_HOST="${TS_HOST:-${_ts_preset:-$_host_default}}"
     if [[ "$TS_HOST" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then break; fi
     warn "invalid: use lowercase letters, digits, hyphens (no leading/trailing hyphen)"
@@ -485,6 +491,9 @@ fi
 _DNS_FROM_PRESET=0
 _URI_FROM_PRESET=0
 if [[ -n "$TS_DNS" ]]; then
+  # The daemon path strips one trailing dot before validating; do the same
+  # for presets so the same string passes either way.
+  TS_DNS="${TS_DNS%.}"
   # Presets are trusted for dry-runs but not for sed: validate the shape
   # before it reaches the stage-8 hostname refresh (|/&/newline injection).
   # Same strictness as TS_HOST, label by label (a typo like -foo..ts.net
@@ -740,6 +749,10 @@ while true; do
   if [[ -z "$_bad" ]]; then unset _bad; break; fi
   warn "doesn't look like what Google issues: $_bad — check the paste"
   unset _bad
+  # Escape hatch: today's shapes are GOCSPX- / …apps.googleusercontent.com,
+  # but a Google-side rotation must not brick the wizard and burn the
+  # console work above. Same confirm discipline as the TS_HOST loop.
+  if confirm "Keep these values anyway?"; then break; fi
   if ! confirm "Re-enter both values?"; then
     warn "stopping — re-run the wizard to try again (console work above is unaffected)"
     exit 1
@@ -766,17 +779,21 @@ if [[ ! -w "$ENV_FILE" ]]; then
   warn "no write permission on $ENV_FILE — fix ownership/permissions, then re-run"
   exit 1
 fi
-if [[ ! -w "$(dirname "$ENV_FILE")" ]]; then
-  warn "no write permission in $(dirname "$ENV_FILE") (backups land there) — fix ownership/permissions, then re-run"
+if [[ ! -w "$(dirname -- "$ENV_FILE")" ]]; then
+  warn "no write permission in $(dirname -- "$ENV_FILE") (backups land there) — fix ownership/permissions, then re-run"
   exit 1
 fi
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
-cp -p "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
+cp -p -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
+# cp -p preserves the source mtime, which would tie-break the -ot prune
+# below by glob order on rapid re-runs — re-stamp so filename order and
+# mtime order agree (mode from -p is kept).
+touch -- "$BACKUP"
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
 # Secrets are about to land in this file: 0600 regardless of what the
 # checkout/editor left behind (a fresh file already gets 0600 in write_env) —
 # and the backup holds the same secrets, so it gets 0600 too.
-chmod 600 "$ENV_FILE" "$BACKUP" || { warn "chmod 600 failed — stopping before secrets are written"; exit 1; }
+chmod 600 -- "$ENV_FILE" "$BACKUP" || { warn "chmod 600 failed — stopping before secrets are written"; exit 1; }
 # Backups are full-secret copies — keep the 5 newest by mtime, prune the
 # rest. Pure bash (-ot comparison): no ls parsing, no GNU-only flags.
 # nullglob is restored afterwards — the wizard must not mutate shell
@@ -818,7 +835,7 @@ _comment_host="$TS_DNS"
 if (( _URI_FROM_PRESET )); then
   _comment_host="${REDIRECT_URI#https://}"; _comment_host="${_comment_host%%/*}"
 fi
-if ! grep -q '^# ── Google connectors' "$ENV_FILE"; then
+if ! grep -q -- '^# ── Google connectors' "$ENV_FILE"; then
   {
     printf '\n'
     printf '# ── Google connectors (#316) — added by setup wizard ──\n'
@@ -830,7 +847,7 @@ else
   # Same tmp-file + cat pattern as the library's write_env, so a symlinked
   # .env stays a symlink (plain sed -i would replace it with a regular file).
   _cb_tmp=$(mktemp)
-  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" "$ENV_FILE" > "$_cb_tmp" || {
+  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" -- "$ENV_FILE" > "$_cb_tmp" || {
     warn "hostname comment refresh failed — restore with: cp -p $BACKUP $ENV_FILE"
     exit 1
   }
