@@ -134,7 +134,8 @@ func validRedirectHost(host string) bool {
 		return false
 	}
 	hasAlpha := false
-	for _, label := range strings.Split(host, ".") {
+	labels := strings.Split(host, ".")
+	for _, label := range labels {
 		if len(label) == 0 || len(label) > 63 {
 			return false
 		}
@@ -151,10 +152,27 @@ func validRedirectHost(host string) bool {
 			return false
 		}
 	}
-	// All-numeric dotted quads that are not valid IPs (999.999.999.999)
-	// can never be registered: public DNS needs an alpha label somewhere.
-	// net.ParseIP already passed the real ones, so anything reaching here
-	// with no letter at all is a typo that would die at Google instead.
+	// The TLD itself must carry a letter: ICANN never issues all-numeric
+	// TLDs, so "myhost.123" is a typo that would die at Google instead of
+	// here. A letter anywhere else is not enough ("123.com" stays valid).
+	tldAlpha := false
+	for i := 0; i < len(labels[len(labels)-1]); i++ {
+		if c := labels[len(labels)-1][i]; c >= 'a' && c <= 'z' {
+			tldAlpha = true
+			break
+		}
+	}
+	if !tldAlpha {
+		return false
+	}
+	// "*.localhost" resolves loopback locally but is not a public
+	// registration (and the http loopback gate only whitelists bare
+	// "localhost"): validated-shape would never match a console entry.
+	if strings.HasSuffix(host, ".localhost") {
+		return false
+	}
+	// A letter somewhere rules out all-numeric typos like 999.999.999.999
+	// that net.ParseIP already rejected as addresses.
 	return hasAlpha
 }
 
@@ -762,6 +780,14 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	tok, err := cc.oauth2(GoogleScopes(id)).Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifier))
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			// Name the timeout at the source: direct callers never see
+			// the gateway's per-verb timeout wording, so the generic 502
+			// below would read as a store failure. The gateway's own ctx
+			// check fires first on its path, so this branch is for
+			// direct/future callers only.
+			return nil, NewStoreError("grant exchange timed out", true)
+		}
 		if logf != nil {
 			// Scrubbed + capped like the domain mapper below — and
 			// quoted, so an inner control byte in provider text cannot

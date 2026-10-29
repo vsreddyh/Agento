@@ -1476,12 +1476,15 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	if !IsDraftOnlySend("gmail⁠", "send_message⁠") {
 		t.Error("Cf-suffixed send should still be refused")
 	}
-	// Oversized inputs fail closed before the fold alloc, on both parts.
-	if IsDraftOnlySend(strings.Repeat("x", maxConnectorIDLen+1), "send_message") {
-		t.Error("oversized server must not be refused")
+	// Oversized inputs refuse outright (fail-closed like every sibling
+	// length gate): an unknown-shaped send must not fall through to the
+	// approval backstop — that path stays for unknown-but-normal-sized
+	// tools only.
+	if !IsDraftOnlySend(strings.Repeat("x", maxConnectorIDLen+1), "send_message") {
+		t.Error("oversized server should be refused")
 	}
-	if IsDraftOnlySend("gmail", strings.Repeat("x", maxConnectorIDLen+1)) {
-		t.Error("oversized tool must not be refused")
+	if !IsDraftOnlySend("gmail", strings.Repeat("x", maxConnectorIDLen+1)) {
+		t.Error("oversized tool should be refused")
 	}
 }
 

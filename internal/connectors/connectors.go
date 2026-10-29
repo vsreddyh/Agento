@@ -205,8 +205,12 @@ func IsDraftOnlySend(server, tool string) bool {
 	// NormalizedID, not a local fold: same composition as every sibling,
 	// so the next fold change cannot strand this one. Both parts gated:
 	// a multi-MB tool pays the same fold alloc as a multi-MB server.
+	// Oversized refuses outright (fail-closed like every sibling length
+	// gate): an unknown-shaped send must not fall through to the approval
+	// backstop — that path is for unknown-but-normal-sized tools, which
+	// still return false below.
 	if len(server) > maxConnectorIDLen || len(tool) > maxConnectorIDLen {
-		return false
+		return true
 	}
 	server = NormalizedID(server)
 	tool = NormalizedID(tool)

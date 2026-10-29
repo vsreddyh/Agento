@@ -399,6 +399,8 @@ func TestOAuthConfigRejectsBadHostname(t *testing.T) {
 		{"unicode", "https://m\xc3\xbcnchen/p/api/connectors/callback"},
 		{"single label", "https://myhost/p/api/connectors/callback"},
 		{"numeric non-ip", "https://999.999.999.999/p/api/connectors/callback"},
+		{"numeric TLD", "https://myhost.123/p/api/connectors/callback"},
+		{"localhost subdomain", "https://foo.localhost/p/api/connectors/callback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)
