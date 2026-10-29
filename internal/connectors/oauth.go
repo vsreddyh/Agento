@@ -491,8 +491,10 @@ func CanonicalRedirectURL(raw string) (string, error) {
 		// registration (private/LAN, Tailscale, or public alike): the
 		// flow would die with redirect_uri_mismatch in the browser after
 		// passing every server-side check. Fail closed here, same class
-		// as the userinfo/query/port-strip gates. Loopback stays for
-		// direct-serve development (localhost/127.0.0.1/::1, any scheme
+		// as the userinfo/query/port-strip gates. Google's own redirect-URI
+		// validation rules state this directly ("Hosts cannot be raw IP
+		// addresses. Localhost IP addresses are exempted"). Loopback stays
+		// for direct-serve development (localhost/127.0.0.1/::1, any scheme
 		// the scheme gate above already narrowed).
 		return "", errors.New("connectors: redirect URL must use a registrable hostname, not a non-loopback IP (use a dotted FQDN; direct-serve with localhost, 127.0.0.1, or [::1])")
 	}
