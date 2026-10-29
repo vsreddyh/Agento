@@ -484,3 +484,26 @@ func TestOAuthConfigNamesMissingVars(t *testing.T) {
 		t.Fatalf("error must not name the set var, got %q", err)
 	}
 }
+
+// Interior whitespace in credentials fails closed before any network
+// call: ids/secrets never legitimately contain spaces (paste error,
+// same fail-fast class as padded/controls).
+func TestOAuthConfigRejectsInteriorSpace(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("GOOGLE_CLIENT_ID", "abc def")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
+	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
+	if _, err := OAuthConfigFromEnv(); err == nil {
+		t.Fatal("spaced client id should fail closed")
+	}
+	cfg := &OAuthConfig{ClientID: "abc def", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", "s", "v", nil); got != "" {
+		t.Errorf("spaced client id URL = %q, want empty", got)
+	}
+	if _, err := Exchange(context.Background(), cfg, Gmail, "code", "verifier", nil); err == nil {
+		t.Fatal("spaced client id Exchange should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("spaced client id should be a deterministic 400, got %v", err)
+	}
+}

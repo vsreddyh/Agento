@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"agento/internal/approvals"
@@ -284,6 +285,20 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	return out, nil
 }
 
+// validCredential reports whether a trimmed client id/secret is shaped
+// like a real credential: no controls, valid UTF-8, and no whitespace at
+// all. Edges are already trimmed, so any whitespace found here is
+// interior — and client ids/secrets never legitimately contain spaces
+// (operator-paste error, same fail-fast class as padded/controls).
+// Tab is already control-caught; IndexFunc covers the rest (plain space,
+// no-break space, and friends).
+func validCredential(s string) bool {
+	if HasControl(s) || !utf8.ValidString(s) {
+		return false
+	}
+	return strings.IndexFunc(s, unicode.IsSpace) < 0
+}
+
 // missingVars names the unset OAuth env vars for the config-error path,
 // so the startup log points at the gap instead of the whole set.
 func missingVars(clientID, clientSecret, redirectURL string) []string {
@@ -318,8 +333,8 @@ func OAuthConfigFromEnv() (*OAuthConfig, error) {
 	// sibling input (redirect below, state/code/verifier at every layer):
 	// an operator-pasted control would otherwise embed in the minted
 	// AuthCodeURL and the token request and fail at Google after consent.
-	if HasControl(clientID) || HasControl(clientSecret) || !utf8.ValidString(clientID) || !utf8.ValidString(clientSecret) {
-		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters or invalid UTF-8")
+	if !validCredential(clientID) || !validCredential(clientSecret) {
+		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET must not contain control characters, spaces, or invalid UTF-8")
 	}
 	if len(clientID) > MaxCredentialLen || len(clientSecret) > MaxCredentialLen {
 		return nil, errors.New("connectors: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET too long")
@@ -480,7 +495,7 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	trimmed.RedirectURL = TrimCredential(trimmed.RedirectURL)
 	trimmed.AuthURL = TrimCredential(trimmed.AuthURL)
 	trimmed.TokenURL = TrimCredential(trimmed.TokenURL)
-	if HasControl(trimmed.ClientID) || HasControl(trimmed.ClientSecret) || !utf8.ValidString(trimmed.ClientID) || !utf8.ValidString(trimmed.ClientSecret) {
+	if !validCredential(trimmed.ClientID) || !validCredential(trimmed.ClientSecret) {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: invalid client credential", id)
 		}
@@ -666,7 +681,7 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	cc.ClientSecret = TrimCredential(cc.ClientSecret)
 	cc.AuthURL = TrimCredential(cc.AuthURL)
 	cc.TokenURL = TrimCredential(cc.TokenURL)
-	if HasControl(cc.ClientID) || HasControl(cc.ClientSecret) || !utf8.ValidString(cc.ClientID) || !utf8.ValidString(cc.ClientSecret) {
+	if !validCredential(cc.ClientID) || !validCredential(cc.ClientSecret) {
 		return nil, deny("oauth client credential is invalid")
 	}
 	if len(cc.ClientID) > MaxCredentialLen || len(cc.ClientSecret) > MaxCredentialLen {

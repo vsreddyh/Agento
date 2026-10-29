@@ -329,8 +329,9 @@ connecting/disconnecting independently from the app:
 Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
 app to open in a browser; Google redirects to the single registered
-`GET /api/connectors/callback?code=&state=` — one registered string, two
-serving spellings: the bare spelling direct on the pi port and the `/p/`
+`GET /api/connectors/callback?code=&state=` — one registered string with
+two serving spellings (the `:8443` port is a variant of the proxy spelling,
+not a third path): the bare spelling direct on the pi port and the `/p/`
 spelling through nginx, which strips `/p` before forwarding (port included
 in the match — the `:8443` spelling and the no-port spelling are different
 registrations). The server consumes the

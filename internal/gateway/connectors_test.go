@@ -878,3 +878,16 @@ func TestConnectorsConnectCleansUpAfterClientGone(t *testing.T) {
 		t.Fatalf("gone-client cleanup consumed %d rows, want 1", len(store.consumed))
 	}
 }
+
+// A merely-oversized id (over 64, under the raw pre-filter) 404s without
+// echo: the trimmed-form gate fires before any scan or fold.
+func TestConnectorsMemberTrimmedOversizedID(t *testing.T) {
+	srv := connectorsServer(t)
+	rec := do(t, srv, http.MethodPost, "/api/connectors/"+strings.Repeat("z", 100)+"/disconnect", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("trimmed-oversized id: %d, want 404 (%s)", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), strings.Repeat("z", 20)) {
+		t.Fatalf("trimmed-oversized id must not echo: %s", rec.Body.String()[:120])
+	}
+}

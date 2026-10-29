@@ -371,6 +371,21 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// absent on both segments, so no branch distinguishes them.
 	id = connectors.TrimCredential(id)
 	action = connectors.TrimCredential(action)
+	// Length on the trimmed form, before any scan or fold: the trimmed form
+	// is what Known actually sees, so padding still cannot turn a known id
+	// unknown — and anything over the cap skips the HasControl rune walks
+	// and the ToLower alloc below. (The raw pre-filter above only kills
+	// multi-MB; this is the contract gate, same 64 as every sibling.)
+	if len(id) > maxConnectorIDLen {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown connector")
+		return
+	}
+	if len(action) > maxConnectorIDLen {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown path "+bounded(approvals.ScrubError(path)))
+		return
+	}
 	if id == "" || connectors.HasControl(id) || connectors.HasControl(action) || !utf8.ValidString(id) || !utf8.ValidString(action) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector")
@@ -632,7 +647,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	}
 	// Parse the query once and reuse it: each Query() call re-parses and
 	// re-allocates the full map, and this unauthenticated entry point
-	// pays that before any fast-path reject runs.
+	// pays that before any fast-path reject runs. First value wins:
+	// duplicates (?code=a&code=b) are not rejected — the first value is
+	// exchanged and the rest dropped, deterministically and safely
+	// (single-use state burns either way, the second value never reaches
+	// Google), so do not "fix" this into a 400 that changes the
+	// dead-attempt shape.
 	// (Raw length already gated above: url.Query() allocates the full map
 	// up front, and raw counts encoded bytes — percent-encoding expands,
 	// so %00-heavy payloads hit the raw 400 before the decoded per-value
