@@ -352,7 +352,10 @@ stage "Install Tailscale"
 if command -v tailscale >/dev/null 2>&1; then
   note "already installed: $(tailscale version 2>/dev/null | head -n1 || true)"
 else
-  _codename=""; [[ -f /etc/os-release ]] && _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '"' || true)
+  _codename=""
+  if [[ -f /etc/os-release ]]; then
+    _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '"' || true)
+  fi
   say "Installing from Tailscale's official apt repo${_codename:+ (Ubuntu $_codename)}."
   unset _codename
   note "This adds /etc/apt/sources.list.d/tailscale.list and the tailscaled service."
@@ -596,31 +599,38 @@ say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # probe still reports status without the wait.
 ok=0
 issuer=""
+# Probe the host being registered, not unconditionally TS_DNS: a lone
+# REDIRECT_URI preset against a daemon-derived TS_DNS would otherwise
+# verify host B while registering host A.
+_probe_host="$TS_DNS"
+if (( _URI_FROM_PRESET )); then
+  _probe_host="${REDIRECT_URI#https://}"; _probe_host="${_probe_host%%/*}"
+fi
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
-  if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then
+  if curl -fsS --max-time 10 "https://$_probe_host/p/healthz" >/dev/null 2>&1; then
     ok=1
   else
     note "not reachable from here right now (expected for a dry-run name)"
   fi
 else
   for ((__i = 1; __i <= 30; __i++)); do
-    if curl -fsS --max-time 10 "https://$TS_DNS/p/healthz" >/dev/null 2>&1; then ok=1; break; fi
+    if curl -fsS --max-time 10 "https://$_probe_host/p/healthz" >/dev/null 2>&1; then ok=1; break; fi
     printf '%s' '.'; sleep 10
   done
 fi
 printf '\n'
 if (( ok )); then
-  printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$TS_DNS"
+  printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$_probe_host"
   # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
   # outlast the probe budget. timeout is coreutils-Linux-only (macOS ships
   # gtimeout at best), so use it when present and run bare otherwise —
   # same portability line as the tmp-file prune below.
   if command -v timeout >/dev/null 2>&1; then
-    issuer=$(timeout 10 openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
+    issuer=$(timeout 10 openssl s_client -connect "$_probe_host:443" -servername "$_probe_host" </dev/null 2>/dev/null \
              | openssl x509 -noout -issuer 2>/dev/null || true)
   else
-    issuer=$(openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
+    issuer=$(openssl s_client -connect "$_probe_host:443" -servername "$_probe_host" </dev/null 2>/dev/null \
              | openssl x509 -noout -issuer 2>/dev/null || true)
   fi
   if [[ -n "$issuer" ]]; then
@@ -635,7 +645,7 @@ else
   warn "not reachable yet (DNS can take up to 10 min to propagate)."
   warn "You can continue — the URI below is still correct; re-run the probe later if needed."
 fi
-unset ok issuer
+unset ok issuer _probe_host
 printf '\n'
 say "This is the exact string to register in Google (copy it verbatim):"
 printf '\n  %s%s%s\n\n' "$BOLD" "$REDIRECT_URI" "$RESET"
@@ -755,12 +765,12 @@ if [[ ! -w "$ENV_FILE" ]]; then
   exit 1
 fi
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
-cp -p "$ENV_FILE" "$BACKUP"
+cp -p "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
 # Secrets are about to land in this file: 0600 regardless of what the
 # checkout/editor left behind (a fresh file already gets 0600 in write_env) —
 # and the backup holds the same secrets, so it gets 0600 too.
-chmod 600 "$ENV_FILE" "$BACKUP"
+chmod 600 "$ENV_FILE" "$BACKUP" || { warn "chmod 600 failed — stopping before secrets are written"; exit 1; }
 # Backups are full-secret copies — keep the 5 newest by mtime, prune the
 # rest. Pure bash (-ot comparison): no ls parsing, no GNU-only flags.
 # nullglob is restored afterwards — the wizard must not mutate shell
