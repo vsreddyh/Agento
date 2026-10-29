@@ -287,11 +287,10 @@ func CanonicalRedirectURL(raw string) (string, error) {
 
 // validCredential reports whether a trimmed client id/secret is shaped
 // like a real credential: no controls, valid UTF-8, and no whitespace at
-// all. Edges are already trimmed, so any whitespace found here is
-// interior — and client ids/secrets never legitimately contain spaces
-// (operator-paste error, same fail-fast class as padded/controls).
-// Tab is already control-caught; IndexFunc covers the rest (plain space,
-// no-break space, and friends).
+// all. Edge owner is TrimCredential (forgives edge whitespace + Cf);
+// this is the interior owner (rejects what survives trimming). Read them
+// together: the next edit must not "fix" one side without the other —
+// same split-ownership pattern as the endpoint() trim-contract comment.
 func validCredential(s string) bool {
 	if HasControl(s) || !utf8.ValidString(s) {
 		return false
@@ -669,7 +668,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// values must match what is sent.
 	redirect, err := CanonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
-		return nil, deny("oauth client redirect URL is invalid")
+		// Keep the canonicaliser discriminant: AuthURL logs the underlying
+		// check the same way, and this branch fires exactly for hand-built
+		// cfg / regressions — when triage needs to know which of the ~10
+		// shape checks fired. Static text only (no input echo), so it is
+		// safe in both the log line and the client-mapped message.
+		return nil, deny("oauth client redirect URL is invalid: " + err.Error())
 	}
 	// Checked == sent: canonicalisation can grow the string (brackets),
 	// so length-gate the canonical form too — same as both CreateStates.
@@ -750,6 +754,9 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if len(tok.RefreshToken) > MaxPlaintextLen || len(tok.AccessToken) > MaxPlaintextLen {
 		return nil, deny("grant exchange returned an oversized token")
 	}
+	// Do not persist tok.Expiry directly; use SetTokens — the write sites
+	// own the MaxAccessLifetime clamp, and this return is unclamped by
+	// design (raw provider value for non-persisting callers).
 	return tok, nil
 }
 

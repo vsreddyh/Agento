@@ -445,12 +445,14 @@ func run() error {
 			// split would be harmless, but there is no reason to buy
 			// one): the conversion transiently allocates over an
 			// OS-bounded value (~128KB) once on the config-error path.
-			// Past any plausible registration (~60 chars), but still a
-			// bound: the byte-for-byte comparison the log exists for
-			// works from this line for every realistic redirect.
+			// Capped at MaxStateFieldLen, the same bound CanonicalRedirectURL
+			// enforces: any storable value logs whole, so the byte-for-byte
+			// comparison this line exists for never truncates a value the
+			// server would actually send. Anything longer fails closed at
+			// config load and is quoted here only as triage context.
 			redirect := os.Getenv("GOOGLE_REDIRECT_URL")
-			if r := []rune(redirect); len(r) > 512 {
-				redirect = string(r[:512]) + "\u2026 (truncated)"
+			if r := []rune(redirect); len(r) > connectors.MaxStateFieldLen {
+				redirect = string(r[:connectors.MaxStateFieldLen]) + "\u2026 (truncated)"
 			}
 			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, redirect)
 		} else {
