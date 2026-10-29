@@ -1265,6 +1265,12 @@ func TestGrantClearNeedsAllColumns(t *testing.T) {
 	if grantClear(probeDoc{Expiry: 123}) {
 		t.Error("expiry-only row should not be grant-clear")
 	}
+	// Raw-presence semantics: a whitespace-only cipher is still a stored
+	// artifact (unservable via GetTokens, but real enough to repair rather
+	// than skip as "clear").
+	if grantClear(probeDoc{Refresh: "   "}) {
+		t.Error("whitespace-only cipher should read as present, not clear")
+	}
 }
 
 // Overlong state is a deterministic reject at the store, not a Mongo filter.

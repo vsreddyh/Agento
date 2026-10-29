@@ -473,12 +473,15 @@ type probeDoc struct {
 }
 
 // grantClear reports whether a probed row holds no grant in any column.
-// Every column counts: a row with an empty refresh but a leftover access
-// cipher (hand-edit, partial clear, future refresher bug) must take the
-// repair write, never the pure no-op that would keep serving it.
+// Every column counts, verbatim: a row with an empty refresh but a
+// leftover access cipher (hand-edit, partial clear, future refresher bug)
+// must take the repair write, never the pure no-op that would keep serving
+// it. Presence is raw (`!= ""`), not trimmed: a whitespace-only cipher is
+// still a stored artifact — unservable (GetTokens keeps its own
+// whitespace gate), but real enough to repair rather than skip.
 func grantClear(cur probeDoc) bool {
-	return TrimCredential(cur.Refresh) == "" &&
-		TrimCredential(cur.Access) == "" &&
+	return cur.Refresh == "" &&
+		cur.Access == "" &&
 		cur.Expiry == 0
 }
 

@@ -247,12 +247,16 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// moving the timestamp — triage reads failure recency from last_error
 	// content, not from updated_at.
 	hasGrant := func() bool {
-		// Presence-only like the Mongo probe: an over-cap cipher reads as
-		// present (repair path), never served — serving happens only
-		// through GetTokens/DecryptToken.
+		// Presence-only like the Mongo probe: any stored artifact counts
+		// as present (repair path), never served — serving happens only
+		// through GetTokens/DecryptToken, which keep their own
+		// whitespace/emptiness gate. An over-cap cipher reads as present;
+		// so does a whitespace-only one (both undecryptable, both
+		// unservable — but both real rows that must not be skipped as
+		// "clear", or a hand-inserted artifact lingers unrepaired).
 		tok, ok := s.tokens[id]
-		return ok && (TrimCredential(tok.RefreshCipher) != "" ||
-			TrimCredential(tok.AccessCipher) != "" ||
+		return ok && (tok.RefreshCipher != "" ||
+			tok.AccessCipher != "" ||
 			tok.AccessExpiryUnixMilli != 0)
 	}
 	var out Connector

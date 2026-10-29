@@ -169,11 +169,16 @@ func validRedirectHost(host string) bool {
 	if !tldAlpha {
 		return false
 	}
-	// RFC-2606 reserved names can never be public registrations (and the
-	// http loopback gate only whitelists bare "localhost"): validated-shape
-	// would never match a console entry.
+	// RFC-2606 reserved names plus LAN/mDNS TLDs can never be public
+	// registrations (and the http loopback gate only whitelists bare
+	// "localhost"): validated-shape would never match a console entry.
+	// mDNS (.local), unqualified-LAN (.lan, .internal, .home), special-use
+	// (.onion, .arpa incl. .home.arpa) all validate syntactically yet no
+	// public Google registration can hold them — same validated-shape !=
+	// registrable-shape class as the single-char/numeric-TLD gates above.
+	// Fail here instead of dying with redirect_uri_mismatch in the browser.
 	switch tld {
-	case "test", "example", "invalid":
+	case "test", "example", "invalid", "local", "internal", "lan", "home", "onion", "arpa":
 		return false
 	}
 	// Bare "localhost" only, no subdomains: "*.localhost" resolves
@@ -190,16 +195,36 @@ func validRedirectHost(host string) bool {
 // RedactURL strips any userinfo for logging: a hand-typed redirect with
 // credentials must never land verbatim in a container log, even on the
 // rejection path that exists to keep credentials out of the log in the
-// first place. Unparseable input logs as-is (trimmed, always inside %q at
-// the call sites): it failed Parse, so no structured userinfo could be
-// extracted from it — and what remains is the operator's own typo, needed
-// for triage. Do not "fix" this into a blind [unparseable] marker: the
-// value is only ever the operator's own env, and triage needs to see it.
+// first place. Unparseable input is scrubbed + bounded inside the helper,
+// not left to the call site's verb: it failed Parse, so no structured
+// userinfo could be extracted — but the raw bytes are still
+// caller-influenced, so the helper strips controls, scrubs, and bounds,
+// never returning the raw string. What remains is the operator's own
+// typo, needed for triage.
 func RedactURL(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	parsed, err := url.Parse(trimmed)
-	if err != nil || parsed.User == nil {
-		return trimmed
+	if err != nil {
+		cleaned := strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return -1
+			}
+			return r
+		}, trimmed)
+		return approvals.ScrubError(cleaned)
+	}
+	if parsed.User == nil {
+		// No userinfo to strip, but the value is still operator-influenced:
+		// strip controls and scrub+bound so the helper is safe under any
+		// verb, not just the %q call sites use today. Clean short URLs
+		// pass through unchanged (nothing to scrub, under the bound).
+		cleaned := strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return -1
+			}
+			return r
+		}, trimmed)
+		return approvals.ScrubError(cleaned)
 	}
 	parsed.User = nil
 	return parsed.String()
@@ -734,7 +759,14 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	// exported for direct/future callers, and this is the one path that
 	// would otherwise panic (ctx.Deadline) instead of 400ing.
 	if ctx == nil {
-		ctx = context.Background()
+		// A nil Context is a caller bug, not a missing deadline: fail
+		// closed with the discriminant instead of substituting Background
+		// (which would silently drop cancellation propagation) or panicking
+		// on the first ctx use below.
+		if logf != nil {
+			logf("connectors: grant exchange refused: nil context")
+		}
+		return nil, NewStoreError("grant exchange aborted, nil context", false)
 	}
 	// Bound the provider round-trip for direct callers: the gateway always
 	// passes its 30s callback ctx, but the helper is exported — an

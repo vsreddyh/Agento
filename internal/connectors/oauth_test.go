@@ -649,6 +649,8 @@ func TestExchangeRejectsNilContext(t *testing.T) {
 		t.Fatal("nil ctx should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("nil ctx should be a deterministic 400, got %v", err)
+	} else if !strings.Contains(err.Error(), "nil context") {
+		t.Fatalf("nil ctx should name the contract, got %q", err)
 	}
 }
 
@@ -681,5 +683,38 @@ func TestLoopbackSchemeBeforeHostShape(t *testing.T) {
 		t.Fatal("http non-allowlist host should fail closed")
 	} else if !strings.Contains(err.Error(), "https") {
 		t.Fatalf("should fail on the scheme gate, got %q", err)
+	}
+}
+
+// RedactURL strips userinfo but keeps the triage pointer: host/path stay,
+// credentials never reach the log — even on the rejection path that
+// exists to keep them out of the log.
+func TestRedactURL(t *testing.T) {
+	if got := RedactURL("https://user:pass@host.example/p/api/connectors/callback"); got != "https://host.example/p/api/connectors/callback" {
+		t.Fatalf("userinfo should be stripped, got %q", got)
+	}
+	if got := RedactURL("https://host.example/p/api/connectors/callback"); got != "https://host.example/p/api/connectors/callback" {
+		t.Fatalf("clean URL should pass through, got %q", got)
+	}
+	// Unparseable input is scrubbed + bounded, never verbatim: a control
+	// byte that breaks parsing must not ride into a log line.
+	if got := RedactURL("https://host\x00/x"); strings.Contains(got, "\x00") {
+		t.Fatalf("unparseable input must not carry controls, got %q", got)
+	}
+	if got := RedactURL(strings.Repeat("x", 5000)); len(got) > 400 {
+		t.Fatalf("unparseable input must be bounded, got len %d", len(got))
+	}
+}
+
+func TestValidRedirectHostRejectsLANTLDs(t *testing.T) {
+	for _, h := range []string{"myhost.local", "myhost.internal", "myhost.lan", "myhost.onion", "myhost.home.arpa", "myhost.example", "myhost.test", "myhost.invalid"} {
+		if validRedirectHost(h) {
+			t.Errorf("%q should fail closed (unregistrable TLD)", h)
+		}
+	}
+	for _, h := range []string{"host.example.com", "123.com"} {
+		if !validRedirectHost(h) {
+			t.Errorf("%q should stay valid", h)
+		}
 	}
 }
