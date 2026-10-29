@@ -399,6 +399,21 @@ purely local, so it works grant-less — the draft is exactly what the
 user needs while disconnected. It builds a validated draft the agent
 presents to the user — actual creation waits for the approval-gate flow
 that covers calendar writes.
+Operator setup on a host with no domain: `scripts/connectors-google-setup.sh`
+is an interactive wizard that walks the two things only a human can do —
+joining a tailnet and creating the Google client — and derives the rest.
+It publishes the callback over Tailscale Funnel (public TLS on 443 →
+`localhost:8080`, the same nginx proxy), because Google accepts only
+`https://` or a loopback `http://` and a bare-IP host can register neither.
+It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+`GOOGLE_REDIRECT_URL`, and `CONNECTORS_ENCRYPTION_KEY` into the root
+`.env` and re-renders compose to prove they reach the pi service. It never
+restarts the stack — the values are inert until a connectors build runs —
+and it is safe to re-run: existing values stay defaults, and an existing
+envelope key is kept, since rotating it invalidates every stored grant.
+Register the `/p/` spelling it prints (through the proxy `/p` is stripped
+before pi sees it); the bare `https://<host>/api/...` form routes to
+health-api instead.
 Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 
 ---
