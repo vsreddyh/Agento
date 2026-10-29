@@ -405,6 +405,9 @@ joining a tailnet and creating the Google client — and derives the rest.
 It publishes the callback over Tailscale Funnel (public TLS on 443 →
 `localhost:8080`, the same nginx proxy), because Google accepts only
 `https://` or a loopback `http://` and a bare-IP host can register neither.
+Note the funnel publishes the whole proxy (chat + sync stay PASSWORD-gated);
+the callback is the only new unauthenticated surface, so do not share the
+`*.ts.net` URL.
 It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URL`, and `CONNECTORS_ENCRYPTION_KEY` into the root
 `.env` and re-renders compose to prove they reach the pi service. It never
@@ -414,6 +417,7 @@ envelope key is kept, since rotating it invalidates every stored grant.
 Register the `/p/` spelling it prints (through the proxy `/p` is stripped
 before pi sees it); the bare `https://<host>/api/...` form routes to
 health-api instead.
+
 Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 
 ---

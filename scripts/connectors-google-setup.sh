@@ -209,6 +209,18 @@ run_wizard() {
 
 TOTAL_STAGES=8
 
+# Cleanup for this wizard's temp files + the backgrounded `tailscale up`.
+# (Library tmpfiles inside write_env are created and removed within the
+# function; these three live across stages, so they get the trap.)
+LOG=""; FOUT=""; TS_PID=""
+wizard_cleanup() {
+  rm -f "$LOG" "$FOUT" /tmp/oc-compose-out /tmp/oc-compose-err 2>/dev/null || true
+  if [[ -n "$TS_PID" ]] && kill -0 "$TS_PID" 2>/dev/null; then
+    kill "$TS_PID" 2>/dev/null || true
+  fi
+}
+trap wizard_cleanup EXIT INT TERM
+
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ENV_FILE="$REPO_DIR/.env"
 TS_HOST="${TS_HOST:-$(hostname -s)}"
@@ -224,8 +236,10 @@ stage "Preflight: what this will change"
 say "This sets up the OAuth callback for Gmail/Calendar connectors (#367/#371)."
 say "Plan: Tailscale Funnel terminates public TLS on 443 and forwards to the"
 say "      existing nginx proxy on localhost:8080. No ports are opened, no"
-say "      domain is bought. The app keeps its current Server URL; only the"
-say "      OAuth callback travels over the funnel."
+say "      domain is bought. The app keeps its current Server URL."
+say "      Note: the funnel publishes the whole proxy (chat + sync stay"
+say "      PASSWORD-gated); the OAuth callback is the only new unauthenticated"
+say "      surface. Do not share the *.ts.net URL."
 printf '\n'
 say "What is on disk right now:"
 for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
@@ -233,7 +247,33 @@ for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_EN
   else note "  $k: MISSING"; fi
 done
 say "  tailscale: $(command -v tailscale >/dev/null 2>&1 && echo installed || echo 'not installed')"
-say "  proxy :8080: $(ss -lnt 2>/dev/null | grep -q ':8080 ' && echo listening || echo 'NOT listening')"
+if curl -fsS --max-time 5 http://127.0.0.1:8080/ping >/dev/null 2>&1; then
+  note "  proxy :8080: listening"
+else
+  note "  proxy :8080: NOT answering (/ping)"
+fi
+# Dependency preflight: every external the stages shell out to. jq is the
+# critical one — without it every tailscale-status check misreads as down.
+# (tailscale itself is installed in stage 2, so its absence here is expected.)
+_missing=""
+for _dep in jq openssl curl podman-compose; do
+  if ! command -v "$_dep" >/dev/null 2>&1; then _missing="$_missing $_dep"; fi
+done
+unset _dep
+if [[ -n "$_missing" ]]; then
+  warn "missing:${_missing} — install them, then re-run"
+  exit 1
+fi
+unset _missing
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  warn "not running as root: tailscale install/up/funnel typically need root"
+  warn "(upstream examples use 'sudo tailscale ...'). Re-run with sudo if"
+  warn "those steps fail."
+  if ! confirm "Continue as non-root?"; then
+    say "Stopped. Nothing changed."
+    exit 1
+  fi
+fi
 printf '\n'
 note "This host is the live stack. Writing .env is safe (inert until the"
 note "connectors image is deployed). Nothing is restarted by this wizard."
@@ -248,18 +288,26 @@ stage "Install Tailscale"
 if command -v tailscale >/dev/null 2>&1; then
   note "already installed: $(tailscale version 2>/dev/null | head -n1 || true)"
 else
-  say "Installing from Tailscale's official apt repo (Ubuntu $(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release))."
+  _codename=""; [[ -f /etc/os-release ]] && _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)
+  say "Installing from Tailscale's official apt repo${_codename:+ (Ubuntu $_codename)}."
+  unset _codename
   note "This adds /etc/apt/sources.list.d/tailscale.list and the tailscaled service."
   printf '\n'
   if ! confirm "Install Tailscale now?"; then
     warn "skipped install; re-run this wizard when ready"
     exit 1
   fi
+  # Intentionally the upstream installer (no pinning): Tailscale's documented
+  # install path; the repo otherwise avoids pipe-to-shell for its own code.
   curl -fsSL https://tailscale.com/install.sh | sh
   printf '\n'
   printf '  %s✓%s installed %s\n' "$GREEN" "$RESET" "$(tailscale version 2>/dev/null | head -n1 || true)"
 fi
-say "Service: $(systemctl is-active tailscaled 2>/dev/null || true)"
+if command -v systemctl >/dev/null 2>&1; then
+  say "Service: $(systemctl is-active tailscaled 2>/dev/null || true)"
+else
+  note "systemctl absent (non-systemd host); tailscaled state unchecked"
+fi
 
 # ── Stage 3: join the tailnet ─────────────────────────────────────────────
 stage "Join your tailnet"
@@ -269,8 +317,12 @@ if tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/de
 else
   say "The machine name becomes the public hostname: <name>.<tailnet>.ts.net"
   step "Pick a short lowercase name (letters, digits, hyphen)."
-  ask TS_HOST "Machine name [$TS_HOST]:"
-  TS_HOST="${TS_HOST:-$(hostname -s)}"
+  while true; do
+    ask TS_HOST "Machine name [$TS_HOST]:"
+    TS_HOST="${TS_HOST:-$(hostname -s)}"
+    if [[ "$TS_HOST" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then break; fi
+    warn "invalid: use lowercase letters, digits, hyphens (no leading/trailing hyphen)"
+  done
   printf '\n'
   say "Opening a login URL. Sign in with your Tailscale account (creating one"
   say "on the free Personal plan is fine) and approve this machine."
@@ -322,8 +374,11 @@ say "to the existing proxy on localhost:8080. Only ports 443/8443/10000 are"
 say "allowed, so 443 it is."
 printf '\n'
 note "First run may prompt you to enable HTTPS certificates / MagicDNS for the"
-note "tailnet. If it complains, enable them and re-run this stage:"
-note "  https://console.tailscale.com/admin/dns"
+note "tailnet, plus the 'funnel' node attribute in the tailnet policy file."
+note "If it complains, enable them and re-run this stage:"
+note "  DNS:     https://console.tailscale.com/admin/dns"
+note "  Funnel attribute (Access controls → Add Funnel to policy):"
+note "  https://console.tailscale.com/admin/acls"
 printf '\n'
 
 FOUT=$(mktemp)
@@ -441,7 +496,7 @@ stage "Write .env and verify"
 [[ -f "$ENV_FILE" ]] || { warn "no $ENV_FILE at $REPO_DIR"; exit 1; }
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S)"
 cp -p "$ENV_FILE" "$BACKUP"
-note "backup: $BACKUP"
+note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
 
 if v=$(_existing CONNECTORS_ENCRYPTION_KEY 2>/dev/null) && [[ -n "$v" ]]; then
   note "keeping the existing envelope key (rotating it would invalidate every stored grant)"
@@ -468,7 +523,11 @@ write_env CONNECTORS_ENCRYPTION_KEY "$CONNECTORS_ENCRYPTION_KEY"
 
 printf '\n'
 say "Rendering compose to prove all four interpolate (values not printed)…"
-if ( cd "$REPO_DIR" && podman-compose --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >/tmp/oc-compose-out 2>/tmp/oc-compose-err; then
+# Same sudo-fallback pattern as scripts/lib/common.sh's podman_compose():
+# a host whose user podman socket is missing needs sudo for compose.
+_compose=(podman-compose)
+podman info &>/dev/null 2>&1 || _compose=(sudo podman-compose)
+if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >/tmp/oc-compose-out 2>/tmp/oc-compose-err; then
   for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
     if grep -qE "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[^[:space:]]" /tmp/oc-compose-out; then
       printf '  %s✓%s %s reaches the pi service\n' "$GREEN" "$RESET" "$k"
@@ -490,7 +549,7 @@ printf '  1. Nothing is restarted yet. These vars are inert until the connectors
 printf '     image is deployed — the running image predates #367/#371.\n'
 printf '  2. Merge #371, rebuild the pi image, bring the stack up.\n'
 printf '  3. Compare the canonical string the gateway logs at boot:\n'
-printf '       podman logs docker_pi_1 | grep "OAuth configured"\n'
+printf '       podman-compose -f docker/docker-compose.yml logs pi | grep "OAuth configured"\n'
 printf '     with what is registered in Google. They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
 printf '  4. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
