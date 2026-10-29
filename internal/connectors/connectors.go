@@ -238,11 +238,15 @@ func IsDraftOnlySend(server, tool string) bool {
 		return false
 	}
 	if len(tool) > maxToolNameLen {
-		// Known server with a garbage tool refuses outright, since no
-		// legit tool of that server is that long. Unknown servers already
-		// returned false above only when oversized; a normal-sized unknown
-		// server reaches Known here and falls through the same way.
-		return Known(server)
+		// Oversized tools fall through like oversized servers: a garbage
+		// tool name can never be a real send path, and the gated backstop
+		// (approval hold) is the honest answer — not a refusal text naming
+		// a draft workflow for a tool that cannot exist. Unknown by
+		// construction, like servers: length fails before identity, so no
+		// Known() call here either. A future legit upstream tool longer
+		// than this cap flips from gated to gated (not gated to refused),
+		// so widening the cap stays a UX change, never a security one.
+		return false
 	}
 	server = NormalizedID(server)
 	tool = NormalizedID(tool)

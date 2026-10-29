@@ -1519,15 +1519,17 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	if !IsDraftOnlySend("gmail⁠", "send_message⁠") {
 		t.Error("Cf-suffixed send should still be refused")
 	}
-	// Oversize defers to identity: an unknown (oversized) server cannot
-	// own a send path, so it falls to the backstop like any other unknown
-	// name; a known server with a garbage tool refuses outright, since no
-	// legit tool of that server is that long.
+	// Oversize defers to the backstop on both parts: an oversized id is
+	// unknown by construction, and an oversized tool can never be a real
+	// send path — the gated backstop (approval hold) is the honest answer,
+	// not a refusal text naming a draft workflow for a tool that cannot
+	// exist. A future legit upstream tool longer than the cap flips from
+	// gated to gated when the cap widens, never gated to refused.
 	if IsDraftOnlySend(strings.Repeat("x", MaxConnectorIDLen+1), "send_message") {
 		t.Error("oversized server should fall to the backstop, not refuse")
 	}
-	if !IsDraftOnlySend("gmail", strings.Repeat("x", maxToolNameLen+1)) {
-		t.Error("oversized tool on a known server should be refused")
+	if IsDraftOnlySend("gmail", strings.Repeat("x", maxToolNameLen+1)) {
+		t.Error("oversized tool should fall to the backstop, not refuse")
 	}
 }
 

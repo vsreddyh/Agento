@@ -610,7 +610,7 @@ func TestConnectorsCallbackRejectsOversizedQuery(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 13000)+"&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 20000)+"&state=s1", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized query: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -624,7 +624,7 @@ func TestConnectorsCallbackRejectsOversizedQuery(t *testing.T) {
 // and the unconfigured path gets the same parse protection.
 func TestConnectorsCallbackHugeQueryUnconfigured(t *testing.T) {
 	srv := connectorsServer(t)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 13000)+"&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 20000)+"&state=s1", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unconfigured huge query: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -1209,12 +1209,12 @@ func TestConnectorsCallbackHugeScopeStillConnects(t *testing.T) {
 	defer mu.Unlock()
 	found := false
 	for _, line := range logged {
-		if strings.Contains(line, "subset check skipped") {
+		if strings.Contains(line, "subset check skipped") && strings.Contains(line, "3000") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("oversized scope should log the skip, got: %q", logged)
+		t.Fatalf("oversized scope should log the skip with byte count, got: %q", logged)
 	}
 }
 

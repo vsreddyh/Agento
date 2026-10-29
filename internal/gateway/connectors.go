@@ -726,12 +726,14 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// raw counts encoded bytes (up to 3x decoded: %00 is 3 raw bytes for 1
 	// decoded byte), so two max-size values at full expansion plus slack —
 	// never tighter than the decoded per-value gates below, which stay the
-	// real contract for legitimately large inputs. DoS hygiene first: a
-	// junk-suffixed but otherwise valid attempt (?code=<valid>&x=<10k>)
-	// dead-attempts here instead of reaching those gates — same 400 shape,
-	// so no oracle, but the fast-path gate is deliberately coarser than
-	// the per-value contract.
-	if len(r.URL.RawQuery) > 3*(2*connectors.MaxStateFieldLen)+256 {
+	// real contract for legitimately large inputs. Budgets all three
+	// attacker-influenced values (code + state + scope) at full expansion,
+	// so a triple at each per-value cap still reaches the per-value gates.
+	// DoS hygiene first: a junk-suffixed but otherwise valid attempt
+	// (?code=<valid>&x=<10k>) dead-attempts here instead of reaching those
+	// gates — same 400 shape, so no oracle, but the fast-path gate is
+	// deliberately coarser than the per-value contract.
+	if len(r.URL.RawQuery) > 3*(3*connectors.MaxStateFieldLen)+256 {
 		callbackDeadAttempt(w, r)
 		return
 	}
@@ -894,7 +896,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 			s.cfg.Logf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)", id, strings.Join(missing, " "), bounded(approvals.ScrubError(granted)))
 		}
 	} else if len(granted) > connectors.MaxStateFieldLen {
-		s.cfg.Logf("connectors: grant for %q scope param oversized, subset check skipped (grant stored; drafts may 403)", id)
+		s.cfg.Logf("connectors: grant for %q scope param oversized (%d bytes), subset check skipped (grant stored; drafts may 403)", id, len(granted))
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, s.cfg.Logf)
 	if err != nil {

@@ -646,10 +646,13 @@ func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
 	}
 	// One pending attempt per connector: a new tap supersedes the old one
 	// (its browser tab fails at ConsumeState with "try connect again").
-	// Bounds live rows to one per connector regardless of tap spam — not a
+	// Bounds live rows to one per connector for sequential taps — not a
 	// hardcoded count, so a fourth connector doesn't invalidate it. The
 	// sweep above only reaps expired rows, so without this a bearer holder
 	// could mint unlimited live states inside the 10-minute window.
+	// Concurrent taps serialize under the mutex here (unlike mongo's
+	// delete-then-insert, which may briefly leave two live rows) — either
+	// tab can still complete, same as mongo.
 	for _, state := range supersede {
 		delete(s.states, state)
 	}
