@@ -1795,3 +1795,17 @@ func TestNewStateClearsFloors(t *testing.T) {
 		t.Errorf("minted verifier len %d outside [%d, %d]", len(verifier), MinVerifierLen, MaxVerifierLen)
 	}
 }
+
+// The stray scan must see raw spellings: Known folds, so it would hide the
+// very case-variant docs the scan exists to surface.
+func TestIsKnownRawID(t *testing.T) {
+	if !isKnownRawID("gmail") || !isKnownRawID("calendar") {
+		t.Error("canonical ids must match exactly")
+	}
+	if isKnownRawID("Gmail") || isKnownRawID(" GMAIL ") || isKnownRawID("slack") {
+		t.Error("case-variant and unknown ids must be stray")
+	}
+	if !Known("Gmail") {
+		t.Error("Known must still fold (stray scan is the only raw caller)")
+	}
+}

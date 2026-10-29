@@ -155,8 +155,12 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 		// would make List serve a row Get(FindOne, exact match) cannot
 		// see — List saying "connected" while Get says "never touched"
 		// for the same logical id. Unfolded, both synthesise DefaultRow
-		// and triage gets the log line.
-		if !Known(id) {
+		// and triage gets the log line. Exact match, not Known(): Known
+		// folds (round 39), so Known("Gmail") is true and would hide the
+		// very docs this scan exists to surface. (Memory List has no stray
+		// scan by construction: no docs to scan, rows synthesise from the
+		// fixed id list — nothing to go stray.)
+		if !isKnownRawID(id) {
 			ignored = append(ignored, id)
 		}
 	}

@@ -125,6 +125,13 @@ func Known(id string) bool {
 	return false
 }
 
+// isKnownRawID reports exact membership without folding: the mongo List
+// stray scan needs the raw spelling ("Gmail" is stray; Known("Gmail") is
+// true). Every other call site wants the folded predicate.
+func isKnownRawID(id string) bool {
+	return id == Gmail || id == Calendar
+}
+
 // HasWhitespace reports any Unicode whitespace in s. Server-minted
 // base64url values (states, verifiers) and Google-issued codes never
 // contain whitespace, so an interior space is operator-paste or garbage:
@@ -256,8 +263,8 @@ func IsDraftOnlySend(server, tool string) bool {
 	// refusal list drifts on punctuation the way the scope test guards
 	// against renames. NormalizedID already trimmed the edges, so any
 	// separator folded here is interior by construction. Covered set:
-	// - . space / : — any other separator falls to the gated backstop
-	// by design.
+	// "-", ".", " ", "/", ":" — any other separator falls to the gated
+	// backstop by design.
 	for _, sep := range []string{"-", ".", " ", "/", ":"} {
 		tool = strings.ReplaceAll(tool, sep, "_")
 	}
