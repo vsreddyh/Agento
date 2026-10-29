@@ -729,3 +729,18 @@ func TestRedactURLMatchesCanonicalTrim(t *testing.T) {
 		t.Fatalf("clean URL should pass through, got %q", got)
 	}
 }
+
+func TestStateFloor(t *testing.T) {
+	short := strings.Repeat("s", MinStateLen-1)
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, "gmail", short, testVerifier, nil); got != "" {
+		t.Errorf("undersized-state AuthURL should fail, got %q", got[:10])
+	}
+	s := NewMemoryStore()
+	ctx := context.Background()
+	if err := s.CreateState(ctx, OAuthState{State: short, Connector: "gmail", Verifier: testVerifier}); err == nil {
+		t.Fatal("undersized-state CreateState should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Fatalf("undersized state should be a deterministic 400, got %v", err)
+	}
+}

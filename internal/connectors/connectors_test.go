@@ -28,6 +28,12 @@ var testVerifier = strings.Repeat("v", 64)
 // encoding gate (not the length gate) is what fires.
 var testVerifierBadUTF8 = strings.Repeat("v", 60) + "\xc0\x80"
 
+// testState is a valid-length state: 22 chars like NewState mints, inside
+// the MinStateLen..MaxStateFieldLen window. Short literals ("s1", "STATE")
+// now trip the floor, so success-path fixtures use realistic lengths.
+var testState = strings.Repeat("s", 22)
+var testState2 = strings.Repeat("t", 22)
+
 func TestListSynthesisesDisconnected(t *testing.T) {
 	s := NewMemoryStore()
 	list, err := s.List(context.Background())
@@ -628,22 +634,22 @@ func TestTokenEnvelope(t *testing.T) {
 func TestOAuthStateLifecycle(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.ConsumeState(ctx, "s1")
+	got, err := s.ConsumeState(ctx, testState)
 	if err != nil || got.Connector != "gmail" || got.Verifier != testVerifier {
 		t.Fatalf("consume = %+v, %v", got, err)
 	}
 	// Double consume fails: a code can never be exchanged twice.
-	if _, err := s.ConsumeState(ctx, "s1"); err == nil {
+	if _, err := s.ConsumeState(ctx, testState); err == nil {
 		t.Fatal("second consume should fail")
 	} else if se, ok := err.(*StoreError); !ok || !se.NotFound {
 		t.Fatalf("second consume should be NotFound, got %v", err)
 	}
 	// Expired at creation fails fast: an explicitly-expired row can never
 	// be consumed, so storing it would only strand a dead attempt.
-	if err := s.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(-time.Minute)}); err == nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState2, Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(-time.Minute)}); err == nil {
 		t.Fatal("explicitly expired create should fail")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("expired create should be a deterministic 400, got %v", err)
@@ -652,11 +658,11 @@ func TestOAuthStateLifecycle(t *testing.T) {
 	s2 := NewMemoryStore()
 	fixed := time.Now()
 	s2.now = func() time.Time { return fixed }
-	if err := s2.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: testVerifier, ExpiresAt: fixed.Add(time.Minute)}); err != nil {
+	if err := s2.CreateState(ctx, OAuthState{State: testState2, Connector: "gmail", Verifier: testVerifier, ExpiresAt: fixed.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	s2.now = func() time.Time { return fixed.Add(2 * time.Minute) }
-	if _, err := s2.ConsumeState(ctx, "s2"); err == nil {
+	if _, err := s2.ConsumeState(ctx, testState2); err == nil {
 		t.Fatal("expired consume should fail")
 	}
 	// Unknown connector rejected at create.
@@ -691,8 +697,8 @@ func TestTokenGrantLifecycle(t *testing.T) {
 // Auth URL carries the connector scopes, PKCE challenge, and offline access.
 func TestAuthURLShape(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	u := AuthURL(cfg, Gmail, "STATE", testVerifier, nil)
-	for _, want := range []string{"client_id=cid", "state=STATE", "code_challenge=", "code_challenge_method=S256", "access_type=offline", "prompt=consent", "gmail.readonly", "gmail.compose"} {
+	u := AuthURL(cfg, Gmail, testState, testVerifier, nil)
+	for _, want := range []string{"client_id=cid", "state=" + testState, "code_challenge=", "code_challenge_method=S256", "access_type=offline", "prompt=consent", "gmail.readonly", "gmail.compose"} {
 		if !strings.Contains(u, want) {
 			t.Errorf("auth URL missing %q:\n%s", want, u)
 		}
@@ -730,13 +736,13 @@ func TestDisconnectClearsTokens(t *testing.T) {
 func TestDisconnectScrubsStates(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Disconnect(ctx, "gmail"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeState(ctx, "s1"); err == nil {
+	if _, err := s.ConsumeState(ctx, testState); err == nil {
 		t.Fatal("state survived disconnect")
 	}
 }
@@ -746,10 +752,10 @@ func TestDisconnectScrubsStates(t *testing.T) {
 func TestCreateStateNormalisesConnector(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "  GMail ", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "  GMail ", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	st, err := s.ConsumeState(ctx, "s1")
+	st, err := s.ConsumeState(ctx, testState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,10 +770,10 @@ func TestCreateStateClampsFarFutureExpiry(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
 	far := time.Now().Add(365 * 24 * time.Hour)
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: testVerifier, ExpiresAt: far}); err != nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, ExpiresAt: far}); err != nil {
 		t.Fatal(err)
 	}
-	st, err := s.ConsumeState(ctx, "s1")
+	st, err := s.ConsumeState(ctx, testState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -784,7 +790,7 @@ func TestCreateStateRejectsPastExpiry(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
 	past := time.Now().Add(-time.Minute)
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: testVerifier, ExpiresAt: past}); err == nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, ExpiresAt: past}); err == nil {
 		t.Fatal("explicitly expired state should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("expired state should be a deterministic 400, got %v", err)
@@ -796,7 +802,7 @@ func TestCreateStateRejectsLongRedirect(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
 	big := strings.Repeat("x", MaxRedirectLen+1)
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: testVerifier, RedirectURI: big}); err == nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, RedirectURI: big}); err == nil {
 		t.Fatal("oversized redirect should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("long redirect should be a deterministic 400, got %v", err)
@@ -811,10 +817,10 @@ func TestCreateStateStoresCanonicalRedirect(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
 	raw := "https://HOST.EXAMPLE.COM/p/api/connectors/callback/"
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: testVerifier, RedirectURI: raw}); err != nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, RedirectURI: raw}); err != nil {
 		t.Fatalf("canonicalisable redirect should store: %v", err)
 	}
-	st, err := s.ConsumeState(ctx, "s1")
+	st, err := s.ConsumeState(ctx, testState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,7 +834,7 @@ func TestCreateStateStoresCanonicalRedirect(t *testing.T) {
 func TestCreateStateRejectsBadRedirect(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: testVerifier, RedirectURI: "not-a-url"}); err == nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, RedirectURI: "not-a-url"}); err == nil {
 		t.Fatal("misshapen redirect should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("bad redirect should be a deterministic 400, got %v", err)
@@ -844,13 +850,13 @@ func TestConsumeStateBoundaryTick(t *testing.T) {
 	fixed := time.Now().Truncate(time.Second)
 	s.now = func() time.Time { return fixed }
 	ctx := context.Background()
-	if err := s.CreateState(ctx, OAuthState{State: "edge", Connector: "gmail", Verifier: testVerifier, ExpiresAt: fixed}); err == nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, ExpiresAt: fixed}); err == nil {
 		t.Fatal("expiresAt==now should fail at creation")
 	}
-	if err := s.CreateState(ctx, OAuthState{State: "live", Connector: "gmail", Verifier: testVerifier, ExpiresAt: fixed.Add(time.Nanosecond)}); err != nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState2, Connector: "gmail", Verifier: testVerifier, ExpiresAt: fixed.Add(time.Nanosecond)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeState(ctx, "live"); err != nil {
+	if _, err := s.ConsumeState(ctx, testState2); err != nil {
 		t.Fatalf("expiresAt 1ns out should be live: %v", err)
 	}
 }
@@ -859,7 +865,7 @@ func TestConsumeStateBoundaryTick(t *testing.T) {
 // Exchange, AuthURL, and the stores — same logical id, same answer.
 func TestOAuthHelpersFoldIDs(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	u := AuthURL(cfg, " GMail ", "s", testVerifier, nil)
+	u := AuthURL(cfg, " GMail ", testState, testVerifier, nil)
 	if !strings.Contains(u, "gmail.readonly") {
 		t.Errorf("unfolded id lost scopes:\n%s", u)
 	}
@@ -874,7 +880,7 @@ func TestOAuthHelpersFoldIDs(t *testing.T) {
 func TestCreateStateDuplicateFails(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	st := OAuthState{State: "dup", Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}
+	st := OAuthState{State: testState, Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}
 	if err := s.CreateState(ctx, st); err != nil {
 		t.Fatal(err)
 	}
@@ -882,10 +888,10 @@ func TestCreateStateDuplicateFails(t *testing.T) {
 		t.Fatal("duplicate state should fail")
 	}
 	// ...but a *new* state for the same connector supersedes the old one.
-	if err := s.CreateState(ctx, OAuthState{State: "dup2", Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState2, Connector: "gmail", Verifier: testVerifier, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeState(ctx, "dup"); err == nil {
+	if _, err := s.ConsumeState(ctx, testState); err == nil {
 		t.Fatal("superseded state should be gone")
 	}
 }
@@ -1003,7 +1009,7 @@ func TestAuthURLLogsReason(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	var logged string
 	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
-	if got := AuthURL(cfg, "slack", "s", testVerifier, logf); got != "" || !strings.Contains(logged, "unknown") {
+	if got := AuthURL(cfg, "slack", testState, testVerifier, logf); got != "" || !strings.Contains(logged, "unknown") {
 		t.Errorf("got %q, logged %q; want empty with unknown-connector reason", got, logged)
 	}
 	// Empty state vs unknown id are distinct log lines: triage must not
@@ -1040,14 +1046,14 @@ func TestCreateStateRejectsControlBytes(t *testing.T) {
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("control state should be a deterministic 400, got %v", err)
 	}
-	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v\ne"}); err == nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState, Connector: "gmail", Verifier: "v\ne"}); err == nil {
 		t.Fatal("control-byte verifier should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("control verifier should be a deterministic 400, got %v", err)
 	}
 	// Invalid UTF-8 fails the same gate: overlong sequences decode as
 	// RuneError (not control), so the control check alone would miss them.
-	if err := s.CreateState(ctx, OAuthState{State: "s2", Connector: "gmail", Verifier: "v\xc0\x80"}); err == nil {
+	if err := s.CreateState(ctx, OAuthState{State: testState2, Connector: "gmail", Verifier: "v\xc0\x80"}); err == nil {
 		t.Fatal("invalid-utf8 verifier should fail closed")
 	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
 		t.Fatalf("invalid utf8 should be a deterministic 400, got %v", err)
@@ -1107,7 +1113,7 @@ func TestSetStatusDisconnectedClearsTokens(t *testing.T) {
 // params, so stored/built values must match the trimmed form.
 func TestAuthURLTrimsInputs(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	got := AuthURL(cfg, " GMail ", " s ", " "+testVerifier+" ", nil)
+	got := AuthURL(cfg, " GMail ", " "+testState+" ", " "+testVerifier+" ", nil)
 	if got == "" {
 		t.Fatal("padded known id should build")
 	}
@@ -1306,7 +1312,7 @@ func TestConsumeStateRejectsOversized(t *testing.T) {
 // overlong ones fail closed.
 func TestAuthURLTrimsAndCaps(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if got := AuthURL(cfg, "gmail", " s ", " "+testVerifier+" ", nil); got == "" {
+	if got := AuthURL(cfg, "gmail", " "+testState+" ", " "+testVerifier+" ", nil); got == "" {
 		t.Fatal("padded inputs should build")
 	} else if strings.Contains(got, " ") {
 		t.Errorf("URL contains a space:\n%s", got)
@@ -1449,26 +1455,26 @@ func TestAuthURLRejectsControlBytes(t *testing.T) {
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
 	var logged string
 	logf := func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
-	if got := AuthURL(cfg, "gmail", "s", testVerifier[:60]+"\x00x", logf); got != "" || !strings.Contains(logged, "invalid") {
+	if got := AuthURL(cfg, "gmail", testState, testVerifier[:60]+"\x00x", logf); got != "" || !strings.Contains(logged, "invalid") {
 		t.Errorf("got %q, logged %q; want empty with invalid-input reason", got, logged)
 	}
 	// A control-bearing id fails the same gate as Exchange: quoting alone
 	// is not the enforcement.
 	logged = ""
-	if got := AuthURL(cfg, "gm\x00ail", "s", testVerifier, logf); got != "" || !strings.Contains(logged, "invalid") {
+	if got := AuthURL(cfg, "gm\x00ail", testState, testVerifier, logf); got != "" || !strings.Contains(logged, "invalid") {
 		t.Errorf("got %q, logged %q; want empty with invalid-id reason", got, logged)
 	}
 	// Invalid UTF-8 fails the same gate: overlong sequences decode as
 	// RuneError (not control), so the control check alone would miss them.
 	logged = ""
-	if got := AuthURL(cfg, "gmail", "s", strings.Repeat("v", 60)+"\xc0\x80", logf); got != "" || !strings.Contains(logged, "invalid") {
+	if got := AuthURL(cfg, "gmail", testState, strings.Repeat("v", 60)+"\xc0\x80", logf); got != "" || !strings.Contains(logged, "invalid") {
 		t.Errorf("got %q, logged %q; want empty with invalid-input reason", got, logged)
 	}
 	// Trailing zero-width from a console copy-paste is forgiven like
 	// whitespace (trimmed at the edges), not rejected as a control:
 	// TrimCredential covers Cf where TrimSpace stopped.
 	logged = ""
-	if got := AuthURL(cfg, "gmail", "s\u200b", testVerifier, logf); got == "" {
+	if got := AuthURL(cfg, "gmail", testState+"\u200b", testVerifier, logf); got == "" {
 		t.Errorf("got empty, want trimmed Cf to build; log: %q", logged)
 	}
 }
@@ -1667,7 +1673,7 @@ func TestKeyFromEnvRejectsInteriorSpace(t *testing.T) {
 func TestRejectsInteriorWhitespace(t *testing.T) {
 	ctx := context.Background()
 	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example.com/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
-	if got := AuthURL(cfg, "gmail", "s t", testVerifier, nil); got != "" {
+	if got := AuthURL(cfg, "gmail", testState[:10]+" "+testState[11:], testVerifier, nil); got != "" {
 		t.Errorf("spaced AuthURL state = %q, want empty", got)
 	}
 	if _, err := Exchange(ctx, cfg, Gmail, "co de", testVerifier, nil); err == nil {

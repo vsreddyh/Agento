@@ -227,7 +227,11 @@ func RedactURL(raw string) string {
 		return approvals.ScrubError(strip(trimmed))
 	}
 	parsed.User = nil
-	return parsed.String()
+	// Scrubbed + bounded like the other branches: the stripped form is
+	// still operator-influenced (hand-typed host/path), so the helper
+	// never returns a raw string on any branch. Clean short URLs pass
+	// through unchanged (nothing to scrub, under the bound).
+	return approvals.ScrubError(parsed.String())
 }
 
 // CanonicalRedirectURL validates and canonicalises in one step so every
@@ -570,6 +574,13 @@ const MaxVerifierLen = 128
 // shorter verifier mints a challenge Google can only 400, stranding the
 // consent the same way an oversized one does. Enforced alongside the
 // ceiling at every verifier gate.
+// MinStateLen floors the same brute-force class for states: NewState mints
+// 22-char 128-bit base64url, so anything much shorter is hand-minted —
+// and the callback is unauthenticated, so a 1-char state is guessable
+// inside the 10-minute window in a way a 22-char state is not. 16 keeps a
+// comfortable margin under the minted 22 without pinning the exact
+// encoding length.
+const MinStateLen = 16
 const MinVerifierLen = 43
 
 // MaxRedirectLen bounds the registered redirect URL at parse and at every
@@ -717,6 +728,12 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 		}
 		return ""
 	}
+	if len(state) < MinStateLen {
+		if logf != nil {
+			logf("connectors: auth URL build failed for %q: undersized state", id)
+		}
+		return ""
+	}
 	if len(verifier) < MinVerifierLen {
 		if logf != nil {
 			logf("connectors: auth URL build failed for %q: undersized verifier", id)
@@ -755,18 +772,29 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 // write sites (gateway + both SetTokens), so callers that persist must go
 // through SetTokens — direct use of tok.Expiry sees the raw provider value.
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
-	// Nil ctx fails closed like every other input leg: the helper is
-	// exported for direct/future callers, and this is the one path that
-	// would otherwise panic (ctx.Deadline) instead of 400ing.
+	// Nil guard first: everything below touches ctx, and a nil Context
+	// would panic on the first use instead of 400ing. A nil Context is a
+	// caller bug — fail closed with the discriminant instead of
+	// substituting Background (which would silently drop cancellation
+	// propagation).
 	if ctx == nil {
-		// A nil Context is a caller bug, not a missing deadline: fail
-		// closed with the discriminant instead of substituting Background
-		// (which would silently drop cancellation propagation) or panicking
-		// on the first ctx use below.
 		if logf != nil {
 			logf("connectors: grant exchange refused: nil context")
 		}
 		return nil, NewStoreError("grant exchange aborted, nil context", false)
+	}
+	// Dead caller before the fallback wrap below (same ordering as the
+	// gateway fast paths): a cancelled parent with no deadline must not
+	// arm a timer that fires immediately, nor pay the guards below.
+	// Deterministic 400, not a 502 — nothing was sent. Supersedes the
+	// config-first ordering for the cancel case specifically: a dead ctx
+	// is cheaper to report than a config shape to diagnose, and the timer
+	// must never arm on a dead parent.
+	if ctx.Err() != nil {
+		if logf != nil {
+			logf("connectors: grant exchange refused: aborted, ended context")
+		}
+		return nil, NewStoreError("grant exchange aborted, caller context ended", false)
 	}
 	// Bound the provider round-trip for direct callers: the gateway always
 	// passes its 30s callback ctx, but the helper is exported — an
@@ -812,19 +840,12 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if HasControl(id) || !utf8.ValidString(id) {
 		return nil, deny("invalid connector id")
 	}
-	// Config shape before caller state (deterministic, no I/O either
-	// way): a stopping server that is also misconfigured logs the
-	// misconfiguration, not the hangup — the config problem persists
-	// while the cancel is transient.
+	// Config shape after the dead-ctx guard above (both deterministic,
+	// no I/O): a live caller with a bad config still logs the
+	// misconfiguration — only a dead caller short-circuits first, so no
+	// timer ever arms on an ended parent.
 	if cfg == nil {
 		return nil, deny("oauth client is not configured")
-	}
-	// Dead caller ctx fails here, before the fallback timeout below and
-	// any network I/O: a cancelled parent with no deadline would otherwise
-	// pay a full oauth2 round-trip before failing. Deterministic 400,
-	// not a 502 — nothing was sent.
-	if ctx.Err() != nil {
-		return nil, deny("grant exchange aborted, caller context ended")
 	}
 	// Bounded before the token endpoint, on trimmed values: codes/verifiers
 	// are short by construction, and a multi-MB value would become an

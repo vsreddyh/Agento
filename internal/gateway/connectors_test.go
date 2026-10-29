@@ -298,7 +298,7 @@ func TestConnectorsCallbackRejectsInvalidUTF8Verifier(t *testing.T) {
 	defer close()
 	store := invalidUTF8Store{connectors.NewMemoryStore()}
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid-utf8 verifier: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -322,7 +322,7 @@ func TestConnectorsCallbackRejectsSpacedVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: spacedVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("spaced verifier: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -345,7 +345,7 @@ func TestConnectorsCallbackRejectsOversizedVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: oversizedVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized verifier: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -366,7 +366,7 @@ func TestConnectorsCallbackRejectsControlVerifier(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: controlVerifierStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("control verifier: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -445,7 +445,7 @@ func TestConnectorsCallbackRejects(t *testing.T) {
 	defer close()
 	srv := oauthServer(t, cfg)
 	// Unknown state.
-	if rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", ""); rec.Code != http.StatusBadRequest {
+	if rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nopenopenopenopenope", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown state: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
 	// Missing params.
@@ -478,7 +478,7 @@ func TestConnectorsCallbackNeedsNoBearer(t *testing.T) {
 	// this is the Google-redirected browser shape (no Authorization
 	// header), and it must still complete — the state is the capability.
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: connectors.NewMemoryStore(), ConnectorOAuth: cfg})
-	r := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nope", nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nopenopenopenopenope", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, r)
 	if rec.Code != http.StatusBadRequest {
@@ -502,9 +502,9 @@ func TestConnectorsCallbackNoProfileOracle(t *testing.T) {
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: connectors.NewMemoryStore(), ConnectorOAuth: cfg})
 	// Unknown profile + callback path answers the SAME 400 as a bad state
 	// on a known profile — no existence oracle for unauthenticated callers.
-	bad := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", "")
+	bad := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nopenopenopenopenope", "")
 	unknown := func() *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodGet, "/nosuchprofile/api/connectors/callback?code=x&state=nope", nil)
+		r := httptest.NewRequest(http.MethodGet, "/nosuchprofile/api/connectors/callback?code=x&state=nopenopenopenopenope", nil)
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, r)
 		return rec
@@ -540,7 +540,7 @@ func TestConnectorsCallbackRejectsControlBytes(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%00b&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%00b&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("control-byte code: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -555,7 +555,7 @@ func TestConnectorsCallbackRejectsSpacedCode(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%20b&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=a%20b&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("spaced code: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -574,7 +574,7 @@ func TestConnectorsCallbackTrimsToDeadAttempt(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=++&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=++&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("whitespace-only code: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -582,7 +582,7 @@ func TestConnectorsCallbackTrimsToDeadAttempt(t *testing.T) {
 		t.Fatalf("trimmed-empty code should name missing params, got: %s", rec.Body)
 	}
 	// Truly absent params give the same message.
-	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?state=s1", "")
+	rec = do(t, srv, http.MethodGet, "/api/connectors/callback?state=ssssssssssssssssssssss", "")
 	if !strings.Contains(rec.Body.String(), "callback needs") {
 		t.Fatalf("absent code should name missing params, got: %s", rec.Body)
 	}
@@ -595,7 +595,7 @@ func TestConnectorsCallbackRejectsInvalidUTF8(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=%C0%80&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=%C0%80&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid-utf8 code: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -610,7 +610,7 @@ func TestConnectorsCallbackRejectsOversizedQuery(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 20000)+"&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 20000)+"&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized query: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -624,7 +624,7 @@ func TestConnectorsCallbackRejectsOversizedQuery(t *testing.T) {
 // and the unconfigured path gets the same parse protection.
 func TestConnectorsCallbackHugeQueryUnconfigured(t *testing.T) {
 	srv := connectorsServer(t)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 20000)+"&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code="+strings.Repeat("x", 20000)+"&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unconfigured huge query: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -640,14 +640,14 @@ func TestConnectorsCallbackTrailingSlashMatches(t *testing.T) {
 	// splitProfile Cleans the path before the exact-match bypass, so the
 	// slash spelling must reach the same handler as the canonical one —
 	// never a different status for the same dead state.
-	plain := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", "")
-	slashed := do(t, srv, http.MethodGet, "/api/connectors/callback/?code=x&state=nope", "")
+	plain := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nopenopenopenopenope", "")
+	slashed := do(t, srv, http.MethodGet, "/api/connectors/callback/?code=x&state=nopenopenopenopenope", "")
 	if plain.Code != slashed.Code || plain.Body.String() != slashed.Body.String() {
 		t.Fatalf("slash spelling diverges: %d %q vs %d %q", plain.Code, plain.Body, slashed.Code, slashed.Body)
 	}
 	// Casing must not distinguish callers on this unauthenticated path:
 	// mixed case reaches the same bypass, not a 401 oracle.
-	mixed := do(t, srv, http.MethodGet, "/API/connectors/CALLBACK?code=x&state=nope", "")
+	mixed := do(t, srv, http.MethodGet, "/API/connectors/CALLBACK?code=x&state=nopenopenopenopenope", "")
 	if mixed.Code != plain.Code || mixed.Body.String() != plain.Body.String() {
 		t.Fatalf("case spelling diverges: %d %q vs %d %q", mixed.Code, mixed.Body, plain.Code, plain.Body)
 	}
@@ -660,7 +660,7 @@ func TestConnectorsCallbackDeadAttemptServesHTMLToBrowsers(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	req := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nope", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nopenopenopenopenope", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	req.Header.Set("Accept", "text/html")
 	rec := httptest.NewRecorder()
@@ -681,7 +681,7 @@ func TestConnectorsCallbackDeadAttemptServesHTMLToBrowsers(t *testing.T) {
 		t.Errorf("x-content-type-options = %q, want nosniff", ct)
 	}
 	// Same 400 meaning without the browser header: JSON shape unchanged.
-	rec2 := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nope", "")
+	rec2 := do(t, srv, http.MethodGet, "/api/connectors/callback?code=x&state=nopenopenopenopenope", "")
 	if rec2.Code != http.StatusBadRequest {
 		t.Fatalf("dead-attempt json: %d, want 400 (%s)", rec2.Code, rec2.Body)
 	}
@@ -850,7 +850,7 @@ func TestConnectorsCallbackMalformedEncoding(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=%zz&state=abc", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=%zz&state=abcabcabcabcabcabcab", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("malformed encoding: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
@@ -875,7 +875,7 @@ func TestConnectorsAcceptHeaderBounded(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := oauthServer(t, cfg)
-	r := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nope", nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=x&state=nopenopenopenopenope", nil)
 	r.Header.Set("Authorization", "Bearer test-token")
 	r.Header.Set("Accept", strings.Repeat("text/html;", 200))
 	rec := httptest.NewRecorder()
@@ -1117,7 +1117,7 @@ func TestConnectorsCallbackRejectsBadRedirect(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()
 	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: badRedirectStore{connectors.NewMemoryStore()}, ConnectorOAuth: cfg})
-	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=s1", "")
+	rec := do(t, srv, http.MethodGet, "/api/connectors/callback?code=c1&state=ssssssssssssssssssssss", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad redirect: %d, want 400 (%s)", rec.Code, rec.Body)
 	}

@@ -642,7 +642,12 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 		// row may already have landed on detached IO, so clean it up
 		// best-effort like the empty-auth_url branch below (same detached
 		// budget, same single-use delete). A failed or abandoned build
-		// mints nothing observable either way.
+		// mints nothing observable either way. The DeadlineExceeded leg
+		// below is nearly dead by construction: CreateState runs on
+		// detached opCtx (validation + mint are the only verb-clock work,
+		// ~µs), so only a hung client or depleted entropy trips it — a
+		// slow Atlas surfaces via the detached Upstream branch above, not
+		// here. Both legs clean up + answer honestly regardless.
 		if ctx.Err() != nil {
 			// Log first: triage distinguishes hangup/shutdown from a slow
 			// Atlas verb deadline below by this line, not the cleanup
@@ -779,6 +784,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	if len(code) > connectors.MaxStateFieldLen || len(state) > connectors.MaxStateFieldLen {
 		callbackError(w, r, http.StatusBadRequest, "invalid_request_error",
 			callbackStateReject)
+		return
+	}
+	if len(state) < connectors.MinStateLen {
+		callbackDeadAttempt(w, r)
 		return
 	}
 	// Control bytes fail closed here, not at Google: an embedded NUL/CR/LF
