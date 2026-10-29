@@ -354,7 +354,7 @@ if command -v tailscale >/dev/null 2>&1; then
 else
   _codename=""
   if [[ -f /etc/os-release ]]; then
-    _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '"' || true)
+    _codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '"' 2>/dev/null || true)
   fi
   say "Installing from Tailscale's official apt repo${_codename:+ (Ubuntu $_codename)}."
   unset _codename
@@ -401,7 +401,7 @@ else
   # Computed once: hostname -s can emit a dotted FQDN on minimal images —
   # cut to the first label so the strict regex below doesn't loop-reject
   # the default.
-  _host_default=$(hostname -s 2>/dev/null | cut -d. -f1 || true)
+  _host_default=$(hostname -s 2>/dev/null | cut -d. -f1 2>/dev/null || true)
   # An unset hostname yields an empty default, an empty fallback, and a
   # regex that rejects empty — an endless warn loop with no way forward
   # except Ctrl-C. Fail fast instead.
@@ -496,7 +496,7 @@ if [[ -n "$TS_DNS" ]]; then
   note "using preset TS_DNS=$TS_DNS (skipping discovery)"
   _DNS_FROM_PRESET=1
 else
-  TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.$//' || true)
+  TS_DNS=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.$//' 2>/dev/null || true)
 fi
 # (no "null" check: jq -r ... // empty never emits the literal string.)
 if [[ -z "$TS_DNS" ]]; then
@@ -732,8 +732,8 @@ while true; do
   ask_secret GOOGLE_CLIENT_SECRET "Client secret (hidden):" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
   # Console copy-paste trails whitespace; strip it before the shape checks so
   # a trailing space doesn't fail a good paste (tokens never contain any).
-  GOOGLE_CLIENT_ID=$(printf '%s' "$GOOGLE_CLIENT_ID" | tr -d '[:space:]')
-  GOOGLE_CLIENT_SECRET=$(printf '%s' "$GOOGLE_CLIENT_SECRET" | tr -d '[:space:]')
+  GOOGLE_CLIENT_ID=$(printf '%s' "$GOOGLE_CLIENT_ID" | tr -d '[:space:]' || true)
+  GOOGLE_CLIENT_SECRET=$(printf '%s' "$GOOGLE_CLIENT_SECRET" | tr -d '[:space:]' || true)
   _bad=""
   [[ "$GOOGLE_CLIENT_ID" != *".apps.googleusercontent.com" ]] && _bad="client id (want …apps.googleusercontent.com)"
   [[ "$GOOGLE_CLIENT_SECRET" != GOCSPX-* ]] && _bad="${_bad:+$_bad and }client secret (want GOCSPX-…)"
@@ -758,10 +758,16 @@ if [[ ! -f "$ENV_FILE" ]]; then
   fi
   exit 1
 fi
-# The four write_env calls below fail silently under set -e on an
-# unwritable file (library); fail fast here with the message instead.
+# The four write_env calls below fail silently under set -e on ENOSPC/I-O
+# (library); fail fast here with the message instead. File-writability is
+# checked, but the backup needs the *directory* — check both, with the
+# precise cause in each message.
 if [[ ! -w "$ENV_FILE" ]]; then
   warn "no write permission on $ENV_FILE — fix ownership/permissions, then re-run"
+  exit 1
+fi
+if [[ ! -w "$(dirname "$ENV_FILE")" ]]; then
+  warn "no write permission in $(dirname "$ENV_FILE") (backups land there) — fix ownership/permissions, then re-run"
   exit 1
 fi
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S).$$"
@@ -833,10 +839,10 @@ else
 fi
 unset _comment_host
 
-write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID"
-write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET"
-write_env GOOGLE_REDIRECT_URL "$REDIRECT_URI"
-write_env CONNECTORS_ENCRYPTION_KEY "$CONNECTORS_ENCRYPTION_KEY"
+write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
+write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
+write_env GOOGLE_REDIRECT_URL "$REDIRECT_URI" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
+write_env CONNECTORS_ENCRYPTION_KEY "$CONNECTORS_ENCRYPTION_KEY" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
 
 printf '\n'
 say "Rendering compose to prove all four interpolate (values not printed)…"
