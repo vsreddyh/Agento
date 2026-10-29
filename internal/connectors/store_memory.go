@@ -235,6 +235,9 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 	// moving the timestamp — triage reads failure recency from last_error
 	// content, not from updated_at.
 	hasGrant := func() bool {
+		// Presence-only like the Mongo probe: an over-cap cipher reads as
+		// present (repair path), never served — serving happens only
+		// through GetTokens/DecryptToken.
 		tok, ok := s.tokens[id]
 		return ok && (TrimCredential(tok.RefreshCipher) != "" ||
 			TrimCredential(tok.AccessCipher) != "" ||

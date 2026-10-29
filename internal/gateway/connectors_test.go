@@ -785,19 +785,19 @@ func TestConnectorsConnectSetsNoStore(t *testing.T) {
 }
 
 // The raw length pre-filter fires before any fold or scan: multi-KB
-// segments 404 without paying the normalize alloc, and without echo.
+// segments 400 without paying the normalize alloc, and without echo.
 func TestConnectorsMemberOversizedSegments(t *testing.T) {
 	srv := connectorsServer(t)
 	rec := do(t, srv, http.MethodPost, "/api/connectors/"+strings.Repeat("x", 3000)+"/disconnect", "")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("oversized id: %d, want 404 (%s)", rec.Code, rec.Body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized id: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), strings.Repeat("x", 100)) {
 		t.Fatalf("oversized id must not echo: %s", rec.Body.String()[:200])
 	}
 	rec = do(t, srv, http.MethodPost, "/api/connectors/gmail/"+strings.Repeat("y", 3000), "")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("oversized verb: %d, want 404 (%s)", rec.Code, rec.Body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized verb: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
 }
 
@@ -879,15 +879,33 @@ func TestConnectorsConnectCleansUpAfterClientGone(t *testing.T) {
 	}
 }
 
-// A merely-oversized id (over 64, under the raw pre-filter) 404s without
+// A merely-oversized id (over 64, under the raw pre-filter) 400s without
 // echo: the trimmed-form gate fires before any scan or fold.
 func TestConnectorsMemberTrimmedOversizedID(t *testing.T) {
 	srv := connectorsServer(t)
 	rec := do(t, srv, http.MethodPost, "/api/connectors/"+strings.Repeat("z", 100)+"/disconnect", "")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("trimmed-oversized id: %d, want 404 (%s)", rec.Code, rec.Body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("trimmed-oversized id: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), strings.Repeat("z", 20)) {
 		t.Fatalf("trimmed-oversized id must not echo: %s", rec.Body.String()[:120])
+	}
+}
+
+// Routed unknown ids 404 at dispatch regardless of config health: the
+// dispatch gate is shared by every member verb and disconnect never reads
+// OAuth config, so resource resolution stays identity-first there. Within
+// the connect verb itself config beats identity (shape-first, matching
+// AuthURL/Exchange) — this pins the dispatch half of that layered
+// contract.
+func TestConnectorsConnectUnknownIDBadConfig(t *testing.T) {
+	cfg, close := oauthTestServer(t, false)
+	defer close()
+	cfg.RedirectURL = "not-a-url"
+	store := connectors.NewMemoryStore()
+	srv := newTestServer(t, &fakeAgent{}, Config{ConnectorStore: store, ConnectorOAuth: cfg})
+	rec := do(t, srv, http.MethodPost, "/api/connectors/slack/connect", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("dual-bad connect: %d, want 404 (%s)", rec.Code, rec.Body)
 	}
 }

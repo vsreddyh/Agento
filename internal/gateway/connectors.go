@@ -347,19 +347,21 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	}
 
 	id, action, _ := strings.Cut(path, "/")
-	// Alloc guard before any fold or scan: a multi-MB segment must fail
-	// without the TrimFunc/ToLower/HasControl rune walks below. No echo —
-	// the value is megabytes. Semantic caps stay on the normalised forms
-	// further down (padding must not turn a known id unknown), so this is
-	// purely a pre-filter, not the contract.
+	// Alloc guard before any fold or scan: a multi-MB segment answers the
+	// same oversized 400 as every sibling gate without the TrimFunc/
+	// ToLower/HasControl rune walks below. No echo — the value is
+	// megabytes. Semantic caps stay on the normalised forms further down
+	// (padding must not turn a known id unknown), so this tier only kills
+	// multi-MB; the trimmed gate below is the contract.
+	// Oversized answers 400, not 404 — matching every store verb: length
+	// fails before identity on all layers, so the same input reports the
+	// same code wherever it is checked. No echo (the value is megabytes).
 	if len(id) > connectors.MaxStateFieldLen {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown connector")
+		connectorsError(w, connectors.NewStoreError("oversized connector id", false))
 		return
 	}
 	if len(action) > connectors.MaxStateFieldLen {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown path")
+		connectorsError(w, connectors.NewStoreError("oversized path segment", false))
 		return
 	}
 	// Trim first, then check — matching the code/state legs and every store
@@ -377,13 +379,11 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 	// and the ToLower alloc below. (The raw pre-filter above only kills
 	// multi-MB; this is the contract gate, same 64 as every sibling.)
 	if len(id) > maxConnectorIDLen {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown connector")
+		connectorsError(w, connectors.NewStoreError("oversized connector id", false))
 		return
 	}
 	if len(action) > maxConnectorIDLen {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown path "+bounded(approvals.ScrubError(path)))
+		connectorsError(w, connectors.NewStoreError("oversized path segment", false))
 		return
 	}
 	if id == "" || connectors.HasControl(id) || connectors.HasControl(action) || !utf8.ValidString(id) || !utf8.ValidString(action) {
@@ -421,6 +421,13 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		return
 	}
 	if !connectors.Known(norm) {
+		// Identity-first at dispatch, by design: this gate is shared by
+		// every member verb, and disconnect never reads OAuth config — a
+		// config 502 here would be wrong for it. So a routed unknown id
+		// 404s here regardless of config health, while the connect verb
+		// itself is shape-first internally (canonical before Known) for
+		// direct callers and the known-id path — same split as AuthURL/
+		// Exchange, which have no dispatch layer to resolve first.
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector "+bounded(approvals.ScrubError(norm)))
 		return
@@ -479,23 +486,25 @@ func (s *Server) handleConnectorConnect(w http.ResponseWriter, r *http.Request, 
 			"connect for "+bounded(approvals.ScrubError(id))+" is not configured on this server yet — never paste a token in chat")
 		return
 	}
+	// Config shape before identity, matching AuthURL/Exchange (shape-first
+	// since round 42): a misconfigured server 502s before identity or
+	// randomness or budgets — the same (unknown-id + bad-config) pair
+	// answers config-first whichever layer it reaches. FromEnv enforces
+	// canonical shape, so this fires only for a hand-built cfg — exactly
+	// when triage needs the discriminant. Ordering rationale in the file's
+	// own terms: config fails fast with no dead attempt minted.
+	pinnedRedirect, err := canonicalRedirectForMint(s.cfg.ConnectorOAuth, id, s.cfg.Logf)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "upstream_error", "",
+			"connect is not configured correctly on this server")
+		return
+	}
 	// Defensive: the router already Known-checks, and CreateState +
 	// Exchange check again — this keeps the handler correct for direct
 	// callers without depending on any of those layers.
 	if !connectors.Known(id) {
 		apiError(w, http.StatusNotFound, "invalid_request_error", "",
 			"unknown connector "+bounded(approvals.ScrubError(id)))
-		return
-	}
-	// Config shape before randomness or deadlines: a misconfigured server
-	// 502s before minting anything or opening a verb budget. FromEnv
-	// enforces canonical shape, so this fires only for a hand-built cfg —
-	// exactly when triage needs the discriminant. Ordering rationale in
-	// the file's own terms: config fails fast with no dead attempt minted.
-	pinnedRedirect, err := canonicalRedirectForMint(s.cfg.ConnectorOAuth, id, s.cfg.Logf)
-	if err != nil {
-		apiError(w, http.StatusBadGateway, "upstream_error", "",
-			"connect is not configured correctly on this server")
 		return
 	}
 	state, verifier, err := connectors.NewState()

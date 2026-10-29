@@ -513,9 +513,11 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 	if err != nil {
 		// Same shape gate as the env path: a hand-built redirect that
 		// would never match a registration fails here, not in the
-		// browser with redirect_uri_mismatch.
+		// browser with redirect_uri_mismatch. Quoted: canonicaliser
+		// errors are static today, but the every-value-quoted contract
+		// keeps the next edit from landing an input echo unquoted.
 		if logf != nil {
-			logf("connectors: auth URL build failed for %q: %v", id, err)
+			logf("connectors: auth URL build failed for %q: %q", id, err.Error())
 		}
 		return ""
 	}

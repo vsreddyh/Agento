@@ -438,7 +438,11 @@ func resolveConnectedAt(stamp, now int64) int64 {
 // turns every repeat verb into a heal-write. The token columns are the
 // one deliberate exception to "never the token columns": only their
 // presence is read (never returned), and the no-op paths need all three
-// to avoid stranding a partial grant behind a skipped write.
+// to avoid stranding a partial grant behind a skipped write. Presence is
+// unbounded by design: an over-cap cipher reads as present (repair path),
+// never served — serving happens only through GetTokens/DecryptToken, so
+// the driver decode alloc is the whole exposure and there is no second
+// read-side cap to add here.
 func probeProjection() bson.D {
 	return bson.D{
 		{Key: "_id", Value: 0},
