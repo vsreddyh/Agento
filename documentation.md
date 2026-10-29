@@ -157,7 +157,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `tasks_changes` | Permanent | **Never pruned** — one single-document counter, not a log (#178) |
 | `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
 | `story` / `resumes` (retired #289) | Git history | No database retention operations |
-| `connectors` (#316) | Permanent | **Never pruned** — 2 fixed rows, no TTL on `connectors` itself (tokens live until disconnect/revoke; the separate `oauth_states` collection carries its own 10-minute TTL) |
+| `connectors` (#316) | Permanent | **Never pruned** — 2 fixed rows, no TTL on `connectors` itself (grants live until disconnect/revoke; `expired` retains the refresh token for renewal and only bars data reads — disconnect is what clears tokens; the separate `oauth_states` collection carries its own 10-minute TTL) |
 
 Run manual dry-runs via:
 ```bash

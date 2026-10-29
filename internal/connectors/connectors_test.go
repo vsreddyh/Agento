@@ -1773,3 +1773,19 @@ func TestEffectiveExpiry(t *testing.T) {
 		t.Errorf("hand-edited far future must not read as decades, got %v", got)
 	}
 }
+
+// Mint and floor move together: a floor above what NewState mints would
+// strand every new attempt (supersede already killed the prior live row),
+// so the mint output is pinned against the minimums it must clear.
+func TestNewStateClearsFloors(t *testing.T) {
+	state, verifier, err := NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state) < MinStateLen {
+		t.Errorf("minted state len %d below MinStateLen %d", len(state), MinStateLen)
+	}
+	if len(verifier) < MinVerifierLen || len(verifier) > MaxVerifierLen {
+		t.Errorf("minted verifier len %d outside [%d, %d]", len(verifier), MinVerifierLen, MaxVerifierLen)
+	}
+}

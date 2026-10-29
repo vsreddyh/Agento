@@ -821,7 +821,10 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// raw counts encoded bytes (up to 3x decoded: %00 is 3 raw bytes for 1
 	// decoded byte), so three max-size values at full expansion plus slack —
 	// never tighter than the decoded per-value gates below, which stay the
-	// real contract for legitimately large inputs. Budgets all three
+	// real contract for legitimately large inputs. Single-value assumption:
+	// repeated tiny params (?scope=a&scope=a&…& — ~7 bytes raw per decoded
+	// byte) can trip the raw cap first — same 400 either way, no oracle,
+	// just a coarser fast path for a shape Google never sends. Budgets all three
 	// attacker-influenced values (code + state + scope) at full expansion,
 	// so a triple at each per-value cap still reaches the per-value gates.
 	// DoS hygiene first: a junk-suffixed but otherwise valid attempt
