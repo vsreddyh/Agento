@@ -312,6 +312,11 @@ func RedactURL(raw string) string {
 		work = work[:end]
 	}
 	mark := func(s string) string {
+		// Marker exempt from the bound by design: it rides past ScrubError's
+		// 300-rune cap (appended after, never swallowed) so the startup line
+		// stays honest. Log-only overage (~15 runes); the parse/map work
+		// above is what the cap actually bounds, and every call site caps
+		// again (truncateForLog/bounded).
 		if cut {
 			return s + "\u2026[truncated]"
 		}

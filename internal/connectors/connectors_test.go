@@ -1739,3 +1739,11 @@ func TestClampAccessExpiry(t *testing.T) {
 		t.Errorf("past should pass through, got %v", got)
 	}
 }
+
+// Padded direct input folds to the refused form, not a lookalike: the
+// helper trims before folding instead of relying on the caller to.
+func TestIsDraftOnlySendTrimsBeforeFold(t *testing.T) {
+	if !IsDraftOnlySend("  gmail  ", "  send-message  ") {
+		t.Error("padded hyphenated send should still be refused")
+	}
+}
