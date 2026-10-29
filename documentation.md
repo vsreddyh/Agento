@@ -410,7 +410,8 @@ the callback is the only new unauthenticated surface, so do not share the
 `*.ts.net` URL.
 It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URL`, and `CONNECTORS_ENCRYPTION_KEY` into the root
-`.env` and re-renders compose to prove they reach the pi service. It never
+`.env` and re-renders compose to prove they land in the rendered compose
+config. It never
 restarts the stack — the values are inert until the pi container is
 recreated (./scripts/hermes.sh restart recreates it; a plain container
 restart without recreation will not pick up .env changes).

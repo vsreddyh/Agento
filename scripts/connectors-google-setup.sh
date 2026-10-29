@@ -353,7 +353,7 @@ else
   printf '\n'
 
   LOG=$(mktemp)
-  tailscale up --hostname="$TS_HOST" >"$LOG" 2>&1 &
+  tailscale up --hostname="$TS_HOST" </dev/null >"$LOG" 2>&1 &
   TS_PID=$!
   URL=""
   for __i in $(seq 1 60); do
@@ -483,9 +483,11 @@ if [[ -n "$_redirect_preset" ]]; then
     exit 1
   fi
   REDIRECT_URI="$_redirect_preset"
+  _URI_FROM_PRESET=1
   note "using preset REDIRECT_URI (skipping derivation from TS_DNS)"
 else
   REDIRECT_URI="https://$TS_DNS/p/api/connectors/callback"
+  _URI_FROM_PRESET=0
 fi
 unset _redirect_preset
 say "Waiting for public DNS + certificate (can take a few minutes)…"
@@ -515,6 +517,10 @@ if (( ok )); then
   issuer=$(timeout 10 openssl s_client -connect "$TS_DNS:443" -servername "$TS_DNS" </dev/null 2>/dev/null \
            | openssl x509 -noout -issuer 2>/dev/null || true)
   [[ -n "$issuer" ]] && note "$issuer" && note "Google accepts Let's Encrypt-issued certs."
+elif (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
+  # Preset/dry-run names were already reassured above — a fake name never
+  # propagates, so the DNS-wait message below would misdirect those users.
+  note "continuing to the .env write without public reachability"
 else
   warn "not reachable yet (DNS can take up to 10 min to propagate)."
   warn "Re-run the wizard later; the .env write below still holds."
@@ -601,7 +607,10 @@ while true; do
   if [[ -z "$_bad" ]]; then unset _bad; break; fi
   warn "doesn't look like what Google issues: $_bad — check the paste"
   unset _bad
-  if ! confirm "Re-enter both values?"; then exit 1; fi
+  if ! confirm "Re-enter both values?"; then
+    warn "stopping — re-run the wizard to try again (console work above is unaffected)"
+    exit 1
+  fi
 done
 
 # ── Stage 8: write .env + verify ──────────────────────────────────────────
@@ -644,11 +653,17 @@ fi
 
 # A comment block once, refreshed on re-runs (the tailnet name can change);
 # write_env only replaces key lines, so this survives re-runs either way.
+# The recorded host follows the redirect URL: on the preset path that host
+# can differ from the daemon-derived TS_DNS.
+_comment_host="$TS_DNS"
+if (( _URI_FROM_PRESET )); then
+  _comment_host="${REDIRECT_URI#https://}"; _comment_host="${_comment_host%%/*}"
+fi
 if ! grep -q '^# ── Google connectors' "$ENV_FILE"; then
   {
     printf '\n'
     printf '# ── Google connectors (#316) — added by setup wizard ──\n'
-    printf '# Callback is served over Tailscale Funnel: https://%s\n' "$TS_DNS"
+    printf '# Callback is served over Tailscale Funnel: https://%s\n' "$_comment_host"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
   } >> "$ENV_FILE"
 else
@@ -656,10 +671,11 @@ else
   # Same tmp-file + cat pattern as the library's write_env, so a symlinked
   # .env stays a symlink (plain sed -i would replace it with a regular file).
   _cb_tmp=$(mktemp)
-  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$TS_DNS|" "$ENV_FILE" > "$_cb_tmp"
+  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" "$ENV_FILE" > "$_cb_tmp"
   cat "$_cb_tmp" > "$ENV_FILE"
   rm -f "$_cb_tmp"; _cb_tmp=""
 fi
+unset _comment_host
 
 write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID"
 write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET"
@@ -709,7 +725,7 @@ printf '     container is recreated — ./scripts/hermes.sh restart recreates\n'
 printf '     it (a plain container restart without recreation will not pick\n'
 printf '     up .env changes).\n'
 printf '  2. Compare the canonical string the gateway logs at boot:\n'
-printf '       %s -f docker/docker-compose.yml logs pi | grep "OAuth configured"\n' "${_compose[*]}"
+printf '       %s -f %s/docker/docker-compose.yml logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$REPO_DIR"
 printf '     with what is registered in Google. They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
 printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
