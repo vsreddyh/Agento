@@ -278,18 +278,17 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 		s.serveConnectorsList(w, r)
 		return
 	}
-	if !strings.HasPrefix(rest, "api/connectors/") {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"unknown path "+bounded(approvals.ScrubError(rest)))
-		return
-	}
 	// Single callback for both connectors: Google requires the EXACT
 	// registered redirect URI, so one stable spelling (rather than one per
 	// connector id) means one URI to register. The connector travels inside
 	// the signed-by-opaque state row, not the path — the handler resolves it
 	// from ConsumeState and rejects cross-wired states. Checked before the
 	// id/action split below so "callback" can never read as a connector id.
-	if rest == "api/connectors/callback" {
+	// Case-insensitive like the server bypass above, and checked before the
+	// prefix gate: path casing must not distinguish the same
+	// unauthenticated caller, and the HasPrefix below is case-sensitive.
+	// ("api/connectorsfoo" still 404s — it is not the callback.)
+	if strings.EqualFold(rest, "api/connectors/callback") {
 		if r.Method != http.MethodGet {
 			// Method errors on this path answer in both
 			// representations like every other callback branch:
@@ -302,6 +301,11 @@ func (s *Server) handleConnectors(w http.ResponseWriter, r *http.Request, rest s
 			return
 		}
 		s.handleConnectorCallback(w, r)
+		return
+	}
+	if !strings.HasPrefix(rest, "api/connectors/") {
+		apiError(w, http.StatusNotFound, "invalid_request_error", "",
+			"unknown path "+bounded(approvals.ScrubError(rest)))
 		return
 	}
 	path := strings.TrimPrefix(rest, "api/connectors/")

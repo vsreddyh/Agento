@@ -799,7 +799,7 @@ func TestCreateStateRejectsLongRedirect(t *testing.T) {
 func TestCreateStateStoresCanonicalRedirect(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
-	raw := "https://HOST/p/api/connectors/callback/"
+	raw := "https://HOST.EXAMPLE/p/api/connectors/callback/"
 	if err := s.CreateState(ctx, OAuthState{State: "s1", Connector: "gmail", Verifier: "v", RedirectURI: raw}); err != nil {
 		t.Fatalf("canonicalisable redirect should store: %v", err)
 	}
@@ -807,7 +807,7 @@ func TestCreateStateStoresCanonicalRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "https://host/p/api/connectors/callback"; st.RedirectURI != want {
+	if want := "https://host.example/p/api/connectors/callback"; st.RedirectURI != want {
 		t.Errorf("stored redirect = %q, want canonical %q", st.RedirectURI, want)
 	}
 }

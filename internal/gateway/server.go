@@ -455,9 +455,14 @@ var ReservedProfileNames = []string{reservedPathSegment, "api"}
 const reservedPathSegment = "v1"
 
 // IsReservedProfileName reports whether name may not be used as a profile directory.
+// IsReservedProfileName reports whether name may not be used as a profile directory.
+// Case-insensitive: "API" reserves like "api" — fixed protocol segments,
+// not user names, so casing must not distinguish callers (the same
+// rationale as the callback bypass). Routing and discovery share this
+// predicate so the two can never disagree.
 func IsReservedProfileName(name string) bool {
 	for _, r := range ReservedProfileNames {
-		if name == r {
+		if strings.EqualFold(name, r) {
 			return true
 		}
 	}
@@ -549,7 +554,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// reveals it anyway), so documented as intentional rather than
 	// mirrored: lying with a 400 here would misdirect triage about server
 	// setup.
-	if rest == "api/connectors/callback" {
+	if strings.EqualFold(rest, "api/connectors/callback") {
 		s.handleConnectors(w, r, rest)
 		return
 	}

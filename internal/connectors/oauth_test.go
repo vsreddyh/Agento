@@ -161,14 +161,14 @@ func TestOAuthConfigValidatesRedirect(t *testing.T) {
 		url  string
 		ok   bool
 	}{
-		{"good", "https://host:8080/p/api/connectors/callback", true},
+		{"good", "https://host.example:8080/p/api/connectors/callback", true},
 		{"http ok", "http://localhost:8643/api/connectors/callback", true},
-		{"trailing slash ok", "https://host:8080/p/api/connectors/callback/", true},
-		{"wrong suffix", "https://host/p/api/connectors/gmail/callback", false},
+		{"trailing slash ok", "https://host.example:8080/p/api/connectors/callback/", true},
+		{"wrong suffix", "https://host.example/p/api/connectors/gmail/callback", false},
 		{"no scheme", "host/api/connectors/callback", false},
 		{"ftp", "ftp://host/api/connectors/callback", false},
-		{"query rejected", "https://host/p/api/connectors/callback?x=1", false},
-		{"fragment rejected", "https://host/p/api/connectors/callback#y", false},
+		{"query rejected", "https://host.example/p/api/connectors/callback?x=1", false},
+		{"fragment rejected", "https://host.example/p/api/connectors/callback#y", false},
 		{"missing", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -187,7 +187,7 @@ func TestOAuthConfigValidatesRedirect(t *testing.T) {
 // A control-bearing redirect fails closed at validation, not in the
 // browser with redirect_uri_mismatch.
 func TestCanonicalRedirectRejectsControlBytes(t *testing.T) {
-	if _, err := CanonicalRedirectURL("https://host/p/api/connectors/callback\x7f"); err == nil {
+	if _, err := CanonicalRedirectURL("https://host.example/p/api/connectors/callback\x7f"); err == nil {
 		t.Fatal("control-bearing redirect should fail closed")
 	}
 }
@@ -210,12 +210,13 @@ func TestOAuthConfigCanonicalisesNonCanonicalRedirect(t *testing.T) {
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
 	// Cleaned, not rejected: validated shape must equal sent shape.
 	for _, tc := range []struct{ name, url, want string }{
-		{"double slash", "https://host/p//api/connectors/callback", "https://host/p/api/connectors/callback"},
-		{"dot segment", "https://host/p/./api/connectors/callback", "https://host/p/api/connectors/callback"},
-		{"trailing dot", "https://host./p/api/connectors/callback", "https://host/p/api/connectors/callback"},
-		{"trailing dot with port", "https://host.:8443/p/api/connectors/callback", "https://host:8443/p/api/connectors/callback"},
-		{"double trailing dot", "https://host../p/api/connectors/callback", "https://host/p/api/connectors/callback"},
+		{"double slash", "https://host.example/p//api/connectors/callback", "https://host.example/p/api/connectors/callback"},
+		{"dot segment", "https://host.example/p/./api/connectors/callback", "https://host.example/p/api/connectors/callback"},
+		{"trailing dot", "https://host.example./p/api/connectors/callback", "https://host.example/p/api/connectors/callback"},
+		{"trailing dot with port", "https://host.example.:8443/p/api/connectors/callback", "https://host.example:8443/p/api/connectors/callback"},
+		{"double trailing dot", "https://host.example../p/api/connectors/callback", "https://host.example/p/api/connectors/callback"},
 		{"ipv6 non-default port", "http://[::1]:8643/api/connectors/callback", "http://[::1]:8643/api/connectors/callback"},
+		{"uppercase folds", "https://HOST.EXAMPLE/p/api/connectors/callback", "https://host.example/p/api/connectors/callback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)
@@ -235,7 +236,7 @@ func TestOAuthConfigRejectsNonLocalhostHTTP(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "http://host/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "http://plainhost.example/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("non-localhost http redirect should fail closed")
 	}
@@ -252,7 +253,7 @@ func TestOAuthConfigRejectsControlClient(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid\x7f")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("control-byte client id should fail closed")
 	}
@@ -271,7 +272,7 @@ func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host:abc/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:abc/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("non-numeric port should fail closed")
 	}
@@ -280,7 +281,7 @@ func TestOAuthConfigRejectsNonNumericPort(t *testing.T) {
 // Length is capped before parsing: a multi-MB redirect must not pay the
 // parse + Clean + String alloc before the deterministic 400.
 func TestCanonicalRedirectRejectsOversized(t *testing.T) {
-	if _, err := CanonicalRedirectURL("https://host/" + strings.Repeat("x", MaxStateFieldLen)); err == nil {
+	if _, err := CanonicalRedirectURL("https://host.example/" + strings.Repeat("x", MaxStateFieldLen)); err == nil {
 		t.Fatal("oversized redirect should fail closed")
 	}
 }
@@ -293,7 +294,7 @@ func TestOAuthConfigRejectsLongClient(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", strings.Repeat("x", MaxStateFieldLen+1))
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("oversized client id should fail closed")
 	}
@@ -335,6 +336,7 @@ func TestOAuthConfigRejectsBadHostname(t *testing.T) {
 		{"underscore", "https://ho_st/p/api/connectors/callback"},
 		{"leading hyphen", "https://-host/p/api/connectors/callback"},
 		{"unicode", "https://m\xc3\xbcnchen/p/api/connectors/callback"},
+		{"single label", "https://myhost/p/api/connectors/callback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GOOGLE_REDIRECT_URL", tc.url)
@@ -352,13 +354,13 @@ func TestOAuthConfigRejectsEncodedControls(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host/p/api/connectors/callback%00")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback%00")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("encoded control should fail closed")
 	}
 	// Invalid UTF-8 fails the same way: bad bytes decode as RuneError
 	// (not control), so the control gate alone would miss them.
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host/p/api/connectors/callback\xff")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example/p/api/connectors/callback\xff")
 	if _, err := OAuthConfigFromEnv(); err == nil {
 		t.Fatal("invalid-utf8 redirect should fail closed")
 	}
@@ -395,12 +397,12 @@ func TestOAuthConfigStripsDefaultPort(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host:443/p/api/connectors/callback")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:443/p/api/connectors/callback")
 	cfg, err := OAuthConfigFromEnv()
 	if err != nil {
 		t.Fatalf("explicit default port should canonicalise, not fail: %v", err)
 	}
-	if cfg.RedirectURL != "https://host/p/api/connectors/callback" {
+	if cfg.RedirectURL != "https://host.example/p/api/connectors/callback" {
 		t.Errorf("RedirectURL = %q, want canonical no-port form", cfg.RedirectURL)
 	}
 }
@@ -413,12 +415,12 @@ func TestOAuthConfigCanonicalisesRedirect(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "cid")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "sec")
 	t.Setenv("CONNECTORS_ENCRYPTION_KEY", key)
-	t.Setenv("GOOGLE_REDIRECT_URL", "https://host:8080/p/api/connectors/callback/")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://host.example:8080/p/api/connectors/callback/")
 	cfg, err := OAuthConfigFromEnv()
 	if err != nil {
 		t.Fatalf("valid redirect rejected: %v", err)
 	}
-	if want := "https://host:8080/p/api/connectors/callback"; cfg.RedirectURL != want {
+	if want := "https://host.example:8080/p/api/connectors/callback"; cfg.RedirectURL != want {
 		t.Fatalf("RedirectURL = %q, want canonical %q", cfg.RedirectURL, want)
 	}
 }

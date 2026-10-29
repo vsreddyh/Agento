@@ -512,6 +512,12 @@ func TestConnectorsCallbackTrailingSlashMatches(t *testing.T) {
 	if plain.Code != slashed.Code || plain.Body.String() != slashed.Body.String() {
 		t.Fatalf("slash spelling diverges: %d %q vs %d %q", plain.Code, plain.Body, slashed.Code, slashed.Body)
 	}
+	// Casing must not distinguish callers on this unauthenticated path:
+	// mixed case reaches the same bypass, not a 401 oracle.
+	mixed := do(t, srv, http.MethodGet, "/API/connectors/CALLBACK?code=x&state=nope", "")
+	if mixed.Code != plain.Code || mixed.Body.String() != plain.Body.String() {
+		t.Fatalf("case spelling diverges: %d %q vs %d %q", mixed.Code, mixed.Body, plain.Code, plain.Body)
+	}
 }
 
 // A dead attempt in a browser tab answers HTML, not JSON: the operator

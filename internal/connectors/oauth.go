@@ -97,12 +97,21 @@ type OAuthConfig struct {
 
 // validRedirectHost reports whether host is a registrable spelling:
 // ASCII labels of [a-z0-9-] with no empties and no leading/trailing
-// hyphens (the console registration is punycode, never Unicode).
+// hyphens, and at least one dot unless loopback (the console registration
+// is punycode, never Unicode; a single-label public hostname can never
+// complete Google registration). "localhost" and IP literals bypass the
+// dot rule — loopback-ness is checked separately for the scheme gate.
 // Takes the already-folded host: CanonicalRedirectURL lowercases before
 // calling, so checked == sent by construction and this predicate never
 // sees the raw spelling.
 func validRedirectHost(host string) bool {
 	if host == "" || len(host) > 253 {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	if !strings.Contains(host, ".") {
 		return false
 	}
 	for _, label := range strings.Split(host, ".") {
@@ -254,7 +263,15 @@ func CanonicalRedirectURL(raw string) (string, error) {
 	if !strings.HasSuffix(parsed.EscapedPath(), "/api/connectors/callback") {
 		return "", errors.New("connectors: redirect URL path must not contain encoded slashes; register the decoded spelling")
 	}
-	return parsed.String(), nil
+	// Length-cap the canonical output, not just the raw input: growth
+	// through canonicalisation (brackets, unescaping) must not mint a
+	// stored/sent string the write paths would 400. Same MaxStateFieldLen
+	// as every sibling gate, so checked == sent == stored by construction.
+	out := parsed.String()
+	if len(out) > MaxStateFieldLen {
+		return "", errors.New("connectors: redirect URL too long")
+	}
+	return out, nil
 }
 
 // OAuthConfigFromEnv builds the OAuth client from the environment. ANY
