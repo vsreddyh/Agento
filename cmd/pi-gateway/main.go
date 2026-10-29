@@ -438,7 +438,14 @@ func run() error {
 		if cfg, err := connectors.OAuthConfigFromEnv(); err != nil {
 			// Echo the attempted redirect: non-secret, and the triage
 			// pointer when the failure is a registration mismatch.
-			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, os.Getenv("GOOGLE_REDIRECT_URL"))
+			// Bounded like the gateway's bounded(): the cap fires inside
+			// CanonicalRedirectURL, so an uncapped env value would emit
+			// megabytes to the log before any bound applies.
+			redirect := os.Getenv("GOOGLE_REDIRECT_URL")
+			if r := []rune(redirect); len(r) > 128 {
+				redirect = string(r[:128]) + "\u2026 (truncated)"
+			}
+			logger.Printf("connectors: OAuth unavailable (%v; redirect %q); connect answers 501", err, redirect)
 		} else {
 			connectorOAuth = cfg
 			// The redirect URL is not a secret — log it so the operator can

@@ -1504,3 +1504,47 @@ func TestTrimCredential(t *testing.T) {
 		t.Error("interior Cf must survive trimming and still fail HasControl")
 	}
 }
+
+// Oversized ids fail closed before any fold/lookup: ids are two short
+// fixed strings, so anything over the cap is certainly unknown — no
+// normalize alloc, no quoted value, same 400 everywhere.
+func TestOversizedIDFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	big := strings.Repeat("x", maxConnectorIDLen+1)
+	if Known(big) {
+		t.Error("oversized id must not be known")
+	}
+	if DisplayName(big) != "Unknown" {
+		t.Errorf("oversized DisplayName = %q, want Unknown", DisplayName(big))
+	}
+	if ScopesFor(big) != nil {
+		t.Errorf("oversized ScopesFor = %v, want nil", ScopesFor(big))
+	}
+	if GoogleScopes(big) != nil {
+		t.Errorf("oversized GoogleScopes = %v, want nil", GoogleScopes(big))
+	}
+	cfg := &OAuthConfig{ClientID: "cid", ClientSecret: "sec", RedirectURL: "https://app.example/cb/api/connectors/callback", AuthURL: "https://auth.example/o", TokenURL: "https://tok.example/t"}
+	if got := AuthURL(cfg, big, "s", "v", nil); got != "" {
+		t.Errorf("oversized AuthURL id = %q, want empty", got)
+	}
+	if _, err := Exchange(ctx, cfg, big, "code", "verifier", nil); err == nil {
+		t.Error("oversized Exchange id should fail")
+	} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+		t.Errorf("oversized Exchange id should be a deterministic 400, got %v", err)
+	}
+	s := NewMemoryStore()
+	for name, err := range map[string]error{
+		"Get":         func() error { _, err := s.Get(ctx, big); return err }(),
+		"SetStatus":   func() error { _, err := s.SetStatus(ctx, big, StatusConnected, ""); return err }(),
+		"Disconnect":  func() error { _, err := s.Disconnect(ctx, big); return err }(),
+		"SetTokens":   s.SetTokens(ctx, big, TokenRow{RefreshCipher: "r"}),
+		"GetTokens":   func() error { _, err := s.GetTokens(ctx, big); return err }(),
+		"CreateState": s.CreateState(ctx, OAuthState{State: "s1", Connector: big, Verifier: "v"}),
+	} {
+		if err == nil {
+			t.Errorf("oversized store %s id should fail", name)
+		} else if se, ok := err.(*StoreError); !ok || se.NotFound || se.Upstream {
+			t.Errorf("oversized store %s id should be a deterministic 400, got %v", name, err)
+		}
+	}
+}

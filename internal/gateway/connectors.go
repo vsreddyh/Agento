@@ -182,7 +182,7 @@ func canonicalRedirectForMint(cfg *connectors.OAuthConfig, logf func(string, ...
 			// Echo the attempted value: redirect is non-secret (logged
 			// verbatim on success), and triage needs the mismatch
 			// candidate without re-reading .env.
-			logf("connectors: connect redirect invalid (want %q): %v", cfg.RedirectURL, err)
+			logf("connectors: connect redirect invalid (want %q): %v", bounded(cfg.RedirectURL), err)
 		}
 		return "", err
 	}

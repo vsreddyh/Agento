@@ -65,6 +65,9 @@ const (
 // together, and the ADR records why. Folds like every store verb: same
 // logical id, same answer.
 func GoogleScopes(id string) []string {
+	if len(id) > maxConnectorIDLen {
+		return nil
+	}
 	id = NormalizedID(id)
 	switch id {
 	case Gmail:
@@ -410,9 +413,18 @@ const MaxPlaintextLen = 2048
 // re-check inputs (defense in depth for direct callers), but this
 // helper needs no trusted caller.
 func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...any)) string {
-	// Folded first, like Exchange and every store verb: the unconfigured
-	// log below must observe the same spelling every downstream branch
-	// logs — stored == logged == sent by construction.
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without paying the normalize alloc or logging the value.
+	if len(id) > maxConnectorIDLen {
+		if logf != nil {
+			logf("connectors: auth URL build failed: oversized connector id")
+		}
+		return ""
+	}
+	// Folded before every use below, like Exchange and every store verb:
+	// the unconfigured log and everything after it observe the same
+	// spelling — stored == logged == sent by construction.
 	id = NormalizedID(id)
 	if cfg == nil || TrimCredential(cfg.ClientID) == "" || TrimCredential(cfg.ClientSecret) == "" || TrimCredential(cfg.RedirectURL) == "" {
 		if logf != nil {
@@ -534,6 +546,21 @@ func AuthURL(cfg *OAuthConfig, id, state, verifier string, logf func(string, ...
 // the log — oauth2 errors echo the token endpoint verbatim, and the client
 // needs a retry signal, not provider internals. logf may be nil (tests).
 func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, logf func(string, ...any)) (*oauth2.Token, error) {
+	// Length before fold and before Known, matching AuthURL and every
+	// store verb: an oversized id is certainly unknown. Logged without
+	// the value: quoting megabytes would reintroduce the log alloc this
+	// gate exists to avoid.
+	if len(id) > maxConnectorIDLen {
+		if logf != nil {
+			logf("connectors: grant exchange refused: oversized connector id")
+		}
+		return nil, NewStoreError("oversized connector id", false)
+	}
+	// Folded first so every deny below observes the same spelling —
+	// stored == logged by construction (AuthURL folds first for the same
+	// reason). Folding is not an identity check, so shape-before-identity
+	// ordering is unchanged.
+	id = NormalizedID(id)
 	// Every deterministic reject below logs its discriminant, mirroring
 	// AuthURL's per-guard logf: the client gets the mapped 400/404, and
 	// triage gets the guard name without guessing.
@@ -606,9 +633,6 @@ func Exchange(ctx context.Context, cfg *OAuthConfig, id, code, verifier string, 
 	if HasControl(cc.AuthURL) || HasControl(cc.TokenURL) || !utf8.ValidString(cc.AuthURL) || !utf8.ValidString(cc.TokenURL) {
 		return nil, deny("oauth client endpoint is invalid")
 	}
-	// Folded like AuthURL above and every store verb: same logical id,
-	// same answer, wherever the caller normalised.
-	id = NormalizedID(id)
 	if !Known(id) {
 		if logf != nil {
 			logf("connectors: grant exchange refused: unknown connector %q", id)

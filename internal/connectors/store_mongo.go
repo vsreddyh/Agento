@@ -176,6 +176,12 @@ func (s *MongoStore) List(ctx context.Context) ([]Connector, error) {
 }
 
 func (s *MongoStore) Get(ctx context.Context, id string) (Connector, error) {
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without the normalize alloc or a quoted value in the 404.
+	if len(id) > maxConnectorIDLen {
+		return Connector{}, NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -192,6 +198,12 @@ func (s *MongoStore) Get(ctx context.Context, id string) (Connector, error) {
 }
 
 func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastError string) (Connector, error) {
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without the normalize alloc or a quoted value in the 404.
+	if len(id) > maxConnectorIDLen {
+		return Connector{}, NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -291,6 +303,12 @@ func (s *MongoStore) SetStatus(ctx context.Context, id string, st Status, lastEr
 }
 
 func (s *MongoStore) Disconnect(ctx context.Context, id string) (Connector, error) {
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without the normalize alloc or a quoted value in the 404.
+	if len(id) > maxConnectorIDLen {
+		return Connector{}, NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -618,6 +636,11 @@ func (s *MongoStore) readBack(id string) (Connector, error) {
 // an empty refresh cipher is rejected, because a stored grant without one
 // strands the row at the first access-token expiry.
 func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) error {
+	// Length before fold (see Get): an oversized id is certainly
+	// unknown — fail before the normalize alloc.
+	if len(id) > maxConnectorIDLen {
+		return NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	// Length before identity, matching CreateState/ConsumeState/Exchange:
 	// an oversized input 400s the same way whether the id is known or
@@ -709,6 +732,12 @@ func (s *MongoStore) SetTokens(ctx context.Context, id string, tok TokenRow) err
 // both NotFound: the caller reconnects either way, and distinguishing them
 // would oracle stored-grant existence.
 func (s *MongoStore) GetTokens(ctx context.Context, id string) (TokenRow, error) {
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without the normalize alloc or a quoted value in the 404.
+	if len(id) > maxConnectorIDLen {
+		return TokenRow{}, NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	if !Known(id) {
 		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -753,6 +782,11 @@ func (s *MongoStore) CreateState(_ context.Context, st OAuthState) error {
 	// Normalised like every other verb: SetTokens/GetTokens/Disconnect all
 	// fold case+spacing first, and a non-normalised stored row would miss
 	// both the Known check here and the Disconnect scrub comparison later.
+	// Length before fold: an oversized connector is certainly unknown —
+	// fail before the normalize alloc (same class as the id verbs).
+	if len(st.Connector) > maxConnectorIDLen {
+		return NewStoreError("oversized connector id", false)
+	}
 	st.Connector = NormalizedID(st.Connector)
 	// Trimmed before storing: the callback trims query params before
 	// ConsumeState, so a padded value stored verbatim would never match a

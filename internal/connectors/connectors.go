@@ -50,6 +50,9 @@ func ListIDs() []string {
 // echo of caller text. Folds like every store verb and OAuth helper: same
 // logical id, same answer, wherever the caller normalised.
 func DisplayName(id string) string {
+	if len(id) > maxConnectorIDLen {
+		return "Unknown"
+	}
 	id = NormalizedID(id)
 	switch id {
 	case Gmail:
@@ -66,6 +69,9 @@ func DisplayName(id string) string {
 // the app shows these at connect time, and disconnect revokes them
 // together. Folds like every store verb: same logical id, same answer.
 func ScopesFor(id string) []string {
+	if len(id) > maxConnectorIDLen {
+		return nil
+	}
 	switch NormalizedID(id) {
 	case Gmail:
 		return []string{"gmail.read", "gmail.draft"}
@@ -76,10 +82,21 @@ func ScopesFor(id string) []string {
 	}
 }
 
+// maxConnectorIDLen bounds connector ids below the gateway: ids are two
+// short fixed strings, so anything longer cannot match a known id. Same
+// value as the gateway's segment cap (which cannot be shared: the gateway
+// imports this package, not vice versa). Checked before Normalise/fold so
+// a multi-MB id fails without a lowercase+trim alloc or a quoted log line
+// for the 404 it was always going to get.
+const maxConnectorIDLen = 64
+
 // Known reports whether id is a v1 connector. Folds like every sibling
 // helper: same logical id, same answer — the fold lives here instead of
 // relying on every caller to pre-fold before branching on it.
 func Known(id string) bool {
+	if len(id) > maxConnectorIDLen {
+		return false
+	}
 	switch NormalizedID(id) {
 	case Gmail, Calendar:
 		return true
@@ -175,6 +192,9 @@ func TrimCredential(s string) string {
 func IsDraftOnlySend(server, tool string) bool {
 	// NormalizedID, not a local fold: same composition as every sibling,
 	// so the next fold change cannot strand this one.
+	if len(server) > maxConnectorIDLen {
+		return false
+	}
 	server = NormalizedID(server)
 	tool = NormalizedID(tool)
 	switch server {

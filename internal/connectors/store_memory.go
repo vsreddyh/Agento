@@ -144,6 +144,12 @@ func (s *MemoryStore) List(_ context.Context) ([]Connector, error) {
 }
 
 func (s *MemoryStore) Get(_ context.Context, id string) (Connector, error) {
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without the normalize alloc or a quoted value in the 404.
+	if len(id) > maxConnectorIDLen {
+		return Connector{}, NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -158,6 +164,12 @@ func (s *MemoryStore) Get(_ context.Context, id string) (Connector, error) {
 }
 
 func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastError string) (Connector, error) {
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without the normalize alloc or a quoted value in the 404.
+	if len(id) > maxConnectorIDLen {
+		return Connector{}, NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -266,6 +278,12 @@ func (s *MemoryStore) SetStatus(_ context.Context, id string, st Status, lastErr
 }
 
 func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error) {
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without the normalize alloc or a quoted value in the 404.
+	if len(id) > maxConnectorIDLen {
+		return Connector{}, NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	if !Known(id) {
 		return Connector{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -330,6 +348,11 @@ func (s *MemoryStore) Disconnect(_ context.Context, id string) (Connector, error
 // sees plaintext and enforces only "a stored grant renews" (non-empty
 // refresh cipher). Tokens die with the process like every other row here.
 func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) error {
+	// Length before fold (see Get): an oversized id is certainly
+	// unknown — fail before the normalize alloc.
+	if len(id) > maxConnectorIDLen {
+		return NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	// Length before identity, matching CreateState/ConsumeState/Exchange:
 	// an oversized input 400s the same way whether the id is known or
@@ -409,6 +432,12 @@ func (s *MemoryStore) SetTokens(_ context.Context, id string, tok TokenRow) erro
 // both NotFound: the caller reconnects either way, and distinguishing them
 // would oracle stored-grant existence to any bearer holder.
 func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) {
+	// Length before fold and before Known: ids are two short fixed
+	// strings, so anything over the cap is certainly unknown — fail
+	// without the normalize alloc or a quoted value in the 404.
+	if len(id) > maxConnectorIDLen {
+		return TokenRow{}, NewStoreError("oversized connector id", false)
+	}
 	id = NormalizedID(id)
 	if !Known(id) {
 		return TokenRow{}, &StoreError{Msg: "unknown connector " + id, NotFound: true}
@@ -431,6 +460,11 @@ func (s *MemoryStore) GetTokens(_ context.Context, id string) (TokenRow, error) 
 // explicit expiry only for tests; without this, a forgotten expiry field
 // would mint an immortal row in a store with no sweeper.
 func (s *MemoryStore) CreateState(_ context.Context, st OAuthState) error {
+	// Length before fold: an oversized connector is certainly unknown —
+	// fail before the normalize alloc (same class as the id verbs).
+	if len(st.Connector) > maxConnectorIDLen {
+		return NewStoreError("oversized connector id", false)
+	}
 	st.Connector = NormalizedID(st.Connector)
 	// Trimmed before storing: the callback trims query params before
 	// ConsumeState, so a padded value stored verbatim would never match a
