@@ -3,10 +3,11 @@
 // Client + db are cached per process.
 //
 // The unit is one client per store, not per process: most stores dial their
-// own client through mongostore.Open -> ConnectURI, so steady state is ~24
-// clients (~28 before the Stage 1 unwire of gmail/calendar) — 8 mcp-gate
+// own client through mongostore.Open -> ConnectURI, so long-lived steady state
+// is ~24 clients (~28 before the Stage 1 unwire of gmail/calendar) — 8 mcp-gate
 // relays via approvals, 7 domain MCP children (browser holds none), 6 stores
-// inside pi-gateway, 3 in health-api. The pool caps below are what keep that
+// inside pi-gateway, 3 in health-api. One-shot dials (retention, cmd/mongo)
+// are excluded from the count. The pool caps below are what keep that
 // from being expensive.
 package mongo
 
@@ -114,22 +115,30 @@ func ConnectURI(uri string) (*mongo.Client, error) {
 }
 
 // DB returns the process-cached database handle.
+//
+// Deliberately no defer here: the dial must happen unlocked (Client blocks on
+// I/O), so every path unlocks explicitly. A defer + manual Unlock mix is one
+// early return away from a double-unlock panic; counting explicit unlocks is
+// the whole discipline, and there are exactly three below.
 func DB() (*mongo.Database, error) {
 	mu.Lock()
-	defer mu.Unlock()
 	if db != nil {
-		return db, nil
+		d := db
+		mu.Unlock()
+		return d, nil
 	}
 	mu.Unlock()
 	c, err := Client()
-	mu.Lock()
 	if err != nil {
 		return nil, err
 	}
+	mu.Lock()
 	if db == nil {
 		db = c.Database(DBName())
 	}
-	return db, nil
+	d := db
+	mu.Unlock()
+	return d, nil
 }
 
 // Col is a shortcut for DB()[name].

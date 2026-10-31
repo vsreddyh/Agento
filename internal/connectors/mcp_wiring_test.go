@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -35,9 +36,12 @@ func wantRelayEntry(id string) mcpEntry {
 
 // knownServers is every id pi/mcp.json may legally contain: the eight wired
 // domain/browser servers plus the two connectors, which come and go with OAuth
-// (#424 Stage 1). checkWiring flags any other key outright: a typo'd extra id
-// (e.g. "gmaill" next to a missing "gmail") would otherwise pass whenever the
-// two real connectors agree with the env, while pi spawns a bogus server.
+// (#424 Stage 1). The domain literals twin the keys in pi/mcp.json — a domain
+// rename must update both files together, and the stray-id check below is what
+// says so when they drift. checkWiring flags any other key outright: a typo'd
+// extra id (e.g. "gmaill" next to a missing "gmail") would otherwise pass
+// whenever the two real connectors agree with the env, while pi spawns a bogus
+// server.
 var knownServers = map[string]bool{
 	"miser-money": true, "cookbook": true, "health-check": true,
 	"task-manager": true, "project-manager": true, "notes": true,
@@ -65,7 +69,14 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 	}
 
 	var problems []string
+	// Sorted for stable output: Go map order is random, and a two-stray CI
+	// failure that shuffles every run is a flake-shaped annoyance.
+	ids := make([]string, 0, len(cfg.MCPServers))
 	for id := range cfg.MCPServers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
 		if !knownServers[id] {
 			problems = append(problems, id+" is in "+mcpJSONPath+
 				" but is not a known server id — likely a typo; pi would spawn a bogus server")
@@ -86,7 +97,7 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 				reason = oauthErr.Error()
 			}
 			problems = append(problems, id+" is wired in "+mcpJSONPath+
-				" but server-side OAuth is NOT configured ("+reason+"): every tool call pays a process and 6-9 Mongo connections to fail — drop the entry (see #424 Stage 1)")
+				" but server-side OAuth is NOT configured ("+reason+"): every tool call pays 2 processes and 2 Mongo clients (12-18 connections) to fail — drop the entry (see #424 Stage 1)")
 			continue
 		}
 		if !wired {
@@ -106,8 +117,9 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 // TestConnectorServersWiredIffConfigured guards the deliberate unwiring of the
 // connector servers while server-side OAuth is unset (#424 Stage 1).
 //
-// Unwired-while-unset saves a process, a Mongo client (3 monitors + up to 6
-// pooled with the ADR-0011 caps, so 6-9 connections) and ~24 MB per connector,
+// Unwired-while-unset saves 2 processes, 2 Mongo clients (3 monitors + up to 6
+// pooled each with the ADR-0011 caps, so 12-18 connections) and ~40 MB per
+// connector (a ~15 MB relay plus a ~24 MB server, measured 2026-10-31),
 // for tools that would answer "not configured" on every call. The dangerous
 // direction is the other one: re-adding OAuth later without re-adding the
 // entries leaves a connector the app reports as connectable with no agent tools
@@ -134,6 +146,11 @@ func TestConnectorServersWiredIffConfigured(t *testing.T) {
 // this, adding OAuth secrets to CI — e.g. for a live-grant test — would
 // silently flip what the suite enforces. These subtests own their env
 // (t.Setenv) and their input bytes, so they hold in every environment.
+//
+// Scope is connectors only: deleting a domain server from mcp.json passes this
+// test by design. Domain presence is enforced by the entrypoint's `pi mcp list`
+// gate at container start, not here — this test owns the OAuth/wiring iff and
+// nothing else.
 func TestCheckWiringBothDirections(t *testing.T) {
 	writeMCP := func(t *testing.T, entries map[string]mcpEntry) []byte {
 		t.Helper()
