@@ -59,8 +59,10 @@ services:
       PASSWORD: ${PASSWORD:-}
       # Same GC target as pi (ADR-0011): this service is a long-lived Go process
       # whose heap is almost entirely request-scoped, so halving the growth target
-      # costs nothing measurable and cuts its resident set. Set here rather than in
-      # the Dockerfile so the value is visible next to the other footprint knobs.
+      # is expected to cut its resident set at a CPU cost this box is nowhere near
+      # paying — expected, not measured: same hedge as pi's comment, same reason.
+      # Set here rather than in the Dockerfile so the value is visible next to the
+      # other footprint knobs.
       GOGC: "50"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

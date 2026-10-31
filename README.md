@@ -46,7 +46,7 @@ and unmanaged.)
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
 | **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (Go, LaTeX/tectonic) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + eight MCP servers) measured **350 MB cgroup / 479 MB summed RSS** on 2026-10-31 with ten servers wired — the real figure, not the multi-GB estimate this row used to carry (see ADR-0011); two unconfigured connector servers are since unwired, so it starts from 350 MB and goes down. Headless Chromium (image layer + ~150–300 MB runtime per profile, see `vps.md`) lands on top. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + eight MCP servers) measured **~350 MB** at Stage 1 — the real figure, not the multi-GB estimate this row used to carry (ADR-0011 is the measurement log). Headless Chromium (image layer + ~150–300 MB runtime per profile, see `vps.md`) lands on top. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
 | **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Pi's own runtime caches, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 

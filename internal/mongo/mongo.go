@@ -3,8 +3,9 @@
 // Client + db are cached per process.
 //
 // One client per process is the granularity that exists: MCP servers are
-// separate OS processes by protocol, so the stack legitimately holds ~20
-// clients, and the pool caps below are what keep that from being expensive.
+// separate OS processes by protocol, so the stack holds one client per process
+// (~18 after the Stage 1 unwire of gmail/calendar, ~20 before), and the pool
+// caps below are what keep that from being expensive.
 package mongo
 
 import (
@@ -27,7 +28,7 @@ const (
 	//
 	// The driver default is 100 per member, which is dimensioning for load this
 	// deployment will never see: two users, one assistant turn at a time, and
-	// each server handles a single tool call sequentially. With ~20 processes
+	// each server handles a single tool call sequentially. With ~18 processes
 	// the default lets an idle stack hold thousands of connections, and the
 	// 2026-10-31 outage showed why that matters — churn against that ceiling
 	// (#423) is what took the cluster down, not steady-state count (#424).
@@ -99,7 +100,7 @@ func Client() (*mongo.Client, error) {
 // ConnectURI dials an explicit URI (for stores targeting a specific database,
 // e.g. tests on a throwaway DB independent of process env). It shares the pool
 // defaults with Client(): a store that dials its own client is still one of the
-// ~20 processes whose connections add up.
+// ~18 processes whose connections add up.
 func ConnectURI(uri string) (*mongo.Client, error) {
 	return mongo.Connect(context.Background(), clientOptions(uri))
 }

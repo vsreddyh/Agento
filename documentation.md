@@ -392,9 +392,10 @@ one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
 The MCP servers (`cmd/gmail`, `cmd/calendar`) are wired into `pi/mcp.json`
 only once Google OAuth is configured: unwired, they cost a process and a Mongo
-client each to answer "not configured" on every call, and #421 already made the
-agent boot without them (ADR-0011 Stage 1; `internal/connectors` fails its
-tests if the wiring and the credentials ever disagree). Once wired they
+client each to answer "not configured" on every call. Booting without them is
+safe since #421 (connectors tolerate missing credentials); keeping them
+unwired is #424 Stage 1 (`internal/connectors` fails its tests if the wiring
+and the credentials ever disagree). Once wired they
 call the official Google APIs with the stored grant: decrypt, refresh on
 expiry, seal the new pair back (lazy refresh-on-use, no background
 worker). No grant means every tool that calls Google answers reconnect
