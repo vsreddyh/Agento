@@ -216,3 +216,17 @@ func TestNewClientNeedsNoGrant(t *testing.T) {
 		t.Fatalf("grant-less call = %v, want reconnect guidance", err)
 	}
 }
+
+// An unconfigured deploy still boots: nil cfg constructs, and every
+// Google-touching call answers "not configured" per call instead of
+// killing the entrypoint probe (#421).
+func TestNewClientAllowsUnconfigured(t *testing.T) {
+	c, err := NewClient(connectors.NewMemoryStore(), nil, "", nil)
+	if err != nil {
+		t.Fatalf("construction without OAuth config should succeed: %v", err)
+	}
+	if _, err := c.List(context.Background(), "", time.Time{}, time.Time{}, 0); err == nil ||
+		!strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("unconfigured call = %v, want not-configured guidance", err)
+	}
+}

@@ -124,11 +124,15 @@ func main() {
 	}
 	cfg, err := connectors.ServerOAuthConfig()
 	if err != nil {
-		log.Fatalf("calendar: %v", err)
+		// Unconfigured OAuth is not fatal: the server still boots with a
+		// nil cfg so the entrypoint probe passes, and every
+		// Google-touching tool answers "not configured" per call until
+		// the deploy sets the client pair.
+		log.Printf("calendar: running unconfigured: %v", err)
 	}
-	// Boot needs Mongo + the client pair only — the grant resolves per
-	// tool call, so a disconnected deploy still starts and every tool
-	// answers reconnect guidance until the user connects.
+	// Boot needs Mongo only — the grant resolves per tool call, so a
+	// disconnected deploy still starts and every tool answers reconnect
+	// guidance until the user connects.
 	client, err = cal.NewClient(store, cfg, "", log.Printf)
 	if err != nil {
 		log.Fatalf("calendar: %v", err)
