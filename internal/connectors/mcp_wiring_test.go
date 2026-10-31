@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -104,7 +104,7 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 			continue
 		}
 
-		if want := wantRelayEntry(id); entry.Command != want.Command || !reflect.DeepEqual(entry.Args, want.Args) {
+		if want := wantRelayEntry(id); entry.Command != want.Command || !slices.Equal(entry.Args, want.Args) {
 			problems = append(problems, id+" in "+mcpJSONPath+
 				" is wired in the wrong shape: got command="+entry.Command+
 				" args="+strings.Join(entry.Args, " ")+", want /usr/local/bin/mcp-gate --server "+id+" -- /usr/local/bin/"+id+
@@ -154,6 +154,12 @@ func TestConnectorServersWiredIffConfigured(t *testing.T) {
 func TestCheckWiringBothDirections(t *testing.T) {
 	writeMCP := func(t *testing.T, entries map[string]mcpEntry) []byte {
 		t.Helper()
+		// Nil means the empty section, stated explicitly: without this,
+		// encoding/json marshals {"mcpServers":null}, which only passes
+		// because nil-map reads happen to be valid in Go.
+		if entries == nil {
+			entries = map[string]mcpEntry{}
+		}
 		raw, err := json.Marshal(map[string]any{"mcpServers": entries})
 		if err != nil {
 			t.Fatalf("marshal test mcp.json: %v", err)

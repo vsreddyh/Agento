@@ -88,12 +88,19 @@ func DBName() string {
 }
 
 // Client returns the process-cached client, connecting on first use.
+//
+// The dial happens unlocked: holding mu across mongo.Connect would serialize
+// every concurrent caller behind one handshake. Two racing first calls may
+// both dial; the loser drops its spare client rather than leaking its
+// monitors, and all later calls share the single published handle.
 func Client() (*mongo.Client, error) {
 	mu.Lock()
-	defer mu.Unlock()
 	if client != nil {
-		return client, nil
+		c := client
+		mu.Unlock()
+		return c, nil
 	}
+	mu.Unlock()
 	uri := strings.TrimSpace(os.Getenv("MONGODB_URI"))
 	if uri == "" {
 		return nil, errors.New("MONGODB_URI is not set")
@@ -102,8 +109,17 @@ func Client() (*mongo.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	mu.Lock()
+	if client != nil {
+		spare := c
+		c = client
+		mu.Unlock()
+		_ = spare.Disconnect(context.Background())
+		return c, nil
+	}
 	client = c
-	return client, nil
+	mu.Unlock()
+	return c, nil
 }
 
 // ConnectURI dials an explicit URI (for stores targeting a specific database,
@@ -117,9 +133,9 @@ func ConnectURI(uri string) (*mongo.Client, error) {
 // DB returns the process-cached database handle.
 //
 // Deliberately no defer here: the dial must happen unlocked (Client blocks on
-// I/O), so every path unlocks explicitly. A defer + manual Unlock mix is one
-// early return away from a double-unlock panic; counting explicit unlocks is
-// the whole discipline, and there are exactly three below.
+// I/O), so every return path unlocks explicitly. A defer + manual Unlock mix
+// is one early return away from a double-unlock panic; the discipline is that
+// no path returns holding mu, whatever the count says today.
 func DB() (*mongo.Database, error) {
 	mu.Lock()
 	if db != nil {

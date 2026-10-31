@@ -285,5 +285,9 @@ services:
       # container prunes collections and talks to no model.
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
+      # No GOGC: one-shots are excluded from the footprint tuning on purpose.
+      # This process runs for seconds and exits before GC pressure matters;
+      # halving its growth target would buy unmeasurable bytes at the cost of
+      # one more knob to keep in step.
     entrypoint: ["/usr/local/bin/retention"]
     restart: "no"
