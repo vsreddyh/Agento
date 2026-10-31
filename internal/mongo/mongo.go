@@ -2,10 +2,12 @@
 // Env: MONGODB_URI (required), MONGODB_DB (default: hermes).
 // Client + db are cached per process.
 //
-// One client per process is the granularity that exists: MCP servers are
-// separate OS processes by protocol, so the stack holds one client per process
-// (~18 after the Stage 1 unwire of gmail/calendar, ~20 before), and the pool
-// caps below are what keep that from being expensive.
+// The unit is one client per store, not per process: most stores dial their
+// own client through mongostore.Open -> ConnectURI, so steady state is ~24
+// clients (~28 before the Stage 1 unwire of gmail/calendar) — 8 mcp-gate
+// relays via approvals, 7 domain MCP children (browser holds none), 6 stores
+// inside pi-gateway, 3 in health-api. The pool caps below are what keep that
+// from being expensive.
 package mongo
 
 import (
@@ -28,16 +30,22 @@ const (
 	//
 	// The driver default is 100 per member, which is dimensioning for load this
 	// deployment will never see: two users, one assistant turn at a time, and
-	// each server handles a single tool call sequentially. With ~18 processes
+	// each server handles a single tool call sequentially. With ~24 clients
 	// the default lets an idle stack hold thousands of connections, and the
 	// 2026-10-31 outage showed why that matters — churn against that ceiling
 	// (#423) is what took the cluster down, not steady-state count (#424).
 	//
-	// Invariant: nothing in this repo may fan out concurrent Mongo operations
-	// within one process beyond this cap. Today the only parallel user is
-	// pi-gateway's startup teach reconcile (one goroutine per profile, and there
-	// is one profile). A new fan-out means revisiting this number first, because
-	// the failure mode is silent queueing, not an error.
+	// Invariant: nothing in this repo may need more than 2 concurrent Mongo
+	// operations per store. Today the only parallel user is pi-gateway's
+	// startup teach reconcile (one goroutine per profile, and there is one
+	// profile). Two things a future reader must not miss: with the default
+	// primary read preference, reads and writes pin to the primary, so the
+	// budget is 2 concurrent ops per store, not 2 per member; and concurrent
+	// HTTP handlers against a shared store count as fan-out — a third
+	// concurrent writer queues toward the 8s ServerSelectionTimeout, which
+	// surfaces as an error, not just latency. money/tasks transactions hold a
+	// session connection across multi-op bodies, so they spend the budget the
+	// same way.
 	defaultMaxPoolSize uint64 = 2
 
 	// defaultMinPoolSize keeps no connections warm. Turns are separated by
@@ -100,7 +108,7 @@ func Client() (*mongo.Client, error) {
 // ConnectURI dials an explicit URI (for stores targeting a specific database,
 // e.g. tests on a throwaway DB independent of process env). It shares the pool
 // defaults with Client(): a store that dials its own client is still one of the
-// ~18 processes whose connections add up.
+// ~24 clients whose connections add up.
 func ConnectURI(uri string) (*mongo.Client, error) {
 	return mongo.Connect(context.Background(), clientOptions(uri))
 }

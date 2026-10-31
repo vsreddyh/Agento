@@ -8,9 +8,8 @@ import "testing"
 // stack to the driver's defaults with no visible change anywhere.
 //
 // Both dial paths (Client and ConnectURI) go through clientOptions, which is what
-// makes capping here enough for all ~18 processes after the Stage 1 unwire
-// (~20 before): most domain servers dial through mongostore.Open -> ConnectURI,
-// not Client.
+// makes capping here enough for all ~24 clients (~28 before the unwire): most
+// domain servers dial through mongostore.Open -> ConnectURI, not Client.
 func TestClientOptionsAppliesPoolDefaults(t *testing.T) {
 	opts := clientOptions("mongodb://example.invalid:27017/")
 	if opts.MaxPoolSize == nil {

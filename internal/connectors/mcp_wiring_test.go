@@ -33,6 +33,18 @@ func wantRelayEntry(id string) mcpEntry {
 	}
 }
 
+// knownServers is every id pi/mcp.json may legally contain: the eight wired
+// domain/browser servers plus the two connectors, which come and go with OAuth
+// (#424 Stage 1). checkWiring flags any other key outright: a typo'd extra id
+// (e.g. "gmaill" next to a missing "gmail") would otherwise pass whenever the
+// two real connectors agree with the env, while pi spawns a bogus server.
+var knownServers = map[string]bool{
+	"miser-money": true, "cookbook": true, "health-check": true,
+	"task-manager": true, "project-manager": true, "notes": true,
+	"memory": true, "browser": true,
+	Gmail: true, Calendar: true,
+}
+
 // checkWiring returns one problem per connector id whose wiring disagrees with
 // whether server-side OAuth is configured. Pure function of its two inputs —
 // no env, no filesystem — so both directions are testable deterministically
@@ -53,6 +65,12 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 	}
 
 	var problems []string
+	for id := range cfg.MCPServers {
+		if !knownServers[id] {
+			problems = append(problems, id+" is in "+mcpJSONPath+
+				" but is not a known server id — likely a typo; pi would spawn a bogus server")
+		}
+	}
 	for _, id := range ListIDs() {
 		entry, wired := cfg.MCPServers[id]
 
@@ -197,6 +215,15 @@ func TestCheckWiringBothDirections(t *testing.T) {
 		ps := checkWiring(writeMCP(t, bad), configured, oauthErr)
 		if len(ps) != 1 || !strings.Contains(ps[0], "wrong shape") {
 			t.Errorf("want the gmail shape problem, got %v", ps)
+		}
+	})
+
+	t.Run("stray id fails", func(t *testing.T) {
+		configured, oauthErr := setOAuth(t, false)
+		stray := map[string]mcpEntry{"gmaill": wantRelayEntry(Gmail)}
+		ps := checkWiring(writeMCP(t, stray), configured, oauthErr)
+		if len(ps) != 1 || !strings.Contains(ps[0], "not a known server id") {
+			t.Errorf("want the stray-id problem, got %v", ps)
 		}
 	})
 }
