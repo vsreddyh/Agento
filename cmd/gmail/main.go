@@ -97,6 +97,7 @@ func main() {
 		// Google-touching tool answers "not configured" per call until
 		// the deploy sets the client pair.
 		log.Printf("gmail: running unconfigured: %v", err)
+		cfg = nil // boot unconfigured; the per-call guard answers not-configured
 	}
 	// Boot needs Mongo only — the grant resolves per tool call, so a
 	// disconnected deploy still starts and every tool answers reconnect

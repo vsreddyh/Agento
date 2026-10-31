@@ -459,14 +459,36 @@ func TestNewClientNeedsNoGrant(t *testing.T) {
 
 // An unconfigured deploy still boots: nil cfg constructs, and every
 // Google-touching call answers "not configured" per call instead of
-// killing the entrypoint probe (#421).
+// killing the entrypoint probe (#421). Every tool routes through
+// service(), so each entry point is pinned here — a future tool that
+// bypasses service() fails this test instead of panicking on nil cfg.
 func TestNewClientAllowsUnconfigured(t *testing.T) {
 	c, err := NewClient(connectors.NewMemoryStore(), nil, "", nil)
 	if err != nil {
 		t.Fatalf("construction without OAuth config should succeed: %v", err)
 	}
-	if _, err := c.List(context.Background(), "", 0); err == nil ||
-		!strings.Contains(err.Error(), "not configured") {
-		t.Fatalf("unconfigured call = %v, want not-configured guidance", err)
+	ctx := context.Background()
+	unconfigured := map[string]func() error{
+		"list": func() error {
+			_, err := c.List(ctx, "", 0)
+			return err
+		},
+		"search": func() error {
+			_, err := c.Search(ctx, "from:boss", 0)
+			return err
+		},
+		"read": func() error {
+			_, err := c.Read(ctx, "msg-id")
+			return err
+		},
+		"create_draft": func() error {
+			_, err := c.CreateDraft(ctx, "boss@example.com", "subject", "body")
+			return err
+		},
+	}
+	for name, call := range unconfigured {
+		if err := call(); err == nil || !strings.Contains(err.Error(), "not configured") {
+			t.Fatalf("%s = %v, want not-configured guidance", name, err)
+		}
 	}
 }
