@@ -55,12 +55,15 @@ type Client struct {
 	static *calendar.Service
 }
 
-// NewClient binds store + config + endpoint. It needs no grant: Mongo and
-// the client pair are the only boot requirements, so construction fails
-// only on programmer error (nil store/cfg), never on a disconnected user.
+// NewClient binds store + config + endpoint. It needs no grant and no
+// OAuth client pair: Mongo is the only boot requirement, so construction
+// fails only on programmer error (nil store), never on a disconnected user
+// and never on a deploy without Google OAuth — a nil cfg boots fine and
+// every Google-touching call answers "not configured" per call (see
+// connectors.GrantTokenSource) until the deploy is configured.
 func NewClient(store connectors.Store, cfg *connectors.OAuthConfig, endpoint string, logf func(string, ...any)) (*Client, error) {
-	if store == nil || cfg == nil {
-		return nil, fmt.Errorf("calendar: client needs a store and an OAuth config")
+	if store == nil {
+		return nil, fmt.Errorf("calendar: client needs a store")
 	}
 	return &Client{store: store, cfg: cfg, endpoint: endpoint, logf: logf}, nil
 }

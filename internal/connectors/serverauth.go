@@ -20,10 +20,13 @@ import (
 // it here would 500 a working server over a value it never uses.
 
 // ServerOAuthConfig builds the OAuth client for the connector MCP servers.
-// ANY missing piece is an error (nil config, fail closed): without the
-// client pair Google cannot refresh, and without the key the stored grant
-// cannot be decrypted — a half-open server would fail every call anyway,
-// so it refuses to start instead.
+// ANY missing piece is an error (nil config): the servers boot anyway with
+// a nil cfg and every Google-touching tool answers "not configured" per
+// call (see GrantTokenSource) — an unconfigured deploy still serves chat
+// and every other server instead of refusing to start. Fail-closed is
+// preserved at the call layer, not the boot layer: without the client pair
+// Google cannot refresh, and without the key the stored grant cannot be
+// decrypted, so no unconfigured call can ever succeed.
 func ServerOAuthConfig() (*OAuthConfig, error) {
 	clientID := strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
 	clientSecret := strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET"))
