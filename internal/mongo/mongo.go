@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	// DefaultMaxPoolSize caps the driver's pool to EACH replica-set member
+	// defaultMaxPoolSize caps the driver's pool to EACH replica-set member
 	// (the driver's own unit — it is per server, not per client).
 	//
 	// The driver default is 100 per member, which is dimensioning for load this
@@ -31,28 +31,36 @@ const (
 	// the default lets an idle stack hold thousands of connections, and the
 	// 2026-10-31 outage showed why that matters — churn against that ceiling
 	// (#423) is what took the cluster down, not steady-state count (#424).
-	DefaultMaxPoolSize = 2
+	//
+	// Invariant: nothing in this repo may fan out concurrent Mongo operations
+	// within one process beyond this cap. Today the only parallel user is
+	// pi-gateway's startup teach reconcile (one goroutine per profile, and there
+	// is one profile). A new fan-out means revisiting this number first, because
+	// the failure mode is silent queueing, not an error.
+	defaultMaxPoolSize uint64 = 2
 
-	// DefaultMinPoolSize keeps no connections warm. Turns are separated by
+	// defaultMinPoolSize keeps no connections warm. Turns are separated by
 	// seconds or minutes of the user reading, so a warm pool is idle capacity
 	// that still counts against the cluster's connection limit.
-	DefaultMinPoolSize = 0
+	defaultMinPoolSize uint64 = 0
 )
 
 // clientOptions is the one option set every Mongo client in this repo starts
-// from, so a pool cap or timeout cannot be added to one path and forgotten on
-// another.
+// from, so a default cannot be added to one path and forgotten on the other.
 //
-// The caps are applied BEFORE ApplyURI on purpose: ApplyURI only overwrites a
-// field the connection string actually names, so an explicit maxPoolSize in
-// MONGODB_URI still wins while these defaults hold everywhere else.
+// Every default below is applied BEFORE ApplyURI, and that ordering is the
+// whole contract: ApplyURI only overwrites a field the connection string
+// actually names, so an explicit maxPoolSize / serverSelectionTimeoutMS /
+// retryWrites in MONGODB_URI wins, while these values hold everywhere else.
+// Splitting the chain around ApplyURI silently creates two classes of default;
+// TestClientOptions* pins this.
 func clientOptions(uri string) *options.ClientOptions {
 	return options.Client().
-		SetMaxPoolSize(DefaultMaxPoolSize).
-		SetMinPoolSize(DefaultMinPoolSize).
-		ApplyURI(uri).
+		SetMaxPoolSize(defaultMaxPoolSize).
+		SetMinPoolSize(defaultMinPoolSize).
 		SetServerSelectionTimeout(8 * time.Second).
-		SetRetryWrites(true)
+		SetRetryWrites(true).
+		ApplyURI(uri)
 }
 
 var (

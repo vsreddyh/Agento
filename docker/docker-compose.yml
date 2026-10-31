@@ -104,7 +104,7 @@ services:
       #
       # Not waiting on pi's *health* is also the right behaviour independently: that
       # healthcheck is a real connectivity gate (its entrypoint refuses to start if
-      # any of the ten MCP servers will not connect), so a proxy gated on it would
+      # any MCP server in pi/mcp.json fails to connect), so a proxy gated on it would
       # take health-api's /api/* routes down with it — and health sync has nothing
       # to do with the agent.
       - pi
@@ -190,8 +190,11 @@ services:
       # Go GC target for every Go process in this container — pi-gateway and each
       # MCP server Pi spawns over stdio (they inherit this env; mcp.json passes no
       # env of its own). GOGC=50 collects at half the heap of the default, which at
-      # one turn at a time buys ~40% of each process's resident heap back and costs
-      # CPU the box is nowhere near using. Node (`pi`) ignores it.
+      # one turn at a time is expected to give back a meaningful fraction of each
+      # process's resident set at a CPU cost this box is nowhere near paying —
+      # expected, not measured: ADR-0011 requires the Stage 1 PR to report the
+      # actual exchange rate, so treat the comment as the hypothesis. Node (`pi`)
+      # ignores it.
       #
       # Deliberately NOT a ${GOGC:-50} passthrough: this is a footprint decision
       # recorded in ADR-0011, and a variable in .env would let one environment
@@ -257,8 +260,8 @@ services:
       timeout: 5s
       retries: 10
       # Generous: the entrypoint runs `pi mcp list` before handing off, which
-      # connects all ten MCP servers. A short start_period reports unhealthy while
-      # that is still in progress.
+      # connects every MCP server in pi/mcp.json. A short start_period reports
+      # unhealthy while that is still in progress.
       start_period: 60s
     restart: unless-stopped
 
