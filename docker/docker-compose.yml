@@ -57,6 +57,11 @@ services:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
       PASSWORD: ${PASSWORD:-}
+      # Same GC target as pi (ADR-0011): this service is a long-lived Go process
+      # whose heap is almost entirely request-scoped, so halving the growth target
+      # costs nothing measurable and cuts its resident set. Set here rather than in
+      # the Dockerfile so the value is visible next to the other footprint knobs.
+      GOGC: "50"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -182,6 +187,16 @@ services:
       # Bearer token for the pi-gateway HTTP surface — the same value the app already
       # sends, which is why the cutover needed no app change.
       PASSWORD: ${PASSWORD:-}
+      # Go GC target for every Go process in this container — pi-gateway and each
+      # MCP server Pi spawns over stdio (they inherit this env; mcp.json passes no
+      # env of its own). GOGC=50 collects at half the heap of the default, which at
+      # one turn at a time buys ~40% of each process's resident heap back and costs
+      # CPU the box is nowhere near using. Node (`pi`) ignores it.
+      #
+      # Deliberately NOT a ${GOGC:-50} passthrough: this is a footprint decision
+      # recorded in ADR-0011, and a variable in .env would let one environment
+      # drift to a different memory profile than the one the ADR measured.
+      GOGC: "50"
       # Explicit rather than relying on the binary's default, because three separate
       # places have to agree on this number: here, the container side of the port
       # mapping, and the healthcheck's URL. None of the three is derived from the

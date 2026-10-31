@@ -1,6 +1,10 @@
 // Package mongo provides the shared MongoDB handle for all Go services.
 // Env: MONGODB_URI (required), MONGODB_DB (default: hermes).
 // Client + db are cached per process.
+//
+// One client per process is the granularity that exists: MCP servers are
+// separate OS processes by protocol, so the stack legitimately holds ~20
+// clients, and the pool caps below are what keep that from being expensive.
 package mongo
 
 import (
@@ -16,6 +20,40 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+const (
+	// DefaultMaxPoolSize caps the driver's pool to EACH replica-set member
+	// (the driver's own unit — it is per server, not per client).
+	//
+	// The driver default is 100 per member, which is dimensioning for load this
+	// deployment will never see: two users, one assistant turn at a time, and
+	// each server handles a single tool call sequentially. With ~20 processes
+	// the default lets an idle stack hold thousands of connections, and the
+	// 2026-10-31 outage showed why that matters — churn against that ceiling
+	// (#423) is what took the cluster down, not steady-state count (#424).
+	DefaultMaxPoolSize = 2
+
+	// DefaultMinPoolSize keeps no connections warm. Turns are separated by
+	// seconds or minutes of the user reading, so a warm pool is idle capacity
+	// that still counts against the cluster's connection limit.
+	DefaultMinPoolSize = 0
+)
+
+// clientOptions is the one option set every Mongo client in this repo starts
+// from, so a pool cap or timeout cannot be added to one path and forgotten on
+// another.
+//
+// The caps are applied BEFORE ApplyURI on purpose: ApplyURI only overwrites a
+// field the connection string actually names, so an explicit maxPoolSize in
+// MONGODB_URI still wins while these defaults hold everywhere else.
+func clientOptions(uri string) *options.ClientOptions {
+	return options.Client().
+		SetMaxPoolSize(DefaultMaxPoolSize).
+		SetMinPoolSize(DefaultMinPoolSize).
+		ApplyURI(uri).
+		SetServerSelectionTimeout(8 * time.Second).
+		SetRetryWrites(true)
+}
 
 var (
 	mu     sync.Mutex
@@ -42,10 +80,7 @@ func Client() (*mongo.Client, error) {
 	if uri == "" {
 		return nil, errors.New("MONGODB_URI is not set")
 	}
-	c, err := mongo.Connect(context.Background(), options.Client().
-		ApplyURI(uri).
-		SetServerSelectionTimeout(8*time.Second).
-		SetRetryWrites(true))
+	c, err := mongo.Connect(context.Background(), clientOptions(uri))
 	if err != nil {
 		return nil, err
 	}
@@ -54,12 +89,11 @@ func Client() (*mongo.Client, error) {
 }
 
 // ConnectURI dials an explicit URI (for stores targeting a specific database,
-// e.g. tests on a throwaway DB independent of process env).
+// e.g. tests on a throwaway DB independent of process env). It shares the pool
+// defaults with Client(): a store that dials its own client is still one of the
+// ~20 processes whose connections add up.
 func ConnectURI(uri string) (*mongo.Client, error) {
-	return mongo.Connect(context.Background(), options.Client().
-		ApplyURI(uri).
-		SetServerSelectionTimeout(8*time.Second).
-		SetRetryWrites(true))
+	return mongo.Connect(context.Background(), clientOptions(uri))
 }
 
 // DB returns the process-cached database handle.
