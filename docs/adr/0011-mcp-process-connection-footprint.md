@@ -16,7 +16,7 @@ Measured on the live stack 2026-10-31:
 |---|---|---|
 | Processes in the pi container | 20 Mongo clients | `pi-gateway` (1) + `mcp-gate` relays (10) + MCP servers (9) |
 | Established Mongo connections | 174 | 3 replica-set members → 3 mandatory monitor connections per client = **60 floor** |
-| `maxPoolSize` | unset → **100 per client** | driver default; nothing sets it anywhere in the repo |
+| `maxPoolSize` | unset → driver default **100 per client per replica-set member** | nothing sets it anywhere in the repo; the per-member wording matters, so the naive reading is not 100 total |
 | Container memory (cgroup) | 350 MB | 479 MB summed RSS, ~130 MB shared |
 | `mcp-gate` relays | 155 MB | **32% of summed RSS (~44% of the cgroup figure) for a second process per server** |
 | `gmail` + `calendar` | 48 MB | for connectors that currently answer 501 (no OAuth configured) |
@@ -51,10 +51,10 @@ stages, each independently shippable and measurable.
 - Set `maxPoolSize=2`, `minPoolSize=0` **as code defaults** in
   `internal/mongo`, not only in `.env`: a pool ceiling that lives in an
   untracked file drifts. Today the ceiling is the driver default of 100 pooled
-  connections per client; after this stage it is 2. The 60-connection monitor
-  *floor* is a different quantity and is set by the client count (20 × 3
-  replica-set members); this stage does not change it — Stage 2 does, bringing
-  it to ~30.
+  connections **per replica-set member** (so up to 300 per client); after this
+  stage it is 2 per member (up to 6). The 60-connection monitor *floor* is a
+  different quantity and is set by the client count (20 × 3 replica-set
+  members); this stage does not change it — Stage 2 does, bringing it to ~30.
 - Set `GOGC=50` for Go services. All 20 Go processes holding 2× heap headroom is
   the single cheapest memory win available. It trades CPU for memory, which at
   one turn at a time is the right trade; the Stage 1 PR must report the CPU
