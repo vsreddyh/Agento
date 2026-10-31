@@ -18,12 +18,15 @@ Measured on the live stack 2026-10-31:
 | Established Mongo connections | 174 | 3 replica-set members → 3 mandatory monitor connections per client = **60 floor** |
 | `maxPoolSize` | unset → **100 per client** | driver default; nothing sets it anywhere in the repo |
 | Container memory (cgroup) | 350 MB | 479 MB summed RSS, ~130 MB shared |
-| `mcp-gate` relays | 155 MB | **32% of memory for a second process per server** |
+| `mcp-gate` relays | 155 MB | **32% of summed RSS (~44% of the cgroup figure) for a second process per server** |
 | `gmail` + `calendar` | 48 MB | for connectors that currently answer 501 (no OAuth configured) |
-| Go GC | default (`GOGC=100`) | 19 processes, each holding ~2× live heap |
+| Go GC | default (`GOGC=100`) | all 20 Go processes, each holding ~2× live heap |
 
-`AGENTS.md` and `README.md` claim 1.2–1.8 GB steady state. The real figure is
-350 MB; that claim is stale and should not be trusted for sizing.
+`README.md:49` claims the `pi` container consumes ~1.2–1.8 GB steady state, and
+`vps.md:154` budgets ~1.2 GB for the whole stack. Measured: the `pi` container
+is 350 MB and the entire stack is ~360 MB, so both overstate it by roughly 3×
+and should not be trusted for sizing. (The root `AGENTS.md` does not carry the
+number.)
 
 Two further facts bound the decision space:
 
@@ -47,11 +50,15 @@ stages, each independently shippable and measurable.
 
 - Set `maxPoolSize=2`, `minPoolSize=0` **as code defaults** in
   `internal/mongo`, not only in `.env`: a pool ceiling that lives in an
-  untracked file drifts. At two users, a floor of 60 monitors and a ceiling of
-  100 pooled connections per client is dimensioning for a load that will never
-  arrive.
-- Set `GOGC=50` for Go services. 19 processes holding 2× heap headroom is the
-  single cheapest memory win available.
+  untracked file drifts. Today the ceiling is the driver default of 100 pooled
+  connections per client; after this stage it is 2. The 60-connection monitor
+  *floor* is a different quantity and is set by the client count (20 × 3
+  replica-set members); this stage does not change it — Stage 2 does, bringing
+  it to ~30.
+- Set `GOGC=50` for Go services. All 20 Go processes holding 2× heap headroom is
+  the single cheapest memory win available. It trades CPU for memory, which at
+  one turn at a time is the right trade; the Stage 1 PR must report the CPU
+  delta alongside the memory delta rather than assert it is free.
 - Do not wire `gmail`/`calendar` into `pi/mcp.json` until OAuth is actually
   configured. 48 MB and 12 connections for tools that answer 501 is waste, and
   #421 already made their absence survivable.
@@ -76,12 +83,15 @@ trade. It must be recorded as defense-in-depth, never described as a sandbox.
 Compile gate + all nine servers into one `agento-mcp` binary
 (`agento-mcp --server gmail`), so 9 processes share one text segment instead of
 mapping ~11 MB each privately. Estimated −60–90 MB. Deferred: it is pure
-memory, it changes every `cmd/*Main`, and Stage 2 may make it unnecessary. It
-does **not** reduce process count or connections by itself.
+memory, it changes every `cmd/*Main`, and Stage 2 may make it unnecessary. As
+long as each server is still spawned as its own process, it does **not** reduce
+process count or connections — the saving is shared text, nothing else. (It
+*could* be deployed multiplexed to cut both, but that is a genuinely different
+design with its own isolation trade-offs and is out of scope here.)
 
 ## Considered options
 
-- **Status quo** — rejected: three processes where one suffices, for a
+- **Status quo** — rejected: two processes per server where one suffices, for a
   load-bearing ceiling of 100 connections per client at two users.
 - **Multi-call binary alone (Stage 3 without Stage 2)** — kept as Stage 3:
   memory only, leaves 2 processes per server and all 20 Mongo clients.
@@ -100,24 +110,43 @@ does **not** reduce process count or connections by itself.
   claim to "enforce in a relay" is superseded in substance; the audit and
   approval *behaviour* is unchanged, the isolation is gone. This ADR should be
   cited where that guarantee is described.
+- The `README.md:49` / `vps.md:154` memory figures must be corrected to the
+  measured numbers, as its own change, so the correction does not ride on
+  Stage 2 and get lost if Stage 2 slips.
 - Pool caps must be verified not to serialize tool calls. With one turn at a
   time this is expected to be safe, but it is a behaviour change and needs a
   test rather than an assumption.
-- `AGENTS.md` / `README.md` memory guidance must be corrected once Stage 1
-  lands, or the next incident is sized against a number that was never true.
 - `#423` (retry + backoff) stays mandatory and is independent: none of these
   stages prevents a restart storm.
 
+## Follow-through on acceptance
+
+Two edits belong to accepting this ADR, not to implementing it, and must not be
+forgotten if implementation stalls:
+
+1. Flip ADR-0002's status line to `superseded in substance by ADR-0011` for the
+   process-isolation claim, leaving its approval/audit behaviour intact.
+2. File the `README.md:49` / `vps.md:154` memory correction as a tracked issue,
+   per the consequence above.
+
 ## Verification
 
-Same commands before and after each stage, so the numbers are comparable:
+Same commands before and after each stage, so the numbers are comparable. They
+resolve the container by compose service name rather than by the generated
+`<project>_pi_1`, because that name changes with the compose project and the
+before/after comparison is worthless if one side cannot be measured:
 
 ```bash
-podman stats --no-stream --format "{{.Name}} {{.MemUsage}}"          # cgroup
-podman exec docker_pi_1 sh -c 'ps -eo rss,comm --sort=-rss | head'   # per-process
-podman exec docker_pi_1 sh -c 'cat /proc/net/tcp /proc/net/tcp6 |
-  awk "\$3 ~ /:6989\$/ && \$4 == \"01\" {n++} END {print n}"'         # connections (:6989 = 27017)
+PI=$(podman ps --filter label=com.docker.compose.service=pi --format "{{.Names}}")
+podman stats --no-stream --format "{{.Name}} {{.MemUsage}}"            # cgroup
+podman exec "$PI" sh -c 'ps -eo rss,comm --sort=-rss | head'          # per-process
+podman exec "$PI" sh -c 'cat /proc/net/tcp /proc/net/tcp6 |
+  awk "\$3 ~ /:6989\$/ && \$4 == \"01\" {n++} END {print n}"'          # connections (:6989 = 27017)
 ```
+
+For Stage 1, also record `podman stats --no-stream --format "{{.Name}} {{.CPUPerc}}"`
+alongside the memory delta: `GOGC=50` buys memory with CPU, and the point of
+measuring is to show the exchange rate rather than assume it is favourable.
 
 Targets: ≤10 Mongo clients, ≤60 connections at idle, ≤200 MB cgroup, and
 `pi` alone (Node) remaining the largest single consumer.
