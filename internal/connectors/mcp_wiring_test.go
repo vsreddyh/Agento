@@ -38,6 +38,12 @@ func wantRelayEntry(id string) mcpEntry {
 // no env, no filesystem — so both directions are testable deterministically
 // (TestCheckWiringBothDirections); the ambient-env test below is only the thin
 // wrapper that feeds it the real file and the real credentials.
+//
+// configured and oauthErr travel together today (configured == (oauthErr == nil))
+// but the signature keeps both so the message can quote the reason: when
+// unconfigured, oauthErr must be non-nil — checkWiring substitutes a generic
+// reason for a nil error rather than dereferencing it, so a future caller
+// passing (false, nil) gets a report, not a panic.
 func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 	var cfg struct {
 		MCPServers map[string]mcpEntry `json:"mcpServers"`
@@ -57,8 +63,12 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 			continue
 		}
 		if !configured && wired {
+			reason := "unknown"
+			if oauthErr != nil {
+				reason = oauthErr.Error()
+			}
 			problems = append(problems, id+" is wired in "+mcpJSONPath+
-				" but server-side OAuth is NOT configured ("+oauthErr.Error()+"): every tool call pays a process and 6-9 Mongo connections to fail — drop the entry (see #424 Stage 1)")
+				" but server-side OAuth is NOT configured ("+reason+"): every tool call pays a process and 6-9 Mongo connections to fail — drop the entry (see #424 Stage 1)")
 			continue
 		}
 		if !wired {
@@ -105,7 +115,7 @@ func TestConnectorServersWiredIffConfigured(t *testing.T) {
 // and enforces unwired; a dev shell with secrets enforces wired), so without
 // this, adding OAuth secrets to CI — e.g. for a live-grant test — would
 // silently flip what the suite enforces. These subtests own their env
-// (t.Setenv) and their file (t.TempDir), so they hold in every environment.
+// (t.Setenv) and their input bytes, so they hold in every environment.
 func TestCheckWiringBothDirections(t *testing.T) {
 	writeMCP := func(t *testing.T, entries map[string]mcpEntry) []byte {
 		t.Helper()
