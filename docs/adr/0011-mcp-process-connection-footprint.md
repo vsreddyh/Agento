@@ -14,13 +14,13 @@ Measured on the live stack 2026-10-31:
 
 | Metric | Value | Notes |
 |---|---|---|
-| Processes in the pi container | 20 Mongo clients | `pi-gateway` (1) + `mcp-gate` relays (10) + MCP servers (9) |
-| Established Mongo connections | 174 | 3 replica-set members → 3 mandatory monitor connections per client = **60 floor** |
+| Mongo clients (all containers) | ~28 | one client per *store*, not per process: 10 `mcp-gate` relays (approvals each) + 9 domain children (`browser` holds none) + `pi-gateway`'s 6 stores + `health-api`'s 3 |
+| Established Mongo connections | 174 | 3 replica-set members → 3 mandatory monitor connections per client = **84 floor** |
 | `maxPoolSize` | unset → driver default **100 per client per replica-set member** | nothing sets it anywhere in the repo; the per-member wording matters, so the naive reading is not 100 total |
 | Container memory (cgroup) | 350 MB | 479 MB summed RSS, ~130 MB shared |
 | `mcp-gate` relays | 155 MB | **32% of summed RSS (~44% of the cgroup figure) for a second process per server** |
 | `gmail` + `calendar` | 48 MB | for connectors that currently answer 501 (no OAuth configured) |
-| Go GC | default (`GOGC=100`) | all 20 Go processes, each holding ~2× live heap |
+| Go GC | default (`GOGC=100`) | all 21 Go processes, each holding ~2× live heap |
 
 `README.md:49` claims the `pi` container consumes ~1.2–1.8 GB steady state, and
 `vps.md:154` budgets ~1.2 GB for the whole stack. Measured: the `pi` container
@@ -52,15 +52,17 @@ stages, each independently shippable and measurable.
   `internal/mongo`, not only in `.env`: a pool ceiling that lives in an
   untracked file drifts. Today the ceiling is the driver default of 100 pooled
   connections **per replica-set member** (so up to 300 per client); after this
-  stage it is 2 per member (up to 6). The 60-connection monitor *floor* is a
-  different quantity and is set by the client count (20 × 3 replica-set
-  members); this stage does not change it — Stage 2 does, bringing it to ~30.
-- Set `GOGC=50` for Go services. All 20 Go processes holding 2× heap headroom is
-  the single cheapest memory win available. It trades CPU for memory, which at
+  stage it is 2 per member (up to 6). The 84-connection monitor *floor* is a
+  different quantity and is set by the client count (28 × 3 replica-set
+  members); this stage trims it only by the 4 unwired clients (→ 72) — Stage 2
+  moves it properly, to ~48.
+- Set `GOGC=50` for Go services. All 21 Go processes in the pi container holding
+  2× heap headroom is the single cheapest memory win available. It trades CPU for memory, which at
   one turn at a time is the right trade; the Stage 1 PR must report the CPU
   delta alongside the memory delta rather than assert it is free.
 - Do not wire `gmail`/`calendar` into `pi/mcp.json` until OAuth is actually
-  configured. 48 MB and 12 connections for tools that answer 501 is waste, and
+  configured. 48 MB and ~20–26 connections for tools that answer 501 is waste
+  (2 gates + 2 domain children, 4 processes and 4 clients — not 2 and 2), and
   #421 already made their absence survivable.
 
 ### Stage 2 — approval gate as a library, delete the relay
@@ -69,13 +71,15 @@ Replace `cmd/mcp-gate` with a shared wrapper applied where each server registers
 its tools (the same `approvals.NeedsApproval` / audit / hold-poll logic, minus
 the JSON-RPC re-parsing). `pi/mcp.json` points straight at each server.
 
-Removes 10 processes, 10 Mongo clients and ~155 MB, and takes 174 connections to
-roughly 40. It also *simplifies* the code: the relay currently re-encodes every
+Removes the 8 remaining relays: 8 processes, 8 approvals clients (≈ −55
+connections: 24 monitors + ~30 pooled), ~−125 MB, taking the post-Stage-1
+baseline (≈ 100–150 connections, PR #426) to roughly 60–90. It also
+*simplifies* the code: the relay currently re-encodes every
 frame in both directions to intercept `tools/call`.
 
 This is accepted despite losing process isolation for enforcement, because of
 Context fact 2: the boundary is already soft, and `bash` bypasses it today.
-Trading a boundary that is not real for 155 MB and 70 connections is a good
+Trading a boundary that is not real for ~125 MB and ~55 connections is a good
 trade. It must be recorded as defense-in-depth, never described as a sandbox.
 
 ### Stage 3 — multi-call binary (only if measurements still justify it)
@@ -94,11 +98,11 @@ design with its own isolation trade-offs and is out of scope here.)
 - **Status quo** — rejected: two processes per server where one suffices, for a
   load-bearing ceiling of 100 connections per client at two users.
 - **Multi-call binary alone (Stage 3 without Stage 2)** — kept as Stage 3:
-  memory only, leaves 2 processes per server and all 20 Mongo clients.
+  memory only, leaves 2 processes per server and all ~24 Mongo clients.
 - **Relay queries the gateway's Mongo over HTTP** — rejected: it preserves the
   process boundary but adds a network hop inside the approval path and a new
   internal auth surface, i.e. more moving parts than deleting the relay.
-- **`directConnection=true`** — rejected: it cuts monitors from 60 to 20 at the
+- **`directConnection=true`** — rejected: it cuts monitors from 84 to 28 at the
   cost of failover awareness. Stage 2 removes most of those monitors anyway, so
   the trade buys little and costs real robustness.
 - **Fold the gate in-process but keep 20 processes** — incoherent: pays the
@@ -148,5 +152,5 @@ For Stage 1, also record `podman stats --no-stream --format "{{.Name}} {{.CPUPer
 alongside the memory delta: `GOGC=50` buys memory with CPU, and the point of
 measuring is to show the exchange rate rather than assume it is favourable.
 
-Targets: ≤10 Mongo clients, ≤60 connections at idle, ≤200 MB cgroup, and
+Targets: ≤16 Mongo clients, ≤90 connections at idle, ≤200 MB cgroup, and
 `pi` alone (Node) remaining the largest single consumer.
