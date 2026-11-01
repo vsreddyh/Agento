@@ -216,3 +216,33 @@ func TestNewClientNeedsNoGrant(t *testing.T) {
 		t.Fatalf("grant-less call = %v, want reconnect guidance", err)
 	}
 }
+
+// An unconfigured deploy still boots: nil cfg constructs, and every
+// Google-touching call answers "not configured" per call instead of
+// killing the entrypoint probe (#421). Every tool routes through
+// service(), so each entry point is pinned here — a future tool that
+// bypasses service() fails this test instead of panicking on nil cfg.
+// (create_event_draft is local-only and stays usable unconfigured, so it
+// is deliberately not in this table.)
+func TestNewClientAllowsUnconfigured(t *testing.T) {
+	c, err := NewClient(connectors.NewMemoryStore(), nil, "", nil)
+	if err != nil {
+		t.Fatalf("construction without OAuth config should succeed: %v", err)
+	}
+	ctx := context.Background()
+	unconfigured := map[string]func() error{
+		"list": func() error {
+			_, err := c.List(ctx, "", time.Time{}, time.Time{}, 0)
+			return err
+		},
+		"get": func() error {
+			_, err := c.Get(ctx, "", "event-id")
+			return err
+		},
+	}
+	for name, call := range unconfigured {
+		if err := call(); err == nil || !strings.Contains(err.Error(), "not configured") {
+			t.Fatalf("%s = %v, want not-configured guidance", name, err)
+		}
+	}
+}
