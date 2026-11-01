@@ -614,6 +614,20 @@ func TestProbeProjectionWithinDisplay(t *testing.T) {
 	}
 }
 
+// tamperTail returns a two-char replacement guaranteed to differ from tail:
+// the envelope test tampers a seal's tail and requires DecryptToken to reject
+// it, but if the replacement equals the original the "tamper" is a no-op and a
+// legitimate seal opens — a ~1/4096 flake (both chars are base64url, so "AA" is
+// a valid suffix the random tag hits by chance). Either the decoder or the GCM
+// auth check rejects the result — the test asserts only err != nil, so both
+// legs satisfy it; what matters is the tamper always changes the bytes.
+func tamperTail(tail string) string {
+	if tail == "AA" {
+		return "BB"
+	}
+	return "AA"
+}
+
 // Envelope round-trips, and every tamper class fails closed.
 func TestTokenEnvelope(t *testing.T) {
 	key := [32]byte{1, 2, 3}
@@ -642,7 +656,7 @@ func TestTokenEnvelope(t *testing.T) {
 	if _, err := DecryptToken(other, sealed); err == nil {
 		t.Error("wrong key opened")
 	}
-	bad := sealed[:len(sealed)-2] + "AA"
+	bad := sealed[:len(sealed)-2] + tamperTail(sealed[len(sealed)-2:])
 	if _, err := DecryptToken(key, bad); err == nil {
 		t.Error("tampered seal opened")
 	}

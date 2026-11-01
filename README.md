@@ -46,7 +46,7 @@ and unmanaged.)
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
 | **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (Go, LaTeX/tectonic) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + ten MCP servers) consumes ~1.2–1.8 GB steady-state before first browse — measured with eight servers, re-measure for ten; headless Chromium (image layer + ~150–300 MB runtime per profile, see `vps.md`) lands on top. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + eight MCP servers) measured **~350 MB** at Stage 1 — the real figure, not the multi-GB estimate this row used to carry (ADR-0011 is the measurement log). Headless Chromium (image layer + ~150–300 MB runtime per profile, see `vps.md`) lands on top. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
 | **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Pi's own runtime caches, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 
@@ -182,7 +182,8 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
 │   └── notes/               # notes MCP (permanent markdown notes + lists; code in cmd/ + internal/)
 ├── pi/                    # The Pi agent dir, bind-mounted at /opt/pi
-│   ├── mcp.json            # the ten MCP servers (eight domain servers + gmail/calendar)
+│   ├── mcp.json            # the eight MCP servers Pi spawns (seven domain + browser);
+│   │                       # gmail/calendar stay unwired until Google OAuth is configured (#424)
 │   ├── settings.json       # Pi's own knobs (tool selection, retry, cache warming)
 │   ├── AGENTS.md           # rules shared by every profile
 │   ├── extensions/         # loaded by every profile (spawn_subagent)

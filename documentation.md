@@ -37,7 +37,7 @@ Retention ───────────────► one-shot container (c
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
 - **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any of the ten MCP servers fails to connect.
+- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any MCP server in `pi/mcp.json` fails to connect.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Read-only web tasks via a headless-Chromium MCP server
@@ -106,7 +106,7 @@ disk, orphaned and unmanaged.)
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
-- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting all ten MCP servers, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
+- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting every MCP server in `pi/mcp.json`, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
 - This ensures discrete credential scoping without mixing secrets across bot instances.
 
 ---
@@ -390,7 +390,12 @@ hint with no error text — the app must branch on the hint, and a
 appears only on `connected` rows with a valid stamp (a connected row without
 one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
-The MCP servers (`cmd/gmail`, `cmd/calendar`, wired in `pi/mcp.json`)
+The MCP servers (`cmd/gmail`, `cmd/calendar`) are wired into `pi/mcp.json`
+only once Google OAuth is configured: unwired, they cost 2 processes and 2 Mongo
+client each to answer "not configured" on every call. Booting without them is
+safe since #421 (connectors tolerate missing credentials); keeping them
+unwired is #424 Stage 1 (`internal/connectors` fails its tests if the wiring
+and the credentials ever disagree). Once wired they
 call the official Google APIs with the stored grant: decrypt, refresh on
 expiry, seal the new pair back (lazy refresh-on-use, no background
 worker). No grant means every tool that calls Google answers reconnect
