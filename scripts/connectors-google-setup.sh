@@ -403,8 +403,8 @@ fi
 # exist. jq is the critical one — without it every tailscale-status check
 # misreads as down. Deliberately unlisted: ps (has a kill -0 fallback),
 # readlink (symlink resolution degrades to the script's own directory),
-# tput (colors degrade), timeout (documented optional), grep/sed/tr/cut
-# and dirname (universal).
+# tput (colors degrade), timeout (documented optional), grep/sed/tr/cut/
+# head/sleep and dirname (universal).
 # Local-daemon calls (tailscale over its unix socket) are intentionally
 # unbounded throughout: a wedged daemon fails fast in practice, unlike
 # network waits, which all carry budgets (curl --max-time, loop counts,
@@ -532,13 +532,13 @@ else
   # URL won't match and takes the 60s fallback. Same fallback covers a
   # Tailscale-side domain change.
   for ((__i = 1; __i <= 60; __i++)); do
-    URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" 2>/dev/null | head -n1 2>/dev/null || true)
+    URL=$(grep -oE -- 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" 2>/dev/null | head -n1 2>/dev/null || true)
     if [[ -n "$URL" ]]; then
       # The writer appends concurrently, so a match can be a half-flushed
       # line. Require the same URL on a second read before opening it —
       # one extra second, never a truncated browser open.
       sleep 1
-      _url2=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" 2>/dev/null | head -n1 2>/dev/null || true)
+      _url2=$(grep -oE -- 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" 2>/dev/null | head -n1 2>/dev/null || true)
       if [[ -n "$_url2" && "$_url2" == "$URL" ]]; then break; fi
       URL=""
     fi
@@ -555,6 +555,9 @@ else
     sed 's/^/      /' "$LOG" 2>/dev/null || true
     pause "Fix the above, then press Enter to check again."
   fi
+  # Last read: a one-time login URL must not ride in memory through the
+  # funnel wait, the probe and the .env writes.
+  unset URL
   # If the setup process already exited (bad hostname, no root, daemon down),
   # the wait below can never succeed — check state once and fall through to
   # the "not Running yet" exit instead of two minutes of dots.
