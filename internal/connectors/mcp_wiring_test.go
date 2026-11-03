@@ -105,7 +105,7 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 				reason = oauthErr.Error()
 			}
 			problems = append(problems, id+" is wired in "+mcpJSONPath+
-				" but server-side OAuth is NOT configured ("+reason+"): every tool call pays 2 processes and 2 Mongo clients (12-18 connections) to fail — drop the entry (see #424 Stage 1)")
+				" but server-side OAuth is NOT configured ("+reason+"): every tool call pays 2 processes and 2 Mongo clients (6-18 connections) to fail — drop the entry (see #424 Stage 1)")
 			continue
 		}
 		if !wired {
@@ -121,7 +121,7 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 // connector servers while server-side OAuth is unset (#424 Stage 1).
 //
 // Unwired-while-unset saves 2 processes, 2 Mongo clients (3 monitors + up to 6
-// pooled each with the ADR-0011 caps, so 12-18 connections) and ~40 MB per
+// pooled each with the ADR-0011 caps, so 6-18 connections) and ~40 MB per
 // connector (a ~15 MB relay plus a ~24 MB server, measured 2026-10-31),
 // for tools that would answer "not configured" on every call. The dangerous
 // direction is the other one: re-adding OAuth later without re-adding the

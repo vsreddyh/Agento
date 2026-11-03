@@ -97,11 +97,11 @@ things about it are deliberate, and both were got wrong while writing it:
   `PI_SERVER_PORT`, so setting it would move the listener off the mapped port and out
   from under the healthcheck, which probes a fixed in-container `:8643`.
 
-Verified end to end in the real container (three-profile era; single-profile
-since #289 — kept as the method record): the entrypoint registers three repos as
-`safe.directory`, `pi mcp list` connects every MCP server in `mcp.json`, all
-three profiles are discovered, `/healthz` answers 200, auth rejects both a missing
-and a wrong bearer token with 401, and each profile answers from its own
+Verified end to end in the real container (three-profile era, before #289 —
+kept as the method record only): the entrypoint registered three repos as
+`safe.directory`, `pi mcp list` connected every MCP server in `mcp.json`, all
+three profiles were discovered, `/healthz` answered 200, auth rejected both a missing
+and a wrong bearer token with 401, and each profile answered from its own
 `AGENTS.md`:
 
 ```
@@ -109,6 +109,10 @@ god     -> 65                  (its weight goal)
 story   -> /workspace/portals  (its vault path)
 resumes -> tectonic            (its compile tool)
 ```
+
+On the current single-profile stack the same check discovers only `chat`,
+and `chat` answers from its own `AGENTS.md`. Do not expect three profiles —
+`god`/`story`/`resumes` retired in #289.
 
 ### `tectonic`'s cache is not persisted
 
