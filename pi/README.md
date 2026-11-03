@@ -581,9 +581,10 @@ The subagent is a **separate `pi` process** driven over RPC, not an in-process
 `createAgentSession`. That is not a style preference; the in-process route leaks.
 
 An SDK session does not load the CLI's built-in extensions, so reproducing MCP
-means hand-building a `DefaultResourceLoader`. That does work — 56 MCP tools,
-measured — but the child then owns eight MCP server subprocesses that nothing ever
-reclaims:
+means hand-building a `DefaultResourceLoader`. That does work — 56 MCP tools with ten
+servers wired, measured (~45 with the eight Stage 1 leaves wired) — but the child
+then owns eight MCP server entries, a relay plus a server process each, that nothing
+ever reclaims:
 
 | step | result |
 |---|---|
@@ -593,7 +594,8 @@ reclaims:
 | `session.extensionRunnerRef.current` | **unpopulated** for SDK sessions, so the event cannot be raised by hand |
 | shared loader across children | corrupts MCP: the tool set collapses mid-session, servers dying |
 
-Measured cost of the in-process route: **eight MCP server processes stranded per delegation**,
+Measured cost of the in-process route: **sixteen MCP server processes stranded per delegation**
+(eight entries × relay + server at Stage 1),
 accumulating for the life of the container. A process is reaped by
 `RpcClient.stop()`, which SIGTERMs the CLI and the CLI closes its own MCP clients on
 the way out — **0 processes left behind**, measured across repeated delegations.
@@ -606,7 +608,7 @@ What the child's flags buy, each structural rather than checked at runtime:
 | flag | why |
 |---|---|
 | `--no-extensions` | the child loads no extension, **including this one**, so `spawn_subagent` does not exist in its world and it cannot recurse. A depth counter is a limit a bug could step past; an absent tool cannot be called. |
-| `-e builtin:mcp -e builtin:codemode -e builtin:tool-search` | `--no-extensions` disables the built-in extensions too, so they are re-enabled by name. Without this the child has no money/cookbook/health/task/project tools and delegation is useless. Measured: 63 tools, 56 of them MCP. |
+| `-e builtin:mcp -e builtin:codemode -e builtin:tool-search` | `--no-extensions` disables the built-in extensions too, so they are re-enabled by name. Without this the child has no money/cookbook/health/task/project tools and delegation is useless. Measured: 63 tools, 56 of them MCP (ten servers wired; ~52 total, ~45 MCP with the eight Stage 1 leaves wired). |
 | `--no-session` | no session file per delegation for the gateway's session store — which has never heard of these conversations — to accumulate. |
 | forwarded `--skill <path>` | read from this process's own `argv`, so per-profile skills reach the child. |
 

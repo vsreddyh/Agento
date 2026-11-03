@@ -11,12 +11,13 @@
  *
  *  - An SDK session (`createAgentSession`) does not load the CLI's built-in
  *    extensions, so reproducing MCP means building a `DefaultResourceLoader` by hand.
- *    That works — 56 MCP tools, verified — but the child then owns eight MCP server
- *    subprocesses that nothing ever reclaims. `AgentSession.dispose()` does not emit
+ *    That works — 56 MCP tools with ten servers wired, verified (~45 with the
+ *    eight Stage 1 leaves wired) — but the child then owns eight MCP server
+ *    entries, a relay plus a server process each, that nothing ever reclaims. `AgentSession.dispose()` does not emit
  *    `session_shutdown`, which is the only event the MCP extension closes its
  *    connections on, and `AgentSessionRuntime.dispose()` (which does emit it) does not
- *    reproduce the MCP wiring. Measured: every delegation stranded eight MCP server processes,
- *    accumulating for the life of the container.
+ *    reproduce the MCP wiring. Measured: every delegation stranded sixteen MCP server processes
+ *    (eight entries × relay + server at Stage 1), accumulating for the life of the container.
  *  - A process is reaped by `RpcClient.stop()`, which SIGTERMs the CLI; the CLI closes
  *    its own MCP clients on the way out. Measured: zero processes left behind, across
  *    repeated delegations.

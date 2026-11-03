@@ -37,16 +37,16 @@ const (
 	// (#423) is what took the cluster down, not steady-state count (#424).
 	//
 	// Invariant: nothing in this repo may need more than 2 concurrent Mongo
-	// operations per store. Today the only parallel user is pi-gateway's
-	// startup teach reconcile (one goroutine per profile, and there is one
-	// profile). Two things a future reader must not miss: with the default
-	// primary read preference, reads and writes pin to the primary, so the
-	// budget is 2 concurrent ops per store, not 2 per member; and concurrent
-	// HTTP handlers against a shared store count as fan-out — a third
-	// concurrent writer queues toward the 8s ServerSelectionTimeout, which
-	// surfaces as an error, not just latency. money/tasks transactions hold a
-	// session connection across multi-op bodies, so they spend the budget the
-	// same way.
+	// operations per store. The parallel users pool-2 was sized against are
+	// pi-gateway's startup teach reconcile (one goroutine per profile, and
+	// there is one profile) and concurrent HTTP handlers against a shared
+	// store (pi-gateway/health-api serve concurrent requests). Two things a
+	// future reader must not miss: with the default primary read preference,
+	// reads and writes pin to the primary, so the budget is 2 concurrent ops
+	// per store, not 2 per member; and a third concurrent writer queues toward
+	// the 8s ServerSelectionTimeout, which surfaces as an error, not just
+	// latency. money/tasks transactions hold a session connection across
+	// multi-op bodies, so they spend the budget the same way.
 	defaultMaxPoolSize uint64 = 2
 
 	// defaultMinPoolSize keeps no connections warm. Turns are separated by
