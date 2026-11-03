@@ -335,15 +335,20 @@ ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
 # the repo root, or running from /tmp reads /tmp/.env and stage 8 exits.
 # Strip one leading "./" first: ./.env is the same file as .env, and without
 # this it would take the override branch in the stage-8 hint.
-ENV_FILE="${ENV_FILE#./}"
+while [[ "$ENV_FILE" == ./* ]]; do ENV_FILE="${ENV_FILE#./}"; done
 if [[ "$ENV_FILE" == ".env" ]]; then ENV_FILE="$REPO_DIR/.env"; fi
 # Tilde never expands inside a variable value: ~/x would canonicalize to
 # $PWD/~/x below. Expand a leading ~ (or bare ~) against $HOME first.
-if [[ "$ENV_FILE" == "~" ]]; then ENV_FILE="${HOME:-~}"; fi
+if [[ "$ENV_FILE" == "~" ]]; then
+  [[ -n "${HOME:-}" ]] || { warn "HOME is unset — export HOME or pass an absolute ENV_FILE"; exit 1; }
+  ENV_FILE="$HOME"
+fi
 # Literal-tilde match is the point below; the expansion SC2088 wants is
 # exactly what the assignment implements.
 # shellcheck disable=SC2088
-if [[ "$ENV_FILE" == "~/"* ]]; then ENV_FILE="${HOME:-~}/${ENV_FILE#"~/"}"; fi
+if [[ "$ENV_FILE" == "~/"* ]]; then
+  [[ -n "${HOME:-}" ]] || { warn "HOME is unset — export HOME or pass an absolute ENV_FILE"; exit 1; }
+  ENV_FILE="$HOME/${ENV_FILE#"~/"}"; fi
 # An explicit relative export (ENV_FILE=throwaway.env) would otherwise
 # split-brain: stage 8 writes against the caller's cwd while the render
 # cd's to REPO_DIR first. Canonicalize once, against the invoking cwd.
@@ -379,6 +384,9 @@ else
   warn "the funnel forwards to this proxy — a stopped stack means minutes"
   warn "of stage-3/4 waits before anything fails. Start the stack first"
   warn "(./scripts/hermes.sh start) or continue anyway."
+  # confirm takes ^[Yy] (library, template-level), so a "yn" typo reads
+  # yes. Asymmetry with stage 5 is deliberate: a mis-skip here costs
+  # minutes of waits, while there it would burn the create-project flow.
   if ! confirm "Continue without a listening proxy?"; then
     say "Stopped. Nothing changed."
     exit 1
@@ -716,9 +724,11 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   # strict-fail keeps only via an explicit knowingly-keep.
   _rec_host=""
   if [[ "$_recorded_uri" == https://*/p/api/connectors/callback ]]; then
-    _rec_host="${_recorded_uri#https://}"; _rec_host="${_rec_host%/p/api/connectors/callback}"
+    # Same _uri_host derivation as probe/comment: scheme- and port-agnostic,
+    # so an explicit `:443` spelling (same canonical form) passes here too.
+    _rec_host=$(_uri_host "$_recorded_uri" || true)
   fi
-  if [[ -n "$_rec_host" ]] && _valid_tsdns "$_rec_host"; then
+  if [[ -n "$_rec_host" ]]; then
     if confirm "Keep the recorded URL?"; then
       REDIRECT_URI="$_recorded_uri"
       note "keeping recorded REDIRECT_URI (tailnet rename? re-check the Google console registration)"
@@ -953,7 +963,8 @@ BACKUP=$(mktemp "$ENV_FILE.bak.$(date +%Y%m%d%H%M%S 2>/dev/null || true).$$.XXXX
 # existence test still left a check-then-copy race). It creates 0600, and
 # the name still matches the *.env.bak.* gitignore + prune glob.
 cp -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
-touch "$BACKUP" || { warn "backup timestamp failed (disk full?) — stopping before anything is written"; exit 1; }
+# No touch: mktemp stamped mtime, and cp (without -p, dropped in round 37)
+# rewrites it — the -ot prune already orders correctly.
 # %q so the restore hint stays copy-pasteable for shell-special paths, not
 # just spaces; reused verbatim by every later failure message.
 printf -v _restore_cmd 'cp -p -- %q %q' "$BACKUP" "$ENV_FILE"
@@ -1160,6 +1171,7 @@ printf '     "app isn'"'"'t verified" warning (Testing mode) → Advanced → pr
 printf '\n'
 printf '  Re-running this wizard is safe: it keeps existing values as defaults.\n'
 printf '  Envelope key: BACKUP FIRST — rotating it invalidates every stored grant.\n\n'
+unset _compose
 }
 
 run_wizard "$@"; exit
