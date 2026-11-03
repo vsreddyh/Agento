@@ -243,7 +243,11 @@ _alive() {
 # presets, since a rename mid-run is legitimate.
 _check_kept_host() {
   local _kh
-  _kh=$(tailscale funnel status 2>/dev/null | grep -oE 'https://[^[:space:]/]+' | head -n1 2>/dev/null || true)
+  # Shape-filtered: `funnel status` can also carry hint text with URLs
+  # (docs links, admin console), and an unfiltered first match would
+  # compare the wrong host against TS_DNS. Every host compared here is
+  # a tailnet DNS name (<host>.<tailnet>.ts.net), so match only that.
+  _kh=$(tailscale funnel status 2>/dev/null | grep -oE 'https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net' | head -n1 2>/dev/null || true)
   _kh="${_kh#https://}"
   if [[ -n "$_kh" && "$_kh" != "$TS_DNS" ]]; then
     warn "kept funnel serves ($_kh) but this run targets ($TS_DNS):"
@@ -900,7 +904,7 @@ while (( ${#_baks[@]} > 5 )); do
   for _b in "${_baks[@]}"; do
     if [[ "$_b" -ot "$_oldest" ]]; then _oldest="$_b"; fi
   done
-  rm -f -- "$_oldest"
+  rm -f -- "$_oldest" || { warn "backup prune failed for $_oldest (read-only dir?) — stopping before .env is modified; remove it by hand"; exit 1; }
   _kept=()
   for _b in "${_baks[@]}"; do
     [[ "$_b" != "$_oldest" ]] || continue
@@ -931,7 +935,21 @@ fi
 # ASCII sentinel in one variable: non-ASCII dashes would silently fork the
 # block if an editor normalized them, and two spellings would drift.
 _marker='# -- Google connectors'
-if ! grep -qF -- "$_marker" "$ENV_FILE"; then
+# Distinguish "marker absent" (grep rc=1 → append the block) from "read
+# failed" (rc≥2 → stop): a bare `if ! grep` folds both into the append
+# branch, which would append a duplicate block on an I/O error and only
+# surface it on the next re-run's refresh path.
+_marker_present=0
+if grep -qF -- "$_marker" "$ENV_FILE"; then
+  _marker_present=1
+else
+  _grep_rc=$?
+  if (( _grep_rc != 1 )); then
+    warn "could not read $ENV_FILE (grep exit $_grep_rc) — stopping before .env is modified"
+    exit 1
+  fi
+fi
+if (( _marker_present == 0 )); then
   {
     printf '\n'
     printf '# -- Google connectors (#316) -- added by setup wizard --\n'
@@ -950,7 +968,7 @@ else
   cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
   rm -f "$_cb_tmp"; _cb_tmp=""
 fi
-unset _comment_host _marker
+unset _comment_host _marker _marker_present _grep_rc
 
 write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
 write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
@@ -1000,13 +1018,24 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
   fi
   unset _render_missing
 else
-  warn "compose render failed (the .env writes stand, but nothing is verified — fix compose and re-run):"
+  # The subshell's cd can only fail on a tree deleted mid-run (REPO_DIR is
+  # fail-loud guarded above), but attributing that to compose would send the
+  # reader debugging the wrong thing.
+  if ! ( cd "$REPO_DIR" ) 2>/dev/null; then
+    warn "cannot enter $REPO_DIR (deleted or unreadable mid-run) — the .env writes stand, but nothing is verified"
+  else
+    warn "compose render failed (the .env writes stand, but nothing is verified — fix compose and re-run):"
+  fi
   sed 's/^/      /' "$RENDER_ERR" || true
   exit 1
 fi
 rm -f "$RENDER_OUT" "$RENDER_ERR"; RENDER_OUT=""; RENDER_ERR=""
 
 finish
+
+# finish clears the screen, wiping the render ✓ lines just earned; restate
+# the proof beside the comparison step that now leans on it.
+note "render proof (cleared with the stage above): all four keys interpolated non-empty"
 
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"
