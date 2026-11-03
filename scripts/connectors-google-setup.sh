@@ -660,7 +660,7 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # grep -qF "" matches every line, so without it an empty TS_DNS would
 # turn the fast path into always-keep (empty exits earlier today, but the
 # safety belongs on this line, not on ordering).
-if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
+if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF -- "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
   rm -f "$FOUT" || true; FOUT=""
@@ -1157,7 +1157,7 @@ rm -f "$RENDER_OUT" "$RENDER_ERR" || true; RENDER_OUT=""; RENDER_ERR=""
 
 # Stage outputs persist; these three were pure temps (the URL was opened long
 # ago, the preset flags last read by the comment host).
-unset URL _DNS_FROM_PRESET _URI_FROM_PRESET
+unset URL _DNS_FROM_PRESET _URI_FROM_PRESET k _restore_cmd
 
 finish
 
