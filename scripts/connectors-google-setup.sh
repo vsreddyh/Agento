@@ -806,6 +806,10 @@ stage "Google Cloud: project + APIs"
 note "This question is re-asked each run — it is navigation, not saved"
 note "configuration (only the .env values persist)."
 ask _HAVE_PROJ "Have a Google Cloud project with the Gmail and Calendar APIs enabled? [y/N]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
+# Edge-trim like TS_HOST: a pasted "y " must not walk the create-project
+# branch. Interior spaces still fail the regex and fall through correctly.
+_HAVE_PROJ="${_HAVE_PROJ#"${_HAVE_PROJ%%[![:space:]]*}"}"
+_HAVE_PROJ="${_HAVE_PROJ%"${_HAVE_PROJ##*[![:space:]]}"}"
 _have_yes=0
 # Strict yes (not confirm's ^[Yy] class): a typo'd "yn" must fall into the
 # guided create-project branch, not skip it.
@@ -1062,6 +1066,14 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
     if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[^\"'[:space:]]" "$RENDER_OUT"; then
       printf '  %s✓%s %s present in rendered compose config\n' "$GREEN" "$RESET" "$k"
     else
+      # Same rc discipline as the comment-block grep: rc=1 is a genuine
+      # empty render, rc≥2 is a read failure that must not masquerade as
+      # "renders EMPTY" (the message would send the reader to the wrong fix).
+      _render_rc=$?
+      if (( _render_rc != 1 )); then
+        warn "could not read the rendered config (grep exit $_render_rc) — the .env writes stand, but nothing is verified"
+        exit 1
+      fi
       printf '  %s✗%s %s renders EMPTY — fix it before restarting\n' "$YELLOW" "$RESET" "$k"
       _render_missing="${_render_missing:+$_render_missing }$k"
     fi
@@ -1070,7 +1082,7 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
     warn "empty render for: ${_render_missing} — an empty value is the misconfiguration this step exists to catch"
     exit 1
   fi
-  unset _render_missing
+  unset _render_missing _render_rc
 else
   # The subshell's cd can only fail on a tree deleted mid-run (REPO_DIR is
   # fail-loud guarded above), but attributing that to compose would send the
