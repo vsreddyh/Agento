@@ -248,11 +248,12 @@ trap wizard_cleanup EXIT INT TERM
 # presets, since a rename mid-run is legitimate.
 _check_kept_host() {
   local _kh
-  # Shape-filtered: `funnel status` can also carry hint text with URLs
-  # (docs links, admin console), and an unfiltered first match would
-  # compare the wrong host against TS_DNS. Every host compared here is
-  # a tailnet DNS name (<host>.<tailnet>.ts.net), so match only that.
-  _kh=$(tailscale funnel status 2>/dev/null | grep -oE 'https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net' 2>/dev/null | head -n1 2>/dev/null || true)
+  # Shape-filtered and boundary-anchored: `funnel status` can also carry
+  # hint text with URLs (docs links, admin console), and without a boundary
+  # `https://foo.ts.net.evil.com` would extract as `foo.ts.net`. Every host
+  # compared here is a tailnet DNS name (<host>.<tailnet>.ts.net).
+  _kh=$(tailscale funnel status 2>/dev/null | grep -oE 'https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net([^a-z0-9.-]|$)' 2>/dev/null | head -n1 2>/dev/null || true)
+  _kh="${_kh%[^a-z0-9]}"   # drop the boundary char the alternation captured
   _kh="${_kh#https://}"
   if [[ -n "$_kh" && "$_kh" != "$TS_DNS" ]]; then
     warn "kept funnel serves ($_kh) but this run targets ($TS_DNS):"
@@ -535,7 +536,7 @@ else
     pause "Press Enter once you've approved the machine in the browser."
   else
     warn "no login URL appeared; output so far:"
-    sed 's/^/      /' "$LOG" || true
+    sed 's/^/      /' "$LOG" 2>/dev/null || true
     pause "Fix the above, then press Enter to check again."
   fi
   # If the setup process already exited (bad hostname, no root, daemon down),
@@ -645,7 +646,7 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # safety belongs on this line, not on ordering).
 if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
-  printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
+  printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
   rm -f "$FOUT"; FOUT=""
 fi
 unset _funnel_status
@@ -656,19 +657,19 @@ if [[ -n "$FOUT" ]]; then
       _check_kept_host
     else
       warn "funnel did not start:"
-      sed 's/^/      /' "$FOUT" || true
+      sed 's/^/      /' "$FOUT" 2>/dev/null || true
       pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
       tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1 || {
         if grep -qiE "already|in use|exists" "$FOUT"; then
           note "funnel reports it is already serving; keeping the existing one"
           _check_kept_host
         else
-          warn "still failing:"; sed 's/^/      /' "$FOUT" || true; exit 1
+          warn "still failing:"; sed 's/^/      /' "$FOUT" 2>/dev/null || true; exit 1
         fi
       }
     fi
   fi
-  sed 's/^/      /' "$FOUT" || true
+  sed 's/^/      /' "$FOUT" 2>/dev/null || true
   rm -f "$FOUT"; FOUT=""
 fi
 printf '\n'
@@ -1130,7 +1131,7 @@ else
   else
     warn "compose render failed (the .env writes stand, but nothing is verified — fix compose and re-run):"
   fi
-  sed 's/^/      /' "$RENDER_ERR" || true
+  sed 's/^/      /' "$RENDER_ERR" 2>/dev/null || true
   exit 1
 fi
 rm -f "$RENDER_OUT" "$RENDER_ERR" || true; RENDER_OUT=""; RENDER_ERR=""
