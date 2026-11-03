@@ -57,6 +57,13 @@ services:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
       PASSWORD: ${PASSWORD:-}
+      # Same GC target as pi (ADR-0011): this service is a long-lived Go process
+      # whose heap is almost entirely request-scoped, so halving the growth target
+      # is expected to cut its resident set at a CPU cost this box is nowhere near
+      # paying — expected, not measured: same hedge as pi's comment, same reason.
+      # Set here rather than in the Dockerfile so the value is visible next to the
+      # other footprint knobs.
+      GOGC: "50"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -99,7 +106,7 @@ services:
       #
       # Not waiting on pi's *health* is also the right behaviour independently: that
       # healthcheck is a real connectivity gate (its entrypoint refuses to start if
-      # any of the ten MCP servers will not connect), so a proxy gated on it would
+      # any MCP server in pi/mcp.json fails to connect), so a proxy gated on it would
       # take health-api's /api/* routes down with it — and health sync has nothing
       # to do with the agent.
       - pi
@@ -182,6 +189,19 @@ services:
       # Bearer token for the pi-gateway HTTP surface — the same value the app already
       # sends, which is why the cutover needed no app change.
       PASSWORD: ${PASSWORD:-}
+      # Go GC target for every Go process in this container — pi-gateway and each
+      # MCP server Pi spawns over stdio (they inherit this env; mcp.json passes no
+      # env of its own). GOGC=50 collects at half the heap of the default, which at
+      # one turn at a time is expected to give back a meaningful fraction of each
+      # process's resident set at a CPU cost this box is nowhere near paying —
+      # expected, not measured: ADR-0011 requires the Stage 1 PR to report the
+      # actual exchange rate, so treat the comment as the hypothesis. Node (`pi`)
+      # ignores it.
+      #
+      # Deliberately NOT a ${GOGC:-50} passthrough: this is a footprint decision
+      # recorded in ADR-0011, and a variable in .env would let one environment
+      # drift to a different memory profile than the one the ADR measured.
+      GOGC: "50"
       # Explicit rather than relying on the binary's default, because three separate
       # places have to agree on this number: here, the container side of the port
       # mapping, and the healthcheck's URL. None of the three is derived from the
@@ -242,8 +262,8 @@ services:
       timeout: 5s
       retries: 10
       # Generous: the entrypoint runs `pi mcp list` before handing off, which
-      # connects all ten MCP servers. A short start_period reports unhealthy while
-      # that is still in progress.
+      # connects every MCP server in pi/mcp.json. A short start_period reports
+      # unhealthy while that is still in progress.
       start_period: 60s
     restart: unless-stopped
 
@@ -265,5 +285,9 @@ services:
       # container prunes collections and talks to no model.
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
+      # No GOGC: one-shots are excluded from the footprint tuning on purpose.
+      # This process runs for seconds and exits before GC pressure matters;
+      # halving its growth target would buy unmeasurable bytes at the cost of
+      # one more knob to keep in step.
     entrypoint: ["/usr/local/bin/retention"]
     restart: "no"

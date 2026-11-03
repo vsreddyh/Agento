@@ -37,7 +37,7 @@ Retention ───────────────► one-shot container (c
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
 - **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any of the ten MCP servers fails to connect.
+- **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any MCP server in `pi/mcp.json` fails to connect.
 - **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
 - **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Read-only web tasks via a headless-Chromium MCP server
@@ -106,7 +106,7 @@ disk, orphaned and unmanaged.)
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
-- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting all ten MCP servers, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
+- The pi entrypoint (`docker/pi/entrypoint.sh`) registers the bind-mounted repos with git, gates startup on `pi mcp list` connecting every MCP server in `pi/mcp.json`, then execs `pi-gateway`. There is no config rendering: each profile's `AGENTS.md` is loaded because its directory is that process's working directory.
 - This ensures discrete credential scoping without mixing secrets across bot instances.
 
 ---
@@ -390,7 +390,22 @@ hint with no error text — the app must branch on the hint, and a
 appears only on `connected` rows with a valid stamp (a connected row without
 one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
-The MCP servers (`cmd/gmail`, `cmd/calendar`, wired in `pi/mcp.json`)
+The MCP servers (`cmd/gmail`, `cmd/calendar`) are wired into `pi/mcp.json`
+only once Google OAuth is configured: wired while unconfigured, they would cost 2 processes and 2 Mongo
+clients each to answer "not configured" on every call. Booting without them is
+safe since #421 (connectors tolerate missing credentials); keeping them
+unwired is #424 Stage 1 (`internal/connectors` fails its tests if the wiring
+and the credentials ever disagree). Re-adding is manual, not automatic: once
+OAuth is configured, add both entries back inside the `mcpServers` object in
+`pi/mcp.json` by hand (the `browser` entry is currently last with no trailing
+comma — add one after it first), then `./scripts/hermes.sh restart` so the pi
+container picks them up:
+
+"gmail": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "gmail", "--", "/usr/local/bin/gmail"]},
+"calendar": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "calendar", "--", "/usr/local/bin/calendar"]}
+(no trailing comma on the last line; commas after `browser` and `gmail`)
+
+Once wired they
 call the official Google APIs with the stored grant: decrypt, refresh on
 expiry, seal the new pair back (lazy refresh-on-use, no background
 worker). No grant means every tool that calls Google answers reconnect
@@ -412,7 +427,10 @@ It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URL`, and `CONNECTORS_ENCRYPTION_KEY` into the root
 `.env` (or `$ENV_FILE` when overridden for a dry run — see the wizard's
 stage-1 note for all five dry-run knobs) and re-renders
-compose to prove they land in the rendered compose config. It never
+compose to prove they land in the rendered compose config. Its closing checklist
+then has the operator re-add the gmail/calendar entries to `pi/mcp.json` by
+hand (Stage 1 unwired them; OAuth alone does not restore the agent tools)
+and restart again. It never
 restarts the stack — the values are inert until the pi container is
 recreated (`./scripts/hermes.sh restart` recreates it; a plain container
 restart without recreation will not pick up .env changes). It is safe

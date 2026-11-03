@@ -1172,10 +1172,9 @@ note "render proof (cleared with the stage above): all four keys interpolated no
 
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"
-printf '  1. Nothing is restarted yet. These vars are inert until the pi\n'
-printf '     container is recreated — ./scripts/hermes.sh restart recreates\n'
-printf '     it (a plain container restart without recreation will not pick\n'
-printf '     up .env changes).\n'
+printf '  1. Restart now so the pi container picks up the new .env values:\n'
+printf '     ./scripts/hermes.sh restart recreates it (a plain container\n'
+printf '     restart without recreation will not pick up .env changes).\n'
 printf '  2. Compare the canonical string the gateway logs at boot:\n'
 printf -v _compose_file '%q' "$REPO_DIR/docker/docker-compose.yml"
 printf '       %s -f %s logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$_compose_file"
@@ -1185,6 +1184,17 @@ printf '     with what is registered in Google. They must match byte-for-byte;\n
 printf '     the log prints the canonical form, so register THAT.\n'
 printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
 printf '     "app isn'"'"'t verified" warning (Testing mode) → Advanced → proceed.\n'
+printf '  4. Re-add gmail/calendar inside the "mcpServers" object in pi/mcp.json\n'
+printf '     by hand (Stage 1 unwired them; OAuth alone does not bring the\n'
+printf '     agent tools back). The "browser" entry is currently last and has\n'
+printf '     no trailing comma — add one after it, then paste (commas after\n'
+printf '     browser and gmail, none after calendar):\n'
+printf '       "gmail": {"command": "/usr/local/bin/mcp-gate", "args":\n'
+printf '         ["--server", "gmail", "--", "/usr/local/bin/gmail"]},\n'
+printf '       "calendar": {"command": "/usr/local/bin/mcp-gate", "args":\n'
+printf '         ["--server", "calendar", "--", "/usr/local/bin/calendar"]}\n'
+printf '     then ./scripts/hermes.sh restart again so the pi container picks\n'
+printf '     them up (entrypoint refuses to start if a server fails to connect).\n'
 printf '\n'
 printf '  Re-running this wizard is safe: it keeps existing values as defaults.\n'
 printf '  Envelope key: BACKUP FIRST — rotating it invalidates every stored grant.\n\n'
