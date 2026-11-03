@@ -197,8 +197,8 @@ is a separate line item.)
 The MCP servers are left at `codemode` exposure, which is Pi's default. Their tools
 are therefore **not declared to the model**; it reaches them from a `codemode`
 script as `tools.mcp__<server>__<tool>({...})`, finding them with `searchTools()`,
-`describeTool()` or `describeNamespace()`. That keeps 56 tool definitions out of
-every request, which is most of the token saving available here.
+`describeTool()` or `describeNamespace()`. That keeps ~45 tool definitions out of
+every request with the eight Stage-1 servers (56 with ten wired), which is most of the token saving available here.
 
 The cost is that the model has to write JavaScript to call a tool, and the model
 instructions must say so — a profile file that told the agent to call `log_meal`
