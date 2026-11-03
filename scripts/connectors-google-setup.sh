@@ -215,11 +215,13 @@ TOTAL_STAGES=8
 LOG=""; FOUT=""; TS_PID=""; RENDER_OUT=""; RENDER_ERR=""; _cb_tmp=""
 wizard_cleanup() {
   rm -f "$LOG" "$FOUT" "$RENDER_OUT" "$RENDER_ERR" "$_cb_tmp" 2>/dev/null || true
-  if [[ -n "$TS_PID" ]] && kill -0 "$TS_PID" 2>/dev/null; then
+  # Zombie-aware liveness, not bare kill -0: an exited-but-unreaped
+  # `tailscale up` (the stage-3 failure path exits with TS_PID still set)
+  # would otherwise read as alive and kill an unrelated recycled PID.
+  if [[ -n "$TS_PID" ]] && _alive "$TS_PID"; then
     kill "$TS_PID" 2>/dev/null || true
   fi
 }
-trap wizard_cleanup EXIT INT TERM
 
 # _alive PID: zombie-aware liveness for backgrounded jobs. kill -0
 # succeeds on zombies (exited but unreaped), so a bare kill -0 reads an
@@ -235,6 +237,9 @@ _alive() {
   [[ -z "$st" ]] && return 0
   [[ "$st" != *Z* ]]
 }
+
+# Installed after _alive exists, so the trap can never run it undefined.
+trap wizard_cleanup EXIT INT TERM
 
 # _check_kept_host: after taking the already-serving failure path, the
 # kept funnel's hostname is unverified (the fast path above is
@@ -301,14 +306,16 @@ if [[ -z "$REPO_DIR" ]]; then
   # otherwise resolves the link's directory and targets the wrong checkout
   # for the .env default and the absolute checklist path. Portable loop
   # (BSD readlink has no -f), bounded so a symlink cycle can't hang.
+  # No `--` on dirname/readlink: BSD rejects it, and these operands come
+  # from BASH_SOURCE, never a dash-leading path.
   _self="${BASH_SOURCE[0]}"; _hops=0
   while [[ -L "$_self" ]] && (( _hops < 40 )); do
-    _link_dir=$(cd -- "$(dirname -- "$_self")" 2>/dev/null && pwd) || break
+    _link_dir=$(cd -- "$(dirname "$_self")" 2>/dev/null && pwd) || break
     _target=$(readlink "$_self" 2>/dev/null) || break
     [[ "$_target" == /* ]] || _target="$_link_dir/$_target"
     _self="$_target"; _hops=$((_hops + 1))
   done
-  REPO_DIR=$(cd "$(dirname -- "$_self")/.." 2>/dev/null && pwd) || REPO_DIR=""
+  REPO_DIR=$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd) || REPO_DIR=""
   unset _self _hops _link_dir _target
 fi
 # An empty REPO_DIR would resolve ENV_FILE to "/.env" (absolute, so the
@@ -906,7 +913,7 @@ if [[ ! -w "$ENV_FILE" ]]; then
   warn "no write permission on $ENV_FILE — fix ownership/permissions, then re-run"
   exit 1
 fi
-_env_dir=$(dirname -- "$ENV_FILE" || true)
+_env_dir=$(dirname "$ENV_FILE" || true)
 if [[ ! -w "$_env_dir" ]]; then
   warn "no write permission in $_env_dir (backups land there) — fix ownership/permissions, then re-run"
   exit 1
@@ -918,7 +925,7 @@ cp -p -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only di
 # below by glob order on rapid re-runs — re-stamp so filename order and
 # mtime order agree (mode from -p is kept).
 touch -- "$BACKUP" || { warn "backup timestamp failed (disk full?) — stopping before anything is written"; exit 1; }
-note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p $BACKUP $ENV_FILE)"
+note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p \"$BACKUP\" \"$ENV_FILE\")"
 # Secrets are about to land in this file: 0600 regardless of what the
 # checkout/editor left behind (a fresh file already gets 0600 in write_env) —
 # and the backup holds the same secrets, so it gets 0600 too.
@@ -995,25 +1002,27 @@ if (( _marker_present == 0 )); then
     printf '# -- Google connectors (#316) -- added by setup wizard --\n'
     printf '# Callback is served over Tailscale Funnel: https://%s\n' "$_comment_host"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
-  } >> "$ENV_FILE" || { warn "comment block append failed — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
+  } >> "$ENV_FILE" || { warn "comment block append failed — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
 else
   # Refresh the recorded hostname; keys below are fresh but this line is not.
   # Same tmp-file + cat pattern as the library's write_env, so a symlinked
   # .env stays a symlink (plain sed -i would replace it with a regular file).
-  _cb_tmp=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
-  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" -- "$ENV_FILE" > "$_cb_tmp" || {
-    warn "hostname comment refresh failed — restore with: cp -p $BACKUP $ENV_FILE"
+  _cb_tmp=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
+  # No `--` after the script: BSD/macOS sed treats it as an operand, while
+  # ENV_FILE is absolute here (canonicalized in stage 1), so not needed.
+  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" "$ENV_FILE" > "$_cb_tmp" || {
+    warn "hostname comment refresh failed — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""
     exit 1
   }
-  cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
+  cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
   rm -f "$_cb_tmp"; _cb_tmp=""
 fi
 unset _comment_host _marker _marker_present _grep_rc
 
-write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
-write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
-write_env GOOGLE_REDIRECT_URL "$REDIRECT_URI" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
-write_env CONNECTORS_ENCRYPTION_KEY "$CONNECTORS_ENCRYPTION_KEY" || { warn "write failed (disk full?) — restore with: cp -p $BACKUP $ENV_FILE"; exit 1; }
+write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
+write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
+write_env GOOGLE_REDIRECT_URL "$REDIRECT_URI" || { warn "write failed (disk full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
+write_env CONNECTORS_ENCRYPTION_KEY "$CONNECTORS_ENCRYPTION_KEY" || { warn "write failed (disk full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
 
 printf '\n'
 say "Rendering compose to prove all four interpolate (values not printed)…"
