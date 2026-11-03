@@ -936,22 +936,17 @@ if [[ ! -w "$_env_dir" ]]; then
   exit 1
 fi
 unset _env_dir
-BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S 2>/dev/null || true).$$"
-# The name is predictable (timestamp + pid): refuse an existing path so a
-# pre-planted symlink or file cannot redirect a full-secret copy.
-if [[ -e "$BACKUP" || -L "$BACKUP" ]]; then
-  warn "backup path already exists ($BACKUP) — remove it and re-run"
-  exit 1
-fi
-# umask 077 in the subshell: with -p, cp would create the backup in the
-# source's mode (typically 0644) — a full-secret copy world-readable until
-# the chmod below, and permanently if the run dies in that window. Without
-# -p there is no mode to restore (the chmod is the guarantee); the touch
-# re-stamps mtime so filename order and -ot prune order agree on rapid
-# re-runs.
-( umask 077; cp -- "$ENV_FILE" "$BACKUP" ) || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
+BACKUP=$(mktemp "$ENV_FILE.bak.$(date +%Y%m%d%H%M%S 2>/dev/null || true).$$.XXXXXX") || { warn "backup creation failed (TMPDIR/dir unwritable?) — stopping before anything is written"; exit 1; }
+# mktemp rather than a hand-built name: O_EXCL and unpredictable suffix, so
+# a pre-planted symlink cannot redirect this full-secret copy (the old
+# existence test still left a check-then-copy race). It creates 0600, and
+# the name still matches the *.env.bak.* gitignore + prune glob.
+cp -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
 touch -- "$BACKUP" || { warn "backup timestamp failed (disk full?) — stopping before anything is written"; exit 1; }
-note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p \"$BACKUP\" \"$ENV_FILE\")"
+# %q so the restore hint stays copy-pasteable for shell-special paths, not
+# just spaces; reused verbatim by every later failure message.
+printf -v _restore_cmd 'cp -p %q %q' "$BACKUP" "$ENV_FILE"
+note "backup: $BACKUP (if the run is interrupted mid-write, restore with: $_restore_cmd)"
 # Secrets are about to land in this file: 0600 regardless of what the
 # checkout/editor left behind (a fresh file already gets 0600 in write_env) —
 # and the backup holds the same secrets, so it gets 0600 too.
@@ -966,6 +961,19 @@ shopt -s nullglob; _baks=("$ENV_FILE".bak.*)
 # gitignored but never pruned) — sweep the default name too when it differs.
 # No dedup needed: the prefixes differ, so no file matches both patterns.
 if [[ "$ENV_FILE" != "$REPO_DIR/.env" ]]; then _baks+=("$REPO_DIR"/.env.bak.*); fi
+# Different spellings of the same path (/tmp/d/.env vs /tmp/d/../d/.env)
+# expand to one inode twice — dedup by -ef before counting, or the sweep
+# prunes an extra unique backup and leaves a dangling entry behind.
+if (( ${#_baks[@]} > 1 )); then
+  _dedup=()
+  for _b in "${_baks[@]}"; do
+    _dup=0
+    for _k in "${_dedup[@]}"; do [[ "$_b" -ef "$_k" ]] && { _dup=1; break; }; done
+    (( _dup )) || _dedup+=("$_b")
+  done
+  _baks=("${_dedup[@]}")
+  unset _dedup _dup _k
+fi
 if (( _nullglob_off )); then shopt -u nullglob; fi
 _pruned=0
 while (( ${#_baks[@]} > 5 )); do
@@ -982,7 +990,7 @@ while (( ${#_baks[@]} > 5 )); do
   _baks=("${_kept[@]}"); _pruned=1
 done
 if (( _pruned )); then note "pruned .env backups to the last 5"; fi
-unset _baks _b _oldest _kept _pruned _nullglob_off
+unset _baks _b _oldest _kept _pruned _nullglob_off _dedup _dup _k
 
 if v=$(_existing CONNECTORS_ENCRYPTION_KEY 2>/dev/null) && [[ -n "$v" ]]; then
   note "keeping the existing envelope key (rotating it would invalidate every stored grant)"
@@ -1028,27 +1036,27 @@ if (( _marker_present == 0 )); then
     printf '# -- Google connectors (#316) -- added by setup wizard --\n'
     printf '# Callback is served over Tailscale Funnel: https://%s\n' "$_comment_host"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
-  } >> "$ENV_FILE" || { warn "comment block append failed — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
+  } >> "$ENV_FILE" || { warn "comment block append failed — restore with: $_restore_cmd"; exit 1; }
 else
   # Refresh the recorded hostname; keys below are fresh but this line is not.
   # Same tmp-file + cat pattern as the library's write_env, so a symlinked
   # .env stays a symlink (plain sed -i would replace it with a regular file).
-  _cb_tmp=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
+  _cb_tmp=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — restore with: $_restore_cmd"; exit 1; }
   # No `--` after the script: BSD/macOS sed treats it as an operand, while
   # ENV_FILE is absolute here (canonicalized in stage 1), so not needed.
   sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" "$ENV_FILE" > "$_cb_tmp" || {
-    warn "hostname comment refresh failed — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""
+    warn "hostname comment refresh failed — restore with: $_restore_cmd"
     exit 1
   }
-  cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
+  cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: $_restore_cmd"; exit 1; }
   rm -f "$_cb_tmp"; _cb_tmp=""
 fi
 unset _comment_host _marker _marker_present _grep_rc
 
-write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
-write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
-write_env GOOGLE_REDIRECT_URL "$REDIRECT_URI" || { warn "write failed (disk full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
-write_env CONNECTORS_ENCRYPTION_KEY "$CONNECTORS_ENCRYPTION_KEY" || { warn "write failed (disk full?) — restore with: cp -p \"$BACKUP\" \"$ENV_FILE\""; exit 1; }
+write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: $_restore_cmd"; exit 1; }
+write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: $_restore_cmd"; exit 1; }
+write_env GOOGLE_REDIRECT_URL "$REDIRECT_URI" || { warn "write failed (disk full?) — restore with: $_restore_cmd"; exit 1; }
+write_env CONNECTORS_ENCRYPTION_KEY "$CONNECTORS_ENCRYPTION_KEY" || { warn "write failed (disk full?) — restore with: $_restore_cmd"; exit 1; }
 
 printf '\n'
 say "Rendering compose to prove all four interpolate (values not printed)…"
@@ -1127,7 +1135,9 @@ printf '     container is recreated — ./scripts/hermes.sh restart recreates\n'
 printf '     it (a plain container restart without recreation will not pick\n'
 printf '     up .env changes).\n'
 printf '  2. Compare the canonical string the gateway logs at boot:\n'
-printf '       %s -f "%s/docker/docker-compose.yml" logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$REPO_DIR"
+printf -v _compose_file '%q' "$REPO_DIR/docker/docker-compose.yml"
+printf '       %s -f %s logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$_compose_file"
+unset _compose_file
 printf '     (if the render step above used sudo, prefix sudo here too)\n'
 printf '     with what is registered in Google. They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
