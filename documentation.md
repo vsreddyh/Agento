@@ -401,8 +401,9 @@ OAuth is configured, add both entries back inside the `mcpServers` object in
 comma — add one after it first), then `./scripts/hermes.sh restart` so the pi
 container picks them up:
 
-"gmail": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "gmail", "--", "/usr/local/bin/gmail"]}
+"gmail": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "gmail", "--", "/usr/local/bin/gmail"]},
 "calendar": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "calendar", "--", "/usr/local/bin/calendar"]}
+(no trailing comma on the last line; commas after `browser` and `gmail`)
 
 Once wired they
 call the official Google APIs with the stored grant: decrypt, refresh on
