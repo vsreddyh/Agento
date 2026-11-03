@@ -891,12 +891,19 @@ while true; do
   ask GOOGLE_CLIENT_ID "Client ID:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
   step "Copy the Client secret (starts GOCSPX-). It is shown once."
   ask_secret GOOGLE_CLIENT_SECRET "Client secret (hidden):" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
-  # Console copy-paste trails whitespace; strip it before the shape checks so
-  # a trailing space doesn't fail a good paste (tokens never contain any).
-  GOOGLE_CLIENT_ID=$(printf '%s' "$GOOGLE_CLIENT_ID" | tr -d '[:space:]' 2>/dev/null || true)
-  GOOGLE_CLIENT_SECRET=$(printf '%s' "$GOOGLE_CLIENT_SECRET" | tr -d '[:space:]' 2>/dev/null || true)
+  # Console copy-paste trails whitespace; trim the *edges* before the shape
+  # checks (interior whitespace is a typo and must still fail, same rule as
+  # TS_HOST — a full strip would silently promote a bad paste to good).
+  GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID#"${GOOGLE_CLIENT_ID%%[![:space:]]*}"}"
+  GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID%"${GOOGLE_CLIENT_ID##*[![:space:]]}"}"
+  GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET#"${GOOGLE_CLIENT_SECRET%%[![:space:]]*}"}"
+  GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET%"${GOOGLE_CLIENT_SECRET##*[![:space:]]}"}"
   _bad=""
-  [[ "$GOOGLE_CLIENT_ID" != *".apps.googleusercontent.com" ]] && _bad="client id (want …apps.googleusercontent.com)"
+  # Interior whitespace is a typo (tokens never contain any); the suffix/
+  # prefix shape checks alone would let "abc .apps…" through.
+  [[ "$GOOGLE_CLIENT_ID" == *[[:space:]]* ]] && _bad="client id (contains whitespace)"
+  [[ "$GOOGLE_CLIENT_SECRET" == *[[:space:]]* ]] && _bad="${_bad:+$_bad and }client secret (contains whitespace)"
+  [[ "$GOOGLE_CLIENT_ID" != *".apps.googleusercontent.com" ]] && _bad="${_bad:+$_bad and }client id (want …apps.googleusercontent.com)"
   [[ "$GOOGLE_CLIENT_SECRET" != GOCSPX-* ]] && _bad="${_bad:+$_bad and }client secret (want GOCSPX-…)"
   if [[ -z "$_bad" ]]; then unset _bad; break; fi
   warn "doesn't look like what Google issues: $_bad — check the paste"
@@ -945,7 +952,7 @@ BACKUP=$(mktemp "$ENV_FILE.bak.$(date +%Y%m%d%H%M%S 2>/dev/null || true).$$.XXXX
 # existence test still left a check-then-copy race). It creates 0600, and
 # the name still matches the *.env.bak.* gitignore + prune glob.
 cp -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
-touch -- "$BACKUP" || { warn "backup timestamp failed (disk full?) — stopping before anything is written"; exit 1; }
+touch "$BACKUP" || { warn "backup timestamp failed (disk full?) — stopping before anything is written"; exit 1; }
 # %q so the restore hint stays copy-pasteable for shell-special paths, not
 # just spaces; reused verbatim by every later failure message.
 printf -v _restore_cmd 'cp -p -- %q %q' "$BACKUP" "$ENV_FILE"
@@ -953,9 +960,11 @@ note "backup: $BACKUP (if the run is interrupted mid-write, restore with: $_rest
 # Secrets are about to land in this file: 0600 regardless of what the
 # checkout/editor left behind (a fresh file already gets 0600 in write_env) —
 # and the backup holds the same secrets, so it gets 0600 too.
-chmod 600 -- "$ENV_FILE" "$BACKUP" || { warn "chmod 600 failed — stopping before secrets are written"; exit 1; }
+chmod 600 "$ENV_FILE" "$BACKUP" || { warn "chmod 600 failed — stopping before secrets are written"; exit 1; }
 # Backups are full-secret copies — keep the 5 newest by mtime, prune the
 # rest. Pure bash (-ot comparison): no ls parsing, no GNU-only flags.
+# (`--` is kept on cp/rm/grep, which BSD documents; touch/chmod take none
+# above, and both operands are absolute by now, so nothing to parse.)
 # nullglob is restored afterwards — the wizard must not mutate shell
 # options it didn't own (matters if this file is ever sourced).
 _baks=(); _nullglob_off=0; shopt -q nullglob || _nullglob_off=1
@@ -1092,7 +1101,7 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
   # check, or a missing var reads as "reaches the pi service".
   _render_missing=""
   for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
-    if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[^\"'[:space:]]" "$RENDER_OUT"; then
+    if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[[:space:]]*[^\"'[:space:]]" "$RENDER_OUT"; then
       printf '  %s✓%s %s present in rendered compose config\n' "$GREEN" "$RESET" "$k"
     else
       # Same rc discipline as the comment-block grep: rc=1 is a genuine
