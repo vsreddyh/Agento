@@ -9,7 +9,7 @@ state (see `.gitignore`).
 | path | committed | purpose |
 |---|---|---|
 | `settings.json` | yes | Pi's own knobs — tool selection, retry, cache warming. **Not** personality. |
-| `mcp.json` | yes | every MCP server in `mcp.json`: miser-money, cookbook, health-check, task-manager, project-manager, notes, memory, browser (gmail/calendar stay unwired until Google OAuth is configured, #424). |
+| `mcp.json` | yes | The MCP servers Pi spawns: miser-money, cookbook, health-check, task-manager, project-manager, notes, memory, browser (gmail/calendar stay unwired until Google OAuth is configured, #424). |
 | `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all of them. |
 | `profiles/<name>/AGENTS.md` | yes | one per profile (`chat` only since #289). Each profile's own instructions and personality. |
 | `profiles/<name>/skills/` | yes | Per-profile skills. **Not discovered as laid out** — see the profile-skills finding below; loaded by an explicit `--skill` path per profile. |
@@ -612,7 +612,7 @@ single turn's cost. That figure is folded into the tool result's own `usage`, be
 Pi adds nested result usage to the caller totals — otherwise delegation looks nearly
 free while being one of the most expensive things the agent can do. Stats are fetched
 **best-effort**: a failure there sets `details.usageUnavailable` rather than throwing,
-because discarding an answer the parent already paid nine processes for is the worst
+because discarding an answer the parent already paid a delegation's processes for is the worst
 available outcome, and the natural response — retry — pays that cost again.
 
 ### What the tool validates before it spawns anything
@@ -624,7 +624,7 @@ during startup:
 | input | rule | why |
 |---|---|---|
 | `task` | must be non-empty and <= 20k characters | output is truncated on the way back, so input is bounded for symmetry; 20k chars (~5k tokens) is generous, and the error tells the caller to name files rather than paste them |
-| `timeoutSeconds` | must be finite and >= 1s, capped at 900s | a subagent pins nine processes for as long as it runs, so a sub-second timeout would pay the full spawn cost to expire immediately; `0` silently becoming the default would hide the mistake |
+| `timeoutSeconds` | must be finite and >= 1s, capped at 900s | a subagent pins a process and every MCP server in `mcp.json` for as long as it runs, so a sub-second timeout would pay the full spawn cost to expire immediately; `0` silently becoming the default would hide the mistake |
 | `thinking` | an explicitly requested level must be one of `off, minimal, low, medium, high, xhigh, max` | Pi **silently accepts an unknown level**, so a typo would leave the child at a depth nobody chose. The **inherited** level is passed through unvalidated on purpose — it came from a working parent, and checking it would mean a new Pi level breaks delegation for every profile using it |
 | `cwd` | must be non-empty, exist, and be a directory; a relative path resolves against this agent's directory | a typo guard, **not** a security boundary — the caller already holds `bash` and full filesystem access. `""` is a typo, not an inheritance request |
 | `model` | trimmed, must name a model, resolved against the parent's registry | the CLI resolves lazily, so an unknown id would otherwise fail on the child's first turn; `undefined` inherits but `""` is a typo, and `provider/` with no model must not reach the registry |
@@ -642,7 +642,7 @@ holding.
 
 | thing | before | after |
 |---|---|---|
-| `client.start()` | unbounded — `timeoutMs` covered only `promptAndWait`, so a child stalling while connecting MCP sat there past `timeoutSeconds` with nine processes pinned | raced against the same `timeoutMs` by `within()`, which clears its timer in `.finally`. Losing the race costs nothing but the wait: the caller's `finally` still stops the child |
+| `client.start()` | unbounded — `timeoutMs` covered only `promptAndWait`, so a child stalling while connecting MCP sat there past `timeoutSeconds` with a process and every MCP server in `mcp.json` pinned | raced against the same `timeoutMs` by `within()`, which clears its timer in `.finally`. Losing the race costs nothing but the wait: the caller's `finally` still stops the child |
 | `answerOf` | joined every `text_delta` first and truncated the result, so a runaway child could bloat the parent before the cut | accumulation stops at `2 × MAX_RESULT_CHARS`. The overshoot is deliberate — it leaves `truncate` enough text to report how many characters were actually dropped instead of a made-up number |
 | `cliPath()` | returned `process.argv[1]` as-is; a relative entry passes `existsSync` here and then resolves against the child's cwd | returned absolute. Same bug class as the relative `cwd` and relative `--skill` cases above: verified here, wrong there, no error |
 
@@ -678,7 +678,7 @@ schema already enforces these types, so this is defence for a caller that does n
 
 The `finally` that calls `client.stop()` is the one wait with no budget behind it:
 the startup and prompt deadlines were both inside `timeoutSeconds`, but a child
-stalling while closing its MCP servers would pin all nine processes indefinitely,
+stalling while closing its MCP servers would pin the process and every MCP server in `mcp.json` indefinitely,
 with nothing left waiting on them. `stop()` is therefore raced against its own
 30s ceiling — deliberately outside `MAX_TIMEOUT_MS`, because by then the call has
 already failed or answered and there is no delegation budget left to spend.

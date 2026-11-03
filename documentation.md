@@ -392,7 +392,7 @@ one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
 The MCP servers (`cmd/gmail`, `cmd/calendar`) are wired into `pi/mcp.json`
 only once Google OAuth is configured: unwired, they cost 2 processes and 2 Mongo
-client each to answer "not configured" on every call. Booting without them is
+clients each to answer "not configured" on every call. Booting without them is
 safe since #421 (connectors tolerate missing credentials); keeping them
 unwired is #424 Stage 1 (`internal/connectors` fails its tests if the wiring
 and the credentials ever disagree). Once wired they

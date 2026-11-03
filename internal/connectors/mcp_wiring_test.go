@@ -2,10 +2,10 @@ package connectors
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -71,19 +71,27 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 	var problems []string
 	// Sorted for stable output: Go map order is random, and a two-stray CI
 	// failure that shuffles every run is a flake-shaped annoyance.
-	ids := make([]string, 0, len(cfg.MCPServers))
-	for id := range cfg.MCPServers {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	ids := slices.Sorted(maps.Keys(cfg.MCPServers))
 	for _, id := range ids {
 		if !knownServers[id] {
 			problems = append(problems, id+" is in "+mcpJSONPath+
 				" but is not a known server id — likely a typo; pi would spawn a bogus server")
+			continue
+		}
+		// Relay shape for every known server present, not just connectors:
+		// a domain entry without the `mcp-gate --server` prefix connects
+		// fine but silently drops approval, the same silent regression
+		// the connector shape check guards against.
+		entry := cfg.MCPServers[id]
+		if want := wantRelayEntry(id); entry.Command != want.Command || !slices.Equal(entry.Args, want.Args) {
+			problems = append(problems, id+" in "+mcpJSONPath+
+				" is wired in the wrong shape: got command="+entry.Command+
+				" args="+strings.Join(entry.Args, " ")+", want /usr/local/bin/mcp-gate --server "+id+" -- /usr/local/bin/"+id+
+				" — the relay prefix is what enforces approval")
 		}
 	}
 	for _, id := range ListIDs() {
-		entry, wired := cfg.MCPServers[id]
+		_, wired := cfg.MCPServers[id]
 
 		if configured && !wired {
 			problems = append(problems, id+" is missing from "+mcpJSONPath+
@@ -103,13 +111,8 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 		if !wired {
 			continue
 		}
-
-		if want := wantRelayEntry(id); entry.Command != want.Command || !slices.Equal(entry.Args, want.Args) {
-			problems = append(problems, id+" in "+mcpJSONPath+
-				" is wired in the wrong shape: got command="+entry.Command+
-				" args="+strings.Join(entry.Args, " ")+", want /usr/local/bin/mcp-gate --server "+id+" -- /usr/local/bin/"+id+
-				" — the relay prefix is what enforces approval")
-		}
+		// Wired + configured: shape already asserted in the ids loop above
+		// for every known server present, so nothing left to check here.
 	}
 	return problems
 }
@@ -147,10 +150,12 @@ func TestConnectorServersWiredIffConfigured(t *testing.T) {
 // silently flip what the suite enforces. These subtests own their env
 // (t.Setenv) and their input bytes, so they hold in every environment.
 //
-// Scope is connectors only: deleting a domain server from mcp.json passes this
-// test by design. Domain presence is enforced by the entrypoint's `pi mcp list`
-// gate at container start, not here — this test owns the OAuth/wiring iff and
-// nothing else.
+// Scope is connectors for presence, every known server for shape: deleting a
+// domain server from mcp.json passes this test by design. Domain presence is
+// enforced by the entrypoint's `pi mcp list` gate at container start, not
+// here — but a present domain entry in the wrong shape (bypassing approval)
+// fails, same as a connector. This test owns the OAuth/wiring iff plus the
+// relay-shape invariant, nothing else.
 func TestCheckWiringBothDirections(t *testing.T) {
 	writeMCP := func(t *testing.T, entries map[string]mcpEntry) []byte {
 		t.Helper()
@@ -238,6 +243,20 @@ func TestCheckWiringBothDirections(t *testing.T) {
 		ps := checkWiring(writeMCP(t, bad), configured, oauthErr)
 		if len(ps) != 1 || !strings.Contains(ps[0], "wrong shape") {
 			t.Errorf("want the gmail shape problem, got %v", ps)
+		}
+	})
+
+	t.Run("domain wrong shape fails", func(t *testing.T) {
+		configured, oauthErr := setOAuth(t, false)
+		if configured {
+			t.Fatal("test setup broken: expected unconfigured")
+		}
+		bad := map[string]mcpEntry{
+			"notes": {Command: "/usr/local/bin/notes"},
+		}
+		ps := checkWiring(writeMCP(t, bad), configured, oauthErr)
+		if len(ps) != 1 || !strings.Contains(ps[0], "wrong shape") {
+			t.Errorf("want the notes shape problem, got %v", ps)
 		}
 	})
 

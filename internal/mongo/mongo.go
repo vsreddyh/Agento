@@ -114,7 +114,9 @@ func Client() (*mongo.Client, error) {
 		spare := c
 		c = client
 		mu.Unlock()
-		_ = spare.Disconnect(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = spare.Disconnect(ctx)
 		return c, nil
 	}
 	client = c
