@@ -332,6 +332,9 @@ ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
 # The library already defaulted ENV_FILE to the relative ".env" at load, so
 # the :- above never fires on a normal run — normalize that exact default to
 # the repo root, or running from /tmp reads /tmp/.env and stage 8 exits.
+# Strip one leading "./" first: ./.env is the same file as .env, and without
+# this it would take the override branch in the stage-8 hint.
+ENV_FILE="${ENV_FILE#./}"
 if [[ "$ENV_FILE" == ".env" ]]; then ENV_FILE="$REPO_DIR/.env"; fi
 # Tilde never expands inside a variable value: ~/x would canonicalize to
 # $PWD/~/x below. Expand a leading ~ (or bare ~) against $HOME first.
@@ -945,7 +948,7 @@ cp -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?)
 touch -- "$BACKUP" || { warn "backup timestamp failed (disk full?) — stopping before anything is written"; exit 1; }
 # %q so the restore hint stays copy-pasteable for shell-special paths, not
 # just spaces; reused verbatim by every later failure message.
-printf -v _restore_cmd 'cp -p %q %q' "$BACKUP" "$ENV_FILE"
+printf -v _restore_cmd 'cp -p -- %q %q' "$BACKUP" "$ENV_FILE"
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: $_restore_cmd)"
 # Secrets are about to land in this file: 0600 regardless of what the
 # checkout/editor left behind (a fresh file already gets 0600 in write_env) —
@@ -959,7 +962,8 @@ _baks=(); _nullglob_off=0; shopt -q nullglob || _nullglob_off=1
 shopt -s nullglob; _baks=("$ENV_FILE".bak.*)
 # A switched ENV_FILE orphans the other name's backups (full-secret copies,
 # gitignored but never pruned) — sweep the default name too when it differs.
-# No dedup needed: the prefixes differ, so no file matches both patterns.
+# Different *names* cannot share a glob match, but different *spellings* of
+# one path can, hence the -ef dedup immediately below.
 if [[ "$ENV_FILE" != "$REPO_DIR/.env" ]]; then _baks+=("$REPO_DIR"/.env.bak.*); fi
 # Different spellings of the same path (/tmp/d/.env vs /tmp/d/../d/.env)
 # expand to one inode twice — dedup by -ef before counting, or the sweep
