@@ -512,11 +512,20 @@ else
   # Current login-URL shape; if Tailscale ever changes domains, the "no
   # login URL appeared" fallback below still fires after 60s of dots.
   for ((__i = 1; __i <= 60; __i++)); do
-    URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" | head -n1 2>/dev/null || true)
-    [[ -n "$URL" ]] && break
+    URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" 2>/dev/null | head -n1 2>/dev/null || true)
+    if [[ -n "$URL" ]]; then
+      # The writer appends concurrently, so a match can be a half-flushed
+      # line. Require the same URL on a second read before opening it —
+      # one extra second, never a truncated browser open.
+      sleep 1
+      _url2=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" 2>/dev/null | head -n1 2>/dev/null || true)
+      if [[ -n "$_url2" && "$_url2" == "$URL" ]]; then break; fi
+      URL=""
+    fi
     _alive "$TS_PID" || break
     printf '%s' '.'; sleep 1
   done
+  unset _url2
   printf '\n'
   if [[ -n "$URL" ]]; then
     open_url "$URL"
@@ -716,6 +725,8 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
     if confirm "Keep it anyway (only for deliberate non-standard setups)?"; then
       REDIRECT_URI="$_recorded_uri"
       note "keeping non-standard recorded REDIRECT_URI as chosen"
+      warn "registered host is not a tailnet name; the funnel still serves $TS_DNS,"
+      warn "so the probe and the .env comment use ($TS_DNS), not the kept URL"
     fi
   fi
   unset _rec_host
@@ -926,6 +937,12 @@ if [[ ! -w "$_env_dir" ]]; then
 fi
 unset _env_dir
 BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S 2>/dev/null || true).$$"
+# The name is predictable (timestamp + pid): refuse an existing path so a
+# pre-planted symlink or file cannot redirect a full-secret copy.
+if [[ -e "$BACKUP" || -L "$BACKUP" ]]; then
+  warn "backup path already exists ($BACKUP) — remove it and re-run"
+  exit 1
+fi
 # umask 077 in the subshell: with -p, cp would create the backup in the
 # source's mode (typically 0644) — a full-secret copy world-readable until
 # the chmod below, and permanently if the run dies in that window. Without
