@@ -875,8 +875,8 @@ while true; do
   ask_secret GOOGLE_CLIENT_SECRET "Client secret (hidden):" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
   # Console copy-paste trails whitespace; strip it before the shape checks so
   # a trailing space doesn't fail a good paste (tokens never contain any).
-  GOOGLE_CLIENT_ID=$(printf '%s' "$GOOGLE_CLIENT_ID" | tr -d '[:space:]' || true)
-  GOOGLE_CLIENT_SECRET=$(printf '%s' "$GOOGLE_CLIENT_SECRET" | tr -d '[:space:]' || true)
+  GOOGLE_CLIENT_ID=$(printf '%s' "$GOOGLE_CLIENT_ID" | tr -d '[:space:]' 2>/dev/null || true)
+  GOOGLE_CLIENT_SECRET=$(printf '%s' "$GOOGLE_CLIENT_SECRET" | tr -d '[:space:]' 2>/dev/null || true)
   _bad=""
   [[ "$GOOGLE_CLIENT_ID" != *".apps.googleusercontent.com" ]] && _bad="client id (want …apps.googleusercontent.com)"
   [[ "$GOOGLE_CLIENT_SECRET" != GOCSPX-* ]] && _bad="${_bad:+$_bad and }client secret (want GOCSPX-…)"
