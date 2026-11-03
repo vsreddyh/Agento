@@ -10,7 +10,10 @@ import (
 	"log"
 	"os"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	"agento/internal/cookbook"
+	"agento/internal/mongo"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -131,9 +134,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("cookbook: %v", err)
 	}
+	// Gate shares the domain store's client (ADR-0011 Stage 2): mongo.DB()
+	// is process-cached and this store built on it, so this adds zero clients.
+	db, err := mongo.DB()
+	if err != nil {
+		log.Fatalf("cookbook: %v", err)
+	}
+	gate := approvals.NewOn(db)
 	s := mcp.NewServer(&mcp.Implementation{Name: "cookbook", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "add_ingredient",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "add_ingredient",
 		Description: "Add an ingredient name (optional note). Names are unique."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			ing, err := store.AddIngredient(ctx, in.Name, in.Note)
@@ -143,7 +153,7 @@ func main() {
 			return result(map[string]any{"ok": true, "ingredient": ing})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "list_ingredients",
 		Description: "List ingredient names, optionally filtered by substring."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListIngredients(ctx, in.Search)
@@ -153,7 +163,7 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "ingredients": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_ingredient",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "delete_ingredient",
 		Description: "Delete an ingredient. Refused if any recipe still references it."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.DeleteIngredient(ctx, in.NameOrID)
@@ -163,7 +173,7 @@ func main() {
 			return result(map[string]any{"ok": true, "deleted": done})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "add_recipe",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "add_recipe",
 		Description: "Save a recipe. ingredient_qtys maps name-or-id -> free qty string. per_serving needs kcal/protein_g/carbs_g/fat_g/fiber_g."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			servings := in.Servings
@@ -177,7 +187,7 @@ func main() {
 			return result(map[string]any{"ok": true, "recipe": r})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "get_recipe",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "get_recipe",
 		Description: "Get one recipe by dish name or id."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.GetRecipe(ctx, in.NameOrID)
@@ -190,7 +200,7 @@ func main() {
 			return result(map[string]any{"ok": true, "recipe": r})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_recipes",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "list_recipes",
 		Description: "List recipes, optionally filtered by name substring, tag, or ingredient name."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listRecipesInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListRecipes(ctx, in.Search, in.Tag, in.Ingredient)
@@ -200,7 +210,7 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "recipes": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "update_recipe",
 		Description: "Patch a recipe (the ONLY way a recipe changes after a cook — call only when the user approves). Empty/zero args are left unchanged."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
@@ -236,7 +246,7 @@ func main() {
 			return result(map[string]any{"ok": true, "recipe": r})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_recipe",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "delete_recipe",
 		Description: "Delete a recipe plus its cook-log rows."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			deleted, logs, err := store.DeleteRecipe(ctx, in.NameOrID)
@@ -246,7 +256,7 @@ func main() {
 			return result(map[string]any{"ok": true, "deleted": deleted, "cook_logs": logs})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "scale_recipe",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "scale_recipe",
 		Description: "Scale macros to a target serving count. Pure math — no write."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in scaleRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.ScaleRecipe(ctx, in.NameOrID, in.Servings)
@@ -257,7 +267,7 @@ func main() {
 			return result(out)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "log_cook",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "log_cook",
 		Description: "Log a cook: what differed (cooking_note) + what to improve (aftertaste_note). Never modifies the recipe."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logCookInput) (*mcp.CallToolResult, map[string]any, error) {
 			c, err := store.LogCook(ctx, in.Recipe, in.CookingNote, in.AftertasteNote, in.Date)
@@ -267,7 +277,7 @@ func main() {
 			return result(map[string]any{"ok": true, "cook": c})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_cooks",
+	approvalgate.AddTool(s, "cookbook", gate, &mcp.Tool{Name: "list_cooks",
 		Description: "List cook-log rows, optionally for one recipe (newest first)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listCooksInput) (*mcp.CallToolResult, map[string]any, error) {
 			limit := in.Limit

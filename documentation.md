@@ -286,8 +286,9 @@ All settings are configured in the single root `.env` file:
 ### Approval gates + audit log (#313)
 
 Sensitive tool calls pause for an explicit in-app approve/deny before they
-execute. Enforcement lives in `cmd/mcp-gate`, the relay every `pi/mcp.json`
-entry points through: reads and routine writes forward untouched, while money
+execute. Enforcement lives in an in-process gate inside each server
+(`internal/approvalgate`, ADR-0011 Stage 2): reads and routine writes forward
+untouched, while money
 writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`) and
 prunes that actually delete (`prune_old` with `dry_run=false`) hold up to 14
 minutes for a decision, then run on approve or fail closed on deny/expiry —
@@ -391,18 +392,18 @@ appears only on `connected` rows with a valid stamp (a connected row without
 one omits it fail-closed); the stored value is first-connected-at, retained
 across disconnect/expire.
 The MCP servers (`cmd/gmail`, `cmd/calendar`) are wired into `pi/mcp.json`
-only once Google OAuth is configured: wired while unconfigured, they would cost 2 processes and 2 Mongo
-clients each to answer "not configured" on every call. Booting without them is
+only once Google OAuth is configured: wired while unconfigured, they would cost 1 process and 1 Mongo
+client each to answer "not configured" on every call. Booting without them is
 safe since #421 (connectors tolerate missing credentials); keeping them
-unwired is #424 Stage 1 (`internal/connectors` fails its tests if the wiring
+unwired until OAuth lands (`internal/connectors` fails its tests if the wiring
 and the credentials ever disagree). Re-adding is manual, not automatic: once
 OAuth is configured, add both entries back inside the `mcpServers` object in
 `pi/mcp.json` by hand (the `browser` entry is currently last with no trailing
 comma — add one after it first), then `./scripts/hermes.sh restart` so the pi
 container picks them up:
 
-"gmail": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "gmail", "--", "/usr/local/bin/gmail"]},
-"calendar": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "calendar", "--", "/usr/local/bin/calendar"]}
+"gmail": {"command": "/usr/local/bin/gmail"},
+"calendar": {"command": "/usr/local/bin/calendar"}
 (no trailing comma on the last line; commas after `browser` and `gmail`)
 
 Once wired they
@@ -428,9 +429,9 @@ It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `.env` (or `$ENV_FILE` when overridden for a dry run — see the wizard's
 stage-1 note for all five dry-run knobs) and re-renders
 compose to prove they land in the rendered compose config. Its closing checklist
-then has the operator re-add the gmail/calendar entries to `pi/mcp.json` by
-hand (Stage 1 unwired them; OAuth alone does not restore the agent tools)
-and restart again. It never
+then has the operator re-add the gmail/calendar entries inside `mcpServers`
+in `pi/mcp.json` by hand (unwired until OAuth is configured; OAuth alone
+does not restore the agent tools) and restart again. It never
 restarts the stack — the values are inert until the pi container is
 recreated (`./scripts/hermes.sh restart` recreates it; a plain container
 restart without recreation will not pick up .env changes). It is safe

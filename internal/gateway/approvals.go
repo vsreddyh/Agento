@@ -28,10 +28,11 @@ const maxApprovalIDLen = 64
 
 // This file is the approval-gate half of the chat surface (#313).
 //
-// The relay (cmd/mcp-gate) holds sensitive tool calls as pending approvals;
-// this API is how the app lists them, decides them, and reads the audit
-// trail. The gateway keeps no live state here — decisions are store writes
-// the relay polls for, so any gateway process serves them identically.
+// The in-process gate (internal/approvalgate, ADR-0011 Stage 2) holds
+// sensitive tool calls as pending approvals; this API is how the app lists
+// them, decides them, and reads the audit trail. The gateway keeps no live
+// state here — decisions are store writes the servers poll for, so any
+// gateway process serves them identically.
 //
 //	GET  /api/approvals            list, filterable by status
 //	POST /api/approvals/{id}/approve | deny

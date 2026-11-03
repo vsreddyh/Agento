@@ -4,11 +4,12 @@
 //
 // The unit is one client per store, not per process: most stores dial their
 // own client through mongostore.Open -> ConnectURI, so long-lived steady state
-// is ~24 clients (~28 before the Stage 1 unwire of gmail/calendar) — 8 mcp-gate
-// relays via approvals, 7 domain MCP children (browser holds none), 6 stores
-// inside pi-gateway, 3 in health-api. One-shot dials (retention, cmd/mongo)
-// are excluded from the count. The pool caps below are what keep that
-// from being expensive.
+// is ~17 clients — 7 domain children with their own store plus the browser's
+// single gate client (browser holds no domain store), 6 stores inside
+// pi-gateway, 3 in health-api. One-shot dials (retention, cmd/mongo)
+// are excluded from the count. The in-process approval gate (ADR-0011
+// Stage 2) shares each server's client and adds zero of its own. The pool
+// caps below are what keep that from being expensive.
 package mongo
 
 import (
@@ -31,9 +32,9 @@ const (
 	//
 	// The driver default is 100 per member, which is dimensioning for load this
 	// deployment will never see: two users, one assistant turn at a time, and
-	// each server handles a single tool call sequentially. With ~24 clients
+	// each server handles a single tool call sequentially. With ~17 clients
 	// the default lets a loaded stack hold thousands of connections (idle
-	// holds monitors only, ~24 x 3 = ~72, since minPoolSize is 0), and the
+	// holds monitors only, ~17 x 3 = ~51, since minPoolSize is 0), and the
 	// 2026-10-31 outage showed why that matters — churn against that ceiling
 	// (#423) is what took the cluster down, not steady-state count (#424).
 	//

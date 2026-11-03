@@ -32,8 +32,8 @@ The expected surface (#315) is narrower than "the agent remembers everything":
   a pending proposal. `POST /api/memory` creates with `source=user`,
   `status=confirmed`.
 - **The agent writes pending items.** A `memory` MCP server exposes exactly two
-  tools, `save_memory` and `list_memory`, routed through `mcp-gate` like every
-  other server. `save_memory` always writes `source=agent`, `status=pending`.
+  tools, `save_memory` and `list_memory`, with the approval gate in-process like
+  every other server. `save_memory` always writes `source=agent`, `status=pending`.
   The agent cannot confirm, edit or delete: those are the user's verbs, and
   letting the writer approve its own write would make the whole review step
   ceremonial.

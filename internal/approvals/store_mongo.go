@@ -42,6 +42,19 @@ func (s *MongoStore) logf(format string, args ...any) {
 	}
 }
 
+// NewOn builds a store on an existing database handle, sharing its client's
+// pool instead of dialing a new one. Stage 2 (ADR-0011): each MCP server runs
+// the approval gate in-process on the client its domain store already holds,
+// so the gate adds zero Mongo clients — the 8 relay approvals clients go
+// away with cmd/mcp-gate instead of moving into the servers.
+func NewOn(db *mongoDrv.Database) *MongoStore {
+	return &MongoStore{
+		approvals: db.Collection(ApprovalsCollection),
+		audit:     db.Collection(AuditCollection),
+		now:       time.Now,
+	}
+}
+
 // New connects to uri/dbName.
 func New(uri, dbName string) (*MongoStore, error) {
 	_, db, err := mongostore.Open(uri, dbName)

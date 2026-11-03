@@ -121,7 +121,7 @@ type Config struct {
 	RunStore runs.Store
 
 	// ApprovalStore persists gate approvals and the audit trail (#313). Nil
-	// means an in-memory store. The relay (cmd/mcp-gate) opens the same
+	// means an in-memory store. Each MCP server opens the same
 	// collections from its own process via the shared MONGODB_URI/MONGODB_DB
 	// pair; both sides fall back to memory independently when Mongo is
 	// unreachable.

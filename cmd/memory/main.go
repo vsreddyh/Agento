@@ -23,6 +23,8 @@ import (
 	"os"
 	"strings"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	"agento/internal/memory"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -166,9 +168,17 @@ func main() {
 		store = ms
 	}
 
+	// Gate shares the domain store's client when there is one
+	// (ADR-0011 Stage 2). Ephemeral (no Mongo): the gate is unshared, so
+	// gated tools deny exactly as the old relay_unavailable path did.
+	var gate approvals.Store = approvals.NewMemoryStore()
+	if ms, ok := store.(*memory.MongoStore); ok {
+		gate = approvals.NewOn(ms.DB())
+	}
+
 	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "save_memory",
+	approvalgate.AddTool(s, "memory", gate, &mcp.Tool{Name: "save_memory",
 		Description: "Remember ONE durable thing the user explicitly told you: a preference, a format rule, a correction, a fact about their life or work. Write it in their terms (" +
 			"\"wants weekly reports as a table\", not \"likes tables\"). The item is saved as PENDING and shown in the app; the user confirms it before it affects answers. " +
 			"Call this when they correct you or state a lasting preference, not for passing context or anything they have not said. Do not save secrets, credentials or one-off details."},
@@ -198,7 +208,7 @@ func main() {
 			})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_memory",
+	approvalgate.AddTool(s, "memory", gate, &mcp.Tool{Name: "list_memory",
 		Description: "List what is remembered for this profile, newest first, optionally filtered by topic and/or status. Use it when the user asks what you remember, or before saving something that may already be recorded. Items include status: only confirmed items are applied to answers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			f, errMsg := prepareList(profile, in)

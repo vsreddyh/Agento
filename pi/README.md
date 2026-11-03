@@ -239,15 +239,15 @@ through nginx — not `pi` itself.
 | `PUT /api/memory/topics/{topic}` | yes — pause/resume one topic | memory store |
 | `POST /{profile}/api/questions/{id}` | yes — answer a pending `ask_user` dialog, exactly once | `extension_ui_response` over Pi stdin |
 
-Approval gates (#313) hold sensitive tool calls in `mcp-gate`, the relay every
-`mcp.json` entry points through: money writes, deletes, rewrites and real
-prunes wait up to 14 minutes for a decision here, then run or fail closed.
-See `docs/adr/0002-approval-gates.md`.
+Approval gates (#313) hold sensitive tool calls in an in-process gate inside
+each server (`internal/approvalgate`, ADR-0011 Stage 2): money writes, deletes,
+rewrites and real prunes wait up to 14 minutes for a decision here, then run
+or fail closed. See `docs/adr/0002-approval-gates.md`.
 
 Memory (#315) is the per-profile store behind the app's Memory screen. The
 gateway prefixes confirmed, unpaused items onto each turn; agent-proposed items
 land pending until the user confirms them, and deletion is immediate. The
-`memory` MCP server (routed through `mcp-gate` like the rest) is how the agent
+`memory` MCP server is how the agent
 proposes one, scoped by the `AGENTO_PROFILE` the gateway passes to Pi. See
 `docs/adr/0003-memory.md`.
 
@@ -583,7 +583,7 @@ The subagent is a **separate `pi` process** driven over RPC, not an in-process
 An SDK session does not load the CLI's built-in extensions, so reproducing MCP
 means hand-building a `DefaultResourceLoader`. That does work — 56 MCP tools with ten
 servers wired, measured (~45 with the eight Stage 1 leaves wired) — but the child
-then owns eight MCP server entries, a relay plus a server process each, that nothing
+then owns eight MCP server entries that nothing
 ever reclaims:
 
 | step | result |
@@ -594,8 +594,7 @@ ever reclaims:
 | `session.extensionRunnerRef.current` | **unpopulated** for SDK sessions, so the event cannot be raised by hand |
 | shared loader across children | corrupts MCP: the tool set collapses mid-session, servers dying |
 
-Measured cost of the in-process route: **sixteen MCP server processes stranded per delegation**
-(eight entries × relay + server at Stage 1),
+Measured cost of the in-process route: **eight MCP server processes stranded per delegation**
 accumulating for the life of the container. A process is reaped by
 `RpcClient.stop()`, which SIGTERMs the CLI and the CLI closes its own MCP clients on
 the way out — **0 processes left behind**, measured across repeated delegations.

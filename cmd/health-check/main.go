@@ -11,7 +11,10 @@ import (
 	"os"
 	"time"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	"agento/internal/healthcheck"
+	"agento/internal/mongo"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -130,6 +133,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("health-check: %v", err)
 	}
+	// Gate shares the domain store's client (ADR-0011 Stage 2): mongo.DB()
+	// is process-cached and this store built on it, so this adds zero clients.
+	db, err := mongo.DB()
+	if err != nil {
+		log.Fatalf("health-check: %v", err)
+	}
+	gate := approvals.NewOn(db)
 	s := mcp.NewServer(&mcp.Implementation{Name: "health-check", Version: "1.0.0"}, nil)
 
 	dayOf := func(date string) string {
@@ -139,7 +149,7 @@ func main() {
 		return date
 	}
 
-	mcp.AddTool(s, &mcp.Tool{Name: "log_meal",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "log_meal",
 		Description: "Log a meal. Agent parses user text into items[{name, qty?, kcal, protein, carbs, fat, fiber}] — MCP validates and names any missing macro field."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logMealInput) (*mcp.CallToolResult, map[string]any, error) {
 			meal, err := store.LogMeal(ctx, dayOf(in.Date), in.Description, in.Items)
@@ -149,7 +159,7 @@ func main() {
 			return result(map[string]any{"ok": true, "meal": meal})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "fix_last_meal",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "fix_last_meal",
 		Description: "Replace the most recent meal's items with corrected items."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in fixLastMealInput) (*mcp.CallToolResult, map[string]any, error) {
 			meal, err := store.FixLastMeal(ctx, in.Description, in.Items)
@@ -162,7 +172,7 @@ func main() {
 			return result(map[string]any{"ok": true, "meal": meal})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "query_meals",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "query_meals",
 		Description: "List meals between start/end dates (YYYY-MM-DD inclusive)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryMealsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.QueryMeals(ctx, in.Start, in.End)
@@ -172,7 +182,7 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "meals": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_meals",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "delete_meals",
 		Description: "Delete meals for one date (YYYY-MM-DD, default today)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteMealsInput) (*mcp.CallToolResult, map[string]any, error) {
 			n, err := store.DeleteMeals(ctx, dayOf(in.Date))
@@ -182,7 +192,7 @@ func main() {
 			return result(map[string]any{"ok": true, "deleted": n})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "log_weight",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "log_weight",
 		Description: "Log body weight in kg (upserts one row per date). Never pruned."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			w, err := store.LogWeight(ctx, dayOf(in.Date), in.Kg)
@@ -192,7 +202,7 @@ func main() {
 			return result(map[string]any{"ok": true, "weight": w})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "log_sleep",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "log_sleep",
 		Description: "Log sleep hours. Date = morning of wake-up."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogSleep(ctx, dayOf(in.Date), in.Hours)
@@ -202,7 +212,7 @@ func main() {
 			return result(map[string]any{"ok": true, "sleep": out})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "log_workout",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "log_workout",
 		Description: "Log a workout (type e.g. run/lift/walk, minutes, optional kcal burn)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogWorkout(ctx, dayOf(in.Date), in.Type, in.Minutes, in.Kcal)
@@ -212,7 +222,7 @@ func main() {
 			return result(map[string]any{"ok": true, "workout": out})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "daily_summary",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "daily_summary",
 		Description: "Daily recap: cal-in totals vs cal-out (workouts + active) + weight/sleep/steps."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in dailySummaryInput) (*mcp.CallToolResult, map[string]any, error) {
 			sum, err := store.DailySummary(ctx, dayOf(in.Date))
@@ -223,7 +233,7 @@ func main() {
 			return result(sum)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",
+	approvalgate.AddTool(s, "health-check", gate, &mcp.Tool{Name: "prune_old",
 		Description: "Prune hc_meals/hc_days older than `days`. NEVER touches hc_weight. dry_run=true (default) only reports counts."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in pruneOldInput) (*mcp.CallToolResult, map[string]any, error) {
 			days := in.Days

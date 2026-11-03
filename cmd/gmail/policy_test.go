@@ -12,20 +12,20 @@ import (
 // TestPublishedToolsMatchPolicy pins the publisher side of the rename-sync
 // obligation: every tool name this binary registers in AddTool must land
 // in exactly one policy bucket — free (runs ungated, never refused) or
-// refused (relay-refused + gated-true backstop). A typo'd AddTool name
+// refused (gate-refused + gated-true backstop). A typo'd AddTool name
 // ("search_gmial") holds for approval instead of failing loudly; this test
 // reads the registered names out of main.go so the typo fails here, in CI,
 // instead of stalling the agent in prod.
 //
 // TestConnectorPolicySync (connectors package) pins the other direction:
 // policy tables stay in agreement with each other. Together they close the
-// loop publisher → policy → relay.
+// loop publisher → policy → gate.
 func TestPublishedToolsMatchPolicy(t *testing.T) {
 	raw, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := regexp.MustCompile(`AddTool\(s,\s*&mcp\.Tool\{Name:\s*"([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
+	names := regexp.MustCompile(`AddTool\(s,(?:\s*"[^"]+",\s*gate,\s*)?&mcp\.Tool\{Name:\s*"([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
 	if len(names) == 0 {
 		t.Fatal("no AddTool names found in main.go")
 	}
@@ -60,7 +60,7 @@ func TestPublishedToolsMatchPolicy(t *testing.T) {
 		case !refused && !holds:
 			// Free read/draft: correct.
 		case refused && !holds:
-			t.Errorf("tool %q refused by relay but not gated: bypass runs it free", name)
+			t.Errorf("tool %q refused by gate but not gated: bypass runs it free", name)
 		default:
 			t.Errorf("tool %q holds for approval but is not a refused write: rename sync gap", name)
 		}

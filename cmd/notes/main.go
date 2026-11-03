@@ -17,6 +17,9 @@ import (
 	"log"
 	"os"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
+	"agento/internal/mongo"
 	"agento/internal/notes"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -111,9 +114,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("notes: %v", err)
 	}
+	// Gate shares the domain store's client (ADR-0011 Stage 2): mongo.DB()
+	// is process-cached and notes.New built on it, so this adds zero clients.
+	db, err := mongo.DB()
+	if err != nil {
+		log.Fatalf("notes: %v", err)
+	}
+	gate := approvals.NewOn(db)
 	s := mcp.NewServer(&mcp.Implementation{Name: "notes", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "create_note",
+	approvalgate.AddTool(s, "notes", gate, &mcp.Tool{Name: "create_note",
 		Description: "Create a note. body is markdown, one list item per line (`- milk`). Tags are lowercased; titles need not be unique. For anything with a due date use the task-manager, not this. Over-cap title/body is stored truncated and reported in `truncated`."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addNoteInput) (*mcp.CallToolResult, map[string]any, error) {
 			n, err := store.AddNote(ctx, in.Title, in.Body, in.Tags, in.Pinned)
@@ -123,7 +133,7 @@ func main() {
 			return result(map[string]any{"ok": true, "note": n})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "get_note",
+	approvalgate.AddTool(s, "notes", gate, &mcp.Tool{Name: "get_note",
 		Description: "Get one note by id (the id from list_notes). Returns the full body. Titles are not unique, so a title will not resolve."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getNoteInput) (*mcp.CallToolResult, map[string]any, error) {
 			n, err := store.GetNote(ctx, in.ID)
@@ -136,7 +146,7 @@ func main() {
 			return result(map[string]any{"ok": true, "note": n})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_notes",
+	approvalgate.AddTool(s, "notes", gate, &mcp.Tool{Name: "list_notes",
 		Description: "List notes (pinned first, then newest first), optionally filtered by tag and/or to pinned only. Returns summaries WITHOUT bodies — call get_note for the text."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listNotesInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListNotes(ctx, in.Tag, in.PinnedOnly, in.Limit)
@@ -146,7 +156,7 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "notes": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "search_notes",
+	approvalgate.AddTool(s, "notes", gate, &mcp.Tool{Name: "search_notes",
 		Description: "Substring search over note titles, bodies AND tags, returning full notes. Use when the user names a thing ('milk') without saying which note holds it. Returns full bodies, so limit is capped at 50 — narrow the query rather than asking for more."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchNotesInput) (*mcp.CallToolResult, map[string]any, error) {
 			limit := in.Limit
@@ -160,7 +170,7 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "notes": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "update_note",
+	approvalgate.AddTool(s, "notes", gate, &mcp.Tool{Name: "update_note",
 		Description: "Patch a note. An arg you omit is left alone; body=\"\" empties the note and tags=[] removes every tag (an empty title is refused). The body replaces, it does not append — editing one line means sending the whole new body. Confirm with the user before overwriting a body you did not write."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateNoteInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Pointers, so absent (leave alone) and empty (clear) stay distinct — see
@@ -189,7 +199,7 @@ func main() {
 			return result(map[string]any{"ok": true, "note": n})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_note",
+	approvalgate.AddTool(s, "notes", gate, &mcp.Tool{Name: "delete_note",
 		Description: "Delete a note by id. Irreversible — confirm with the user first. An unknown id returns ok:false, the same as get_note and update_note."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteNoteInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.DeleteNote(ctx, in.ID)

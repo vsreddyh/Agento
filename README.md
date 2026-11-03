@@ -46,7 +46,7 @@ and unmanaged.)
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
 | **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (Go, LaTeX/tectonic) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + MCP servers — ten at measurement time, eight after the #424 Stage 1 unwire) measured **~350 MB** pre-Stage-1 (2026-10-31) — the real figure, not the multi-GB estimate this row used to carry (ADR-0011 is the measurement log). The eight-server steady state is expected ~270 MB (350 − 2×~40, predicted — ADR-0011 to confirm after deploy). Headless Chromium (image layer + ~150–300 MB runtime per profile, see `vps.md`) lands on top. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
+| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + MCP servers — ten at measurement time, eight after the #424 Stage 1 unwire) measured **~350 MB** pre-Stage-1 (2026-10-31) — the real figure, not the multi-GB estimate this row used to carry (ADR-0011 is the measurement log). The eight-server steady state was expected ~270 MB at Stage 1 (350 − 2×~40, predicted). Stage 2 deletes the 8 relay processes outright (~124 MB summed-RSS in the ADR-0011 accounting), so lower still — ADR-0011 to confirm after deploy. Headless Chromium (image layer + ~150–300 MB runtime per profile, see `vps.md`) lands on top. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
 | **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Pi's own runtime caches, and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 
@@ -202,7 +202,6 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── browser/           # browser MCP server (stdio)
 │   ├── gmail/             # Gmail connector MCP server (stdio)
 │   ├── calendar/          # Calendar connector MCP server (stdio)
-│   ├── mcp-gate/          # approval-gate relay wrapping every MCP server
 │   └── pi-gateway/        # OpenAI-compatible gateway + pi spawner
 ├── internal/              # Shared Go packages (mongo, validate, money, cookbook, healthcheck, notes)
 ├── scripts/

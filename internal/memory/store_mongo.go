@@ -46,6 +46,10 @@ func FromEnv() (*MongoStore, error) {
 	return New(uri, db)
 }
 
+// DB exposes the store's database so the in-process approval gate
+// (ADR-0011 Stage 2) shares this client instead of dialing its own.
+func (s *MongoStore) DB() *mongoDrv.Database { return s.items.Database() }
+
 // EnsureIndexes creates the profile listing index and the settings lookup.
 // Memory has no TTL: an item lives until it is deleted or forgotten.
 // The compound serves the List sort; topic/status filters scan the profile's

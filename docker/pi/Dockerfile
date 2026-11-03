@@ -85,7 +85,6 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/miser-money ./cmd/miser-money \
  && go build -trimpath -ldflags="-s -w" -o /out/browser ./cmd/browser \
  && go build -trimpath -ldflags="-s -w" -o /out/gmail ./cmd/gmail \
  && go build -trimpath -ldflags="-s -w" -o /out/calendar ./cmd/calendar \
- && go build -trimpath -ldflags="-s -w" -o /out/mcp-gate ./cmd/mcp-gate \
  && go build -trimpath -ldflags="-s -w" -o /out/pi-gateway ./cmd/pi-gateway
 
 FROM ${NODE_IMAGE} AS runtime
@@ -214,7 +213,6 @@ COPY --from=gobuild /out/memory           /usr/local/bin/memory
 COPY --from=gobuild /out/browser          /usr/local/bin/browser
 COPY --from=gobuild /out/gmail            /usr/local/bin/gmail
 COPY --from=gobuild /out/calendar         /usr/local/bin/calendar
-COPY --from=gobuild /out/mcp-gate         /usr/local/bin/mcp-gate
 
 # pi-gateway is the container's main process, not an optional extra. It serves the
 # OpenAI-compatible HTTP surface AND spawns one `pi --mode rpc` child per profile,
@@ -229,7 +227,7 @@ RUN chmod 755 /usr/local/bin/miser-money /usr/local/bin/cookbook \
              /usr/local/bin/project-manager /usr/local/bin/notes \
              /usr/local/bin/memory /usr/local/bin/browser \
              /usr/local/bin/gmail /usr/local/bin/calendar \
-             /usr/local/bin/mcp-gate /usr/local/bin/pi-gateway
+             /usr/local/bin/pi-gateway
 
 COPY docker/pi/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

@@ -1,7 +1,7 @@
 // Command browser is the web-browsing MCP server (#312).
 // Storage: none of its own — sessions persist as Chromium profile dirs,
 // evidence lands in the exports tree, and the navigation log is the
-// mcp-gate audit trail (every call's args carry its URL).
+// in-process gate audit trail (every call's args carry its URL).
 // Runs over stdio for MCP clients.
 //
 // What this is for: read-only web tasks the agent can cite — open a page,
@@ -35,6 +35,10 @@ import (
 
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
+	"agento/internal/mongostore"
 )
 
 const (
@@ -558,9 +562,18 @@ func main() {
 	pruneSessions(filepath.Join(agentDir, ".runtime", "browser"))
 	store = &sessions{byProfile: map[string]*session{}, agentDir: agentDir, chrome: chrome}
 
+	// Browser holds no domain store, so the gate gets the process's one
+	// Mongo client (ADR-0011 Stage 2): approvals + audit need a shared
+	// store, and this is the only dial in the process.
+	_, db, err := mongostore.Open(mongostore.Env())
+	if err != nil {
+		log.Fatalf("browser: %v", err)
+	}
+	gate := approvals.NewOn(db)
+
 	s := mcp.NewServer(&mcp.Implementation{Name: "browser", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "browser_goto",
+	approvalgate.AddTool(s, "browser", gate, &mcp.Tool{Name: "browser_goto",
 		Description: "Open a page in the profile's persistent browser. Public http(s) only; login walls stop the call with a report (v1 cannot fill forms, so no password is ever pasted). Holds for approval with the URL shown."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in gotoInput) (*mcp.CallToolResult, map[string]any, error) {
 			u, err := checkURL(in.URL)
@@ -603,7 +616,7 @@ func main() {
 			})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "browser_read",
+	approvalgate.AddTool(s, "browser", gate, &mcp.Tool{Name: "browser_read",
 		Description: "Read the current page as text: URL, title and body content up to the cap. Use it after goto, or to re-read after the page changed."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, map[string]any, error) {
 			sess, err := store.get(profile)
@@ -656,7 +669,7 @@ func main() {
 			})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "browser_screenshot",
+	approvalgate.AddTool(s, "browser", gate, &mcp.Tool{Name: "browser_screenshot",
 		Description: "Capture the current page as PNG into the session dir. Working file, not evidence: use browser_save_evidence for the exports bundle the Files tab shows."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in shotInput) (*mcp.CallToolResult, map[string]any, error) {
 			sess, err := store.get(profile)
@@ -690,7 +703,7 @@ func main() {
 			return result(map[string]any{"ok": true, "path": path})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "browser_save_evidence",
+	approvalgate.AddTool(s, "browser", gate, &mcp.Tool{Name: "browser_save_evidence",
 		Description: "Bundle the current page into exports: PNG screenshot + markdown + meta.json (URL, title, time, note) in a timestamped dir the Files tab shows. Cite the returned paths and URLs in the answer."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in evidenceInput) (*mcp.CallToolResult, map[string]any, error) {
 			sess, err := store.get(profile)

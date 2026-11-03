@@ -15,8 +15,8 @@ flow and the draft-only refusal the relay enforces by tool name.
 
 ## Decision
 
-Two stdio MCP servers behind mcp-gate like every other (`cmd/gmail`,
-`cmd/calendar`, wired in `pi/mcp.json`), calling the official Google
+Two stdio MCP servers with the approval gate in-process like every other
+(`cmd/gmail`, `cmd/calendar`, wired in `pi/mcp.json`), calling the official Google
 Gmail and Calendar APIs with the stored grant:
 
 - gmail: `search_gmail` / `read_gmail` / `list_messages` (read-only),

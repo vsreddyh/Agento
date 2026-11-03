@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	"agento/internal/money"
 	"agento/internal/validate"
 
@@ -21,6 +23,13 @@ import (
 )
 
 var store *money.Store
+
+var gate approvals.Store
+
+// gate is the in-process approval gate (ADR-0011 Stage 2), sharing the
+// domain store's client. Package-level so registerTools (also used by the
+// handler test, where it stays nil and only allow-path tools are called)
+// sees the same instance main builds.
 
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
 	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
@@ -211,6 +220,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("miser-money: %v", err)
 	}
+	// Gate shares the domain store's client (ADR-0011 Stage 2):
+	// zero new Mongo clients.
+	gate = approvals.NewOn(store.DB())
 	s := mcp.NewServer(&mcp.Implementation{Name: "miser-money", Version: "1.0.0"}, nil)
 	registerTools(s)
 
@@ -228,7 +240,7 @@ func main() {
 // nil: a handler that reaches the store before validating panics, and that panic is the
 // signal that the guard was removed.
 func registerTools(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "create_account",
 		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique; type cash|bank|card|wallet|other."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			if in.Type == "" {
@@ -241,7 +253,7 @@ func registerTools(s *mcp.Server) {
 			return result(map[string]any{"ok": true, "account": acct})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_accounts",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "list_accounts",
 		Description: "List accounts with their current (stored) balances."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listAccountsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListAccounts(ctx, in.IncludeArchived)
@@ -251,7 +263,7 @@ func registerTools(s *mcp.Server) {
 			return result(map[string]any{"ok": true, "accounts": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "archive_account",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "archive_account",
 		Description: "Soft-delete an account (history stays queryable; blocked from new writes)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in archiveAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.ArchiveAccount(ctx, in.Name)
@@ -264,7 +276,7 @@ func registerTools(s *mcp.Server) {
 			return result(map[string]any{"ok": true, "archived": in.Name})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "get_balances",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "get_balances",
 		Description: "Current per-account balances plus total across active accounts."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBalancesInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.Balances(ctx)
@@ -275,7 +287,7 @@ func registerTools(s *mcp.Server) {
 			return result(out)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "log_transaction",
 		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
@@ -290,7 +302,7 @@ func registerTools(s *mcp.Server) {
 			return result(map[string]any{"ok": true, "id": tid, "date": day, "type": typ, "amount": in.Amount})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "log_text",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "log_text",
 		Description: "Log from free-form text ('spent 300 on groceries'). Optional account override; blank requires an existing account."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTextInput) (*mcp.CallToolResult, map[string]any, error) {
 			r := money.Classify(in.Text)
@@ -337,7 +349,7 @@ func registerTools(s *mcp.Server) {
 				"error": fmt.Sprintf("Not a loggable statement (classified as '%s').", r.Action)})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "query_transactions",
 		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
@@ -361,7 +373,7 @@ func registerTools(s *mcp.Server) {
 			return result(map[string]any{"ok": true, "count": len(rows), "transactions": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "summarize",
 		Description: "Summarize income, expenses, net total and per-category breakdown. Optional account filter. Give a period phrase OR an explicit start/end pair — half a pair is rejected, and an explicit pair wins over a period phrase if you send both."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in summarizeInput) (*mcp.CallToolResult, map[string]any, error) {
 			// An explicit range wins over `period` — see the tool description, which now
@@ -402,7 +414,7 @@ func registerTools(s *mcp.Server) {
 			return result(sum)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "fix_last_transaction",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "fix_last_transaction",
 		Description: "Correct the most recent transaction's amount (balances adjusted atomically)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in fixLastTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.FixLast(ctx, in.Amount)
@@ -415,7 +427,7 @@ func registerTools(s *mcp.Server) {
 			return result(map[string]any{"ok": true, "amount": in.Amount})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "delete_transactions",
 		Description: "Delete matching transactions (balances inverted atomically). At least one filter required."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			filt := map[string]any{}
@@ -441,7 +453,7 @@ func registerTools(s *mcp.Server) {
 			return result(map[string]any{"ok": true, "deleted": n})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",
+	approvalgate.AddTool(s, "miser-money", gate, &mcp.Tool{Name: "prune_old",
 		Description: "Immediate 90-day purge (TTL handles this natively in the background). dry_run=true (default) only reports."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in pruneOldInput) (*mcp.CallToolResult, map[string]any, error) {
 			days := in.Days

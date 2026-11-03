@@ -8,7 +8,7 @@ import "testing"
 // stack to the driver's defaults with no visible change anywhere.
 //
 // Both dial paths (Client and ConnectURI) go through clientOptions, which is what
-// makes capping here enough for all ~24 clients (~28 before the unwire): most
+// makes capping here enough for all ~17 clients: most
 // domain servers dial through mongostore.Open -> ConnectURI, not Client.
 func TestClientOptionsAppliesPoolDefaults(t *testing.T) {
 	opts := clientOptions("mongodb://example.invalid:27017/")

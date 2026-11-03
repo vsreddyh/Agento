@@ -1,6 +1,9 @@
 # ADR-0002: Approval gates via an MCP relay, audit in Mongo
 
-- Status: accepted (2026-10)
+- Status: superseded in substance by ADR-0011 (2026-11) for the
+  process-isolation claim; the approval/audit behaviour stands unchanged.
+  Enforcement moved from the `mcp-gate` relay process into an in-process
+  library inside each server (`internal/approvalgate`).
 - Issue: #313
 
 ## Context
@@ -203,9 +206,9 @@ belongs to #312.
 
 ## Consequences
 
-- `pi/mcp.json` points every server through `mcp-gate` (built in the image
-  alongside the servers); the entrypoint `pi mcp list` gate passes through
-  it unchanged.
+- `pi/mcp.json` points straight at each server binary (ADR-0011 Stage 2
+  deleted the `mcp-gate` relay; enforcement is in-process now); the entrypoint
+  `pi mcp list` gate probes the servers directly, unchanged.
 - The app needs an approvals surface (pending cards + approve/deny) and an
   audit screen — second PR in this stack.
 - Adding an MCP tool now requires a policy row, enforced by test.

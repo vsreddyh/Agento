@@ -15,28 +15,28 @@ import (
 // as internal/skills).
 const mcpJSONPath = "../../pi/mcp.json"
 
-// mcpEntry is the shape pi/mcp.json uses for every server: the approval relay
-// wrapping the real binary. Asserting it here — not just presence — is what
-// makes a re-add safe: an entry without the `mcp-gate --server` prefix connects
-// fine but bypasses approval, which is precisely the silent regression a
-// presence-only check would wave through.
+// mcpEntry is the shape pi/mcp.json uses for every server: the server binary
+// directly (ADR-0011 Stage 2 deleted the mcp-gate relay; approval is a
+// library inside each server now). Asserting it here — not just presence —
+// is what makes a re-add safe: an entry with the old `mcp-gate --server`
+// prefix spawns a binary that no longer exists, and any other shape is a
+// server Pi cannot start. Either way the entrypoint gate refuses to boot.
 type mcpEntry struct {
 	Command string   `json:"command"`
-	Args    []string `json:"args"`
+	Args    []string `json:"args,omitempty"`
 }
 
-// wantRelayEntry is the only correct shape for a connector entry: the relay in
-// front, the real binary behind it.
-func wantRelayEntry(id string) mcpEntry {
+// wantDirectEntry is the only correct shape for a server entry: the binary
+// itself, no relay, no args.
+func wantDirectEntry(id string) mcpEntry {
 	return mcpEntry{
-		Command: "/usr/local/bin/mcp-gate",
-		Args:    []string{"--server", id, "--", "/usr/local/bin/" + id},
+		Command: "/usr/local/bin/" + id,
 	}
 }
 
 // knownServers is every id pi/mcp.json may legally contain: the eight wired
-// domain/browser servers plus the two connectors, which come and go with OAuth
-// (#424 Stage 1). The domain literals twin the keys in pi/mcp.json — a domain
+// domain/browser servers plus the two connectors, which come and go with OAuth.
+// The domain literals twin the keys in pi/mcp.json — a domain
 // rename must update both files together, and the stray-id check below is what
 // says so when they drift. checkWiring flags any other key outright: a typo'd
 // extra id (e.g. "gmaill" next to a missing "gmail") would otherwise pass
@@ -78,16 +78,15 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 				" but is not a known server id — likely a typo; pi would spawn a bogus server")
 			continue
 		}
-		// Relay shape for every known server present, not just connectors:
-		// a domain entry without the `mcp-gate --server` prefix connects
-		// fine but silently drops approval, the same silent regression
-		// the connector shape check guards against.
+		// Direct shape for every known server present: the relay is gone
+		// (ADR-0011 Stage 2), so a leftover `mcp-gate --server` prefix
+		// points at a binary that no longer exists and the entrypoint
+		// gate refuses to boot.
 		entry := cfg.MCPServers[id]
-		if want := wantRelayEntry(id); entry.Command != want.Command || !slices.Equal(entry.Args, want.Args) {
+		if want := wantDirectEntry(id); entry.Command != want.Command || len(entry.Args) != 0 {
 			problems = append(problems, id+" in "+mcpJSONPath+
 				" is wired in the wrong shape: got command="+entry.Command+
-				" args="+strings.Join(entry.Args, " ")+", want /usr/local/bin/mcp-gate --server "+id+" -- /usr/local/bin/"+id+
-				" — the relay prefix is what enforces approval")
+				" args="+strings.Join(entry.Args, " ")+", want {\"command\": \"/usr/local/bin/"+id+"\"} with no relay and no args")
 		}
 	}
 	for _, id := range ListIDs() {
@@ -96,7 +95,7 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 		if configured && !wired {
 			problems = append(problems, id+" is missing from "+mcpJSONPath+
 				" but server-side OAuth is configured: the connector would advertise tools the agent does not have. Add it as:\n"+
-				"\""+id+"\": {\"command\": \"/usr/local/bin/mcp-gate\", \"args\": [\"--server\", \""+id+"\", \"--\", \"/usr/local/bin/"+id+"\"]}  (see #424 Stage 1)")
+				"\""+id+"\": {\"command\": \"/usr/local/bin/"+id+"\"}  (see ADR-0011 Stage 2)")
 			continue
 		}
 		if !configured && wired {
@@ -105,7 +104,7 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 				reason = oauthErr.Error()
 			}
 			problems = append(problems, id+" is wired in "+mcpJSONPath+
-				" but server-side OAuth is NOT configured ("+reason+"): every tool call pays 2 processes and 2 Mongo clients (6-18 connections) to fail — drop the entry (see #424 Stage 1)")
+				" but server-side OAuth is NOT configured ("+reason+"): every tool call pays 1 process and 1 Mongo client to fail — drop the entry (see ADR-0011 Stage 2)")
 			continue
 		}
 		if !wired {
@@ -118,15 +117,14 @@ func checkWiring(raw []byte, configured bool, oauthErr error) []string {
 }
 
 // TestConnectorServersWiredIffConfigured guards the deliberate unwiring of the
-// connector servers while server-side OAuth is unset (#424 Stage 1).
+// connector servers while server-side OAuth is unset.
 //
-// Unwired-while-unset saves 2 processes, 2 Mongo clients (3 monitors + up to 6
-// pooled each with the ADR-0011 caps, so 6-18 connections) and ~40 MB per
-// connector (a ~15 MB relay plus a ~24 MB server, measured 2026-10-31),
-// for tools that would answer "not configured" on every call. The dangerous
-// direction is the other one: re-adding OAuth later without re-adding the
-// entries leaves a connector the app reports as connectable with no agent tools
-// behind it at all.
+// Unwired-while-unset saves 1 process and 1 Mongo client per connector
+// (3 monitors + up to 6 pooled each with the ADR-0011 caps, so 3-9
+// connections) for tools that would answer "not configured" on every call.
+// The dangerous direction is the other one: re-adding OAuth later without
+// re-adding the entries leaves a connector the app reports as connectable
+// with no agent tools behind it at all.
 //
 // "Configured" here is exactly what ServerOAuthConfig requires: the client pair
 // plus the envelope key. GOOGLE_REDIRECT_URL is deliberately not part of it
@@ -153,9 +151,10 @@ func TestConnectorServersWiredIffConfigured(t *testing.T) {
 // Scope is connectors for presence, every known server for shape: deleting a
 // domain server from mcp.json passes this test by design. Domain presence is
 // enforced by the entrypoint's `pi mcp list` gate at container start, not
-// here — but a present domain entry in the wrong shape (bypassing approval)
-// fails, same as a connector. This test owns the OAuth/wiring iff plus the
-// relay-shape invariant, nothing else.
+// here — but a present domain entry in the wrong shape (a leftover relay
+// prefix pointing at a deleted binary) fails, same as a connector. This
+// test owns the OAuth/wiring iff plus the direct-shape invariant, nothing
+// else.
 func TestCheckWiringBothDirections(t *testing.T) {
 	writeMCP := func(t *testing.T, entries map[string]mcpEntry) []byte {
 		t.Helper()
@@ -188,8 +187,15 @@ func TestCheckWiringBothDirections(t *testing.T) {
 	}
 
 	both := map[string]mcpEntry{
-		Gmail:    wantRelayEntry(Gmail),
-		Calendar: wantRelayEntry(Calendar),
+		Gmail:    wantDirectEntry(Gmail),
+		Calendar: wantDirectEntry(Calendar),
+	}
+
+	relay := func(id string) mcpEntry {
+		return mcpEntry{
+			Command: "/usr/local/bin/mcp-gate",
+			Args:    []string{"--server", id, "--", "/usr/local/bin/" + id},
+		}
 	}
 
 	t.Run("unconfigured+unwired passes", func(t *testing.T) {
@@ -231,14 +237,14 @@ func TestCheckWiringBothDirections(t *testing.T) {
 		}
 	})
 
-	t.Run("wrong shape fails even when wired+configured", func(t *testing.T) {
+	t.Run("relay shape fails even when wired+configured", func(t *testing.T) {
 		configured, oauthErr := setOAuth(t, true)
 		if !configured {
 			t.Fatalf("test setup broken: %v", oauthErr)
 		}
 		bad := map[string]mcpEntry{
-			Gmail:    {Command: "/usr/local/bin/gmail"},
-			Calendar: wantRelayEntry(Calendar),
+			Gmail:    relay(Gmail),
+			Calendar: wantDirectEntry(Calendar),
 		}
 		ps := checkWiring(writeMCP(t, bad), configured, oauthErr)
 		if len(ps) != 1 || !strings.Contains(ps[0], "wrong shape") {
@@ -246,13 +252,13 @@ func TestCheckWiringBothDirections(t *testing.T) {
 		}
 	})
 
-	t.Run("domain wrong shape fails", func(t *testing.T) {
+	t.Run("domain relay shape fails", func(t *testing.T) {
 		configured, oauthErr := setOAuth(t, false)
 		if configured {
 			t.Fatal("test setup broken: expected unconfigured")
 		}
 		bad := map[string]mcpEntry{
-			"notes": {Command: "/usr/local/bin/notes"},
+			"notes": relay("notes"),
 		}
 		ps := checkWiring(writeMCP(t, bad), configured, oauthErr)
 		if len(ps) != 1 || !strings.Contains(ps[0], "wrong shape") {
@@ -262,7 +268,7 @@ func TestCheckWiringBothDirections(t *testing.T) {
 
 	t.Run("stray id fails", func(t *testing.T) {
 		configured, oauthErr := setOAuth(t, false)
-		stray := map[string]mcpEntry{"gmaill": wantRelayEntry(Gmail)}
+		stray := map[string]mcpEntry{"gmaill": wantDirectEntry(Gmail)}
 		ps := checkWiring(writeMCP(t, stray), configured, oauthErr)
 		if len(ps) != 1 || !strings.Contains(ps[0], "not a known server id") {
 			t.Errorf("want the stray-id problem, got %v", ps)
