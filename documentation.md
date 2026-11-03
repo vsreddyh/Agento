@@ -396,8 +396,10 @@ clients each to answer "not configured" on every call. Booting without them is
 safe since #421 (connectors tolerate missing credentials); keeping them
 unwired is #424 Stage 1 (`internal/connectors` fails its tests if the wiring
 and the credentials ever disagree). Re-adding is manual, not automatic: once
-OAuth is configured, add both entries back to `pi/mcp.json` by hand, then
-recreate the pi container so it picks them up:
+OAuth is configured, add both entries back inside the `mcpServers` object in
+`pi/mcp.json` by hand (the `browser` entry is currently last with no trailing
+comma — add one after it first), then `./scripts/hermes.sh restart` so the pi
+container picks them up:
 
 "gmail": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "gmail", "--", "/usr/local/bin/gmail"]}
 "calendar": {"command": "/usr/local/bin/mcp-gate", "args": ["--server", "calendar", "--", "/usr/local/bin/calendar"]}
