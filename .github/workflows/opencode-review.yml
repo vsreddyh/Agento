@@ -47,9 +47,8 @@ jobs:
           model: opencode-go/muse-spark-1.3-contributor
           use_github_token: true
           prompt: |
-            Review this pull request only. Do not modify code, push commits, or create branches or PRs - post findings as PR comments.
-            - Check for code quality issues
-            - Look for potential bugs
-            - Suggest improvements
-            - Follow repo conventions in AGENTS.md, README.md, and documentation.md
-            - For android/** changes, enforce the VERSION + CHANGELOG rules in AGENTS.md
+            Review this pull request for behaviour-level problems, including
+            docs that would make an operator run the wrong command or believe
+            a false claim, and post them as PR comments. Do not modify code,
+            push commits, or create branches or PRs. If there are none, say so
+            once and stop.
