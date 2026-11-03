@@ -283,6 +283,18 @@ _valid_tsdns() {
   [[ "$rest" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]
 }
 
+# _uri_host URI: the hostname part of a redirect URL, scheme- and
+# port-agnostic (the preset is https-validated, but keep-recorded can
+# replace it with anything). Prints the host only when it is a valid
+# tailnet DNS name; callers fall back to TS_DNS otherwise, so a kept
+# loopback URL can never be mistaken for the funnel host.
+_uri_host() {
+  local u="${1#*://}"
+  u="${u%%/*}"; u="${u%%:*}"
+  _valid_tsdns "$u" || return 1
+  printf '%s' "$u"
+}
+
 REPO_DIR="${REPO_DIR:-}"
 if [[ -z "$REPO_DIR" ]]; then
   # Follow symlinks first: an `ln -s …/connectors-google-setup.sh` on PATH
@@ -470,9 +482,11 @@ else
   fi
   while true; do
     ask TS_HOST "Machine name [${TS_HOST:-$_host_default}]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
-    # Pasted hostnames trail whitespace like stage-7 pastes; strip before
-    # the strict regex so a trailing space doesn't fail a good paste.
-    TS_HOST=$(printf '%s' "$TS_HOST" | tr -d '[:space:]' || true)
+    # Pasted hostnames trail whitespace like stage-7 pastes, so trim the
+    # *edges* — but not interior whitespace: "my host" is a typo the strict
+    # regex must reject, not silently repair into "myhost".
+    TS_HOST="${TS_HOST#"${TS_HOST%%[![:space:]]*}"}"
+    TS_HOST="${TS_HOST%"${TS_HOST##*[![:space:]]}"}"
     TS_HOST="${TS_HOST:-${_ts_preset:-$_host_default}}"
     if [[ "$TS_HOST" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then break; fi
     warn "invalid: use lowercase letters, digits, hyphens (no leading/trailing hyphen)"
@@ -666,12 +680,8 @@ unset _redirect_preset
 # The knobs are independent, so they can contradict: funnel serves TS_DNS
 # while Google registers the URI host. Both can be legitimate (dry-runs),
 # but a silent split funnels A while registering B — warn, don't stop.
-_uri_check="${REDIRECT_URI#https://}"; _uri_check="${_uri_check%%/*}"
-if [[ "$_uri_check" != "$TS_DNS" ]]; then
-  warn "REDIRECT_URI host ($_uri_check) differs from TS_DNS ($TS_DNS):"
-  warn "the funnel serves TS_DNS while Google registers the URI host."
-fi
-unset _uri_check
+# Compared *after* the keep prompt below, since keeping can replace the URI;
+# a warn placed here would describe a value that is no longer registered.
 # Every other captured value offers keep-current on re-runs; the derived
 # URI must too, or a hand-customized URL (e.g. loopback for local testing)
 # is silently overwritten. Identical re-derivations stay silent — the
@@ -704,6 +714,15 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   unset _rec_host
 fi
 unset _recorded_uri
+# Compare the *final* URI (after any keep) against the funnel host. A
+# non-tailnet kept URL yields no host — probe/comment fall back to TS_DNS,
+# so there is no funnel-vs-registration split to report there.
+_uri_check=$(_uri_host "$REDIRECT_URI" || true)
+if [[ -n "$_uri_check" && "$_uri_check" != "$TS_DNS" ]]; then
+  warn "REDIRECT_URI host ($_uri_check) differs from TS_DNS ($TS_DNS):"
+  warn "the funnel serves TS_DNS while Google registers the URI host."
+fi
+unset _uri_check
 say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # Preset/dry-run hostnames (or SKIP_PROBE=1) skip the 30× poll: a fake name
 # would burn ~5 min of timeouts before the .env write. One opportunistic
@@ -715,12 +734,11 @@ issuer=""
 # verify host B while registering host A.
 _probe_host="$TS_DNS"
 if (( _URI_FROM_PRESET )); then
-  # Scheme-agnostic strip: a preset is https-validated, but the keep prompt
-  # can replace it with a recorded non-standard URL (loopback http). Only a
-  # tailnet host is probeable over https — anything else falls back to the
-  # funnel host instead of probing "http:" as if it were a hostname.
-  _probe_host="${REDIRECT_URI#*://}"; _probe_host="${_probe_host%%/*}"; _probe_host="${_probe_host%%:*}"
-  if ! _valid_tsdns "$_probe_host"; then _probe_host="$TS_DNS"; fi
+  # _uri_host strips scheme/port and returns empty for a kept non-standard
+  # URL (loopback http) — fall back to the funnel host rather than probing
+  # "https://http:" as if that were a hostname.
+  _probe_host=$(_uri_host "$REDIRECT_URI" || true)
+  _probe_host="${_probe_host:-$TS_DNS}"
 fi
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
@@ -948,11 +966,11 @@ unset v
 # can differ from the daemon-derived TS_DNS.
 _comment_host="$TS_DNS"
 if (( _URI_FROM_PRESET )); then
-  # Same validate-then-fallback as the probe host: the comment records the
-  # funnel host, so a kept non-tailnet URL (loopback http) must not write
-  # "https://http:" or claim a funnel serves something it doesn't.
-  _comment_host="${REDIRECT_URI#*://}"; _comment_host="${_comment_host%%/*}"; _comment_host="${_comment_host%%:*}"
-  if ! _valid_tsdns "$_comment_host"; then _comment_host="$TS_DNS"; fi
+  # Same _uri_host derivation as the probe host: the comment records the
+  # funnel host, so a kept non-tailnet URL must not write "https://http:"
+  # or claim a funnel serves something it doesn't.
+  _comment_host=$(_uri_host "$REDIRECT_URI" || true)
+  _comment_host="${_comment_host:-$TS_DNS}"
 fi
 # ASCII sentinel in one variable: non-ASCII dashes would silently fork the
 # block if an editor normalized them, and two spellings would drift.
@@ -1027,7 +1045,7 @@ if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-
   # check, or a missing var reads as "reaches the pi service".
   _render_missing=""
   for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
-    if grep -qE "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[^\"'[:space:]]" "$RENDER_OUT"; then
+    if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[^\"'[:space:]]" "$RENDER_OUT"; then
       printf '  %s✓%s %s present in rendered compose config\n' "$GREEN" "$RESET" "$k"
     else
       printf '  %s✗%s %s renders EMPTY — fix it before restarting\n' "$YELLOW" "$RESET" "$k"
