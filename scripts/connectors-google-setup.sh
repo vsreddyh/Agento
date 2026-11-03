@@ -247,7 +247,7 @@ _check_kept_host() {
   # (docs links, admin console), and an unfiltered first match would
   # compare the wrong host against TS_DNS. Every host compared here is
   # a tailnet DNS name (<host>.<tailnet>.ts.net), so match only that.
-  _kh=$(tailscale funnel status 2>/dev/null | grep -oE 'https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net' | head -n1 2>/dev/null || true)
+  _kh=$(tailscale funnel status 2>/dev/null | grep -oE 'https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net' 2>/dev/null | head -n1 2>/dev/null || true)
   _kh="${_kh#https://}"
   if [[ -n "$_kh" && "$_kh" != "$TS_DNS" ]]; then
     warn "kept funnel serves ($_kh) but this run targets ($TS_DNS):"
@@ -364,8 +364,9 @@ fi
 # Dependency preflight: every external the stages shell out to that must
 # exist. jq is the critical one — without it every tailscale-status check
 # misreads as down. Deliberately unlisted: ps (has a kill -0 fallback),
+# readlink (symlink resolution degrades to the script's own directory),
 # tput (colors degrade), timeout (documented optional), grep/sed/tr/cut
-# (universal).
+# and dirname (universal).
 # Local-daemon calls (tailscale over its unix socket) are intentionally
 # unbounded throughout: a wedged daemon fails fast in practice, unlike
 # network waits, which all carry budgets (curl --max-time, loop counts,
@@ -714,7 +715,12 @@ issuer=""
 # verify host B while registering host A.
 _probe_host="$TS_DNS"
 if (( _URI_FROM_PRESET )); then
-  _probe_host="${REDIRECT_URI#https://}"; _probe_host="${_probe_host%%/*}"
+  # Scheme-agnostic strip: a preset is https-validated, but the keep prompt
+  # can replace it with a recorded non-standard URL (loopback http). Only a
+  # tailnet host is probeable over https — anything else falls back to the
+  # funnel host instead of probing "http:" as if it were a hostname.
+  _probe_host="${REDIRECT_URI#*://}"; _probe_host="${_probe_host%%/*}"; _probe_host="${_probe_host%%:*}"
+  if ! _valid_tsdns "$_probe_host"; then _probe_host="$TS_DNS"; fi
 fi
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
@@ -942,7 +948,11 @@ unset v
 # can differ from the daemon-derived TS_DNS.
 _comment_host="$TS_DNS"
 if (( _URI_FROM_PRESET )); then
-  _comment_host="${REDIRECT_URI#https://}"; _comment_host="${_comment_host%%/*}"
+  # Same validate-then-fallback as the probe host: the comment records the
+  # funnel host, so a kept non-tailnet URL (loopback http) must not write
+  # "https://http:" or claim a funnel serves something it doesn't.
+  _comment_host="${REDIRECT_URI#*://}"; _comment_host="${_comment_host%%/*}"; _comment_host="${_comment_host%%:*}"
+  if ! _valid_tsdns "$_comment_host"; then _comment_host="$TS_DNS"; fi
 fi
 # ASCII sentinel in one variable: non-ASCII dashes would silently fork the
 # block if an editor normalized them, and two spellings would drift.
