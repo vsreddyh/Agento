@@ -253,7 +253,8 @@ _check_kept_host() {
   # `https://foo.ts.net.evil.com` would extract as `foo.ts.net`. Every host
   # compared here is a tailnet DNS name (<host>.<tailnet>.ts.net).
   _kh=$(tailscale funnel status 2>/dev/null | grep -oE 'https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net([^a-z0-9.-]|$)' 2>/dev/null | head -n1 2>/dev/null || true)
-  _kh="${_kh%[^a-z0-9]}"   # drop the boundary char the alternation captured
+  # Glob, not regex: strip exactly one trailing non-alnum boundary char.
+  _kh="${_kh%[^a-z0-9]}"
   _kh="${_kh#https://}"
   if [[ -n "$_kh" && "$_kh" != "$TS_DNS" ]]; then
     warn "kept funnel serves ($_kh) but this run targets ($TS_DNS):"
@@ -311,12 +312,12 @@ if [[ -z "$REPO_DIR" ]]; then
   # from BASH_SOURCE, never a dash-leading path.
   _self="${BASH_SOURCE[0]}"; _hops=0
   while [[ -L "$_self" ]] && (( _hops < 40 )); do
-    _link_dir=$(cd -- "$(dirname "$_self")" 2>/dev/null && pwd) || break
+    _link_dir=$(cd -- "$(dirname "$_self" 2>/dev/null)" 2>/dev/null && pwd) || break
     _target=$(readlink "$_self" 2>/dev/null) || break
     [[ "$_target" == /* ]] || _target="$_link_dir/$_target"
     _self="$_target"; _hops=$((_hops + 1))
   done
-  REPO_DIR=$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd) || REPO_DIR=""
+  REPO_DIR=$(cd "$(dirname "$_self" 2>/dev/null)/.." 2>/dev/null && pwd) || REPO_DIR=""
   unset _self _hops _link_dir _target
 fi
 # An empty REPO_DIR would resolve ENV_FILE to "/.env" (absolute, so the
@@ -527,8 +528,9 @@ else
   tailscale up --hostname="$TS_HOST" </dev/null >"$LOG" 2>&1 &
   TS_PID=$!
   URL=""
-  # Current login-URL shape; if Tailscale ever changes domains, the "no
-  # login URL appeared" fallback below still fires after 60s of dots.
+  # Current login-URL shape, Tailscale SaaS control plane only — a Headscale
+  # URL won't match and takes the 60s fallback. Same fallback covers a
+  # Tailscale-side domain change.
   for ((__i = 1; __i <= 60; __i++)); do
     URL=$(grep -oE 'https://login\.tailscale\.com/[^[:space:]]+' "$LOG" 2>/dev/null | head -n1 2>/dev/null || true)
     if [[ -n "$URL" ]]; then
