@@ -660,7 +660,7 @@ fi
 unset _funnel_status
 if [[ -n "$FOUT" ]]; then
   if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1; then
-    if grep -qiE "already|in use|exists" "$FOUT"; then
+    if grep -qiE -- "already|in use|exists" "$FOUT"; then
       note "funnel reports it is already serving; keeping the existing one"
       _check_kept_host
     else
@@ -668,7 +668,7 @@ if [[ -n "$FOUT" ]]; then
       sed 's/^/      /' "$FOUT" 2>/dev/null || true
       pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
       tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1 || {
-        if grep -qiE "already|in use|exists" "$FOUT"; then
+        if grep -qiE -- "already|in use|exists" "$FOUT"; then
           note "funnel reports it is already serving; keeping the existing one"
           _check_kept_host
         else
@@ -1108,7 +1108,7 @@ RENDER_ERR=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — sto
 # socket-touching detection above is already timeout-bounded), so a hang
 # here means a wedged compose binary, not a slow network — no budget
 # would make that failure friendlier than the exit below.
-if ( cd "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >"$RENDER_OUT" 2>"$RENDER_ERR"; then
+if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >"$RENDER_OUT" 2>"$RENDER_ERR"; then
   # Empty vars render as KEY: '' — the quote alone must not satisfy the
   # check, or a missing var reads as "reaches the pi service".
   _render_missing=""
@@ -1137,7 +1137,7 @@ else
   # The subshell's cd can only fail on a tree deleted mid-run (REPO_DIR is
   # fail-loud guarded above), but attributing that to compose would send the
   # reader debugging the wrong thing.
-  if ! ( cd "$REPO_DIR" ) 2>/dev/null; then
+  if ! ( cd -- "$REPO_DIR" ) 2>/dev/null; then
     warn "cannot enter $REPO_DIR (deleted or unreadable mid-run) — the .env writes stand, but nothing is verified"
   else
     warn "compose render failed (the .env writes stand, but nothing is verified — fix compose and re-run):"
@@ -1146,6 +1146,10 @@ else
   exit 1
 fi
 rm -f "$RENDER_OUT" "$RENDER_ERR" || true; RENDER_OUT=""; RENDER_ERR=""
+
+# Stage outputs persist; these three were pure temps (the URL was opened long
+# ago, the preset flags last read by the comment host).
+unset URL _DNS_FROM_PRESET _URI_FROM_PRESET
 
 finish
 
