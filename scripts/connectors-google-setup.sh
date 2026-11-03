@@ -285,7 +285,19 @@ _valid_tsdns() {
 
 REPO_DIR="${REPO_DIR:-}"
 if [[ -z "$REPO_DIR" ]]; then
-  REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd) || REPO_DIR=""
+  # Follow symlinks first: an `ln -s …/connectors-google-setup.sh` on PATH
+  # otherwise resolves the link's directory and targets the wrong checkout
+  # for the .env default and the absolute checklist path. Portable loop
+  # (BSD readlink has no -f), bounded so a symlink cycle can't hang.
+  _self="${BASH_SOURCE[0]}"; _hops=0
+  while [[ -L "$_self" ]] && (( _hops < 40 )); do
+    _link_dir=$(cd -- "$(dirname -- "$_self")" 2>/dev/null && pwd) || break
+    _target=$(readlink "$_self" 2>/dev/null) || break
+    [[ "$_target" == /* ]] || _target="$_link_dir/$_target"
+    _self="$_target"; _hops=$((_hops + 1))
+  done
+  REPO_DIR=$(cd "$(dirname -- "$_self")/.." 2>/dev/null && pwd) || REPO_DIR=""
+  unset _self _hops _link_dir _target
 fi
 # An empty REPO_DIR would resolve ENV_FILE to "/.env" (absolute, so the
 # relative-canonicalization below skips it) and misdirect stage 8 — or,
@@ -597,7 +609,7 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # grep -qF "" matches every line, so without it an empty TS_DNS would
 # turn the fast path into always-keep (empty exits earlier today, but the
 # safety belongs on this line, not on ordering).
-if [[ -n "$TS_DNS" ]] && echo "$_funnel_status" | grep -qF "$TS_DNS" && echo "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && echo "$_funnel_status" | grep -qiE 'https://|443'; then
+if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' || true
   rm -f "$FOUT"; FOUT=""
@@ -1029,7 +1041,7 @@ else
   sed 's/^/      /' "$RENDER_ERR" || true
   exit 1
 fi
-rm -f "$RENDER_OUT" "$RENDER_ERR"; RENDER_OUT=""; RENDER_ERR=""
+rm -f "$RENDER_OUT" "$RENDER_ERR" || true; RENDER_OUT=""; RENDER_ERR=""
 
 finish
 
