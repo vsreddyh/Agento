@@ -349,6 +349,12 @@ fi
 if [[ "$ENV_FILE" == "~/"* ]]; then
   [[ -n "${HOME:-}" ]] || { warn "HOME is unset — export HOME or pass an absolute ENV_FILE"; exit 1; }
   ENV_FILE="$HOME/${ENV_FILE#"~/"}"; fi
+# ~user expansion is a login-shell feature we do not implement; fail loud
+# rather than canonicalizing it into "$PWD/~user/…" and misdirecting stage 8.
+if [[ "$ENV_FILE" == "~"* ]]; then
+  warn "ENV_FILE only expands bare ~ and ~/… — pass an absolute path"
+  exit 1
+fi
 # An explicit relative export (ENV_FILE=throwaway.env) would otherwise
 # split-brain: stage 8 writes against the caller's cwd while the render
 # cd's to REPO_DIR first. Canonicalize once, against the invoking cwd.
@@ -575,7 +581,9 @@ else
     TS_PID=""
   fi
   # Clear the log path alongside the file itself so the trap goes quiet.
-  rm -f "$LOG"; LOG=""
+  # || true: the EXIT trap owns these paths, so cleanup failure must not
+  # exit silently with set -e (same rule as the render tmps below).
+  rm -f "$LOG" || true; LOG=""
 fi
 
 if ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1; then
@@ -655,7 +663,7 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
-  rm -f "$FOUT"; FOUT=""
+  rm -f "$FOUT" || true; FOUT=""
 fi
 unset _funnel_status
 if [[ -n "$FOUT" ]]; then
@@ -678,7 +686,7 @@ if [[ -n "$FOUT" ]]; then
     fi
   fi
   sed 's/^/      /' "$FOUT" 2>/dev/null || true
-  rm -f "$FOUT"; FOUT=""
+  rm -f "$FOUT" || true; FOUT=""
 fi
 printf '\n'
 
@@ -1074,7 +1082,7 @@ else
     exit 1
   }
   cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: $_restore_cmd"; exit 1; }
-  rm -f "$_cb_tmp"; _cb_tmp=""
+  rm -f "$_cb_tmp" || true; _cb_tmp=""
 fi
 unset _comment_host _marker _marker_present _grep_rc
 
