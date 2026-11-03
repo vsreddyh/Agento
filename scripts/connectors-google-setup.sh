@@ -1188,7 +1188,7 @@ printf '  4. Re-add gmail/calendar inside the "mcpServers" object in pi/mcp.json
 printf '     by hand (Stage 1 unwired them; OAuth alone does not bring the\n'
 printf '     agent tools back). The "browser" entry is currently last and has\n'
 printf '     no trailing comma — add one after it, then paste (commas after\n'
-printf '     `browser` and `gmail`, none after `calendar`):\n'
+printf '     browser and gmail, none after calendar):\n'
 printf '       "gmail": {"command": "/usr/local/bin/mcp-gate", "args":\n'
 printf '         ["--server", "gmail", "--", "/usr/local/bin/gmail"]},\n'
 printf '       "calendar": {"command": "/usr/local/bin/mcp-gate", "args":\n'
