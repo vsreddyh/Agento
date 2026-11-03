@@ -32,7 +32,8 @@ const (
 	// The driver default is 100 per member, which is dimensioning for load this
 	// deployment will never see: two users, one assistant turn at a time, and
 	// each server handles a single tool call sequentially. With ~24 clients
-	// the default lets an idle stack hold thousands of connections, and the
+	// the default lets a loaded stack hold thousands of connections (idle
+	// holds monitors only, ~24 x 3 = ~72, since minPoolSize is 0), and the
 	// 2026-10-31 outage showed why that matters — churn against that ceiling
 	// (#423) is what took the cluster down, not steady-state count (#424).
 	//
