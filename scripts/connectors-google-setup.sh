@@ -803,6 +803,8 @@ stage "Google Cloud: project + APIs"
 # create-project branch, so EOF-on-a-TTY would walk it instead of exiting
 # like every other gate. ask fails loudly on EOF instead: same y/N line
 # discipline on a terminal, friendly stop anywhere else.
+note "This question is re-asked each run — it is navigation, not saved"
+note "configuration (only the .env values persist)."
 ask _HAVE_PROJ "Have a Google Cloud project with the Gmail and Calendar APIs enabled? [y/N]:" || { warn "no input — the wizard needs a terminal; re-run to try again"; exit 1; }
 _have_yes=0
 # Strict yes (not confirm's ^[Yy] class): a typo'd "yn" must fall into the
@@ -913,17 +915,20 @@ if [[ ! -w "$ENV_FILE" ]]; then
   warn "no write permission on $ENV_FILE — fix ownership/permissions, then re-run"
   exit 1
 fi
-_env_dir=$(dirname "$ENV_FILE" || true)
+_env_dir=$(dirname "$ENV_FILE" 2>/dev/null || true)
 if [[ ! -w "$_env_dir" ]]; then
   warn "no write permission in $_env_dir (backups land there) — fix ownership/permissions, then re-run"
   exit 1
 fi
 unset _env_dir
-BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S || true).$$"
-cp -p -- "$ENV_FILE" "$BACKUP" || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
-# cp -p preserves the source mtime, which would tie-break the -ot prune
-# below by glob order on rapid re-runs — re-stamp so filename order and
-# mtime order agree (mode from -p is kept).
+BACKUP="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S 2>/dev/null || true).$$"
+# umask 077 in the subshell: with -p, cp would create the backup in the
+# source's mode (typically 0644) — a full-secret copy world-readable until
+# the chmod below, and permanently if the run dies in that window. Without
+# -p there is no mode to restore (the chmod is the guarantee); the touch
+# re-stamps mtime so filename order and -ot prune order agree on rapid
+# re-runs.
+( umask 077; cp -- "$ENV_FILE" "$BACKUP" ) || { warn "backup failed (disk full? read-only dir?) — stopping before anything is written"; exit 1; }
 touch -- "$BACKUP" || { warn "backup timestamp failed (disk full?) — stopping before anything is written"; exit 1; }
 note "backup: $BACKUP (if the run is interrupted mid-write, restore with: cp -p \"$BACKUP\" \"$ENV_FILE\")"
 # Secrets are about to land in this file: 0600 regardless of what the
