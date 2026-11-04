@@ -42,7 +42,7 @@ data class GateApproval(
         .take(200)
 }
 
-/** One audit row: a proxied call and what happened to it (#313). */
+/** One audit row: a gated call and what happened to it (#313). */
 data class AuditRow(
     val id: String,
     val server: String = "",
@@ -101,8 +101,8 @@ internal fun parseAuditRow(o: JSONObject): AuditRow? {
  * logged and skipped rather than failing the list.
  */
 /** One approvals page: rows plus whether the store can decide them.
- * Degraded means the gateway and relay hold different in-process stores:
- * decisions made here can never reach a held call. */
+ * Degraded means the gateway and the servers hold different in-process
+ * stores: decisions made here can never reach a held call. */
 data class ApprovalList(
     val approvals: List<GateApproval> = emptyList(),
     val degraded: Boolean = false,
@@ -216,7 +216,7 @@ class ApprovalsApi(context: Context) {
     }
 
     /**
-     * Decides a held call. True = approved (the relay forwards it),
+     * Decides a held call. True = approved (the gate releases it),
      * false = denied (Pi gets a tool error and the turn continues).
      * A 409 means someone else decided first — refresh, don't retry blind.
      */

@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.17.3]
+- **Approval-gate comments describe the in-process gate (ADR-0011).** No
+  behaviour change: the approvals API said an audit row was a "proxied"
+  call, degraded meant the gateway and "the relay" held different stores,
+  and approving let "the relay" forward the call. Stage 2 folded the gate
+  into each server, so the comments now say gated, servers, and the gate.
+
 ## [5.17.2]
 - **The slash menu stops promising what it cannot send (#395, #396,
   #390, #391, #394, #397, #392, #393, #411).** `/SKILL:notes` and

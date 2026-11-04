@@ -77,7 +77,8 @@ func FromEnv() (*MongoStore, error) {
 func (s *MongoStore) DB() *mongoDrv.Database { return s.coll.Database() }
 
 // EnsureIndexes creates the states TTL (pending attempts die on their own;
-// the relay-style sweep other stores need does not exist here by design)
+// the approval-gate startup sweep other stores run does not exist here by
+// design — an OAuth state has no holder to orphan)
 // plus the connector lookup the supersede/scrub deletes filter on. The
 // connectors collection needs none: two fixed rows keyed by _id.
 func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
