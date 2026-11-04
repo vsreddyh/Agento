@@ -1299,6 +1299,8 @@ internal fun ChatTab(
             title = title,
             threads = state.threads,
             activeId = state.threadId,
+            loadError = state.threadsError,
+            onRetryLoad = vm::retryThreadsLoad,
             onSearch = vm::searchThreads,
             onSwitch = { tts.stop(); vm.switchThread(it); showThreads = false },
             onNew = { tts.stop(); vm.newConversation() },
@@ -1431,12 +1433,25 @@ internal fun ThreadSheet(
     onExport: (String) -> Unit,
     onSaveSkill: (String) -> Unit,
     onClose: () -> Unit,
+    /** Corrupt-file banner (#431): "" when the last load succeeded. */
+    loadError: String = "",
+    onRetryLoad: () -> Unit = {},
 ) {
     var query by remember { mutableStateOf("") }
     var renaming by remember { mutableStateOf<ThreadSummary?>(null) }
     var deleting by remember { mutableStateOf<ThreadSummary?>(null) }
     ModalBottomSheet(onDismissRequest = onClose) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            if (loadError.isNotEmpty()) {
+                // Loud, persistent (#431): the list below is NOT "no
+                // conversations" — the file failed to parse and its bytes
+                // stay on disk (the save guard keeps them). Retry re-parses;
+                // Settings → Backup exports the raw file.
+                ErrorCard(raw = loadError, onRetry = onRetryLoad)
+                Spacer(modifier = Modifier.height(4.dp))
+                HintLine("Data kept on disk — retry, or export the raw file from Settings → Backup.")
+                Spacer(modifier = Modifier.height(8.dp))
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "$title conversations",

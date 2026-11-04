@@ -60,6 +60,10 @@ data class ChatUiState(
     /** Conversations in this tab, newest first. */
     val threads: List<ThreadSummary> = emptyList(),
     val threadId: String = "",
+    /** Last thread-file load failure (#431): corrupt/unreadable bytes load
+     * as an empty list, so without this the sheet reads it as "no
+     * conversations". "" when the last load succeeded or no file exists. */
+    val threadsError: String = "",
     /** Reachability of the server; null = not checked yet. */
     val online: Boolean? = null,
     /** Distinct tool names seen live this turn (pi-gateway's progress frames). */
@@ -376,6 +380,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         threads = summaries(),
                         threadId = threadId,
                         ready = true,
+                        // Corrupt file loads as empty (#431): banner it
+                        // instead of showing "no conversations".
+                        threadsError = ChatThreads.loadError(tab),
                     )
                 } else {
                     // A user op already published newer state — just mark ready so the UI unblocks.
@@ -929,7 +936,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val live = threads.firstOrNull { it.id == threadId }
         val merged = restored.filter { it.id != threadId } + listOfNotNull(live)
         threads = merged
-        _state.value = _state.value.copy(threads = summaries())
+        _state.value = _state.value.copy(
+            threads = summaries(),
+            threadsError = ChatThreads.loadError(tab),
+        )
         return merged.filter { it.messages.isNotEmpty() }
     }
 
@@ -956,6 +966,32 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         }
     }
 
+    /** Re-reads the thread file after a load failure (#431): the failure
+     * is never cached, so a retry re-parses the bytes still on disk (the
+     * save guard keeps them there). On success the file is adopted like a
+     * rewrite; on failure the banner re-publishes. */
+    fun retryThreadsLoad() {
+        touchThreads()
+        viewModelScope.launch(Dispatchers.IO) {
+            val restored = ChatThreads.load(appCtx, tab)
+                .filter { it.id.isNotEmpty() }
+                .sortedByDescending { it.updatedAt }
+                .filter { it.messages.isNotEmpty() }
+            withContext(Dispatchers.Main) {
+                if (ChatThreads.loadError(tab).isEmpty()) {
+                    if (_state.value.streaming) {
+                        pendingRestored = restored
+                    } else {
+                        applyRewrite(restored)
+                    }
+                } else {
+                    _state.value = _state.value.copy(
+                        threadsError = ChatThreads.loadError(tab))
+                }
+            }
+        }
+    }
+
     /** Adopts a rewritten thread file (#339): the restored list is
      * authoritative, and a conversation it no longer holds must not stay
      * on screen (its next persist would put it back). */
@@ -976,6 +1012,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threads = summaries(),
                 pendingAttachments = emptyList(),
                 notices = retainedNotices(),
+                threadsError = ChatThreads.loadError(tab),
             )
         } else {
             val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
@@ -987,6 +1024,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 threadId = threadId,
                 pendingAttachments = emptyList(),
                 notices = retainedNotices(),
+                threadsError = ChatThreads.loadError(tab),
             )
         }
         // An import replaces the threads out from under the turn: any held
