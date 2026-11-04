@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.1]
+- **Gateway failures surface instead of rendering as normal data (#430).**
+  A failed model catalog shows the saved pick only (never the offline list
+  as live inventory) with an explicit error; the Settings hub reports
+  "Unreachable" instead of echoing the server URL. Unparseable task/job
+  rows are counted ("N could not be parsed") in the Task Manager count line
+  and the Scheduler, and unexpected `tasks`/`jobs`/`projects` envelopes fail
+  loudly instead of reading as empty lists.
+
 ## [6.0.0]
 - **BREAKING: retired prefs keys and old-gateway fallbacks removed (#433).**
   The app reads one canonical key per setting (`server_base_url`,

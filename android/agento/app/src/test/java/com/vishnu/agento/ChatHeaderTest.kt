@@ -81,4 +81,21 @@ class ChatHeaderTest {
         assertEquals(0, chatHeaderOverflowBadgeCount(-1, -2))
         assertEquals(2, chatHeaderOverflowBadgeCount(-1, 2))
     }
+
+    @Test
+    fun `failed catalog never masquerades offline list as live`() {
+        // live=false (fetch failed): saved pick only, no offline entries (#430).
+        assertEquals(
+            listOf(ProviderOption("saved-x", "saved-x (saved)", emptyList())),
+            providerOptionsFor(emptyList(), "saved-x", live = false),
+        )
+        assertEquals(
+            emptyList<ProviderOption>(),
+            providerOptionsFor(emptyList(), "", live = false),
+        )
+        // live default unchanged: offline stand-in plus the saved pick.
+        val live = providerOptionsFor(emptyList(), "saved-x")
+        assertTrue(live.any { it.slug == "saved-x" })
+        assertTrue(live.size > 1)
+    }
 }

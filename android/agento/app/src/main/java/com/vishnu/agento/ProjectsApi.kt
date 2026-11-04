@@ -96,10 +96,12 @@ class ProjectsApi(context: Context) {
             call("GET", "/api/projects$q").map { body ->
                 val out = mutableListOf<ServerProject>()
                 val root = JSONObject(body)
+                // Canonical `projects` envelope only (#433: no `data`/`items`
+                // downgrade — another shape fails loudly instead of reading
+                // as "no projects").
                 val arr = root.optJSONArray("projects")
-                    ?: root.optJSONArray("data")
-                    ?: root.optJSONArray("items")
-                    ?: return@map out
+                    ?: throw IllegalStateException(
+                        "unexpected projects response shape (gateway too old?)")
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     parseProject(o)?.let { out.add(it) }

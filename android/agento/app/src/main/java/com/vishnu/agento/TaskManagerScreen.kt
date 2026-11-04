@@ -102,6 +102,9 @@ internal fun TaskManagerScreen(
     // Whether the server held back rows beyond its cap: the list below
     // must say so rather than silently ending mid-collection (#168).
     var listTruncated by remember { mutableStateOf(false) }
+    // Rows the server sent but the parse skipped (#430): counted in
+    // TasksApi.list, shown in the count line, never a silent shrink.
+    var listDropped by remember { mutableIntStateOf(0) }
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
@@ -294,6 +297,7 @@ internal fun TaskManagerScreen(
                 val leaving = exiting.filterValues { it == filter }.keys
                 tasks = mergeRefresh(page.tasks, tasks, leaving)
                 listTruncated = page.truncated
+                listDropped = page.dropped
                 error = ""
                 // Which filter these rows are the answer for (#308): recorded
                 // with the rows themselves, so the enter-animation effect never
@@ -327,6 +331,7 @@ internal fun TaskManagerScreen(
                     // them: a failed fetch leaves yesterday's rows up, and they
                     // must not keep advertising yesterday's truncation.
                     listTruncated = false
+                    listDropped = 0
                 }
                 false
             },
@@ -1163,6 +1168,7 @@ internal fun TaskManagerScreen(
                             // find what was never fetched (#168 follow-up is
                             // wiring ?search= end to end).
                             (if (listTruncated) " — showing the first ${tasks.size}" else "") +
+                            (if (listDropped > 0) " · $listDropped could not be parsed" else "") +
                             // List-level, not per-task (#288): when the local
                             // rows were last fetched. Absent before the first
                             // successful load.

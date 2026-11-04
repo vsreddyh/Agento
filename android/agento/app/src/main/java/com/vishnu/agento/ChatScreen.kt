@@ -1646,7 +1646,7 @@ internal fun TabModelSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.height(12.dp))
-            val options = providerOptionsFor(catalog, provider)
+            val options = providerOptionsFor(catalog, provider, live = error.isEmpty())
             val shownProvider = options.firstOrNull { it.slug == provider }
                 ?.let { providerDisplay(it.slug, it.label) }
                 ?: provider.ifEmpty { "Choose a provider…" }
@@ -1715,7 +1715,7 @@ internal fun TabModelSheet(
                 error.isNotEmpty() -> {
                     ErrorCard(raw = error)
                     Spacer(modifier = Modifier.height(4.dp))
-                    HintLine("Check Server URL + Password in Settings, then reopen this picker.")
+                    HintLine("Live models could not be loaded — only the saved pick is listed below. Check Server URL + Password in Settings, then reopen this picker.")
                 }
                 catalog.isEmpty() -> {
                     HintLine("No providers found — check Settings → Server.")
@@ -3910,10 +3910,21 @@ internal fun providerDisplay(slug: String, label: String): String =
     if (label == slug) slug else "$label ($slug)"
 
 /** Dropdown options for a tab: live catalog, else known slugs; the saved
- * value is always kept so legacy/unknown slugs are never lost. */
-internal fun providerOptionsFor(catalog: List<ProviderOption>, saved: String): List<ProviderOption> {
+ * value is always kept so legacy/unknown slugs are never lost.
+ *
+ * The offline list is only a stand-in while live data is expected ([live]
+ * true: still loading or never attempted). Once the fetch has FAILED the
+ * caller passes live=false and the picker shows the saved value only —
+ * the offline list must never masquerade as live inventory next to an
+ * error card (#430). */
+internal fun providerOptionsFor(
+    catalog: List<ProviderOption>,
+    saved: String,
+    live: Boolean = true,
+): List<ProviderOption> {
     val base = catalog.ifEmpty {
-        LlmProvider.entries.map { ProviderOption(it.id, it.id, emptyList()) }
+        if (live) LlmProvider.entries.map { ProviderOption(it.id, it.id, emptyList()) }
+        else emptyList()
     }
     return if (saved.isNotBlank() && base.none { it.slug == saved }) {
         listOf(ProviderOption(saved, "$saved (saved)", emptyList())) + base

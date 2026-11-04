@@ -118,6 +118,9 @@ internal fun SettingsScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
+    // True when the inventory fetch failed (#430): the hub must say
+    // Unreachable, not render the server URL as if it answered.
+    var catalogFailed by remember { mutableStateOf(false) }
     // Bumped after a settings import so the fields below reload from prefs.
     var settingsRefresh by remember { mutableIntStateOf(0) }
 
@@ -125,9 +128,10 @@ internal fun SettingsScreen(
     LaunchedEffect(settingsRefresh) {
         error = ""
         val api = ChatApi(context)
-        catalog = runCatching {
-            api.fetchCatalog(catalogPath(api)).getOrDefault(emptyList())
-        }.getOrDefault(emptyList())
+        api.fetchCatalog(catalogPath(api)).fold(
+            onSuccess = { list -> catalog = list; catalogFailed = false },
+            onFailure = { catalog = emptyList(); catalogFailed = true },
+        )
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -190,6 +194,8 @@ internal fun SettingsScreen(
                         SettingsHub(
                             serverStatus = if (state.serverUrl.isBlank()) {
                                 "Not set up"
+                            } else if (catalogFailed) {
+                                "Unreachable — check server"
                             } else if (catalog.isNotEmpty()) {
                                 "Connected"
                             } else {

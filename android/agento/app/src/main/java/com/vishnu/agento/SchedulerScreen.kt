@@ -47,6 +47,9 @@ internal fun SchedulerScreen(
     val scope = rememberCoroutineScope()
     val toasts = remember(scope) { ToastCenter(scope) }
     var jobs by remember { mutableStateOf<List<CronJob>>(emptyList()) }
+    // Unparseable rows the server sent but the list skipped (#430): counted
+    // in the parse, shown below, never a silent shrink.
+    var dropped by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
@@ -63,12 +66,13 @@ internal fun SchedulerScreen(
         scope.launch {
             JobsApi(context).list(path()).fold(
                 onSuccess = {
-                    jobs = it
+                    jobs = it.jobs
+                    dropped = it.dropped
                     loaded = true
                     // Same discovery as the background worker, over the
                     // rows just fetched rather than a second fetch: a
                     // response that landed while away notifies on open.
-                    CronCheck.notifyFresh(context, it)
+                    CronCheck.notifyFresh(context, it.jobs)
                 },
                 onFailure = { e ->
                     error = e.message ?: e.javaClass.simpleName
@@ -133,6 +137,9 @@ internal fun SchedulerScreen(
             if (error.isNotEmpty() && jobs.isEmpty()) {
                 ErrorCard(raw = error, onRetry = { load() },
                     modifier = Modifier.padding(12.dp))
+            }
+            if (dropped > 0) {
+                HintLine("$dropped job(s) could not be parsed — the list below is partial.")
             }
             if (loaded && jobs.isEmpty() && error.isEmpty()) {
                 EmptyState(
