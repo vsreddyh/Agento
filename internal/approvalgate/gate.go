@@ -23,6 +23,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"agento/internal/approvals"
@@ -36,10 +37,22 @@ const (
 	storeTimeout = 5 * time.Second
 )
 
+// warned tracks servers already warned about, so a 12-tool binary logs one
+// line, not twelve.
+var warned sync.Map
+
 // AddTool registers h on s with the approval gate in front. server is the
-// --server name the relay used (lowercase id from pi/mcp.json); store must be
-// shared (Mongo) for holds to be decidable from the gateway.
+// lowercase id from pi/mcp.json; store must be shared (Mongo) for holds to be
+// decidable from the gateway.
 func AddTool[In, Out any](s *mcp.Server, server string, store approvals.Store, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	// Unknown server holds every call fail-closed, so say so once at
+	// startup: without this a typo in the server literal is silent until
+	// a human wonders why every tool on it parks holds.
+	if !approvals.KnownServer(server) {
+		if _, loaded := warned.LoadOrStore(server, true); !loaded {
+			log.Printf("approvalgate: warning: server %q is not in the approval policy table; every tool call will hold", server)
+		}
+	}
 	name := strings.ToLower(strings.TrimSpace(t.Name))
 	mcp.AddTool(s, t, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 		args := argMap(in)

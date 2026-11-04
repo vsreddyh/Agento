@@ -101,10 +101,10 @@ func (s Status) Valid() bool {
 // blind. Pi built-in tools (bash/read/write via codemode) never reach the
 // gate at all — see the ADR's threat note.
 func NeedsApproval(server, tool string, args map[string]any) bool {
-	// Case-insensitive like connectors.IsDraftOnlySend: the server id comes
-	// from the operator-controlled mcp.json entry, and an exact-case match
-	// would let a "Gmail" entry silently change a tool's gate. The table keys
-	// stay lowercase; the mcp.json wiring pins lowercase names.
+	// Case-insensitive like connectors.IsDraftOnlySend: the server id is a
+	// code literal in each cmd/*/main.go, so the fold guards callers that
+	// pass a differently-cased id — the table keys stay lowercase and the
+	// policy/gate tests pin the literals each binary registers.
 	server = strings.ToLower(strings.TrimSpace(server))
 	tool = strings.ToLower(strings.TrimSpace(tool))
 	// Dry runs only count: both prune tools default dry_run=true, and a

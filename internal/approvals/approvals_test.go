@@ -358,8 +358,8 @@ func TestMemoryAuditExpiry(t *testing.T) {
 	}
 }
 
-// KnownServer is what the relay warns on: a typo must be detectable without
-// importing the unexported table.
+// KnownServer is what the gate warns on at startup: a typo must be detectable
+// without importing the unexported table.
 func TestKnownServer(t *testing.T) {
 	if !KnownServer("notes") || !KnownServer("miser-money") {
 		t.Fatal("a wired server is not in the policy table")
@@ -410,7 +410,7 @@ func TestStoresRedactOnWrite(t *testing.T) {
 	}
 }
 
-// A relay restart expires only its own server's queue: six relays share one
+// A server restart expires only its own server's queue: all servers share one
 // collection, and one restarting must not kill another's live hold.
 func TestMarkServerInterruptedIsScoped(t *testing.T) {
 	ctx := context.Background()
@@ -434,8 +434,8 @@ func TestMarkServerInterruptedIsScoped(t *testing.T) {
 	}
 }
 
-// Case-insensitive like the relay refusal (#316 re-review): a "Gmail"
-// --server flag must not change a tool's gate. Fail-closed either way, but
+// Case-insensitive like the gate refusal (#316 re-review): a "Gmail"
+// server id must not change a tool's gate. Fail-closed either way, but
 // the same logical tool must gate the same way whatever the case.
 func TestNeedsApprovalCaseInsensitive(t *testing.T) {
 	if NeedsApproval("Gmail", "Search_Gmail", nil) {
