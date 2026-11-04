@@ -109,12 +109,39 @@ fi
 if [ -f "$PI_CODING_AGENT_DIR/mcp.json" ]; then
   MCP_CHECK_LOG=$(mktemp)
   log "checking MCP servers..."
-  if ! pi mcp list >"$MCP_CHECK_LOG" 2>&1; then
-    log "MCP check reported problems:"
-    sed 's/^/[pi]   /' "$MCP_CHECK_LOG" >&2 || true
-    rm -f "$MCP_CHECK_LOG"
-    die "one or more MCP servers failed to connect"
-  fi
+  # Retry with backoff (#423): one transient Mongo/Atlas TLS blip must not
+  # fail the boot. The single `pi mcp list` probe plus `restart:
+  # unless-stopped` with no delay restarted the stack 774 times in ~50 min
+  # during a handshake outage — each boot opens 8 concurrent handshakes, so
+  # the loop also amplified load on Atlas. Config failures (missing secrets,
+  # missing settings.json) still die fast above; only this connectivity
+  # probe retries, since only it can be transient.
+  attempt=1
+  max_attempts=5
+  delay=2
+  while true; do
+    if pi mcp list >"$MCP_CHECK_LOG" 2>&1; then
+      break
+    fi
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      log "MCP check reported problems (attempt $attempt/$max_attempts):"
+      sed 's/^/[pi]   /' "$MCP_CHECK_LOG" >&2 || true
+      rm -f "$MCP_CHECK_LOG"
+      # Fatal delay before die (#423): the compose restart policy is
+      # `unless-stopped` with no delay (deploy.restart_policy is swarm-only
+      # and ignored by podman-compose), so dying immediately spins at
+      # ~10 restarts/min forever on an unrecoverable error. Sleep here to
+      # bound the loop at ~1 restart/min instead.
+      fatal_delay="${PI_FATAL_RESTART_DELAY:-60}"
+      log "MCP servers still unreachable after $max_attempts attempts; sleeping ${fatal_delay}s before exit so the restart loop cannot spin"
+      sleep "$fatal_delay"
+      die "one or more MCP servers failed to connect"
+    fi
+    log "MCP check failed (attempt $attempt/$max_attempts); retrying in ${delay}s"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
   # `|| true` here too, matching the failure branch: under `set -e` a sed failure
   # on a *healthy* probe would otherwise abort the boot.
   sed 's/^/[pi]   /' "$MCP_CHECK_LOG" >&2 || true
