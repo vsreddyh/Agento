@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.2]
+- **Local data failures surface instead of plausible defaults (#431).** A
+  corrupt thread file banners "couldn't load conversations" in the thread
+  sheet with Retry (bytes stay on disk via the save guard; Backup exports
+  the raw file) instead of an empty "no conversations" list. A reminder
+  whose fetch failed posts "Task due — couldn't load details" plus a
+  details line in the expanded view — still firing, never looking healthy.
+
 ## [6.0.1]
 - **Gateway failures surface instead of rendering as normal data (#430).**
   A failed model catalog shows the saved pick only (never the offline list

@@ -168,11 +168,26 @@ object ChatThreads {
     private val lastLoad: MutableMap<String, Pair<LoadStamp, List<ChatThread>>> =
         java.util.concurrent.ConcurrentHashMap()
 
+    /** Last load failure per tab (#431): a corrupt/unreadable file loads as
+     * an empty list (and stays uncached), which the UI would otherwise read
+     * as "no conversations". The message persists until a later load
+     * succeeds or the file goes missing — it is the loud counterpart to the
+     * silent empty list. Never a secret, just the failure class. */
+    private val lastLoadError: MutableMap<String, String> =
+        java.util.concurrent.ConcurrentHashMap()
+
+    /** The last thread-file load failure for [tab], or "" when the last
+     * load succeeded or no file exists. */
+    fun loadError(tab: String): String = lastLoadError[tab] ?: ""
+
     @androidx.annotation.WorkerThread
     fun load(context: Context, tab: String): List<ChatThread> {
         requireIoThread("ChatThreads.load")
         val f = file(context, tab)
-        if (!f.exists()) return emptyList()
+        if (!f.exists()) {
+            lastLoadError.remove(tab)
+            return emptyList()
+        }
         // Unchanged-file fast path (#339): every load re-walks every photo
         // payload (a full alphabet scan each), which is hundreds of
         // millions of characters for a photo-heavy thread — on every cold
@@ -185,7 +200,7 @@ object ChatThreads {
         // The scans (whitespace strip + alphabet validation over photo
         // payloads) must never run on Main: every caller — VM, Settings
         // export/import — is inside Dispatchers.IO.
-        val loaded: List<ChatThread> = runCatching {
+        val result = runCatching {
             threadJson.decodeFromString(ListSerializer(ChatThread.serializer()), f.readText(Charsets.UTF_8))
                 .filter { it.id.isNotEmpty() }
                 .take(MAX_THREADS)
@@ -207,7 +222,19 @@ object ChatThreads {
                         m.copy(attachments = canonicalizeAttachments(m.attachments))
                     })
                 }
-        }.getOrDefault(emptyList())
+        }
+        // Loud failure record (#431): only a successful parse clears it —
+        // the UI reads loadError() to banner a corrupt file instead of
+        // showing its empty list as "no conversations".
+        result.fold(
+            onSuccess = { lastLoadError.remove(tab) },
+            onFailure = { e ->
+                lastLoadError[tab] =
+                    "Couldn't load conversations — file kept on disk"
+                runCatching { android.util.Log.w("ChatThreads", "load failed for $tab", e) }
+            },
+        )
+        val loaded: List<ChatThread> = result.getOrDefault(emptyList())
         // Only a successful parse is cached (#339): an unreadable file
         // must not pin an empty result under its stamp.
         if (loaded.isNotEmpty()) {
@@ -265,6 +292,12 @@ object ChatThreads {
             val out = canonicalizeUnchanged(cached?.first, cached?.second, capped)
             file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), out), Charsets.UTF_8)
             lastCanonical[tab] = capped to out
+            // A landed write supersedes any load failure (#431 review):
+            // the file no longer holds what failed to parse, so a banner
+            // still claiming "kept on disk" would describe bytes this very
+            // save replaced (first send over corruption). The corrupt-skip
+            // return above runs before any write, so it never clears.
+            lastLoadError.remove(tab)
             // The load cache is dropped here (#339): the app's own write
             // invalidates the stamp fast path, so a same-size write inside
             // one mtime tick can never serve a stale list.
@@ -285,6 +318,8 @@ object ChatThreads {
     internal fun invalidate(tab: String) {
         lastCanonical.remove(tab)
         lastLoad.remove(tab)
+        // A rewrite replaces the bytes the error described (#431).
+        lastLoadError.remove(tab)
     }
 
     /** Tabs whose thread file was rewritten out-of-band, with a per-tab
