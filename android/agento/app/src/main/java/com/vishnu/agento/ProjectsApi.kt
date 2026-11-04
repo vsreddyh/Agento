@@ -26,6 +26,15 @@ data class ServerProject(
     val updatedAt: String = "",
 )
 
+/** Project list with its dropped-row count (#430, same contract as
+ * [TaskList]/[JobList]): rows the parse skipped are counted, never silently
+ * shrunk away. */
+data class ProjectList(
+    val projects: List<ServerProject>,
+    val dropped: Int = 0,
+    val truncated: Boolean = false,
+)
+
 /** Parses an RFC3339 instant (server timestamps) to epoch millis for
  * shortTime(); unparseable input hides the timestamp (0). */
 fun projectTimeMs(iso: String): Long {
@@ -83,7 +92,7 @@ class ProjectsApi(context: Context) {
     /** Lists projects by status (`Todo|Ongoing|Testing|Blocked|Paused|Done|all`, default
      * all); unknown statuses fail fast. `search` matches name/note. `limit`
      * caps rows (server default 200, max 500). */
-    suspend fun list(status: String = "all", search: String = "", limit: Int = 200): Result<List<ServerProject>> =
+    suspend fun list(status: String = "all", search: String = "", limit: Int = 200): Result<ProjectList> =
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
@@ -96,15 +105,29 @@ class ProjectsApi(context: Context) {
             call("GET", "/api/projects$q").map { body ->
                 val out = mutableListOf<ServerProject>()
                 val root = JSONObject(body)
+                // Canonical `projects` envelope only (#433: no `data`/`items`
+                // downgrade — another shape fails loudly instead of reading
+                // as "no projects").
                 val arr = root.optJSONArray("projects")
-                    ?: root.optJSONArray("data")
-                    ?: root.optJSONArray("items")
-                    ?: return@map out
+                    ?: throw IllegalStateException(
+                        "unexpected projects response shape (gateway too old?)")
+                // Counted, never silently dropped (#430, #447 review): the
+                // same contract as the tasks/jobs envelopes — a row the
+                // parse skips increments instead of vanishing.
+                var dropped = 0
                 for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    parseProject(o)?.let { out.add(it) }
+                    val o = arr.optJSONObject(i)
+                    if (o == null) {
+                        dropped++
+                        continue
+                    }
+                    val row = parseProject(o)
+                    if (row == null) dropped++ else out.add(row)
                 }
-                out
+                if (dropped > 0) {
+                    runCatching { android.util.Log.w("ProjectsApi", "dropped $dropped unparseable project row(s)") }
+                }
+                ProjectList(out, dropped, root.optBoolean("truncated", false))
             }
         }
 

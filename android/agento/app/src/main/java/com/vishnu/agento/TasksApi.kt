@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,10 +67,12 @@ data class ServerTask(
     val nextDueDate: String = "",
 )
 
-/** A bounded list response: the rows, and whether more exist. */
+/** A bounded list response: the rows, whether more exist, and how many
+ * rows were dropped as unparseable (#430: counted, never silent). */
 data class TaskList(
     val tasks: List<ServerTask>,
     val truncated: Boolean = false,
+    val dropped: Int = 0,
 )
 
 /**
@@ -577,11 +580,23 @@ class TasksApi(context: Context) {
                 val arr = root.optJSONArray("tasks")
                     ?: throw IllegalStateException(
                         "unexpected tasks response shape (gateway too old?)")
+                var dropped = 0
                 for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    parseTask(o)?.let { out.add(it) }
+                    // A non-object entry is dropped AND counted (#447 review):
+                    // silently continuing here contradicts the counted,
+                    // never-silently-dropped contract below.
+                    val o = arr.optJSONObject(i)
+                    if (o == null) {
+                        dropped++
+                        continue
+                    }
+                    val row = parseTask(o)
+                    if (row == null) dropped++ else out.add(row)
                 }
-                TaskList(out, root.optBoolean("truncated", false))
+                if (dropped > 0) {
+                    runCatching { Log.w("TasksApi", "dropped $dropped unparseable task row(s)") }
+                }
+                TaskList(out, root.optBoolean("truncated", false), dropped)
             }.also { r -> r.getOrNull()?.let { noteContractVersion(it.tasks) } }
         }
 

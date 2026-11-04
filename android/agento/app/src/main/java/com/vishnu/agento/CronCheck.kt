@@ -46,24 +46,59 @@ internal object CronCheck {
      */
     suspend fun check(context: Context): Int {
         val appCtx = context.applicationContext
-        val jobs = withContext(Dispatchers.IO) {
+        val listed = withContext(Dispatchers.IO) {
             JobsApi(appCtx).list(ChatApi(appCtx).pathFor("chat")).getOrNull()
-        } ?: return 0
-        return notifyFresh(appCtx, jobs)
+        }
+        // Total failure reads as empty without this (#447 review): the
+        // partial-drop path logs, so the total path must too — otherwise
+        // "fail loudly" holds everywhere except here.
+        if (listed == null) {
+            runCatching {
+                android.util.Log.w("CronCheck", "job list fetch failed, skipping check")
+            }
+            return 0
+        }
+        // Parse-skipped jobs never notify (#447 review): the runs below
+        // only see what parsed, so log the count instead of rendering the
+        // check complete.
+        if (listed.dropped > 0) {
+            runCatching {
+                android.util.Log.w(
+                    "CronCheck",
+                    "dropped ${listed.dropped} unparseable job(s)",
+                )
+            }
+        }
+        return notifyFresh(appCtx, listed.jobs, listed.dropped)
     }
 
     /**
      * Cursor + notify pass over an already-fetched job list, so a screen
      * that just loaded does not fetch twice. Same rules as [check].
      */
-    fun notifyFresh(context: Context, jobs: List<CronJob>): Int {
+    fun notifyFresh(context: Context, jobs: List<CronJob>, dropped: Int = 0): Int {
         val appCtx = context.applicationContext
         var posted = 0
         val p = prefs(appCtx)
+        // A first sighting right after a drops episode ends is likely a
+        // recovered job, not a new one (#447 review): baseline-silencing it
+        // would lose the intervening runs to the fresh cursor. Treat its
+        // history as fresh exactly once (latest run + count, one
+        // notification — no blast). Scoped to the episode-ending clean
+        // fetch, not the whole partial episode: newcomers arriving while
+        // drops are still ongoing baseline silently like always, since a
+        // still-dropping fetch can't tell them apart from recoveries. A
+        // per-id scope would be precise, but parseJob fails only on an empty
+        // id, so a dropped row never has an id to match on — the aggregate
+        // flag is the only signal that exists.
+        val prevDropped = p.getInt("cron_prev_dropped", 0)
+        if (dropped != prevDropped) p.edit { putInt("cron_prev_dropped", dropped) }
+        val recovered = prevDropped > 0 && dropped == 0
         for (job in jobs) {
             val has = p.contains(seenKey(job.id))
             val seen = p.getLong(seenKey(job.id), 0L)
-            val fresh = unseenRuns(job.runs, if (has) seen else null)
+            val fresh = if (!has && recovered) unseenRuns(job.runs, 0L)
+                else unseenRuns(job.runs, if (has) seen else null)
             val maxAt = job.runs.maxOfOrNull { it.at } ?: 0L
             if (fresh.isEmpty()) {
                 // First check (or nothing new): record the cursor so the

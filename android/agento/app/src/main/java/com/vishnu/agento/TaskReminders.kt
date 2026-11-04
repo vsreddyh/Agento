@@ -401,8 +401,15 @@ object TaskReminders {
         if (!isEnabled(appCtx)) return RefreshOutcome.Ok
         // Limit 500 (server max): the budget below can only arm what it
         // sees, and the default 200 would silently drop tasks past it.
-        val tasks = TasksApi(appCtx).list("open", limit = 500).getOrNull()?.tasks
+        val listed = TasksApi(appCtx).list("open", limit = 500).getOrNull()
             ?: return RefreshOutcome.Failed
+        // Parse-skipped rows never arm and never notify (#447 review): log
+        // the count here and carry it in the budget line below, or the
+        // refresh reads complete while tasks go silent.
+        if (listed.dropped > 0) {
+            Log.w("TaskReminders", "dropped ${listed.dropped} unparseable open task(s)")
+        }
+        val tasks = listed.tasks
         // IST-pinned (#124): due times are entered as wall-clock IST,
         // so "now" and the arming horizon must read the same zone.
         val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
@@ -511,6 +518,7 @@ object TaskReminders {
                     droppedOneShots = wantedOneShots - kept.count { !it.nag },
                     droppedNags = (candidates.size - wantedOneShots) -
                         kept.count { it.nag },
+                    unparseable = listed.dropped,
                 ).encode(),
             )
         }
@@ -651,6 +659,9 @@ object TaskReminders {
         val armed: Int,
         val droppedOneShots: Int,
         val droppedNags: Int,
+        /** Rows the fetch couldn't parse, so they never competed for
+         * budget (#447 review): unarmed without a trace otherwise. */
+        val unparseable: Int = 0,
     ) {
         val dropped: Int get() = droppedOneShots + droppedNags
 
@@ -667,7 +678,12 @@ object TaskReminders {
             } else {
                 " — OVER BUDGET, dropped " + lost.joinToString(" and ")
             }
-            return "reminders $armed/$cap wanted=$wanted tasks=$tasks$dropped"
+            val unparsed = if (unparseable > 0) {
+                " — $unparseable unparseable row(s) never armed"
+            } else {
+                ""
+            }
+            return "reminders $armed/$cap wanted=$wanted tasks=$tasks$dropped$unparsed"
         }
     }
 
@@ -687,8 +703,8 @@ object TaskReminders {
     /**
      * What the last refresh decided, or null before the first one.
      *
-     * Six small non-negative counts in one comma-separated pref rather than
-     * six keys or a joined object: [SharedPreferences] has no array accessor
+     * Seven small non-negative counts in one comma-separated pref rather than
+     * seven keys or a joined object: [SharedPreferences] has no array accessor
      * (that is `Bundle`), and a single key means one atomic write and one
      * read, with no partial state to guard against.
      */
@@ -697,17 +713,21 @@ object TaskReminders {
         val parts = raw.split(',').map { it.toIntOrNull() ?: return null }
         // Counts are never negative: anything else is a corrupt or
         // hand-edited value, and reporting "dropped -1 alert(s)" would be
-        // worse than reporting nothing.
-        return if (parts.size == 6 && parts.all { it >= 0 }) {
-            Budget(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5])
+        // worse than reporting nothing. Seven parts is the current shape;
+        // six is a pre-unparseable write and still reads (as zero).
+        return if ((parts.size == 6 || parts.size == 7) && parts.all { it >= 0 }) {
+            Budget(
+                parts[0], parts[1], parts[2], parts[3], parts[4], parts[5],
+                unparseable = parts.getOrElse(6) { 0 },
+            )
         } else {
             null
         }
     }
 
-    /** The six counts, as one pref value. */
+    /** The counts, as one pref value (seven since the unparseable count). */
     private fun Budget.encode(): String =
-        "$tasks,$wanted,$cap,$armed,$droppedOneShots,$droppedNags"
+        "$tasks,$wanted,$cap,$armed,$droppedOneShots,$droppedNags,$unparseable"
 
     /** Drop every armed alarm (reminders disabled). Legacy bare-id keys
      * need the old identity, exactly as in refresh — otherwise a

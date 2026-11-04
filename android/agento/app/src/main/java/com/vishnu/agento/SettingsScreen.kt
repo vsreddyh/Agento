@@ -118,16 +118,23 @@ internal fun SettingsScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
+    // True when the inventory fetch failed (#430): the hub must say
+    // Unreachable, not render the server URL as if it answered.
+    var catalogFailed by remember { mutableStateOf(false) }
     // Bumped after a settings import so the fields below reload from prefs.
     var settingsRefresh by remember { mutableIntStateOf(0) }
 
-    /** Preloads the live provider/model catalog (pickers live per tab now). */
-    LaunchedEffect(settingsRefresh) {
+    /** Preloads the live provider/model catalog (pickers live per tab now).
+     * Re-runs on resume too (#447 review): the hub's Connected/Unreachable
+     * line must reflect the gateway's current answer, not the fetch from
+     * before the app was backgrounded. */
+    LaunchedEffect(settingsRefresh, resumeTick) {
         error = ""
         val api = ChatApi(context)
-        catalog = runCatching {
-            api.fetchCatalog(catalogPath(api)).getOrDefault(emptyList())
-        }.getOrDefault(emptyList())
+        api.fetchCatalog(catalogPath(api)).fold(
+            onSuccess = { list -> catalog = list; catalogFailed = false },
+            onFailure = { catalog = emptyList(); catalogFailed = true },
+        )
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -190,6 +197,8 @@ internal fun SettingsScreen(
                         SettingsHub(
                             serverStatus = if (state.serverUrl.isBlank()) {
                                 "Not set up"
+                            } else if (catalogFailed) {
+                                "Unreachable — check server"
                             } else if (catalog.isNotEmpty()) {
                                 "Connected"
                             } else {
@@ -344,6 +353,12 @@ internal fun SettingsScreen(
                         } else if (catalog.isNotEmpty()) {
                             val count = catalog.sumOf { it.models.size }
                             HintLine("Connected — ${catalog.size} provider(s), $count model(s). Pick a model on each assistant's page.")
+                        } else if (catalogFailed) {
+                            // The hub fetch failed, but no save/test ran to
+                            // populate `error` (#447 review): without this
+                            // branch the section below claims nothing was
+                            // ever saved. Same wording as the hub row.
+                            ErrorCard(raw = "Unreachable — check Server URL + Password, then reopen Settings.")
                         } else {
                             HintLine("No providers loaded yet — save the server above first.")
                         }
@@ -1460,13 +1475,22 @@ internal fun WidgetDiagnosticsCard() {
     ) {
         // The one thing in here that changes what the user should do: an
         // exhausted budget means some tasks have no alert armed at all, and
-        // nothing else in the app would tell them (#165).
+        // nothing else in the app would tell them (#165). Unparseable rows
+        // are the same class of silent no-alarm (#447 review): they never
+        // even competed for a slot.
         budget?.let { b ->
-            if (b.dropped > 0) {
+            if (b.dropped > 0 || b.unparseable > 0) {
                 Text(
-                    "Reminder budget exceeded — ${b.dropped} reminder(s) are not " +
-                        "armed, so those tasks will not alert. ${b.armed} of " +
-                        "${b.cap} slots used by ${b.tasks} timed task(s).",
+                    buildString {
+                        if (b.dropped > 0) {
+                            append("Reminder budget exceeded — ${b.dropped} reminder(s) are not " +
+                                "armed, so those tasks will not alert. ")
+                        }
+                        append("${b.armed} of ${b.cap} slots used by ${b.tasks} timed task(s).")
+                        if (b.unparseable > 0) {
+                            append(" ${b.unparseable} row(s) could not be parsed and never competed for a slot.")
+                        }
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
                 )

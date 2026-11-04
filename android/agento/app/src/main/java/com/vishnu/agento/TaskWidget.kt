@@ -320,6 +320,12 @@ class TaskWidget : AppWidgetProvider() {
         // tap-to-retry) instead of a dead generic error.
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
+        // Rows the last fetch parsed per server state (#447 review): a
+        // partial parse renders complete rows with no sign anything was
+        // skipped unless the count says so. Same lifetime as lastErrors —
+        // cleared when the state next succeeds cleanly.
+        @Volatile private var lastDropped: Map<String, Int> = emptyMap()
+
         // Last RemoteViewsFactory failure (same process — the service has
         // no android:process). Surfaced in diagnostics so an on-device
         // widget crash names itself without adb.
@@ -329,6 +335,24 @@ class TaskWidget : AppWidgetProvider() {
         fun recordFactoryError(where: String, e: Throwable) {
             lastFactoryError = "$where: ${e.javaClass.simpleName}: ${e.message}".take(300)
             Log.w("TaskWidget", "factory failure at $where", e)
+        }
+
+        /** Records one state fetch's dropped count from outside the provider
+         * (#447 review): the API<31 service fallback fetches on its own
+         * (host-driven bind, no provider pass), so without this its partial
+         * parses would never reach [lastDropped]/diagnostics. A clean fetch
+         * clears the state's count — same rule as the provider path — or
+         * diagnostics would accuse a fixed server forever.
+         */
+        internal fun noteDropped(state: String, n: Int) {
+            lastDropped = if (n > 0) {
+                lastDropped + (state to n)
+            } else {
+                lastDropped - state
+            }
+            if (n > 0) {
+                Log.w("TaskWidget", "dropped $n unparseable $state task(s) (service fallback)")
+            }
         }
 
         /** "seen v3, app speaks v1" for diagnostics: which task contracts
@@ -359,6 +383,7 @@ class TaskWidget : AppWidgetProvider() {
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
+                appendLine("dropped=${lastDropped.filterValues { it > 0 }}")
                 appendLine("factoryError=${lastFactoryError ?: "none"}")
                 // What the reminder budget had to drop, if anything (#165).
                 // Without this a task whose alarm was never armed looks
@@ -680,6 +705,7 @@ class TaskWidget : AppWidgetProvider() {
             val api = TasksApi(appCtx)
             val views = mutableMapOf<String, List<ServerTask>>()
             val errors = mutableMapOf<String, String>()
+            val dropped = mutableMapOf<String, Int>()
             coroutineScope {
                 TaskWidgetView.entries.map { v ->
                     // Limit 50 per state, and the truncation flag is
@@ -689,17 +715,32 @@ class TaskWidget : AppWidgetProvider() {
                     // it is (#168).
                     async { v.state to api.list(v.state, limit = 50) }
                 }.awaitAll().forEach { (state, res) ->
-                    res.getOrNull()?.tasks?.let { views[state] = it }
-                        ?: run {
-                            errors[state] = res.exceptionOrNull()?.message
-                                ?: "unknown error"
+                    val list = res.getOrNull()
+                    if (list == null) {
+                        errors[state] = res.exceptionOrNull()?.message
+                            ?: "unknown error"
+                    } else {
+                        views[state] = list.tasks
+                        if (list.dropped > 0) {
+                            dropped[state] = list.dropped
+                            runCatching {
+                                android.util.Log.w(
+                                    "TaskWidget",
+                                    "dropped ${list.dropped} unparseable $state task(s)",
+                                )
+                            }
                         }
+                    }
                 }
             }
             if (views.isNotEmpty()) cachedViews = cachedViews + views
             // Drop errors for states that just succeeded so a stale
             // message can never outlive its failure (#130 review).
             lastErrors = (lastErrors + errors) - views.keys
+            // Same lifetime for dropped counts (#447 review): a state that
+            // succeeds cleanly clears its stale count; a state that failed
+            // keeps whatever its last fetch reported.
+            lastDropped = (lastDropped - views.keys) + dropped
             // Every state failed means nothing was delivered and the widget
             // is now showing whatever it had cached. A partial failure is
             // Ok: the states that worked are pushed, and the ones that did
@@ -736,10 +777,15 @@ class TaskWidget : AppWidgetProvider() {
                 } else {
                     null
                 }
+                // Dropped rows for the state on screen (#447 review):
+                // cached rows carry their fetch's count (kept, not cleared,
+                // on a failed refresh), so the count describes exactly
+                // what is shown.
+                val dropped = if (tasks == null) 0 else lastDropped[view.state] ?: 0
                 // One wedged placement must not abort the rest (#130).
                 runCatching {
                     mgr.updateAppWidget(
-                        id, render(appCtx, id, view, tasks, tasks == null, detail))
+                        id, render(appCtx, id, view, tasks, tasks == null, detail, dropped))
                 }.onFailure {
                     Log.w("TaskWidget", "updateAppWidget failed for id=$id", it)
                 }
@@ -770,6 +816,9 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             errorDetail: String? = null,
+            /** Rows this fetch skipped as unparseable (#447 review): partial
+             * parses must not render as complete. */
+            dropped: Int = 0,
         ): RemoteViews {
             val open = Intent(context, MainActivity::class.java).setAction(ACTION_TASKS)
             val openPending = PendingIntent.getActivity(
@@ -836,14 +885,14 @@ class TaskWidget : AppWidgetProvider() {
                     val showList = !tasks.isNullOrEmpty()
                     setViewVisibility(R.id.task_widget_static_list,
                         if (showList) View.VISIBLE else View.GONE)
-                    val empty = emptyText(context, tasks, error, errorDetail)
+                    val empty = emptyText(context, tasks, error, errorDetail, dropped)
                     setTextViewText(R.id.task_widget_empty, empty)
                     setViewVisibility(R.id.task_widget_empty,
                         if (empty.isEmpty()) View.GONE else View.VISIBLE)
                     setTextViewText(R.id.task_widget_view, view.title)
                     setTextViewText(R.id.task_widget_title, view.title)
                     setTextViewText(R.id.task_widget_count,
-                        countText(context, view, tasks, error, capped = true))
+                        countText(context, view, tasks, error, capped = true, dropped = dropped))
                 }
             }
             // E: the collection widget, on the same proven chrome.
@@ -893,8 +942,8 @@ class TaskWidget : AppWidgetProvider() {
                 // toggle button is gone (it never rendered on this host).
                 setTextViewText(R.id.task_widget_title, view.title)
                 setTextViewText(R.id.task_widget_count,
-                    countText(context, view, tasks, error))
-                val empty = emptyText(context, tasks, error, errorDetail)
+                    countText(context, view, tasks, error, dropped = dropped))
+                val empty = emptyText(context, tasks, error, errorDetail, dropped)
                 setTextViewText(R.id.task_widget_empty, empty)
                 // Hide the empty line when rows are showing: an empty
                 // string would still contribute its 8dp top padding.
@@ -912,10 +961,13 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             errorDetail: String?,
+            dropped: Int = 0,
         ): String = when {
             tasks == null && !error -> context.getString(R.string.task_widget_loading)
             tasks == null -> errorDetail?.take(140)
                 ?: context.getString(R.string.task_widget_error)
+            tasks.isEmpty() && dropped > 0 ->
+                context.resources.getQuantityString(R.plurals.task_widget_dropped, dropped, dropped)
             tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
             else -> ""
         }
@@ -929,20 +981,31 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             capped: Boolean = false,
+            dropped: Int = 0,
         ): String {
             val plural = when (view) {
                 TaskWidgetView.Open -> R.plurals.task_widget_open
                 TaskWidgetView.Done -> R.plurals.task_widget_done
                 TaskWidgetView.All -> R.plurals.task_widget_all
             }
+            // A partial parse renders complete rows with no sign anything
+            // was skipped (#447 review): the count names the skipped rows.
+            // legitimately-empty stays "All done!" via emptyText instead.
+            val droppedSuffix =
+                if (tasks != null && dropped > 0) " · $dropped couldn't load" else ""
             return when {
                 tasks == null && !error -> context.getString(R.string.task_widget_loading)
                 tasks == null -> context.getString(R.string.task_widget_error)
+                // Empty + dropped must not read "All done!" (#447 review):
+                // the body line below names the unparseable rows, so the
+                // header stays out of the way instead of contradicting it.
+                tasks.isEmpty() && dropped > 0 -> ""
                 tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
                 capped && tasks.size > STATIC_ROW_LIMIT ->
                     context.resources.getQuantityString(plural, tasks.size, tasks.size) +
-                        " · showing " + STATIC_ROW_LIMIT
-                else -> context.resources.getQuantityString(plural, tasks.size, tasks.size)
+                        " · showing " + STATIC_ROW_LIMIT + droppedSuffix
+                else -> context.resources.getQuantityString(plural, tasks.size, tasks.size) +
+                    droppedSuffix
             }
         }
     }

@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [7.0.0]
+- **BREAKING: projects envelope fallback removed (#430 follow-through).** The `data`/`items` downgrade in `ProjectsApi.list` is gone — same breaking class as the 6.0.0 MAJOR (old gateways serving those shapes now fail loudly instead of bridging). Shipped as its own MAJOR because 6.0.1's PATCH label understated it.
+- **Gateway failures surface instead of rendering as normal data (#430).**
+  A failed model catalog shows the saved pick only (never the offline list
+  as live inventory) with an explicit error; the Settings hub reports
+  "Unreachable" instead of echoing the server URL. Unparseable task/job
+  rows are counted ("N could not be parsed") in the Task Manager count line
+  and the Scheduler, dropped rows badge partial widget headers (all-dropped
+  lists name the count in the body line instead of reading "All done!"),
+  and the `projects` envelope joins the 6.0.0 strict-envelope rule (fails
+  loudly instead of reading as empty lists).
+
 ## [6.0.0]
 - **BREAKING: retired prefs keys and old-gateway fallbacks removed (#433).**
   The app reads one canonical key per setting (`server_base_url`,

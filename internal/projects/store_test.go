@@ -40,19 +40,19 @@ func TestCreateAndList(t *testing.T) {
 	if doc["name"] != "Launch site" || doc["status"] != "Todo" {
 		t.Fatalf("unexpected doc: %v", doc)
 	}
-	rows, err := s.List(ctx, "", "", 0)
+	rows, _, err := s.List(ctx, "", "", 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("List all: %v %v", rows, err)
 	}
-	rows, err = s.List(ctx, "Todo", "", 0)
+	rows, _, err = s.List(ctx, "Todo", "", 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("List Todo: %v %v", rows, err)
 	}
-	rows, err = s.List(ctx, "Done", "", 0)
+	rows, _, err = s.List(ctx, "Done", "", 0)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("List Done should be empty: %v %v", rows, err)
 	}
-	rows, err = s.List(ctx, "", "launch", 0)
+	rows, _, err = s.List(ctx, "", "launch", 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("List search: %v %v", rows, err)
 	}
@@ -67,7 +67,7 @@ func TestValidation(t *testing.T) {
 	if _, err := s.Create(ctx, "x", "Flying", ""); err == nil {
 		t.Fatal("bad status should fail")
 	}
-	if _, err := s.List(ctx, "Flying", "", 0); err == nil {
+	if _, _, err := s.List(ctx, "Flying", "", 0); err == nil {
 		t.Fatal("bad list status should fail")
 	}
 	doc, err := s.Create(ctx, "x", "ongoing", "")
@@ -122,12 +122,18 @@ func TestListLimit(t *testing.T) {
 			t.Fatalf("Create: %v", err)
 		}
 	}
-	rows, err := s.List(ctx, "", "", 2)
+	rows, truncated, err := s.List(ctx, "", "", 2)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("List limit=2: %v %v", rows, err)
 	}
-	rows, err = s.List(ctx, "", "", 0)
+	if !truncated {
+		t.Fatalf("List limit=2 over 3 rows should report truncated")
+	}
+	rows, truncated, err = s.List(ctx, "", "", 0)
 	if err != nil || len(rows) != 3 {
 		t.Fatalf("List limit=0 defaults: %v %v", rows, err)
+	}
+	if truncated {
+		t.Fatalf("List limit=0 over 3 rows should not report truncated")
 	}
 }

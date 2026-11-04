@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -31,6 +32,13 @@ data class CronRun(
     val at: Long = 0L,
     val text: String = "",
     val missed: Boolean = false,
+)
+
+/** A jobs list response: the rows plus the unparseable-drop count
+ * (#430: counted and surfaced, never silent). */
+data class JobList(
+    val jobs: List<CronJob>,
+    val dropped: Int = 0,
 )
 
 /**
@@ -131,23 +139,39 @@ class JobsApi(context: Context) {
 
     /** Parses the canonical `jobs` envelope (#433: no `data`/`items`
      * downgrade — a gateway answering another shape fails loudly as
-     * "unexpected shape" instead of rendering as "no jobs"). */
-    private fun parseList(body: String): Result<List<CronJob>> {
+     * "unexpected shape" instead of rendering as "no jobs"). Id-less rows
+     * are counted, never silently dropped (#430). */
+    private fun parseList(body: String): Result<JobList> {
         val out = mutableListOf<CronJob>()
         val root = runCatching { JSONObject(body) }.getOrNull()
             ?: return Result.failure(IllegalStateException("unexpected jobs response shape"))
         val arr = root.optJSONArray("jobs")
             ?: return Result.failure(
                 IllegalStateException("unexpected jobs response shape (gateway too old?)"))
+        var dropped = 0
         for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            parseJob(o)?.let { out.add(it) }
+            // Same counted-drop contract as the tasks envelope (#447
+            // review): a non-object entry counts, it never just vanishes.
+            val o = arr.optJSONObject(i)
+            if (o == null) {
+                dropped++
+                continue
+            }
+            val row = parseJob(o)
+            if (row == null) {
+                dropped++
+            } else {
+                out.add(row)
+            }
         }
-        return Result.success(out)
+        if (dropped > 0) {
+            runCatching { Log.w("JobsApi", "dropped $dropped unparseable job row(s)") }
+        }
+        return Result.success(JobList(out, dropped))
     }
 
     /** Lists jobs on the scheduler profile (gateway home). */
-    suspend fun list(path: String): Result<List<CronJob>> =
+    suspend fun list(path: String): Result<JobList> =
         withContext(Dispatchers.IO) {
             call("GET", "$path/api/jobs").map { parseList(it).getOrThrow() }
         }

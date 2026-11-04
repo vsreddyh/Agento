@@ -102,6 +102,9 @@ internal fun TaskManagerScreen(
     // Whether the server held back rows beyond its cap: the list below
     // must say so rather than silently ending mid-collection (#168).
     var listTruncated by remember { mutableStateOf(false) }
+    // Rows the server sent but the parse skipped (#430): counted in
+    // TasksApi.list, shown in the count line, never a silent shrink.
+    var listDropped by remember { mutableIntStateOf(0) }
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
@@ -294,6 +297,7 @@ internal fun TaskManagerScreen(
                 val leaving = exiting.filterValues { it == filter }.keys
                 tasks = mergeRefresh(page.tasks, tasks, leaving)
                 listTruncated = page.truncated
+                listDropped = page.dropped
                 error = ""
                 // Which filter these rows are the answer for (#308): recorded
                 // with the rows themselves, so the enter-animation effect never
@@ -322,11 +326,14 @@ internal fun TaskManagerScreen(
                         ToastKind.Error,
                     )
                 } else {
-                    error = serverDetail(e.message ?: e.javaClass.simpleName)
-                    // The flag describes the rows on screen, so it resets with
-                    // them: a failed fetch leaves yesterday's rows up, and they
-                    // must not keep advertising yesterday's truncation.
-                    listTruncated = false
+                    val msg = serverDetail(e.message ?: e.javaClass.simpleName)
+                    // Foreground failure keeps stale rows visible with a
+                    // toast (#447 review): replacing a list the user is
+                    // reading with an error card is the worse surprise —
+                    // same rule as the Scheduler/Projects screens. Counts
+                    // stay: they describe the rows still showing, and the
+                    // next success re-derives them.
+                    if (tasks.isEmpty()) error = msg else toasts.toast(msg, ToastKind.Error)
                 }
                 false
             },
@@ -412,24 +419,45 @@ internal fun TaskManagerScreen(
         else if (seenFilter != filterName) {
             seenFilter = filterName
             if (deepLinkAutoSwitched) deepLinkAutoSwitched = false
-            else pendingDeepLink = null
+            // A manual switch normally drops a still-missing id — unless
+            // the list is partial (#447 review): the id may belong to an
+            // unparseable row, so keep it pending for a clean fetch instead
+            // of killing it silently here.
+            else if (listDropped == 0) pendingDeepLink = null
         }
     }
     // If a loaded, non-empty list doesn't carry the id and we haven't
     // tried All yet, switch there automatically (a Done-view row tapped
     // while the Manager sits on Open); otherwise the id is truly gone.
-    LaunchedEffect(tasks, loading, pendingDeepLink) {
+    // Dropped rows stay pending instead of being discarded (#447 review):
+    // the id may belong to an unparseable row, and the next clean fetch
+    // re-runs this effect to decide again.
+    var deepLinkWarned by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(tasks, loading, pendingDeepLink, listDropped) {
         val id = pendingDeepLink ?: return@LaunchedEffect
         tasks.firstOrNull { it.id == id }?.let {
             selected = it
             pendingDeepLink = null
             deepLinkAutoSwitched = false
+            deepLinkWarned = null
             return@LaunchedEffect
         }
         if (loading) return@LaunchedEffect
         if (tasks.isEmpty() || filter == ServerTaskFilter.All || deepLinkAutoSwitched) {
+            // Fully searched the parsed rows. A dropped row may still hold
+            // this id (#447 review): stay pending for a clean fetch instead
+            // of discarding it — toast once per id, not per refresh.
+            if (listDropped > 0) {
+                if (deepLinkWarned != id) {
+                    deepLinkWarned = id
+                    toasts.toast("That task hasn't loaded yet — will retry on the next refresh.", ToastKind.Info)
+                }
+                return@LaunchedEffect
+            }
+            toasts.toast("That task couldn't be opened.", ToastKind.Error)
             pendingDeepLink = null
             deepLinkAutoSwitched = false
+            deepLinkWarned = null
         } else {
             deepLinkAutoSwitched = true
             filterName = ServerTaskFilter.All.name
@@ -989,7 +1017,13 @@ internal fun TaskManagerScreen(
                     // New and Refresh stay live while a request runs.
                     actions = {
                         TextButton(onClick = { bulkMode = true }) { Text("Select") }
-                        IconButton(onClick = { editing = ServerTaskDraft() }) {
+                        // No New action while rows are unreadable (#447
+                        // review): same guard as the empty-state button —
+                        // the toolbar must not bypass it.
+                        IconButton(
+                            onClick = { editing = ServerTaskDraft() },
+                            enabled = listDropped == 0,
+                        ) {
                             Icon(Icons.Filled.Add, contentDescription = "New task")
                         }
                         IconButton(onClick = {
@@ -1113,22 +1147,52 @@ internal fun TaskManagerScreen(
                         Text("Retry")
                     }
                 } else if (tasks.isEmpty()) {
+                    // All-dropped reads as empty without the copy below
+                    // (#447 review): the count line only renders for
+                    // non-empty lists, so an all-unparseable page would say
+                    // "No tasks yet". (The count line already names dropped
+                    // rows for partial lists, so no separate hint here.)
                     EmptyState(
                         icon = Icons.Filled.Assignment,
-                        title = when (filter) {
+                        title = if (listDropped > 0) {
+                            "Couldn't read tasks"
+                        } else when (filter) {
                             ServerTaskFilter.Done -> "Nothing completed yet"
                             ServerTaskFilter.All -> "No tasks yet"
                             else -> "No open tasks"
                         },
-                        subtitle = "Capture your first to-do.",
-                        actionLabel = "New task",
-                        onAction = { editing = ServerTaskDraft() },
+                        subtitle = if (listDropped > 0) {
+                            "The server sent rows this app can't read — check the gateway version."
+                        } else {
+                            "Capture your first to-do."
+                        },
+                        actionLabel = if (listDropped > 0) {
+                            null
+                        } else {
+                            "New task"
+                        },
+                        // No New action while rows are unreadable (#447
+                        // review): task identity is name-matched in places,
+                        // so creating against an unreadable list risks
+                        // duplicates of rows that are there but unparsed.
+                        onAction = if (listDropped > 0) {
+                            null
+                        } else {
+                            { editing = ServerTaskDraft() }
+                        },
                     )
                 } else if (visible.isEmpty()) {
                     EmptyState(
                         icon = Icons.Filled.Search,
                         title = "No matches",
-                        subtitle = "Try a different search.",
+                        // A filter miss while rows are unparsed is not a clean
+                        // negative (#447 review): the dropped rows were never
+                        // searched and could contain matches.
+                        subtitle = if (listDropped > 0) {
+                            "Try a different search — $listDropped unparseable task(s) were not searched."
+                        } else {
+                            "Try a different search."
+                        },
                         actionLabel = "Clear search",
                         onAction = { query = "" },
                     )
@@ -1163,6 +1227,7 @@ internal fun TaskManagerScreen(
                             // find what was never fetched (#168 follow-up is
                             // wiring ?search= end to end).
                             (if (listTruncated) " — showing the first ${tasks.size}" else "") +
+                            (if (listDropped > 0) " · $listDropped could not be parsed" else "") +
                             // List-level, not per-task (#288): when the local
                             // rows were last fetched. Absent before the first
                             // successful load.
@@ -1522,7 +1587,7 @@ internal fun TaskManagerScreen(
         )
     }
 
-    val open = selected?.let { s -> tasks.firstOrNull { it.id == s.id } ?: s }
+    val open = selected?.let { s -> tasks.firstOrNull { it.id == s.id } }
     if (open != null) {
         // One clock for the date and the overdue test, so the sheet can
         // never straddle midnight between the two, truncated to the minute
@@ -1556,6 +1621,15 @@ internal fun TaskManagerScreen(
                 deleting = open
             },
         )
+    } else if (selected != null && !loading && error.isEmpty()) {
+        // The open row left the latest successful list — deleted elsewhere,
+        // or newly unparseable (#447 review): close instead of acting on a
+        // ghost, and say so once. A failed fetch keeps the stale sheet (its
+        // rows may simply be stale, not gone).
+        LaunchedEffect(selected?.id) {
+            toasts.toast("That task is no longer available.", ToastKind.Error)
+            selected = null
+        }
     }
 }
 

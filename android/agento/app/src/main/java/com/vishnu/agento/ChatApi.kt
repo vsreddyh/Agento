@@ -475,7 +475,8 @@ class ChatApi(context: Context) {
      * dynamic provider/model dropdowns (`slug` + display `name` + string
      * `models` per row). Lenient by design: rows without a slug are skipped,
      * non-string model entries are skipped, and an empty result is a failure
-     * so the UI falls back to the offline provider list. */
+     * so the UI shows the saved pick only — never the offline provider list
+     * as if it were live inventory (#430). */
     suspend fun fetchCatalog(path: String, refresh: Boolean = false): Result<List<ProviderOption>> =
         withContext(Dispatchers.IO) {
             val base = baseUrl()

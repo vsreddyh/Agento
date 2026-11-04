@@ -99,11 +99,11 @@ func main() {
 	approvalgate.AddTool(s, "project-manager", gate, &mcp.Tool{Name: "list_projects",
 		Description: "List projects. status Todo | Ongoing | Testing | Blocked | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listProjectsInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.List(ctx, in.Status, in.Search, in.Limit)
+			rows, truncated, err := store.List(ctx, in.Status, in.Search, in.Limit)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "projects": rows})
+			return result(map[string]any{"ok": true, "count": len(rows), "truncated": truncated, "projects": rows})
 		})
 
 	approvalgate.AddTool(s, "project-manager", gate, &mcp.Tool{Name: "get_project",

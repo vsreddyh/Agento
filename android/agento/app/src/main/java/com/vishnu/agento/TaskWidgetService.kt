@@ -85,11 +85,23 @@ private class TaskFactory(
             items = (TaskWidget.cachedViews[state]
                 ?: runCatching {
                     runBlocking {
-                        withTimeoutOrNull(10_000) {
-                            TasksApi(appCtx).list(state, limit = 50).getOrNull()?.tasks
-                        }.orEmpty()
+                        // Null covers both a 10s timeout and a failed fetch
+                        // (#447 review): log either instead of collapsing to
+                        // an unexplained empty list.
+                        val res = withTimeoutOrNull(10_000) {
+                            TasksApi(appCtx).list(state, limit = 50).getOrNull()
+                        }
+                        if (res == null) {
+                            android.util.Log.w(
+                                "TaskWidget",
+                                "service fallback fetch failed or timed out for $state",
+                            )
+                        } else {
+                            TaskWidget.noteDropped(state, res.dropped)
+                        }
+                        res?.tasks
                     }
-                }.getOrDefault(emptyList())
+                }.getOrNull().orEmpty()
                 // Same order as the pushed paths (#369): the factory is
                 // the only renderer on API <31, so it sorts its own copy.
                 ).sortedForWidget(sort())

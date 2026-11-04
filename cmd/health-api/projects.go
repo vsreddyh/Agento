@@ -44,7 +44,7 @@ func listProjects(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	rows, err := store.List(ctx,
+	rows, truncated, err := store.List(ctx,
 		r.URL.Query().Get("status"),
 		r.URL.Query().Get("search"),
 		limit,
@@ -56,7 +56,7 @@ func listProjects(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []map[string]any{}
 	}
-	writeJSON(w, http.StatusOK, bson.M{"projects": rows})
+	writeJSON(w, http.StatusOK, bson.M{"projects": rows, "truncated": truncated})
 }
 
 // projectStore opens the shared projects collection (same rows the agent

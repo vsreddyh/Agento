@@ -140,13 +140,16 @@ func (s *Store) Create(ctx context.Context, name, status, note string) (map[stri
 // List returns projects filtered by status ("" or "all" = everything) with
 // optional case-insensitive name/note search, most recently updated first
 // (the app applies its status-rank ordering client-side). limit caps rows:
-// <=0 defaults to DefaultLimit, above MaxLimit clamps down.
-func (s *Store) List(ctx context.Context, status, search string, limit int) ([]map[string]any, error) {
+// <=0 defaults to DefaultLimit, above MaxLimit clamps down. The bool
+// reports truncation (#447 review): like tasks, one row past the cap is
+// fetched to tell "exactly full" from "cut off", instead of the board
+// silently ending mid-collection.
+func (s *Store) List(ctx context.Context, status, search string, limit int) ([]map[string]any, bool, error) {
 	filt := bson.M{}
 	if status = strings.TrimSpace(status); status != "" && !strings.EqualFold(status, "all") {
 		st, err := CheckStatus(status)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		filt["status"] = st
 	}
@@ -155,21 +158,28 @@ func (s *Store) List(ctx context.Context, status, search string, limit int) ([]m
 		rx := bson.M{"$regex": regexp.QuoteMeta(search), "$options": "i"}
 		filt["$or"] = []bson.M{{"name": rx}, {"note": rx}}
 	}
+	lim := mongostore.ClampLimit(limit, DefaultLimit, MaxLimit)
 	cur, err := s.projects.Find(ctx, filt,
-		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(int64(mongostore.ClampLimit(limit, DefaultLimit, MaxLimit))))
+		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(int64(lim)+1))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer cur.Close(ctx)
 	out := []map[string]any{}
 	for cur.Next(ctx) {
 		var doc bson.M
 		if err := cur.Decode(&doc); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, toDoc(doc))
 	}
-	return out, cur.Err()
+	if err := cur.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(out) > lim {
+		return out[:lim], true, nil
+	}
+	return out, false, nil
 }
 
 // Get fetches one project by hex id.

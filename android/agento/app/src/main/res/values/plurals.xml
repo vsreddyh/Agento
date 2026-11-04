@@ -12,4 +12,8 @@
         <item quantity="one">%d task</item>
         <item quantity="other">%d tasks</item>
     </plurals>
+    <plurals name="task_widget_dropped">
+        <item quantity="one">Couldn\'t load %d task</item>
+        <item quantity="other">Couldn\'t load %d tasks</item>
+    </plurals>
 </resources>

@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 /** Gateway scheduler: native cron jobs over the Jobs API (same auth as
@@ -47,6 +48,9 @@ internal fun SchedulerScreen(
     val scope = rememberCoroutineScope()
     val toasts = remember(scope) { ToastCenter(scope) }
     var jobs by remember { mutableStateOf<List<CronJob>>(emptyList()) }
+    // Unparseable rows the server sent but the list skipped (#430): counted
+    // in the parse, shown below, never a silent shrink.
+    var dropped by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
@@ -63,15 +67,28 @@ internal fun SchedulerScreen(
         scope.launch {
             JobsApi(context).list(path()).fold(
                 onSuccess = {
-                    jobs = it
+                    jobs = it.jobs
+                    dropped = it.dropped
+                    // A successful load retires the failure (#447 review),
+                    // silent or not: leaving it would pin the error card,
+                    // block the empty state, and freeze the detail dialog on
+                    // a ghost row.
+                    error = ""
                     loaded = true
                     // Same discovery as the background worker, over the
                     // rows just fetched rather than a second fetch: a
                     // response that landed while away notifies on open.
-                    CronCheck.notifyFresh(context, it)
+                    CronCheck.notifyFresh(context, it.jobs, it.dropped)
                 },
                 onFailure = { e ->
-                    error = e.message ?: e.javaClass.simpleName
+                    val msg = e.message ?: e.javaClass.simpleName
+                    error = msg
+                    // A failed refresh over rows already on screen must say
+                    // so (#447 review): without the toast the stale rows
+                    // read as current. The dropped count stays: it describes
+                    // the rows still showing (last success), not the failed
+                    // fetch — same rule as the Task Manager list.
+                    toasts.toast(friendlyError(msg).title, ToastKind.Error)
                     loaded = true
                 },
             )
@@ -95,13 +112,49 @@ internal fun SchedulerScreen(
 
     LaunchedEffect(Unit) { load() }
 
+    // Silent refresh on return (#447 review): the hub, the picker and the
+    // Task Manager list all re-read on resume, so a gateway outage between
+    // backgrounding and foregrounding can't leave this list showing
+    // pre-outage rows with no signal. Guarded like the Task Manager's: a
+    // resume before the first load finishes does nothing — that load is
+    // already fetching.
+    LifecycleResumeEffect(Unit) {
+        if (loaded) {
+            val job = scope.launch { load(silent = true) }
+            onPauseOrDispose { job.cancel() }
+        } else {
+            onPauseOrDispose { }
+        }
+    }
+
     // Notification deep-link into one job's stored chat: opened once the
-    // list carries the row, then cleared upstream.
-    LaunchedEffect(jobs, loaded, deepLinkJobId) {
+    // list carries the row, then cleared upstream. `dropped` is a key:
+    // without it a clean fetch returning structurally-equal jobs wouldn't
+    // re-run this effect, and a pending id would never resolve after the
+    // parse recovered (#447 review). Toasts fire once per id: without the
+    // guard every refresh re-announces the same pending tap.
+    var deepLinkWarned by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(jobs, loaded, deepLinkJobId, dropped) {
         val id = deepLinkJobId ?: return@LaunchedEffect
-        jobs.firstOrNull { it.id == id }?.let {
-            detail = it
+        val found = jobs.firstOrNull { it.id == id }
+        if (found != null) {
+            detail = found
+            deepLinkWarned = null
             onDeepLinkConsumed()
+        } else if (loaded && dropped == 0) {
+            // The row never arrived and the parse was clean — dropped,
+            // deleted, or never existing (#447 review): say so instead of
+            // ignoring the tap forever, and consume so a dead id can't pin
+            // this effect.
+            toasts.toast("That job couldn't be opened.", ToastKind.Error)
+            deepLinkWarned = null
+            onDeepLinkConsumed()
+        } else if (loaded && deepLinkWarned != id) {
+            // Unparseable rows are still outstanding (#447 review): the
+            // missing id may belong to one of them. Stay pending for a clean
+            // fetch instead of discarding the deep link.
+            deepLinkWarned = id
+            toasts.toast("That job hasn't loaded yet — will retry on the next refresh.", ToastKind.Info)
         }
     }
 
@@ -118,7 +171,12 @@ internal fun SchedulerScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { creating = true }) {
+                    // No New action while any rows are unreadable (#447
+                    // review): same suppression as the Task Manager/Projects
+                    // lists — creating against a partially unreadable list
+                    // risks duplicates of rows that failed to parse.
+                    val unreadable = dropped > 0
+                    IconButton(onClick = { creating = true }, enabled = !unreadable) {
                         Icon(Icons.Filled.Add, contentDescription = "New job")
                     }
                     IconButton(onClick = { load() }, enabled = !busy) {
@@ -134,13 +192,35 @@ internal fun SchedulerScreen(
                 ErrorCard(raw = error, onRetry = { load() },
                     modifier = Modifier.padding(12.dp))
             }
+            // Standalone hint only for partial lists (#447 review): when
+            // everything was dropped the EmptyState below carries the same
+            // message — showing both reads the count twice.
+            if (dropped > 0 && jobs.isNotEmpty()) {
+                HintLine("$dropped job(s) could not be parsed — the list below is partial.")
+            }
             if (loaded && jobs.isEmpty() && error.isEmpty()) {
+                // All-dropped reads as empty without this (#447 review):
+                // same guard as the Task Manager list.
+                if (dropped > 0) {
+                    HintLine(
+                        "$dropped job(s) could not be parsed — the list below would be incomplete.",
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                }
                 EmptyState(
                     icon = Icons.Filled.Schedule,
-                    title = "No scheduled jobs",
-                    subtitle = "Jobs run prompts on a schedule, even when the app is closed.",
-                    actionLabel = "New job",
-                    onAction = { creating = true },
+                    title = if (dropped > 0) "Couldn't read jobs" else "No scheduled jobs",
+                    subtitle = if (dropped > 0) {
+                        "The server sent rows this app can't read — check the gateway version."
+                    } else {
+                        "Jobs run prompts on a schedule, even when the app is closed."
+                    },
+                    actionLabel = if (dropped > 0) null else "New job",
+                    onAction = if (dropped > 0) {
+                        null
+                    } else {
+                        { creating = true }
+                    },
                 )
             }
             LazyColumn(
@@ -289,8 +369,12 @@ internal fun SchedulerScreen(
         )
     }
     // Stored cron chat: the prompt plus the short run history, re-resolved
-    // against the live list so a run that lands while open appears.
-    val detailJob = detail?.let { d -> jobs.firstOrNull { it.id == d.id } ?: d }
+    // against the live list so a run that lands while open appears. A row
+    // that left the latest successful list (deleted elsewhere, or newly
+    // unparseable) closes instead of showing the stale snapshot (#447
+    // review); a failed fetch keeps the dialog, since the rows may simply
+    // be stale rather than gone.
+    val detailJob = detail?.let { d -> jobs.firstOrNull { it.id == d.id } }
     if (detailJob != null) {
         AlertDialog(
             onDismissRequest = { detail = null },
@@ -344,6 +428,14 @@ internal fun SchedulerScreen(
                 }
             },
         )
+    } else if (detail != null && loaded && error.isEmpty()) {
+        // The open row is gone from the latest successful list — deleted
+        // elsewhere, or newly unparseable (#447 review). Close (acting on
+        // the stale snapshot would misfire) and say so, once per row.
+        LaunchedEffect(detail?.id) {
+            toasts.toast("That job is no longer available.", ToastKind.Error)
+            detail = null
+        }
     }
 }
 

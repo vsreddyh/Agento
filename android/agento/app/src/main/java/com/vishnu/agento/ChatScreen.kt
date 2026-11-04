@@ -89,8 +89,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
@@ -1616,9 +1618,19 @@ internal fun TabModelSheet(
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
-    LaunchedEffect(tab) {
+    // Fetch failure, sticky across reloads/resumes (#447 review): clearing
+    // `error` at fetch start flips `live` back on with an empty catalog and
+    // re-expands the offline list as live behind the spinner. The gate keys
+    // on this, not on the transient error text.
+    var catalogFailed by remember { mutableStateOf(false) }
+    // Re-fetch on resume (#447 review): the hub re-reads the catalog when
+    // returning from the background, and an open sheet must not keep
+    // describing a gateway that went down (or came back) underneath it.
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+    val scope = rememberCoroutineScope()
+    suspend fun loadCatalog() {
         loading = true
-        error = ""
         val prefs = appContext.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         provider = (prefs.getString("provider_$tab", "") ?: "").trim()
         model = (prefs.getString("model_$tab", "") ?: "").trim()
@@ -1630,8 +1642,11 @@ internal fun TabModelSheet(
             error = e.message ?: e.javaClass.simpleName
             emptyList()
         }
+        catalogFailed = catalog.isEmpty()
+        if (!catalogFailed) error = ""
         loading = false
     }
+    LaunchedEffect(tab, resumeTick) { loadCatalog() }
     fun save(p: String, m: String, e: String) {
         val api = ChatApi(appContext)
         api.setChatConfig(api.baseUrl(), api.password(), tab, p, m, e)
@@ -1646,7 +1661,7 @@ internal fun TabModelSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.height(12.dp))
-            val options = providerOptionsFor(catalog, provider)
+            val options = providerOptionsFor(catalog, provider, live = !catalogFailed)
             val shownProvider = options.firstOrNull { it.slug == provider }
                 ?.let { providerDisplay(it.slug, it.label) }
                 ?: provider.ifEmpty { "Choose a provider…" }
@@ -1657,7 +1672,10 @@ internal fun TabModelSheet(
                 onPick = {
                     if (it != provider) model = ""
                     provider = it
-                    error = ""
+                    // No error clear (#447 review): the error names a failed
+                    // catalog fetch, and clearing it here would flip `live`
+                    // back on and re-expand the offline list as if it were
+                    // live inventory.
                     save(provider, model, effort)
                 },
             )
@@ -1674,7 +1692,6 @@ internal fun TabModelSheet(
                         model,
                         ChatApi(context).effortFor(tab, model),
                     )
-                    error = ""
                     save(provider, model, effort)
                 },
             )
@@ -1691,7 +1708,8 @@ internal fun TabModelSheet(
                 options = effortOptions.map { e -> e to EffortCatalog.labelFor(e) },
                 onPick = {
                     effort = it
-                    error = ""
+                    // No error clear, like the provider/model picks above
+                    // (#447 review): the catalog failure outlives the pick.
                     save(provider, model, effort)
                 },
             )
@@ -1715,14 +1733,38 @@ internal fun TabModelSheet(
                 error.isNotEmpty() -> {
                     ErrorCard(raw = error)
                     Spacer(modifier = Modifier.height(4.dp))
-                    HintLine("Check Server URL + Password in Settings, then reopen this picker.")
+                    // No saved pick means nothing is listed (#447 review):
+                    // don't describe an empty picker as listing something.
+                    HintLine(
+                        if (options.isNotEmpty()) {
+                            "Live models could not be loaded — only the saved pick is listed below. Check Server URL + Password in Settings, then reopen this picker."
+                        } else {
+                            "Live models could not be loaded — nothing to list yet. Check Server URL + Password in Settings, then reopen this picker."
+                        },
+                    )
                 }
                 catalog.isEmpty() -> {
                     HintLine("No providers found — check Settings → Server.")
                 }
                 provider.isNotBlank() && modelOptionsFor(options, provider).isEmpty() -> {
-                    HintLine("This provider has no models listed — try Reload below.")
+                    // A saved slug the catalog doesn't offer (e.g. a retired
+                    // name) never resolves by refetching (#447 review): say
+                    // to pick another instead of looping on Reload forever.
+                    if (provider.isNotBlank() && catalog.none { it.slug == provider }) {
+                        HintLine("Saved provider “$provider” isn't offered anymore — pick another above.")
+                    } else {
+                        HintLine("This provider has no models listed — try Reload below.")
+                    }
                 }
+            }
+            // Manual retry for every empty/error state above (#447 review):
+            // the hints name reopening or Reload, so the button must exist.
+            OutlinedButton(
+                onClick = { scope.launch { loadCatalog() } },
+                enabled = !loading,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (loading) "Loading…" else "Reload")
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -3910,10 +3952,23 @@ internal fun providerDisplay(slug: String, label: String): String =
     if (label == slug) slug else "$label ($slug)"
 
 /** Dropdown options for a tab: live catalog, else known slugs; the saved
- * value is always kept so legacy/unknown slugs are never lost. */
-internal fun providerOptionsFor(catalog: List<ProviderOption>, saved: String): List<ProviderOption> {
+ * value is always kept so legacy/unknown slugs are never lost.
+ *
+ * The offline list is only a stand-in while live data is expected ([live]
+ * true: still loading or never attempted). Once the fetch has FAILED the
+ * caller passes live=false and the picker shows the saved value only —
+ * the offline list must never masquerade as live inventory next to an
+ * error card (#430). The default is fail-closed (#447 review): a future
+ * caller that forgets the flag gets the saved pick only, never the
+ * offline list dressed as live. */
+internal fun providerOptionsFor(
+    catalog: List<ProviderOption>,
+    saved: String,
+    live: Boolean = false,
+): List<ProviderOption> {
     val base = catalog.ifEmpty {
-        LlmProvider.entries.map { ProviderOption(it.id, it.id, emptyList()) }
+        if (live) LlmProvider.entries.map { ProviderOption(it.id, it.id, emptyList()) }
+        else emptyList()
     }
     return if (saved.isNotBlank() && base.none { it.slug == saved }) {
         listOf(ProviderOption(saved, "$saved (saved)", emptyList())) + base

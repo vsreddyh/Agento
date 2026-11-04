@@ -81,4 +81,25 @@ class ChatHeaderTest {
         assertEquals(0, chatHeaderOverflowBadgeCount(-1, -2))
         assertEquals(2, chatHeaderOverflowBadgeCount(-1, 2))
     }
+
+    @Test
+    fun `failed catalog never masquerades offline list as live`() {
+        // live=false (fetch failed): saved pick only, no offline entries (#430).
+        assertEquals(
+            listOf(ProviderOption("saved-x", "saved-x (saved)", emptyList())),
+            providerOptionsFor(emptyList(), "saved-x", live = false),
+        )
+        assertEquals(
+            emptyList<ProviderOption>(),
+            providerOptionsFor(emptyList(), "", live = false),
+        )
+        // Default is fail-closed (#447 review): omitting the flag behaves
+        // like a failed fetch — saved pick only, never the offline list
+        // dressed as live.
+        val def = providerOptionsFor(emptyList(), "saved-x")
+        assertEquals(
+            listOf(ProviderOption("saved-x", "saved-x (saved)", emptyList())),
+            def,
+        )
+    }
 }

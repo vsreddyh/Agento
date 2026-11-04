@@ -34,6 +34,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
@@ -99,6 +100,13 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var editing by remember { mutableStateOf<ServerProject?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
+    /** Rows the last successful parse skipped (#430, #447 review): a partial
+     * list must say so instead of ending silently mid-collection. Reset on
+     * every load so a stale count can't outlive its fetch. */
+    var dropped by remember { mutableIntStateOf(0) }
+    /** Whether the last successful fetch hit the server cap (#447 review):
+     * without this the board silently ends mid-collection past the cap. */
+    var truncated by remember { mutableStateOf(false) }
     // Bumped after every load/mutation so the loader below reruns.
     var refreshTick by remember { mutableIntStateOf(0) }
     var filter by remember { mutableStateOf("All") }
@@ -148,7 +156,20 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 val norm = { s: String -> s.trim().lowercase(Locale.ROOT) }
                 // Limit 500 (server max): the default 200 would see an
                 // incomplete board past 200 rows and duplicate/stall.
-                val have = api.list("all", limit = 500).getOrNull().orEmpty()
+                // A failed list aborts the run (#447 review): the strict
+                // envelopes fail loudly, and reading that failure as an
+                // empty board would re-create every legacy row as a
+                // duplicate — then fail the landed check and do it again on
+                // every launch. The file stays, the flag stays unset, the
+                // next launch retries.
+                val haveList = api.list("all", limit = 500).getOrNull()
+                    ?: return@LaunchedEffect
+                // A capped page is not the whole board (#447 review): names
+                // past the cutoff would read as missing and get duplicated,
+                // then fail the landed check below forever. Abort like a
+                // failed fetch — the file stays, the flag stays unset.
+                if (haveList.truncated) return@LaunchedEffect
+                val have = haveList.projects
                     .map { norm(it.name) }.toMutableSet()
                 for ((name, status, note) in legacy) {
                     if (norm(name) in have) continue
@@ -156,7 +177,13 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     if (created == null) break
                     have.add(norm(created.name))
                 }
-                val landed = api.list("all", limit = 500).getOrNull().orEmpty()
+                val landedList = api.list("all", limit = 500).getOrNull()
+                    ?: return@LaunchedEffect
+                // Same capped-page guard as the have-check above: verifying
+                // against a truncated list could delete the file while
+                // legacy names sit past the cutoff, unmigrated forever.
+                if (landedList.truncated) return@LaunchedEffect
+                val landed = landedList.projects
                     .map { norm(it.name) }.toSet()
                 if (legacy.all { norm(it.first) in landed }) {
                     withContext(Dispatchers.IO) {
@@ -171,19 +198,40 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         }
     }
 
-    LaunchedEffect(filter, refreshTick) {
-        loading = true
-        error = ""
-        api.list(if (filter == "All") "all" else filter).fold(
-            onSuccess = { projects = it },
-            onFailure = { e ->
-                val msg = serverDetail(e.message ?: e.javaClass.simpleName)
-                // A failed refresh over cached rows still surfaces: stale
-                // data with no error affordance hides outages.
-                if (projects.isEmpty()) error = msg else toast(msg, ToastKind.Error)
-            },
-        )
-        loading = false
+    fun load(silent: Boolean = false) {
+        if (!silent) {
+            loading = true
+            error = ""
+        }
+        scope.launch {
+            api.list(if (filter == "All") "all" else filter).fold(
+                onSuccess = { projects = it.projects; dropped = it.dropped; truncated = it.truncated },
+                onFailure = { e ->
+                    val msg = serverDetail(e.message ?: e.javaClass.simpleName)
+                    // A failed refresh over cached rows still surfaces: stale
+                    // data with no error affordance hides outages. The dropped
+                    // count stays: it describes the rows on screen (last
+                    // success), not the failed fetch — same rule as the Task
+                    // Manager list.
+                    if (projects.isEmpty()) error = msg else toast(msg, ToastKind.Error)
+                },
+            )
+            if (!silent) loading = false
+        }
+    }
+
+    LaunchedEffect(filter, refreshTick) { load() }
+
+    // Silent refresh on return (#447 review): same rule as the Scheduler —
+    // a gateway outage between backgrounding and foregrounding must not
+    // leave pre-outage rows on screen with no signal.
+    LifecycleResumeEffect(Unit) {
+        if (!loading) {
+            val job = scope.launch { load(silent = true) }
+            onPauseOrDispose { job.cancel() }
+        } else {
+            onPauseOrDispose { }
+        }
     }
 
     fun doCycle(t: ServerProject) {
@@ -233,10 +281,12 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 },
                 title = { Text("Projects") },
                 actions = {
-                    // #62: + starts a new project.
+                    // #62: + starts a new project. Disabled while rows are
+                    // unreadable (#447 review): the EmptyState guard below
+                    // must not be bypassable from the toolbar.
                     IconButton(
                         onClick = { editing = ServerProject(status = "Todo") },
-                        enabled = !busy,
+                        enabled = !busy && dropped == 0,
                     ) {
                         Icon(Icons.Filled.Add, contentDescription = "New task")
                     }
@@ -283,6 +333,18 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 if (busy) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
+                if (dropped > 0 && visible.isNotEmpty()) {
+                    HintLine(
+                        "$dropped project(s) could not be parsed — the list below is partial.",
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                }
+                if (truncated && visible.isNotEmpty()) {
+                    HintLine(
+                        "Showing the first ${visible.size} — the board continues past the fetched page.",
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                }
                 if (loading && projects.isEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
@@ -294,16 +356,34 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 } else if (!loading && error.isEmpty() && visible.isEmpty()) {
+                    // All-dropped reads as empty without this (#447 review):
+                    // same guard as the Task Manager and Scheduler lists.
+                    val allDropped = projects.isEmpty() && dropped > 0
                     EmptyState(
                         icon = Icons.Filled.List,
-                        title = if (projects.isEmpty()) "No projects yet" else "Nothing matches this filter",
-                        subtitle = if (projects.isEmpty()) {
+                        title = if (allDropped) {
+                            "Couldn't read projects"
+                        } else if (projects.isEmpty()) {
+                            "No projects yet"
+                        } else {
+                            "Nothing matches this filter"
+                        },
+                        subtitle = if (allDropped) {
+                            "The server sent rows this app can't read — check the gateway version."
+                        } else if (projects.isEmpty()) {
                             "Capture your first project — it syncs to your server."
+                        } else if (dropped > 0) {
+                            // A filter miss while rows are unparsed is not a
+                            // clean negative (#447 review): the dropped rows
+                            // were never searched and could contain matches.
+                            "Try a different status filter — note $dropped unparseable row(s) were not searched."
                         } else {
                             "Try a different status filter."
                         },
-                        actionLabel = if (projects.isEmpty()) "New task" else null,
-                        onAction = if (projects.isEmpty()) {
+                        // No New action while rows are unreadable (#447
+                        // review): same duplicate risk as the Task Manager.
+                        actionLabel = if (projects.isEmpty() && !allDropped) "New task" else null,
+                        onAction = if (projects.isEmpty() && !allDropped) {
                             { editing = ServerProject(status = "Todo") }
                         } else null,
                     )
