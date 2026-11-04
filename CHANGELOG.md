@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.17.5]
+- **Updater installs the release APK or nothing (#429).** The grab-first-APK
+  fallback is gone: a release with no release-flavor asset fails loudly with
+  "has no release APK asset" instead of silently installing a debug/unsigned
+  artifact over the release build.
+
 ## [5.17.4]
 - **Settings sidebar loses its duplicate subsections (#418).** The drawer
   and rail show one Settings entry that opens the hub; subsection rows are
