@@ -55,7 +55,8 @@ stages, each independently shippable and measurable.
   stage it is 2 per member (up to 6). The 84-connection monitor *floor* is a
   different quantity and is set by the client count (28 × 3 replica-set
   members); this stage trims it only by the 4 unwired clients (→ 72) — Stage 2
-  moves it properly, to ~48.
+  moves it properly, to ~51 (net −7 clients: 8 relay approvals clients go,
+  the browser gate dials 1 new one — browser holds no domain store).
 - Set `GOGC=50` for Go services. All 21 Go processes in the pi container holding
   2× heap headroom is the single cheapest memory win available. It trades CPU for memory, which at
   one turn at a time is the right trade; the Stage 1 PR must report the CPU
@@ -71,8 +72,9 @@ Replace `cmd/mcp-gate` with a shared wrapper applied where each server registers
 its tools (the same `approvals.NeedsApproval` / audit / hold-poll logic, minus
 the JSON-RPC re-parsing). `pi/mcp.json` points straight at each server.
 
-Removes the 8 remaining relays: 8 processes, 8 approvals clients (≈ −55
-connections: 24 monitors + ~30 pooled), ~−125 MB, taking the post-Stage-1
+Removes the 8 remaining relays: 8 processes, 8 approvals clients, minus the
+1 client the browser gate dials (no domain store to share — net −7 clients:
+24 monitors out, 3 back, plus ~30 pooled), ~−125 MB, taking the post-Stage-1
 baseline (≈ 100–150 connections, PR #426) to roughly 60–90. It also
 *simplifies* the code: the relay currently re-encodes every
 frame in both directions to intercept `tools/call`.
@@ -152,5 +154,5 @@ For Stage 1, also record `podman stats --no-stream --format "{{.Name}} {{.CPUPer
 alongside the memory delta: `GOGC=50` buys memory with CPU, and the point of
 measuring is to show the exchange rate rather than assume it is favourable.
 
-Targets: ≤16 Mongo clients, ≤90 connections at idle, ≤200 MB cgroup, and
+Targets: ≤17 Mongo clients (≤19 with gmail/calendar wired), ≤90 connections at idle, ≤200 MB cgroup, and
 `pi` alone (Node) remaining the largest single consumer.

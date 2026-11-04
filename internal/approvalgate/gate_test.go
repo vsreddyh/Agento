@@ -251,6 +251,8 @@ func TestUnsharedStoreStillAllows(t *testing.T) {
 func TestUnknownToolHolds(t *testing.T) {
 	st := newStub(true)
 	// Unknown tool on a known server fails closed (holds → times out here).
+	// This pins the policy branch, not the wire path: the SDK rejects
+	// unregistered tools before the gate ever runs.
 	_, _, err := decideCall(st, "notes", "no_such_tool_xyz", nil)
 	if err == nil || !strings.Contains(err.Error(), "expired before a decision") {
 		t.Fatalf("want hold-then-expiry, got %v", err)

@@ -96,10 +96,14 @@ func (s Status) Valid() bool {
 }
 
 // Policy is the gate rule for one (server, tool): false runs immediately,
-// true holds for approval. Unknown tools hold: a tool added without a rule
-// is a write the table never reviewed, and failing closed beats executing
-// blind. Pi built-in tools (bash/read/write via codemode) never reach the
-// gate at all — see the ADR's threat note.
+// true holds for approval. Unknown servers hold: a tool added to an
+// unlisted server is a write no table reviewed, and failing closed beats
+// executing blind. (Unknown *tools* on a wired server never reach the gate —
+// the MCP SDK rejects unregistered tools before any handler runs — so the
+// unknown-tool branch below is a backstop for direct callers, pinned by
+// TestUnknownToolHolds, not the wire path.) Pi built-in tools
+// (bash/read/write via codemode) never reach the gate at all — see the
+// ADR's threat note.
 func NeedsApproval(server, tool string, args map[string]any) bool {
 	// Case-insensitive like connectors.IsDraftOnlySend: the server id is a
 	// code literal in each cmd/*/main.go, so the fold guards callers that
@@ -119,8 +123,10 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 	if !ok {
 		return true
 	}
-	// Unknown tool on a known server holds: fail closed. The completeness
-	// test below forces an explicit rule the moment a server gains one.
+	// Unknown tool on a known server holds: fail closed. (Unreachable from
+	// the wire — the SDK rejects unregistered tools first — this is the
+	// backstop for direct callers.) The completeness test below forces an
+	// explicit rule the moment a server gains one.
 	gate, ok := gated[tool]
 	return !ok || gate
 }

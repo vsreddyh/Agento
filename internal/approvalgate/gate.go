@@ -7,7 +7,8 @@
 // no pump pair, no pending map, no teardown join budget.
 //
 // Behaviour matches the relay decision-for-decision: draft-only refusal,
-// fail-closed unknown server/tool, allow-path audit, hold → poll →
+// fail-closed unknown server (unknown *tools* never reach the gate — the
+// SDK rejects unregistered tools first), allow-path audit, hold → poll →
 // approve/deny/expire with the same audit dispositions and reply wording.
 // What is gone is process-only: stdio plumbing, frame pairing, eviction,
 // and the memory-fallback meeting problem (without a shared store the gate

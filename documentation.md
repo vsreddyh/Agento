@@ -292,8 +292,9 @@ untouched, while money
 writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`) and
 prunes that actually delete (`prune_old` with `dry_run=false`) hold up to 14
 minutes for a decision, then run on approve or fail closed on deny/expiry —
-Pi gets a tool error and the turn continues. Unknown tools and unknown
-servers hold too (deny-by-default). Every proxied `tools/call` writes one
+Pi gets a tool error and the turn continues. Unknown servers hold too
+(deny-by-default; unknown *tools* are rejected by the SDK before the gate
+ever sees them). Every proxied `tools/call` writes one
 audit row with tool, redacted args, disposition (`allowed`/`approved`/
 `denied`/`expired`), result and decider; arg keys are redacted by substring
 and error text is pattern-scrubbed (300-rune cap), so treat `error` as
