@@ -1149,7 +1149,7 @@ func (badRedirectStore) ConsumeState(context.Context, string) (connectors.OAuthS
 }
 
 // A granted subset still connects (reads keep working) but logs the gap:
-// the next draft 403 traces back to this line, not to the relay.
+// the next draft 403 traces back to this line, not to the gate.
 func TestConnectorsCallbackSubsetScopeWarns(t *testing.T) {
 	cfg, close := oauthTestServer(t, false)
 	defer close()

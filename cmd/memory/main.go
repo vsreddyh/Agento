@@ -155,7 +155,7 @@ func main() {
 
 	// Without Mongo the gateway serves from an in-process store the agent
 	// cannot see, so proposals would vanish. Refusing to start would fail the
-	// container's pi-mcp-list gate and take all six servers down with it; an
+	// container's pi-mcp-list gate and take all eight wired servers down with it; an
 	// in-process store with a loud warning keeps the server connectable while
 	// saying plainly that saves here will not reach the app.
 	// Index ownership lives solely in pi-gateway (EnsureIndexes on startup):

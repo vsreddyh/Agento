@@ -34,6 +34,10 @@ func TestGateServerLiteralPinned(t *testing.T) {
 	if !approvals.KnownServer("cookbook") {
 		t.Fatalf("cookbook is not in the approval policy table")
 	}
+	sweeps := regexp.MustCompile(`MarkServerInterrupted\(sweepCtx,\s*"([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
+	if len(sweeps) != 1 || sweeps[0][1] != "cookbook" {
+		t.Fatalf("startup sweep literal = %v, want exactly one for \"cookbook\"", sweeps)
+	}
 	// Registration set must equal the policy-table keys: a registered
 	// tool with no rule holds fail-closed 14m in prod, and a rule
 	// with no registration is a dead row. Same pin as the

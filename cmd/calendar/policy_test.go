@@ -40,6 +40,10 @@ func TestPublishedToolsMatchPolicy(t *testing.T) {
 	if !approvals.KnownServer("calendar") {
 		t.Fatalf("calendar is not in the approval policy table")
 	}
+	sweeps := regexp.MustCompile(`MarkServerInterrupted\(sweepCtx,\s*"([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
+	if len(sweeps) != 1 || sweeps[0][1] != "calendar" {
+		t.Fatalf("startup sweep literal = %v, want exactly one for \"calendar\"", sweeps)
+	}
 	// Presence, not just bucket-membership: a deleted registration
 	// leaves fewer names, all still correctly bucketed, and the refusal
 	// for direct callers is gone with no test failing. Assert the exact

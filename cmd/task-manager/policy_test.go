@@ -34,6 +34,10 @@ func TestGateServerLiteralPinned(t *testing.T) {
 	if !approvals.KnownServer("task-manager") {
 		t.Fatalf("task-manager is not in the approval policy table")
 	}
+	sweeps := regexp.MustCompile(`MarkServerInterrupted\(sweepCtx,\s*"([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
+	if len(sweeps) != 1 || sweeps[0][1] != "task-manager" {
+		t.Fatalf("startup sweep literal = %v, want exactly one for \"task-manager\"", sweeps)
+	}
 	// Registration set must equal the policy-table keys: a registered
 	// tool with no rule holds fail-closed 14m in prod, and a rule
 	// with no registration is a dead row. Same pin as the
