@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"agento/internal/approvalgate"
 	"agento/internal/approvals"
@@ -291,6 +292,14 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "cooks": rows})
 		})
 
+	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
+	// between CreateApproval and decision leaves a pending row no live
+	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, serr := gate.MarkServerInterrupted(sweepCtx, "cookbook", time.Now()); serr != nil {
+		log.Printf("cookbook: startup sweep failed: %v", serr)
+	}
+	cancel()
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "cookbook:", err)
 		os.Exit(1)

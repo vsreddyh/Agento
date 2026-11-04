@@ -123,8 +123,9 @@ type Config struct {
 	// ApprovalStore persists gate approvals and the audit trail (#313). Nil
 	// means an in-memory store. Each MCP server opens the same
 	// collections from its own process via the shared MONGODB_URI/MONGODB_DB
-	// pair; both sides fall back to memory independently when Mongo is
-	// unreachable.
+	// pair; every MCP server except memory hard-requires Mongo (log.Fatalf
+	// without it, and the entrypoint pi mcp list gate then refuses boot),
+	// so in practice both sides are either Mongo together or down together.
 	ApprovalStore approvals.Store
 
 	// MemoryStore is the per-profile memory store (#315). Nil means an

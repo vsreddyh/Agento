@@ -129,7 +129,7 @@ func Client() (*mongo.Client, error) {
 // ConnectURI dials an explicit URI (for stores targeting a specific database,
 // e.g. tests on a throwaway DB independent of process env). It shares the pool
 // defaults with Client(): a store that dials its own client is still one of the
-// ~24 clients whose connections add up.
+// ~17 clients whose connections add up.
 func ConnectURI(uri string) (*mongo.Client, error) {
 	return mongo.Connect(context.Background(), clientOptions(uri))
 }
