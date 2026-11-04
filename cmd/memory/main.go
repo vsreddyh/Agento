@@ -171,7 +171,7 @@ func main() {
 
 	// Gate shares the domain store's client when there is one
 	// (ADR-0011 Stage 2). Ephemeral (no Mongo): the gate is unshared, so
-	// gated tools deny exactly as the old relay_unavailable path did.
+	// gated tools deny fail-closed (gate_unavailable audit).
 	var gate approvals.Store = approvals.NewMemoryStore()
 	if ms, ok := store.(*memory.MongoStore); ok {
 		gate = approvals.NewOn(ms.DB())

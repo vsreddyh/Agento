@@ -31,8 +31,8 @@ func callTool(t *testing.T, name string, args map[string]any) (string, string) {
 
 	// No Mongo here by design (see above): point the gate at a memory
 	// store so allow-path audits land somewhere. Gated tools would deny
-	// (unshared store fails closed, like the old relay_unavailable) —
-	// these tests only call allow-path tools.
+	// fail-closed (gate_unavailable on an unshared store) — these tests
+	// only call allow-path tools.
 	if gate == nil {
 		gate = approvals.NewMemoryStore()
 	}

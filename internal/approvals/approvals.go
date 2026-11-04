@@ -15,6 +15,7 @@ package approvals
 import (
 	"context"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -136,6 +137,24 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 func KnownServer(server string) bool {
 	_, ok := gatedTools[strings.ToLower(strings.TrimSpace(server))]
 	return ok
+}
+
+// ToolsFor returns the policy table's tool names for a server, sorted. The
+// cmd policy tests assert the AddTool registration set equals this set, so
+// a registered-but-unclassified tool (holds fail-closed 14m in prod) and a
+// classified-but-unregistered tool (dead policy row) both fail CI. Nil for
+// an unknown server.
+func ToolsFor(server string) []string {
+	gated, ok := gatedTools[strings.ToLower(strings.TrimSpace(server))]
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(gated))
+	for tool := range gated {
+		out = append(out, tool)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // isDryRun reports whether a prune call only counts. Missing or

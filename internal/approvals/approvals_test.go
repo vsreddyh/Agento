@@ -98,7 +98,7 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			"browser_save_evidence"},
 		// First connectors v1 (#316): servers not yet wired, but the policy
 		// is classified now so a future mcp.json wiring cannot run a send
-		// free. Send rows are doubly covered: the relay refuses them
+		// free. Send rows are doubly covered: the gate refuses them
 		// outright (connectors.IsDraftOnlySend) and the true here backstops
 		// any caller that bypasses that check.
 		"gmail": {"search_gmail", "read_gmail", "list_messages",

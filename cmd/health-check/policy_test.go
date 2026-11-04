@@ -34,4 +34,25 @@ func TestGateServerLiteralPinned(t *testing.T) {
 	if !approvals.KnownServer("health-check") {
 		t.Fatalf("health-check is not in the approval policy table")
 	}
+	// Registration set must equal the policy-table keys: a registered
+	// tool with no rule holds fail-closed 14m in prod, and a rule
+	// with no registration is a dead row. Same pin as the
+	// gmail/calendar tool-set checks, via approvals.ToolsFor.
+	want := map[string]bool{}
+	for _, tool := range approvals.ToolsFor("health-check") {
+		want[tool] = true
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("registered %d tools, policy table has %d", len(seen), len(want))
+	}
+	for tool := range seen {
+		if !want[tool] {
+			t.Errorf("registered tool %q has no policy-table rule", tool)
+		}
+	}
+	for tool := range want {
+		if !seen[tool] {
+			t.Errorf("policy-table tool %q is not registered in main.go", tool)
+		}
+	}
 }

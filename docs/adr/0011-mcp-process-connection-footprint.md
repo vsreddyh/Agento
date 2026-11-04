@@ -86,8 +86,8 @@ trade. It must be recorded as defense-in-depth, never described as a sandbox.
 
 ### Stage 3 — multi-call binary (only if measurements still justify it)
 
-Compile gate + all nine servers into one `agento-mcp` binary
-(`agento-mcp --server gmail`), so 9 processes share one text segment instead of
+Compile gate + all ten servers into one `agento-mcp` binary
+(`agento-mcp --server gmail`), so 10 processes share one text segment instead of
 mapping ~11 MB each privately. Estimated −60–90 MB. Deferred: it is pure
 memory, it changes every `cmd/*Main`, and Stage 2 may make it unnecessary. As
 long as each server is still spawned as its own process, it does **not** reduce
