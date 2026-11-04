@@ -11,7 +11,7 @@ read mail or calendar. The servers had to be first-party, not external:
 the grant vault (sealed `TokenRow`s in Mongo, envelope key server-side)
 is unreadable to a third-party server, which would bring its own OAuth,
 its own token storage, and its own tool names — orphaning the consent
-flow and the draft-only refusal the relay enforces by tool name.
+flow and the draft-only refusal the gate enforces by tool name.
 
 ## Decision
 
@@ -21,7 +21,7 @@ Gmail and Calendar APIs with the stored grant:
 
 - gmail: `search_gmail` / `read_gmail` / `list_messages` (read-only),
   `create_draft` (compose scope). `send_message` / `send_gmail` are
-  registered only so the relay refuses them with "create a draft instead"
+  registered only so the gate refuses them with "create a draft instead"
   instead of answering an unknown tool.
 - calendar: `list_events` / `get_event` (readonly),
   `create_event_draft` (agent-side object: validated, sent nowhere — the
@@ -59,7 +59,7 @@ works grant-less.
   `cmd/gmail`, `cmd/calendar` own the MCP surface. Both follow the
   notes-server shape (typed inputs, schema tests, `fail`/`result`).
 - Reads stay ungated (`false`); sends refuse (`IsDraftOnlySend`); the
-  gated `true` rows stay as the backstop for relay bypass.
+  gated `true` rows stay as the backstop for gate bypass.
 - Calendar writes still have no path: `create_event_draft` presents, the
   agent does not create. Actual creation waits for the approval-gate
   flow that covers calendar writes (still a follow-up, like the app

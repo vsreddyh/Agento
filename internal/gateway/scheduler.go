@@ -38,7 +38,7 @@ const schedulerProfileName = "chat"
 //
 // Unattended tool policy is prompt-level (see cronjobs.SchedulerPrompt): the
 // gateway cannot enforce read-only any other way — gated calls are held by
-// the relay, which waits on a human that is not there. The TurnTimeout still
+// the in-process gate, which waits on a human that is not there. The TurnTimeout still
 // bounds a turn that attempts one anyway.
 //
 // The context is intentionally unread (named _): the turn detaches like the

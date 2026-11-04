@@ -22,7 +22,7 @@ ADR-0011 Stage 2; the `cmd/mcp-gate` relay before it) answers Pi
 with `connectors.RefusalMessage` ("create a draft instead") and audits a
 `connector_draft_only` deny. No approval card is parked for a refused send.
 The `approvals.gatedTools` rows for the same tools are `true` as a backstop
-for any caller that bypasses the relay check: a send must never run free.
+for any caller that bypasses the gate check: a send must never run free.
 
 Reads are intentionally ungated (`false`): reads never gate
 anywhere in this stack (ADR-0002 — gating search would make the agent ask

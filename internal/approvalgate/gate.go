@@ -91,7 +91,7 @@ func decide[Out any](ctx context.Context, server, tool, name string, args, redac
 	}
 
 	// Gated but no shared store: the gateway could never decide this hold,
-	// so deny instead of parking it (relay_unavailable).
+	// so deny instead of parking it (gate_unavailable).
 	if !store.Shared() {
 		audit(store, server, tool, redacted, approvals.DispositionDenied,
 			"gate_unavailable: approvals unavailable (no shared store)", "")

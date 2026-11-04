@@ -149,11 +149,11 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 			out = append(out, approvalWire(a))
 		}
 		resp := map[string]any{"approvals": out}
-		// Split-brain signal: when the gateway and the relay hold different
+		// Split-brain signal: when the gateway and the servers hold different
 		// in-process stores, no decision made here can ever reach a held
 		// call — the turn would hang the full hold and fail closed. The app
 		// banners this instead of showing a queue that can never decide.
-		// (Failing the holds fast lives in the relay; this flag is what lets
+		// (Failing the holds fast lives in approvalgate; this flag is what lets
 		// the app tell "empty" from "undecidable".)
 		if !s.approvals.Shared() {
 			resp["degraded"] = "approval store is not shared across processes; gated calls cannot be decided"

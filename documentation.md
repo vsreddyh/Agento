@@ -301,9 +301,11 @@ untrusted display text. Pending queue: `GET /api/approvals` (pass
 `?status=pending`), decide with `POST /api/approvals/{id}/approve|deny`
 (exactly once — races after expiry 409); history: `GET /api/audit`
 (`?server=&tool=`). State is in Mongo (`approvals`, 15-minute TTL;
-`audit_log`, 90-day TTL) and survives restarts; without Mongo both sides
-fall back to memory that cannot meet — the relay denies gated calls
-immediately (`relay_unavailable`) and the app banners the queue as degraded
+`audit_log`, 90-day TTL) and survives restarts; without Mongo every server
+except memory and browser exits (log.Fatalf) and the entrypoint gate
+refuses boot — the gateway's in-memory fallback then meets only memory's
+and browser's ephemeral gates, whose gated calls deny immediately
+(`gate_unavailable`) while the app banners the queue as degraded
 instead of showing an undecidable list. The app surface (since 5.7.0) is the
 **Approvals** sheet: pending cards with redacted args + approve/deny, a
 badged entry with an in-turn banner while streaming, and the recent audit
@@ -360,7 +362,7 @@ connected. Tokens land before the status flips — a connected-with-no-tokens
 row is never servable. Without full OAuth config (client id/secret,
 redirect URL, envelope key, durable store) connect answers 501.
 
-The refusal is enforced in the relay before the approval check, audited as
+The refusal is enforced in the gate before the approval check, audited as
 `connector_draft_only`, and parks no approval card. Token placement: OAuth
 refresh tokens live **server-side in Mongo** (`connectors` collection,
 envelope-encrypted), never in the app and never pasted in chat — the API

@@ -1045,7 +1045,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// scopes (?scope=, space-delimited) and granular consent or admin
 	// restriction can return fewer than requested. The grant still stores
 	// and flips (read paths keep working on a subset); a later draft 403
-	// traces back to this line, not to the relay. Enforcement belongs to
+	// traces back to this line, not to the gate. Enforcement belongs to
 	// the consumers that need the missing scope (follow-up MCP servers),
 	// not to the mint path, which cannot know which calls the app will make.
 	// Length-gated like code/state: the value is attacker-influenced and
