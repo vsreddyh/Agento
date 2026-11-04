@@ -369,8 +369,10 @@ fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
  * Client for the user's tasks (same bearer auth as chat/sync, served
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
- * validation the agent uses over MCP. Parsing is lenient across shapes;
- * rows without an id or name are skipped, missing fields blank.
+ * validation the agent uses over MCP. Field parsing is lenient; rows
+ * without an id or name are skipped, missing fields blank. The envelope
+ * itself is strict (#433: a non-canonical envelope fails the whole list
+ * loudly instead of rendering as no tasks).
  */
 class TasksApi(context: Context) {
 
@@ -454,19 +456,9 @@ class TasksApi(context: Context) {
     private val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
     private val http: OkHttpClient get() = sharedHttp
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     /** Lenient string read: Android's `optString` coerces JSON null to
      * the string "null", so every nullable/completedAt-style field must
@@ -475,11 +467,11 @@ class TasksApi(context: Context) {
         if (o.isNull(key)) "" else o.optString(key, "").trim()
 
     /** Lenient weekday-selection read (#304): a missing or mistyped key is an
-     * empty selection rather than a parse failure — the whole parse path is
-     * lenient across shapes, and the round-trip compare is what reports a
-     * server that stored something the app did not ask for. Values are
-     * canonicalised on the way in so a display and a comparison both start from
-     * the same spelling the server stores. */
+     * empty selection rather than a parse failure — field parsing stays
+     * lenient (only the envelope is strict, #433), and the round-trip
+     * compare is what reports a server that stored something the app did
+     * not ask for. Values are canonicalised on the way in so a display and
+     * a comparison both start from the same spelling the server stores. */
     private fun optDays(o: JSONObject, key: String): List<String> {
         val arr = o.optJSONArray(key) ?: return emptyList()
         val raw = mutableListOf<String>()
@@ -491,8 +483,9 @@ class TasksApi(context: Context) {
     }
 
     private fun parseTask(o: JSONObject): ServerTask? {
+        // Canonical `id` only (#433): no `_id` fallback — a row without it
+        // is dropped like any other unparseable row (#430 counts these).
         val id = optStr(o, "id")
-            .ifEmpty { optStr(o, "_id") }
         if (id.isEmpty()) return null
         val name = optStr(o, "name")
         if (name.isEmpty()) return null
@@ -578,10 +571,12 @@ class TasksApi(context: Context) {
             call("GET", query).map { body ->
                 val out = mutableListOf<ServerTask>()
                 val root = JSONObject(body)
+                // Canonical `tasks` envelope only (#433): no `data`/`items`
+                // downgrade — another shape fails loudly instead of reading
+                // as "no tasks".
                 val arr = root.optJSONArray("tasks")
-                    ?: root.optJSONArray("data")
-                    ?: root.optJSONArray("items")
-                    ?: return@map TaskList(out)
+                    ?: throw IllegalStateException(
+                        "unexpected tasks response shape (gateway too old?)")
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     parseTask(o)?.let { out.add(it) }

@@ -57,19 +57,9 @@ class ServerApi(context: Context) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     private fun get(path: String, endpoint: String): Result<String> {
         val base = base()
@@ -527,21 +517,24 @@ fun normalizeMcpServerKey(name: String): String {
 }
 
 /**
- * Drops derived [McpServer] rows already covered by an explicit
- * toolset row (e.g. `mcp-miser-money` toolset + derived `miser-money`
- * parsed from its `mcp__miser-money__*` tools would otherwise render the
- * same server twice). Derived rows remain as fallback for servers with no
- * explicit row (older gateways, MCP tools bundled inside another toolset).
+ * Drops ALL derived [McpServer] rows (#433): rows covered by an explicit
+ * toolset row would render the same server twice (e.g. `mcp-miser-money`
+ * toolset + derived `miser-money` parsed from its `mcp__miser-money__*`
+ * tools), and derived rows with NO explicit row were the old-gateway
+ * fallback (MCP tools bundled inside another toolset) — an old gateway now
+ * reads as unsupported in the toolsets section instead of rendering
+ * half-derived rows. The function stays (rather than inlining empty at the
+ * call site) so the retirement has one named place with its reason.
  * Pure for testability.
  */
 fun dedupMcpServers(
     toolsets: List<ToolsetInfo>,
     servers: List<McpServer>,
 ): List<McpServer> {
-    val covered = toolsets
-        .map { normalizeMcpServerKey(it.name) }
-        .toSet()
-    return servers.filter { normalizeMcpServerKey(it.name) !in covered }
+    // Both halves dropped (#433 review): keeping the covered ones re-shows
+    // the duplicates the old `!in covered` dropped, one card per explicit
+    // row plus one derived.
+    return emptyList()
 }
 
 /** Case-insensitive search across name + description. */

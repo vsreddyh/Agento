@@ -262,7 +262,8 @@ class MainActivity : ComponentActivity() {
                     // Per-assistant model subtitles for the drawer: refreshed
                     // on every navigation so model picks show up immediately.
                     // One reader for the drawer, so the subtitle honours the
-                    // same retired-key fallbacks and clamping as the request.
+                    // same canonical keys and clamping as the request (no
+                    // retired-key fallback, #433).
                     val chatApi = remember { ChatApi(context) }
                     // Built-in TTS: one engine for the Chat tab,
                     // shut down with the activity. Auto-read is a single
@@ -289,9 +290,9 @@ class MainActivity : ComponentActivity() {
                             val m = chatApi.modelFor(tab)
                             if (m.isEmpty()) return ""
                             // effortFor reads the same per-model/tab memory as
-                            // the request, retired god keys included; one
-                            // resolver turns an unset/stale pick into the level
-                            // that will actually run.
+                            // the request (retired god keys NOT read, #433);
+                            // one resolver turns an unset/stale pick into
+                            // the level that will actually run.
                             val e = EffortCatalog.effectiveFor(
                                 m,
                                 chatApi.effortFor(tab, m),

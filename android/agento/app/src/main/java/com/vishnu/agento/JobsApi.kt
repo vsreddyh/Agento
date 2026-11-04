@@ -36,8 +36,10 @@ data class CronRun(
 /**
  * Scheduler client over the gateway's native Jobs API (same bearer auth as
  * chat, served through the proxy's /p/ route — no server changes needed).
- * Parsing is lenient across gateway versions; missing fields show as blank
- * rather than failing the whole list.
+ * Field parsing is lenient across gateway versions; missing fields show as
+ * blank rather than failing the row. The envelope itself is strict (#433:
+ * no `data`/`items` downgrade — a gateway answering another shape fails
+ * the whole list loudly instead of rendering as "no jobs").
  */
 class JobsApi(context: Context) {
 
@@ -53,19 +55,9 @@ class JobsApi(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()
@@ -137,25 +129,27 @@ class JobsApi(context: Context) {
         )
     }
 
-    private fun parseList(body: String): List<CronJob> {
+    /** Parses the canonical `jobs` envelope (#433: no `data`/`items`
+     * downgrade — a gateway answering another shape fails loudly as
+     * "unexpected shape" instead of rendering as "no jobs"). */
+    private fun parseList(body: String): Result<List<CronJob>> {
         val out = mutableListOf<CronJob>()
-        val root = runCatching { JSONObject(body) }.getOrNull() ?: return out
+        val root = runCatching { JSONObject(body) }.getOrNull()
+            ?: return Result.failure(IllegalStateException("unexpected jobs response shape"))
         val arr = root.optJSONArray("jobs")
-            ?: root.optJSONArray("data")
-            ?: root.optJSONArray("items")
-        if (arr != null) {
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                parseJob(o)?.let { out.add(it) }
-            }
+            ?: return Result.failure(
+                IllegalStateException("unexpected jobs response shape (gateway too old?)"))
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            parseJob(o)?.let { out.add(it) }
         }
-        return out
+        return Result.success(out)
     }
 
     /** Lists jobs on the scheduler profile (gateway home). */
     suspend fun list(path: String): Result<List<CronJob>> =
         withContext(Dispatchers.IO) {
-            call("GET", "$path/api/jobs").map { parseList(it) }
+            call("GET", "$path/api/jobs").map { parseList(it).getOrThrow() }
         }
 
     /** Creates a job: prompt + schedule expression + delivery target. */
@@ -193,17 +187,15 @@ class JobsApi(context: Context) {
 
     suspend fun pause(path: String, id: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            // Native pause endpoint, with PATCH fallback for older gateways.
-            val direct = call("POST", "$path/api/jobs/$id/pause")
-            if (direct.isSuccess) return@withContext direct.map { }
-            call("PATCH", "$path/api/jobs/$id", JSONObject().put("paused", true)).map { }
+            // Native pause endpoint only (#433): no PATCH downgrade for
+            // older gateways — an old gateway fails loudly here instead of
+            // half-pausing through a different verb.
+            call("POST", "$path/api/jobs/$id/pause").map { }
         }
 
     suspend fun resume(path: String, id: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            val direct = call("POST", "$path/api/jobs/$id/resume")
-            if (direct.isSuccess) return@withContext direct.map { }
-            call("PATCH", "$path/api/jobs/$id", JSONObject().put("paused", false)).map { }
+            call("POST", "$path/api/jobs/$id/resume").map { }
         }
 
     suspend fun runNow(path: String, id: String): Result<Unit> =

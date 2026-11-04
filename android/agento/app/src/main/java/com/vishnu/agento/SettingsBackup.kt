@@ -59,12 +59,16 @@ object SettingsBackup {
 
     /** Every string pref the app reads; import ignores anything else. */
     val STRING_KEYS: List<String> = buildList {
-        // Unified server URL (proxy: chat + sync) + single app password;
-        // legacy keys stay listed so old backups still restore and fall back
-        // (retired api_key dropped; path_* dropped with the path field).
+        // Unified server URL (proxy: chat + sync) + single app password.
+        // Retired keys (`api_base_url`, `server_url`, `auth_token`,
+        // `provider_god`, `model_god`, `effort_god`) are NOT listed (#433):
+        // on a fresh install an old backup holding only those restores to
+        // unconfigured and the UI says so loudly, instead of silently
+        // bridging to stale config. Over existing config the retired keys
+        // are ignored and current values are kept (import merges, never
+        // resets).
         add("server_base_url")
         add("app_password")
-        add("api_base_url")
         for (t in TABS) {
             add("provider_$t")
             add("model_$t")
@@ -72,8 +76,6 @@ object SettingsBackup {
             // (`effort_<tab>_<model>`) is dynamic — see effortKeys() below.
             add("effort_$t")
         }
-        add("server_url")
-        add("auth_token")
         add("theme_mode")
         add("last_sync_at")
         // Behaviour (#355): stored TTS voice name, "" for engine default.
@@ -131,6 +133,17 @@ object SettingsBackup {
         // Update poll cadence (#366: 0 = off); coerced like the rest.
         BehaviourSettings.KEY_UPDATE_INTERVAL_HOURS,
     )).distinct()
+
+    /**
+     * True for retired god keys (#433): the exact `provider_god`,
+     * `model_god` and `effort_god` plus the per-model `effort_god_<model>`
+     * family the old fallback read. Shaped tight like [isEffortMemoryKey]:
+     * canonical `effort_<tab>[_<model>]` keys never match (tab "god" is not
+     * in [TABS]), and neither do near-misses like `provider_godx`.
+     */
+    fun isRetiredGodKey(k: String): Boolean =
+        k == "provider_god" || k == "model_god" || k == "effort_god" ||
+            (k.startsWith("effort_god_") && k.length > "effort_god_".length)
 
     /**
      * True for per-model effort memory keys (`effort_<tab>_<model>` with tab

@@ -93,6 +93,27 @@ class SettingsBackupTest {
         assertFalse(SettingsBackup.isEffortMemoryKey("effort_"))
     }
 
+    // ── isRetiredGodKey (#433: no stale god copy survives a save) ─────────
+
+    @Test
+    fun `retired god keys match exact and per-model suffixed forms`() {
+        assertTrue(SettingsBackup.isRetiredGodKey("provider_god"))
+        assertTrue(SettingsBackup.isRetiredGodKey("model_god"))
+        assertTrue(SettingsBackup.isRetiredGodKey("effort_god"))
+        assertTrue(SettingsBackup.isRetiredGodKey("effort_god_mimo-v2-6-flash"))
+    }
+
+    @Test
+    fun `canonical and near-miss keys are not god keys`() {
+        assertFalse(SettingsBackup.isRetiredGodKey("provider_chat"))
+        assertFalse(SettingsBackup.isRetiredGodKey("model_chat"))
+        assertFalse(SettingsBackup.isRetiredGodKey("effort_chat"))
+        assertFalse(SettingsBackup.isRetiredGodKey("effort_chat_mimo-v2-6-flash"))
+        assertFalse(SettingsBackup.isRetiredGodKey("effort_god_"))
+        assertFalse(SettingsBackup.isRetiredGodKey("provider_godx"))
+        assertFalse(SettingsBackup.isRetiredGodKey("server_base_url"))
+    }
+
     // ── pretty → compact format change (#339) ───────────────────────────
 
     @Test

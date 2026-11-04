@@ -144,19 +144,9 @@ class MemoryApi(context: Context) {
             ApprovalsApi.encode(v)
     }
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     private data class CallResult(val code: Int, val body: String)
 

@@ -28,24 +28,12 @@ class SyncClient(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    /** Single server URL (proxy: chat + sync on one port). Same chain as
-     * chat (`server_base_url` → `server_url` → `api_base_url`) so both sides
-     * agree pre-save (incl. background sync); legacy keys are removed on save. */
-    fun serverUrl(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
-    /** Single app password (the sync token doubles as chat credential).
-     * Prefers `app_password`; falls back to the legacy `auth_token` so users
-     * who configured a sync token keep working without re-entry. */
-    fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    /** Single server URL (proxy: chat + sync on one port). Canonical key
+     * only ([ServerEndpoint]); a retired-key install resolves to "" and
+     * post() fails loudly with "server URL not configured" (#433). */
+    fun serverUrl(): String = ServerEndpoint.base(prefs)
+    /** Single app password (the sync token doubles as chat credential). */
+    fun password(): String = ServerEndpoint.password(prefs)
     /** Marks the one-time historical backfill done so later runs send today-only payloads. */
     fun markFirstSyncDone() {
         prefs.edit {
@@ -58,12 +46,14 @@ class SyncClient(context: Context) {
         prefs.edit {
             putString("server_base_url", serverUrl.trim().trimEnd('/'))
             putString("app_password", password.trim())
-            remove("server_url") // legacy: unified key is written above
-            remove("auth_token") // legacy: unified key is written above
-            // Same migration set as the other writers (ChatApi.setChatConfig
-            // and the Settings save button): every legacy key the readers
-            // fall back to is dropped wherever the unified keys are written.
-            remove("api_base_url") // legacy: unified key is written above
+            // Retired keys are never read (#433); dropped on save (god
+            // sweep covers exact + suffixed).
+            remove("server_url")
+            remove("auth_token")
+            remove("api_base_url")
+            for (k in prefs.all.keys) {
+                if (SettingsBackup.isRetiredGodKey(k)) remove(k)
+            }
         }
     }
 

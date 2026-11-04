@@ -8,6 +8,19 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.0]
+- **BREAKING: retired prefs keys and old-gateway fallbacks removed (#433).**
+  The app reads one canonical key per setting (`server_base_url`,
+  `app_password`, `provider_<tab>`, `model_<tab>`, `effort_<tab>[_<model>]`)
+  and one envelope/endpoint per action. Installs holding only retired keys
+  (`server_url`, `api_base_url`, `auth_token`, `provider_god`, `model_god`,
+  `effort_god`) read as unconfigured with a loud error — re-enter config
+  once. Old gateways fail loudly too (no PATCH pause/resume downgrade, no
+  `data`/`items` downgrade in the jobs/tasks envelopes, no `_id` fallback in
+  task parsing, no derived-only MCP rows; ProjectsApi keeps its own
+  `_id`/`data`/`items` bridging for now). All typed
+  clients now resolve through the single `ServerEndpoint` path.
+
 ## [5.17.5]
 - **Updater installs the release APK or nothing (#429).** The grab-first-APK
   fallback is gone: a release with no release-flavor asset fails loudly with

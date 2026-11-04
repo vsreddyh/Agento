@@ -3,39 +3,23 @@ package com.vishnu.agento
 import android.content.SharedPreferences
 
 /**
- * One resolution rule for the gateway endpoint (#398).
+ * One resolution rule for the gateway endpoint (#398, canonical-only #433).
  *
- * The chat and question clients read the same two prefs in the same order;
- * keeping the chain in one place means a new fallback key — or the removal
- * of a retired one — cannot land in one client and be missed by the other,
- * which is how `QuestionsApi` drifted from `ChatApi`. Other typed clients
- * (tasks, runs, memory, …) still carry their own copies; migrating them is
- * a separate change, not a claim made here.
+ * Single canonical keys: `server_base_url` and `app_password`. Retired keys
+ * (`server_url`, `api_base_url`, `auth_token`) are NOT read — an install
+ * holding only retired keys resolves to "" and every caller fails loudly
+ * with its "not configured" error, so the user re-enters config once
+ * instead of silently talking to the wrong server with the wrong
+ * credential. The retired `api_key` was never read and stays unread.
  */
 internal object ServerEndpoint {
 
-    /** Unification chain, in priority order: the single server URL the app
-     * saves first, then the legacy keys a pre-unification config may still
-     * hold. Removed on save, so a normal install only ever has the first. */
-    private val BASE_KEYS = listOf("server_base_url", "server_url", "api_base_url")
-
     /** Trimmed, trailing-slash-free base URL, or "" when unconfigured. */
-    fun base(prefs: SharedPreferences): String {
-        for (k in BASE_KEYS) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    fun base(prefs: SharedPreferences): String =
+        (prefs.getString("server_base_url", "") ?: "").trim().trimEnd('/')
 
     /** The single app password (the sync token doubles as the chat
-     * credential). Prefers `app_password`; falls back to the legacy
-     * `auth_token` so users who configured a sync token keep working without
-     * re-entry. The retired `api_key` is deliberately NOT read (the server no
-     * longer accepts it). */
-    fun password(prefs: SharedPreferences): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+     * credential), or "" when unconfigured. */
+    fun password(prefs: SharedPreferences): String =
+        (prefs.getString("app_password", "") ?: "").trim()
 }
