@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DarkMode
@@ -101,6 +102,7 @@ internal fun SettingsScreen(
     wc: WindowClass = WindowClass.Compact,
     onMenu: () -> Unit = {},
     onPick: (SettingSection) -> Unit = {},
+    onBack: () -> Unit = {},
     themeMode: String = ThemeStore.SYSTEM,
     onTheme: (String) -> Unit = {},
 ) {
@@ -151,8 +153,14 @@ internal fun SettingsScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = onMenu) {
-                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    if (section != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    } else {
+                        IconButton(onClick = onMenu) {
+                            Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                        }
                     }
                 },
                 title = { Text(section?.title ?: "Settings") },
