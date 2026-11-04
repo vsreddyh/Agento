@@ -19,7 +19,7 @@ func mongoErrNotFound() error { return mongoDrv.ErrNoDocuments }
 func errBoom() error { return errors.New("boom") }
 
 // TestConnectorPolicySync pins the rename-sync obligation: the tool names
-// the servers publish must match the relay refusal and the approval policy
+// the servers publish must match the gate refusal and the approval policy
 // exactly. A renamed server tool that misses either table holds for
 // approval (safe) instead of refusing with the draft message (wrong UX) —
 // or worse, runs free. The exposed lists live in ExposedTools (single
@@ -36,7 +36,7 @@ func TestConnectorPolicySync(t *testing.T) {
 			case !refused && !holds:
 				// Free read/draft: correct.
 			case refused && !holds:
-				t.Errorf("%s/%s refused by relay but not gated: bypass runs it free", server, tool)
+				t.Errorf("%s/%s refused by gate but not gated: bypass runs it free", server, tool)
 			default:
 				t.Errorf("%s/%s holds for approval but is not a refused write: rename sync gap", server, tool)
 			}
@@ -134,8 +134,8 @@ func TestDraftOnlySend(t *testing.T) {
 			t.Errorf("%s/%s should not be a refused send", tc.server, tc.tool)
 		}
 	}
-	// Case-insensitive: the --server flag is operator-controlled, and a
-	// "Gmail" mcp.json entry must not bypass the refusal.
+	// Case-insensitive: the server id is a code literal, and a
+	// "Gmail" literal must not bypass the refusal.
 	if !IsDraftOnlySend("Gmail", "Send_Message") {
 		t.Error("mixed-case Gmail/Send_Message should still refuse")
 	}
@@ -1535,7 +1535,7 @@ func TestDecryptTokenRejectsEmpty(t *testing.T) {
 }
 
 // Refusal/policy sync: IsDraftOnlySend must name exactly the send paths,
-// and the same tools must gate (not refuse-or-run-free) in the relay
+// and the same tools must gate (not refuse-or-run-free) in the gate
 // policy. A renamed tool misses the refusal and falls through to the
 // gated backstop — safe, but the agent stalls on an approval for the
 // exact flow v1 sells ("create a draft instead"). Sync this list with

@@ -42,8 +42,9 @@ const (
 var warned sync.Map
 
 // AddTool registers h on s with the approval gate in front. server is the
-// lowercase id from pi/mcp.json; store must be shared (Mongo) for holds to be
-// decidable from the gateway.
+// lowercase code literal each binary registers with (what the KnownServer
+// warning and the cmd policy tests pin); store must be shared (Mongo) for
+// holds to be decidable from the gateway.
 func AddTool[In, Out any](s *mcp.Server, server string, store approvals.Store, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	// Unknown server holds every call fail-closed, so say so once at
 	// startup: without this a typo in the server literal is silent until
