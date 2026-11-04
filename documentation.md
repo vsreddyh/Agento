@@ -294,7 +294,7 @@ prunes that actually delete (`prune_old` with `dry_run=false`) hold up to 14
 minutes for a decision, then run on approve or fail closed on deny/expiry —
 Pi gets a tool error and the turn continues. Unknown servers hold too
 (deny-by-default; unknown *tools* are rejected by the SDK before the gate
-ever sees them). Every proxied `tools/call` writes one
+ever sees them). Every `tools/call` through the gate writes one
 audit row with tool, redacted args, disposition (`allowed`/`approved`/
 `denied`/`expired`), result and decider; arg keys are redacted by substring
 and error text is pattern-scrubbed (300-rune cap), so treat `error` as
@@ -315,7 +315,7 @@ trail below. Full design: `docs/adr/0002-approval-gates.md`.
 Threat note — what this does and does not fix:
 
 - Fixed: unattended money writes, deletes, prunes and rewrites now need a
-  human; every proxied call is attributable for 90 days; deny leaves state
+  human; every gated call is attributable for 90 days; deny leaves state
   unchanged (Pi gets a tool error, the turn continues).
 - NOT fixed: Pi built-in tools (`bash` file writes, `read`/`write`/`edit`
   via codemode) never traverse MCP, so they are observed but not gated — a

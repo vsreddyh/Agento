@@ -125,8 +125,10 @@ type Config struct {
 	// collections from its own process via the shared MONGODB_URI/MONGODB_DB
 	// pair; every MCP server except memory and browser hard-requires Mongo
 	// (log.Fatalf without it, and the entrypoint pi mcp list gate then
-	// refuses boot), so in practice both sides are either Mongo together
-	// or down together.
+	// refuses boot), so a gateway-side fallback only meets memory's and
+	// browser's ephemeral gates: anything else is down together, and the
+	// outage reads as degraded backlog plus gate_unavailable denies — not
+	// silently increased throughput.
 	ApprovalStore approvals.Store
 
 	// MemoryStore is the per-profile memory store (#315). Nil means an

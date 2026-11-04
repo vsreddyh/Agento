@@ -27,14 +27,14 @@ const (
 	// ApprovalsCollection holds pending and decided approvals. Short-lived:
 	// rows expire ApprovalTTL after creation whether decided or not.
 	ApprovalsCollection = "approvals"
-	// AuditCollection holds one row per proxied tool call. The audit trail
+	// AuditCollection holds one row per gated tool call. The audit trail
 	// outlives the approval that allowed it.
 	AuditCollection = "audit_log"
 
 	// ApprovalTTL bounds how long a call waits for a human. Fifteen minutes
 	// is long enough to see a notification and answer, short enough that a
 	// forgotten approval does not hold a turn past its budget (TurnTimeout
-	// is 960s; the proxy hold is shorter, see WaitTimeout).
+	// is 960s; the gate hold is shorter, see WaitTimeout).
 	ApprovalTTL = 15 * time.Minute
 
 	// WaitTimeout is how long the gate holds one sensitive call. Slightly
@@ -373,7 +373,7 @@ type Approval struct {
 	ExpiresAt time.Time `bson:"expiresAt" json:"-"`
 }
 
-// AuditEntry is one proxied call and what happened to it.
+// AuditEntry is one gated call and what happened to it.
 type AuditEntry struct {
 	ID          string         `bson:"_id" json:"id"`
 	Server      string         `bson:"server" json:"server"`

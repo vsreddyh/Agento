@@ -205,7 +205,7 @@ belongs to #312.
 ### Threat note (what this does and does not fix)
 
 - Fixed: unattended money writes, deletes, prunes and rewrites now need an
-  explicit human decision; every proxied call is attributable in the audit
+  explicit human decision; every gated call is attributable in the audit
   log for 90 days; deny leaves state unchanged (Pi gets a tool error and
   the turn continues).
 - NOT fixed: Pi built-in tools (`bash` file writes, `read`/`write`/`edit`

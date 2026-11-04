@@ -209,7 +209,7 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		"unknown path "+bounded(r.URL.Path))
 }
 
-// handleAudit serves /api/audit: the read-only trail of every proxied call.
+// handleAudit serves /api/audit: the read-only trail of every gated call.
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, rest string) {
 	path := strings.TrimPrefix(rest, "api/audit")
 	path = strings.TrimPrefix(path, "/")
