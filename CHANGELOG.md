@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.17.4]
+- **Settings sidebar loses its duplicate subsections (#418).** The drawer
+  and rail show one Settings entry that opens the hub; subsection rows are
+  gone (the hub rows already navigate there). Subsection screens gain a
+  back arrow returning to the hub.
+
 ## [5.17.3]
 - **Approval-gate comments describe the in-process gate (ADR-0011).** No
   behaviour change: the approvals API said an audit row was a "proxied"
