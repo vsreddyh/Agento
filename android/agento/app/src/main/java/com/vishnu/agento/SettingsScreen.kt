@@ -269,17 +269,10 @@ internal fun SettingsScreen(
                                 prefs.edit {
                                     putString("server_base_url", state.serverUrl.trim().trimEnd('/'))
                                     putString("app_password", state.password.trim())
+                                    // Retired keys are never read (#433);
+                                    // dropped here so no stale copy lingers.
                                     remove("api_base_url")
                                     remove("server_url")
-                                    // Same migration set as every other
-                                    // writer (ChatApi.setChatConfig,
-                                    // SyncClient.setConfig): state.password
-                                    // is prefilled with the resolved
-                                    // password (MainViewModel.refresh falls
-                                    // back to auth_token), so the effective
-                                    // secret is already in app_password and
-                                    // a stale auth_token at rest would only
-                                    // be a second copy of it.
                                     remove("auth_token")
                                 }
                                 error = ""

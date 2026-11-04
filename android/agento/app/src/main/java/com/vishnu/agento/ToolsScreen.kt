@@ -219,8 +219,9 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // blank the section.
     val listedToolsets = toolsets
     // Dedupe: explicit mcp-* toolset rows already render the server, so
-    // derived rows parsed from their mcp__<server>__* tools are fallback
-    // only (otherwise each server shows twice: 4 servers -> 8 rows).
+    // derived rows parsed from their mcp__<server>__* tools are dropped
+    // (#433: no derived-only fallback for old gateways — a server with no
+    // explicit row has no MCP row).
     val mcp = remember(listedToolsets) {
         dedupMcpServers(listedToolsets, mcpServersFrom(listedToolsets))
     }

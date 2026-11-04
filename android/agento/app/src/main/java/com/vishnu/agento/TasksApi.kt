@@ -454,19 +454,9 @@ class TasksApi(context: Context) {
     private val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
     private val http: OkHttpClient get() = sharedHttp
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     /** Lenient string read: Android's `optString` coerces JSON null to
      * the string "null", so every nullable/completedAt-style field must
@@ -491,8 +481,9 @@ class TasksApi(context: Context) {
     }
 
     private fun parseTask(o: JSONObject): ServerTask? {
+        // Canonical `id` only (#433): no `_id` fallback — a row without it
+        // is dropped like any other unparseable row (#430 counts these).
         val id = optStr(o, "id")
-            .ifEmpty { optStr(o, "_id") }
         if (id.isEmpty()) return null
         val name = optStr(o, "name")
         if (name.isEmpty()) return null
@@ -578,10 +569,12 @@ class TasksApi(context: Context) {
             call("GET", query).map { body ->
                 val out = mutableListOf<ServerTask>()
                 val root = JSONObject(body)
+                // Canonical `tasks` envelope only (#433): no `data`/`items`
+                // downgrade — another shape fails loudly instead of reading
+                // as "no tasks".
                 val arr = root.optJSONArray("tasks")
-                    ?: root.optJSONArray("data")
-                    ?: root.optJSONArray("items")
-                    ?: return@map TaskList(out)
+                    ?: throw IllegalStateException(
+                        "unexpected tasks response shape (gateway too old?)")
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     parseTask(o)?.let { out.add(it) }

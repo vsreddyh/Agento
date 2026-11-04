@@ -372,10 +372,9 @@ class ChatApi(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    /** Single server URL (proxy: chat + sync on one port). The resolution
-     * chain (`server_base_url` → `server_url` → `api_base_url`) lives in
-     * [ServerEndpoint] so every client agrees (#398); [save] writes the
-     * unified key and drops the legacy two this reads. */
+    /** Single server URL (proxy: chat + sync on one port). Canonical key
+     * only ([ServerEndpoint.base], #433); [save] writes the unified key
+     * and drops retired keys at rest. */
     fun baseUrl(): String = ServerEndpoint.base(prefs)
 
     /** Single app password (the sync token doubles as chat credential). See
@@ -387,19 +386,16 @@ class ChatApi(context: Context) {
         "/p/" + defaultProfileFor(tab)
 
     /**
-     * Provider slug for a tab; blank means not configured. Reads the `chat`
-     * keys, falling back to the retired `god` keys so installs configured
-     * before #289 keep working without re-entry (#289: old keys orphaned,
-     * never written again).
+     * Provider slug for a tab; blank means not configured. Canonical key
+     * only (#433): a retired `provider_god` install reads as unconfigured
+     * and the picker says so, instead of silently bridging.
      */
     fun providerFor(tab: String): String =
         (prefs.getString("provider_$tab", "") ?: "").trim()
-            .ifEmpty { (prefs.getString("provider_god", "") ?: "").trim() }
 
-    /** Model for a tab; blank means not configured (`god` fallback as above). */
+    /** Model for a tab; blank means not configured (`god` fallback removed). */
     fun modelFor(tab: String): String =
         (prefs.getString("model_$tab", "") ?: "").trim()
-            .ifEmpty { (prefs.getString("model_god", "") ?: "").trim() }
 
     /**
      * Reasoning effort for a tab+model pair; blank means unset — the user
@@ -408,8 +404,8 @@ class ChatApi(context: Context) {
      * default a missing `reasoning_effort`; it refuses the turn (#361), so
      * blank must stay a UI-only value. Per-model memory first
      * (`effort_<tab>_<model>`), falling back to the tab's last pick
-     * (`effort_<tab>`). Retired `god` keys are read as fallback, like
-     * provider/model above. The stored value is clamped to the model's own
+     * (`effort_<tab>`). Retired `god` keys are NOT read (#433).
+     * The stored value is clamped to the model's own
      * vocabulary — a pick saved for a graded model (e.g. `max`) is invalid
      * on a toggle model (`none`/`high`) and reads back as blank so callers
      * fall through to the model's default instead of showing/sending a
@@ -420,11 +416,9 @@ class ChatApi(context: Context) {
         var stored = ""
         if (m.isNotEmpty()) {
             stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase(Locale.ROOT)
-                .ifEmpty { (prefs.getString("effort_god_$m", "") ?: "").trim().lowercase(Locale.ROOT) }
         }
         if (stored.isEmpty()) {
             stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase(Locale.ROOT)
-                .ifEmpty { (prefs.getString("effort_god", "") ?: "").trim().lowercase(Locale.ROOT) }
         }
         if (stored.isEmpty() || m.isEmpty()) return stored
         return stored.takeIf { it in EffortCatalog.optionsFor(m) } ?: ""
@@ -453,15 +447,10 @@ class ChatApi(context: Context) {
         prefs.edit {
             putString("server_base_url", baseUrl.trim().trimEnd('/'))
             putString("app_password", password.trim())
-            remove("api_base_url") // legacy: unified key is written above
-            remove("server_url") // legacy: unified key is written above
-            // Legacy password fallback: every writer (this setter, the
-            // Settings save button, SyncClient.setConfig) resolves through
-            // password() first — which already includes this fallback — so
-            // after any save app_password holds the effective secret and a
-            // stale auth_token at rest would only be a second copy of it.
-            // Removed like the legacy URL keys above. The read fallback in
-            // ServerEndpoint stays for configs that never re-save.
+            // Retired keys are never read (#433) but are still dropped on
+            // save so a stale copy at rest cannot confuse a future reader.
+            remove("api_base_url")
+            remove("server_url")
             remove("auth_token")
             remove("path_$tab") // legacy: path field removed, defaults apply
             putString("provider_$tab", provider.trim())
