@@ -113,8 +113,8 @@ exactly one principal to attribute a decision to. Per-user attribution arrives
 with per-user auth, and until then the field should be read as "decided from
 the app", not as an audit-grade user id.
 
-The pending list is global by design: approvals are one queue across all six
-relays, so `GET /api/approvals` filters by status only and a caller that wants
+The pending list is global by design: approvals are one queue across all
+servers, so `GET /api/approvals` filters by status only and a caller that wants
 one server narrows client-side. The audit trail, by contrast, is long and
 filterable (`?server=&tool=`), because history is read by cause. A server
 filter on the pending list would only matter if the queue were ever sharded.

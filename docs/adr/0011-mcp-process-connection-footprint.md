@@ -62,9 +62,9 @@ stages, each independently shippable and measurable.
   one turn at a time is the right trade; the Stage 1 PR must report the CPU
   delta alongside the memory delta rather than assert it is free.
 - Do not wire `gmail`/`calendar` into `pi/mcp.json` until OAuth is actually
-  configured. 48 MB and ~20–26 connections for tools that answer 501 is waste
-  (2 gates + 2 domain children, 4 processes and 4 clients — not 2 and 2), and
-  #421 already made their absence survivable.
+  configured. 2 processes and 2 clients for tools that answer 501 is waste
+  (1 process + 1 client per connector: 3 monitors + up to 6 pooled each, so
+  ~6–18 connections), and #421 already made their absence survivable.
 
 ### Stage 2 — approval gate as a library, delete the relay
 
