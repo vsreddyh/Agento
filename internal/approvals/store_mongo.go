@@ -45,8 +45,10 @@ func (s *MongoStore) logf(format string, args ...any) {
 // NewOn builds a store on an existing database handle, sharing its client's
 // pool instead of dialing a new one. Stage 2 (ADR-0011): each MCP server runs
 // the approval gate in-process on the client its domain store already holds,
-// so the gate adds zero Mongo clients — the 8 relay approvals clients go
-// away with cmd/mcp-gate instead of moving into the servers.
+// so the gate adds no client of its own — the 8 relay approvals clients go
+// away with cmd/mcp-gate instead of moving into the servers. The one
+// exception is browser, which holds no domain store and therefore dials its
+// single gate client (net −7 clients across the eight, ~17 total).
 func NewOn(db *mongoDrv.Database) *MongoStore {
 	return &MongoStore{
 		approvals: db.Collection(ApprovalsCollection),

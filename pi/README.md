@@ -40,8 +40,11 @@ even for an untrusted directory. Treat the content of one as untrusted input.
 **calls `die` if any server fails to connect**. That check only became active when
 this PR added `mcp.json`, so the pi service must carry:
 
-- `MONGODB_URI` and `MONGODB_DB` — every server in `pi/mcp.json` opens the shared
-  Atlas database on startup and fails to connect without them
+- `MONGODB_URI` and `MONGODB_DB` — every server in `pi/mcp.json` except `memory`
+  and `browser` opens the shared Atlas database on startup and exits without
+  them (`memory` and `browser` fall back to in-process stores whose gated
+  calls deny fail-closed; the entrypoint gate still refuses boot because the
+  other six die)
 - `OPENCODE_API_KEY` — already enforced by the entrypoint
 
 `docker/docker-compose.yml` defines one anchor, `&mongo-env`, holding only the

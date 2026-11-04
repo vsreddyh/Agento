@@ -8,8 +8,9 @@
 // single gate client (browser holds no domain store), 6 stores inside
 // pi-gateway, 3 in health-api. One-shot dials (retention, cmd/mongo)
 // are excluded from the count. The in-process approval gate (ADR-0011
-// Stage 2) shares each server's client and adds zero of its own. The pool
-// caps below are what keep that from being expensive.
+// Stage 2) adds no client of its own: it shares the client each server's
+// domain store already holds, and browser's gate is the single new dial
+// counted above. The pool caps below are what keep that from being expensive.
 package mongo
 
 import (
