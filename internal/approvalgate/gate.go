@@ -10,9 +10,11 @@
 // fail-closed unknown server/tool, allow-path audit, hold → poll →
 // approve/deny/expire with the same audit dispositions and reply wording.
 // What is gone is process-only: stdio plumbing, frame pairing, eviction,
-// startup sweeps (no orphaned holder in-process), and the memory-fallback
-// meeting problem (without a shared store the gate still denies, since the
-// gateway could never decide that hold either).
+// and the memory-fallback meeting problem (without a shared store the gate
+// still denies, since the gateway could never decide that hold either).
+// The startup sweep moved into each server main instead: same per-server
+// MarkServerInterrupted call before serving, because a crash between
+// CreateApproval and decision still orphans the Mongo row.
 package approvalgate
 
 import (

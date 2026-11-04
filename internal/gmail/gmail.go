@@ -2,7 +2,7 @@
 // API, using the connector grant the OAuth layer sealed into the store
 // (#316). It never sees a client secret or a refresh token in plaintext
 // beyond the process that decrypts them, and it never sends: send paths
-// are refused by the relay before they reach this process (see
+// are refused by the gate before they reach this process (see
 // connectors.IsDraftOnlySend), and the send tools below are registered
 // only so that refusal names the draft path instead of 404ing.
 package gmail

@@ -8,7 +8,7 @@ import (
 )
 
 // MemoryStore is the fallback when MongoDB is unavailable, and what the
-// relay and gateway tests use. Same contract as the Mongo backend, minus
+// server and gateway tests use. Same contract as the Mongo backend, minus
 // durability: expiry is enforced lazily per read instead of by a TTL monitor.
 type MemoryStore struct {
 	mu        sync.Mutex
@@ -250,7 +250,7 @@ func (m *MemoryStore) ListAudit(_ context.Context, f AuditFilter) ([]AuditEntry,
 	return out, nil
 }
 
-// MarkServerInterrupted expires this server's pending rows at relay startup.
+// MarkServerInterrupted expires this server's pending rows at server startup.
 func (m *MemoryStore) MarkServerInterrupted(_ context.Context, server string, at time.Time) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -269,7 +269,7 @@ func (m *MemoryStore) MarkServerInterrupted(_ context.Context, server string, at
 }
 
 // MarkInterrupted expires pending rows that predate the restart: a restart
-// orphans the relay that owned their wait, and a "pending" row nobody reads
+// orphans the server that owned their wait, and a "pending" row nobody reads
 // would lie until TTL. Rows created at/after `at` belong to this process's
 // startup (the single-process case makes that rare, but the scope mirrors
 // Mongo so a Create landing mid-sweep is not expired by a dead owner).
