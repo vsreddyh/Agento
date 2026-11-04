@@ -95,7 +95,7 @@ func ClampAccessExpiry(expiryUnixMilli int64, now time.Time) int64 {
 //
 //   - gmail: readonly + compose. compose creates/updates/deletes DRAFTS
 //     only — it cannot send. The exact scope the draft-only rule needs:
-//     the token is incapable of sending even if the relay check vanished.
+//     the token is incapable of sending even if the gate check vanished.
 //   - calendar: readonly. Draft events are agent-side objects (created
 //     locally, sent nowhere) until the approval-gate flow covers writes,
 //     so the grant carries no write bit at all.

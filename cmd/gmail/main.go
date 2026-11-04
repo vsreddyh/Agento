@@ -1,13 +1,13 @@
 // Command gmail is the Gmail connector MCP server (#316).
 // Storage: MongoDB (connectors grant, sealed) + the Gmail API itself.
-// Runs over stdio for MCP clients, behind mcp-gate like every server.
+// Runs over stdio for MCP clients, with the approval gate in-process like every server.
 //
 // What this is for: searching/reading mail and creating drafts. What it is
 // NOT for: sending — send_message/send_gmail are registered only so the
-// relay refuses them with "create a draft instead" (see
+// gate refuses them with "create a draft instead" (see
 // connectors.IsDraftOnlySend) instead of answering an unknown tool. The
 // grant carries compose (drafts), never send: the token is incapable of
-// sending even if the relay check vanished.
+// sending even if the gate check vanished.
 package main
 
 import (
@@ -17,7 +17,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	"agento/internal/connectors"
 	mail "agento/internal/gmail"
 
@@ -106,9 +109,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("gmail: %v", err)
 	}
+	// Gate shares the connectors store's client (ADR-0011 Stage 2):
+	// zero new Mongo clients.
+	gate := approvals.NewOn(store.DB())
 	s := mcp.NewServer(&mcp.Implementation{Name: "gmail", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "search_gmail",
+	approvalgate.AddTool(s, "gmail", gate, &mcp.Tool{Name: "search_gmail",
 		Description: "Search mail with Gmail query syntax (same as the search box: 'from:boss subject:invoice newer_than:7d'). Returns headers + snippets WITHOUT bodies — call read_gmail for the text. Lists are capped at 50 silently (a full page means narrow the query, not that only 50 exist). Subject and From arrive RFC2047-decoded; Date is raw by design."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchGmailInput) (*mcp.CallToolResult, map[string]any, error) {
 			res, err := client.Search(ctx, in.Query, in.Limit)
@@ -122,7 +128,7 @@ func main() {
 			return result(out)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "read_gmail",
+	approvalgate.AddTool(s, "gmail", gate, &mcp.Tool{Name: "read_gmail",
 		Description: "Read one message by id (the id from search_gmail / list_messages). Returns the full text/plain body, truncated past 20KB and reported. Ids are opaque — a subject will not resolve. To/Cc are not surfaced (headers available: From/Date); use the snippet and thread for recipient context."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in readGmailInput) (*mcp.CallToolResult, map[string]any, error) {
 			m, err := client.Read(ctx, in.ID)
@@ -132,7 +138,7 @@ func main() {
 			return result(map[string]any{"ok": true, "message": m})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_messages",
+	approvalgate.AddTool(s, "gmail", gate, &mcp.Tool{Name: "list_messages",
 		Description: "List recent messages (default INBOX), newest first. Returns headers + snippets WITHOUT bodies — call read_gmail for the text. Lists are capped at 50 silently (a full page means narrow the query with search_gmail, not that only 50 exist). For a filtered view use search_gmail instead."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listMessagesInput) (*mcp.CallToolResult, map[string]any, error) {
 			res, err := client.List(ctx, in.Label, in.Limit)
@@ -149,7 +155,7 @@ func main() {
 			return result(out)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "create_draft",
+	approvalgate.AddTool(s, "gmail", gate, &mcp.Tool{Name: "create_draft",
 		Description: "Create a Gmail draft (compose scope: it can create drafts, never send). To is one ASCII bare address (no display names, no lists); subject caps at 200 runes, body at 20000 (refused, not truncated); leading/trailing whitespace is trimmed. Non-ASCII subjects are Q-encoded. The user sends it from Gmail — this server has no send path."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createDraftInput) (*mcp.CallToolResult, map[string]any, error) {
 			d, err := client.CreateDraft(ctx, in.To, in.Subject, in.Body)
@@ -159,19 +165,27 @@ func main() {
 			return result(map[string]any{"ok": true, "draft": d})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "send_message",
+	approvalgate.AddTool(s, "gmail", gate, &mcp.Tool{Name: "send_message",
 		Description: "DISABLED in v1: sending is refused, create a draft instead and let the user send it."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ sendMessageInput) (*mcp.CallToolResult, map[string]any, error) {
-			// Unreachable through the relay (it refuses first), defense in
+			// Unreachable through the gate (it refuses first), defense in
 			// depth for direct callers. Same message either way.
 			return fail(errors.New(connectors.RefusalMessage))
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "send_gmail",
+	approvalgate.AddTool(s, "gmail", gate, &mcp.Tool{Name: "send_gmail",
 		Description: "DISABLED in v1: sending is refused, create a draft instead and let the user send it."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ sendMessageInput) (*mcp.CallToolResult, map[string]any, error) {
 			return fail(errors.New(connectors.RefusalMessage))
 		})
 
+	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
+	// between CreateApproval and decision leaves a pending row no live
+	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, serr := gate.MarkServerInterrupted(sweepCtx, "gmail", time.Now()); serr != nil {
+		log.Printf("gmail: startup sweep failed: %v", serr)
+	}
+	cancel()
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "gmail:", err)
 		os.Exit(1)

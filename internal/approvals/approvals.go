@@ -2,9 +2,10 @@
 //
 // Pi offers no pre-execution tool hook: its tool events are post-hoc
 // notifications, and the MCP servers run as Pi-spawned stdio subprocesses.
-// So enforcement lives in a relay (cmd/mcp-gate) between Pi and each server:
-// every `tools/call` passes through it, reads and routine writes forward
-// untouched, and sensitive calls hold for an explicit in-app decision.
+// So enforcement lives in a gate inside each server (internal/approvalgate,
+// ADR-0011 Stage 2): every `tools/call` passes through it, reads and routine
+// writes forward untouched, and sensitive calls hold for an explicit in-app
+// decision.
 //
 // The app never sees secrets in this flow: approvals carry the tool, its
 // redacted arguments and the time — never credentials — and a decision is a
@@ -14,6 +15,7 @@ package approvals
 import (
 	"context"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -25,17 +27,17 @@ const (
 	// ApprovalsCollection holds pending and decided approvals. Short-lived:
 	// rows expire ApprovalTTL after creation whether decided or not.
 	ApprovalsCollection = "approvals"
-	// AuditCollection holds one row per proxied tool call. The audit trail
+	// AuditCollection holds one row per gated tool call. The audit trail
 	// outlives the approval that allowed it.
 	AuditCollection = "audit_log"
 
 	// ApprovalTTL bounds how long a call waits for a human. Fifteen minutes
 	// is long enough to see a notification and answer, short enough that a
 	// forgotten approval does not hold a turn past its budget (TurnTimeout
-	// is 960s; the proxy hold is shorter, see WaitTimeout).
+	// is 960s; the gate hold is shorter, see WaitTimeout).
 	ApprovalTTL = 15 * time.Minute
 
-	// WaitTimeout is how long the relay holds one sensitive call. Slightly
+	// WaitTimeout is how long the gate holds one sensitive call. Slightly
 	// under ApprovalTTL so expiry, not the race, decides the outcome.
 	WaitTimeout = 14 * time.Minute
 
@@ -48,7 +50,7 @@ const (
 	ListCap = 100
 )
 
-// Disposition is what the relay decided for one call.
+// Disposition is what the gate decided for one call.
 type Disposition string
 
 const (
@@ -95,15 +97,19 @@ func (s Status) Valid() bool {
 }
 
 // Policy is the gate rule for one (server, tool): false runs immediately,
-// true holds for approval. Unknown tools hold: a tool added without a rule
-// is a write the table never reviewed, and failing closed beats executing
-// blind. Pi built-in tools (bash/read/write via codemode) never reach the
-// relay at all — see the ADR's threat note.
+// true holds for approval. Unknown servers hold: a tool added to an
+// unlisted server is a write no table reviewed, and failing closed beats
+// executing blind. (Unknown *tools* on a wired server never reach the gate —
+// the MCP SDK rejects unregistered tools before any handler runs — so the
+// unknown-tool branch below is a backstop for direct callers, pinned by
+// TestUnknownToolHolds, not the wire path.) Pi built-in tools
+// (bash/read/write via codemode) never reach the gate at all — see the
+// ADR's threat note.
 func NeedsApproval(server, tool string, args map[string]any) bool {
-	// Case-insensitive like connectors.IsDraftOnlySend: --server comes from
-	// the operator-controlled flag, and an exact-case match would let a
-	// "Gmail" mcp.json entry silently change a tool's gate. The table keys
-	// stay lowercase; the follow-up mcp.json wiring pins lowercase names.
+	// Case-insensitive like connectors.IsDraftOnlySend: the server id is a
+	// code literal in each cmd/*/main.go, so the fold guards callers that
+	// pass a differently-cased id — the table keys stay lowercase and the
+	// policy/gate tests pin the literals each binary registers.
 	server = strings.ToLower(strings.TrimSpace(server))
 	tool = strings.ToLower(strings.TrimSpace(tool))
 	// Dry runs only count: both prune tools default dry_run=true, and a
@@ -118,19 +124,37 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 	if !ok {
 		return true
 	}
-	// Unknown tool on a known server holds: fail closed. The completeness
-	// test below forces an explicit rule the moment a server gains one.
+	// Unknown tool on a known server holds: fail closed. (Unreachable from
+	// the wire — the SDK rejects unregistered tools first — this is the
+	// backstop for direct callers.) The completeness test below forces an
+	// explicit rule the moment a server gains one.
 	gate, ok := gated[tool]
 	return !ok || gate
 }
 
-// KnownServer reports whether the policy table has a row for this server. The
-// relay warns at startup when it does not, so a wiring typo in mcp.json is
-// visible at boot instead of only as per-hold lines. Execution stays
-// fail-closed either way: unknown servers hold every call.
+// KnownServer reports whether the policy table has a row for this server.
+// Execution stays fail-closed either way: unknown servers hold every call.
 func KnownServer(server string) bool {
 	_, ok := gatedTools[strings.ToLower(strings.TrimSpace(server))]
 	return ok
+}
+
+// ToolsFor returns the policy table's tool names for a server, sorted. The
+// cmd policy tests assert the AddTool registration set equals this set, so
+// a registered-but-unclassified tool (holds fail-closed 14m in prod) and a
+// classified-but-unregistered tool (dead policy row) both fail CI. Nil for
+// an unknown server.
+func ToolsFor(server string) []string {
+	gated, ok := gatedTools[strings.ToLower(strings.TrimSpace(server))]
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(gated))
+	for tool := range gated {
+		out = append(out, tool)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // isDryRun reports whether a prune call only counts. Missing or
@@ -214,7 +238,7 @@ var gatedTools = map[string]map[string]bool{
 	// the correct posture for a server with no classification. (If Drive
 	// ever returns, its PR re-adds the row with its tools.) Reads and
 	// drafts run under the normal gate; write paths are refused outright
-	// by the relay (see connectors.IsDraftOnlySend), and the true here
+	// by the gate (see connectors.IsDraftOnlySend), and the true here
 	// is the backstop for a caller that bypasses that check: a write
 	// must never run free.
 	// Follow-up sync obligation (both sides): the draft allowlist here
@@ -349,7 +373,7 @@ type Approval struct {
 	ExpiresAt time.Time `bson:"expiresAt" json:"-"`
 }
 
-// AuditEntry is one proxied call and what happened to it.
+// AuditEntry is one gated call and what happened to it.
 type AuditEntry struct {
 	ID          string         `bson:"_id" json:"id"`
 	Server      string         `bson:"server" json:"server"`
@@ -398,12 +422,12 @@ func (e AuditEntry) Clone() AuditEntry {
 func NewID() string { return primitive.NewObjectID().Hex() }
 
 // Store is the persistence surface. *MongoStore and *MemoryStore implement
-// it; the relay and the gateway share one.
+// it; the servers and the gateway share one.
 //
 // Shared reports whether this store is visible to other processes. Only a
-// shared (Mongo) store lets a relay-held call be decided from the gateway:
+// shared (Mongo) store lets a gate-held call be decided from the gateway:
 // two memory fallbacks in two processes can never meet, so without Mongo the
-// relay denies gated calls immediately (relay_unavailable) instead of parking
+// gate denies gated calls immediately instead of parking
 // a hold no decision could ever release.
 type Store interface {
 	Shared() bool
@@ -413,18 +437,18 @@ type Store interface {
 	// error: a decision lands exactly once, and races after expiry lose.
 	DecideApproval(ctx context.Context, id string, approved bool, by string, at time.Time) (Approval, error)
 	// TimeoutApproval flips a still-pending approval expired. No-op when it
-	// already decided — the relay calls this after its wait, win or lose.
+	// already decided — the gate calls this after its wait, win or lose.
 	TimeoutApproval(ctx context.Context, id string, at time.Time) error
 	ListApprovals(ctx context.Context, f ApprovalFilter) ([]Approval, error)
 	Audit(ctx context.Context, e AuditEntry) error
 	ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry, error)
 	// MarkInterrupted flips pending rows expired at startup: a restart must
-	// not leave a "pending" row the relay that owned it will never read.
+	// not leave a "pending" row the process that owned it will never read.
 	MarkInterrupted(ctx context.Context, at time.Time) (int64, error)
-	// MarkServerInterrupted flips one server's pending rows expired. A relay
-	// restart owns that server's queue outright (one relay per server), so
-	// the rows it finds at startup belong to a process that will never
-	// decide them. Scoped by server so six relays do not expire each other.
+	// MarkServerInterrupted flips one server's pending rows expired. A server
+	// restart owns that server's queue outright, so the rows it finds at
+	// startup belong to a process that will never decide them. Scoped by
+	// server so servers do not expire each other.
 	MarkServerInterrupted(ctx context.Context, server string, at time.Time) (int64, error)
 }
 

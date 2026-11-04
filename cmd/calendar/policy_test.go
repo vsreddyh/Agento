@@ -12,22 +12,37 @@ import (
 // TestPublishedToolsMatchPolicy pins the publisher side of the rename-sync
 // obligation: every tool name this binary registers in AddTool must land
 // in exactly one policy bucket — free (runs ungated, never refused) or
-// refused (relay-refused + gated-true backstop). A typo'd AddTool name
+// refused (gate-refused + gated-true backstop). A typo'd AddTool name
 // ("create_even") holds for approval instead of failing loudly; this test
 // reads the registered names out of main.go so the typo fails here, in CI,
 // instead of stalling the agent in prod.
 //
 // TestConnectorPolicySync (connectors package) pins the other direction:
 // policy tables stay in agreement with each other. Together they close the
-// loop publisher → policy → relay.
+// loop publisher → policy → gate.
 func TestPublishedToolsMatchPolicy(t *testing.T) {
 	raw, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := regexp.MustCompile(`AddTool\(s,\s*&mcp\.Tool\{Name:\s*"([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
+	names := regexp.MustCompile(`AddTool\(s,(?:\s*"([^"]+)",\s*gate,\s*)?&mcp\.Tool\{Name:\s*"([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
 	if len(names) == 0 {
 		t.Fatal("no AddTool names found in main.go")
+	}
+	// The server literal must be this binary's id and known to the
+	// policy table: a typo fails closed silently (every tool holds), so
+	// pin it here rather than relying on the startup warning alone.
+	for _, m := range names {
+		if got := m[1]; got == "" || got != "calendar" {
+			t.Fatalf("AddTool server literal = %q, want \"calendar\"", got)
+		}
+	}
+	if !approvals.KnownServer("calendar") {
+		t.Fatalf("calendar is not in the approval policy table")
+	}
+	sweeps := regexp.MustCompile(`MarkServerInterrupted\(sweepCtx,\s*"([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
+	if len(sweeps) != 1 || sweeps[0][1] != "calendar" {
+		t.Fatalf("startup sweep literal = %v, want exactly one for \"calendar\"", sweeps)
 	}
 	// Presence, not just bucket-membership: a deleted registration
 	// leaves fewer names, all still correctly bucketed, and the refusal
@@ -45,7 +60,7 @@ func TestPublishedToolsMatchPolicy(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, m := range names {
-		name := m[1]
+		name := m[2]
 		if seen[name] {
 			t.Errorf("duplicate tool registration %q", name)
 		}
@@ -61,7 +76,7 @@ func TestPublishedToolsMatchPolicy(t *testing.T) {
 		case !refused && !holds:
 			// Free read/draft: correct.
 		case refused && !holds:
-			t.Errorf("tool %q refused by relay but not gated: bypass runs it free", name)
+			t.Errorf("tool %q refused by gate but not gated: bypass runs it free", name)
 		default:
 			t.Errorf("tool %q holds for approval but is not a refused write: rename sync gap", name)
 		}

@@ -2,9 +2,9 @@
 // the official Calendar API, using the connector grant the OAuth layer
 // sealed into the store (#316). Reads are free; writes are draft-only:
 // create_event_draft builds an agent-side object (validated, sent nowhere),
-// while create_event/send_invite are refused by the relay before they reach
+// while create_event/send_invite are refused by the gate before they reach
 // this process (see connectors.IsDraftOnlySend) — the grant carries
-// readonly, so the token is incapable of writing even if the relay check
+// readonly, so the token is incapable of writing even if the gate check
 // vanished.
 package calendar
 

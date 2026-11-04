@@ -28,10 +28,11 @@ const maxApprovalIDLen = 64
 
 // This file is the approval-gate half of the chat surface (#313).
 //
-// The relay (cmd/mcp-gate) holds sensitive tool calls as pending approvals;
-// this API is how the app lists them, decides them, and reads the audit
-// trail. The gateway keeps no live state here — decisions are store writes
-// the relay polls for, so any gateway process serves them identically.
+// The in-process gate (internal/approvalgate, ADR-0011 Stage 2) holds
+// sensitive tool calls as pending approvals; this API is how the app lists
+// them, decides them, and reads the audit trail. The gateway keeps no live
+// state here — decisions are store writes the servers poll for, so any
+// gateway process serves them identically.
 //
 //	GET  /api/approvals            list, filterable by status
 //	POST /api/approvals/{id}/approve | deny
@@ -148,11 +149,11 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 			out = append(out, approvalWire(a))
 		}
 		resp := map[string]any{"approvals": out}
-		// Split-brain signal: when the gateway and the relay hold different
+		// Split-brain signal: when the gateway and the servers hold different
 		// in-process stores, no decision made here can ever reach a held
 		// call — the turn would hang the full hold and fail closed. The app
 		// banners this instead of showing a queue that can never decide.
-		// (Failing the holds fast lives in the relay; this flag is what lets
+		// (Failing the holds fast lives in approvalgate; this flag is what lets
 		// the app tell "empty" from "undecidable".)
 		if !s.approvals.Shared() {
 			resp["degraded"] = "approval store is not shared across processes; gated calls cannot be decided"
@@ -208,7 +209,7 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		"unknown path "+bounded(r.URL.Path))
 }
 
-// handleAudit serves /api/audit: the read-only trail of every proxied call.
+// handleAudit serves /api/audit: the read-only trail of every gated call.
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, rest string) {
 	path := strings.TrimPrefix(rest, "api/audit")
 	path = strings.TrimPrefix(path, "/")

@@ -13,7 +13,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	"agento/internal/projects"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -78,9 +81,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("project-manager: %v", err)
 	}
+	// Gate shares the domain store's client (ADR-0011 Stage 2):
+	// zero new Mongo clients.
+	gate := approvals.NewOn(store.DB())
 	s := mcp.NewServer(&mcp.Implementation{Name: "project-manager", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "create_project",
+	approvalgate.AddTool(s, "project-manager", gate, &mcp.Tool{Name: "create_project",
 		Description: "Create a project. name required; status Todo (default) | Ongoing | Testing | Blocked | Paused | Done; note free-form."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Create(ctx, in.Name, in.Status, in.Note)
@@ -90,7 +96,7 @@ func main() {
 			return result(map[string]any{"ok": true, "project": doc})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_projects",
+	approvalgate.AddTool(s, "project-manager", gate, &mcp.Tool{Name: "list_projects",
 		Description: "List projects. status Todo | Ongoing | Testing | Blocked | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listProjectsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.List(ctx, in.Status, in.Search, in.Limit)
@@ -100,7 +106,7 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "projects": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "get_project",
+	approvalgate.AddTool(s, "project-manager", gate, &mcp.Tool{Name: "get_project",
 		Description: "Fetch one project by id."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getProjectInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Get(ctx, in.ID)
@@ -110,7 +116,7 @@ func main() {
 			return result(map[string]any{"ok": true, "project": doc})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "update_project",
+	approvalgate.AddTool(s, "project-manager", gate, &mcp.Tool{Name: "update_project",
 		Description: "Edit name/status/note (only sent keys change; blank name rejected)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateProjectInput) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
@@ -140,7 +146,7 @@ func main() {
 			return result(map[string]any{"ok": true, "project": doc})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_project",
+	approvalgate.AddTool(s, "project-manager", gate, &mcp.Tool{Name: "delete_project",
 		Description: "Permanently delete a project."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteProjectInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.Delete(ctx, in.ID)
@@ -153,6 +159,14 @@ func main() {
 			return result(map[string]any{"ok": true, "deleted": in.ID})
 		})
 
+	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
+	// between CreateApproval and decision leaves a pending row no live
+	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, serr := gate.MarkServerInterrupted(sweepCtx, "project-manager", time.Now()); serr != nil {
+		log.Printf("project-manager: startup sweep failed: %v", serr)
+	}
+	cancel()
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "project-manager:", err)
 		os.Exit(1)

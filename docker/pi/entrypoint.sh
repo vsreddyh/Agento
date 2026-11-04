@@ -104,9 +104,8 @@ fi
 # Only `mcp list` output lands here — server names, tool names, connection
 # errors. Never point this at a command that could echo credentials.
 # Failure attribution needs no extra work: Pi names the failing MCP server,
-# and mcp.json keys are exactly the --server names, while each mcp-gate
-# prefixes its own stderr with mcp-gate[<server>] — so a relay crash reads
-# as that server failing, not as every server failing.
+# and mcp.json keys are exactly the server binary names — so a server crash
+# reads as that server failing, not as every server failing.
 if [ -f "$PI_CODING_AGENT_DIR/mcp.json" ]; then
   MCP_CHECK_LOG=$(mktemp)
   log "checking MCP servers..."

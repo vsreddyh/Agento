@@ -102,6 +102,10 @@ func FromEnv() (*Store, error) {
 	return New(uri, db)
 }
 
+// DB exposes the store's database so the in-process approval gate
+// (ADR-0011 Stage 2) shares this client instead of dialing its own.
+func (s *Store) DB() *mongoDrv.Database { return s.db }
+
 // useTransactions probes for replica-set support; only positive cached.
 func (s *Store) useTransactions(ctx context.Context) bool {
 	if s.txOK != nil && *s.txOK {

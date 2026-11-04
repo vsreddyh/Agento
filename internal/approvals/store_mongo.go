@@ -32,13 +32,28 @@ func (s *MongoStore) clock() time.Time {
 }
 
 // Shared reports true: Mongo is visible to every process holding the
-// same URI, which is what makes relay-held calls decidable from the
+// same URI, which is what makes gate-held calls decidable from the
 // gateway.
 func (s *MongoStore) Shared() bool { return true }
 
 func (s *MongoStore) logf(format string, args ...any) {
 	if s.Logf != nil {
 		s.Logf(format, args...)
+	}
+}
+
+// NewOn builds a store on an existing database handle, sharing its client's
+// pool instead of dialing a new one. Stage 2 (ADR-0011): each MCP server runs
+// the approval gate in-process on the client its domain store already holds,
+// so the gate adds no client of its own — the 8 relay approvals clients go
+// away with cmd/mcp-gate instead of moving into the servers. The one
+// exception is browser, which holds no domain store and therefore dials its
+// single gate client (net −7 clients across the eight, ~17 total).
+func NewOn(db *mongoDrv.Database) *MongoStore {
+	return &MongoStore{
+		approvals: db.Collection(ApprovalsCollection),
+		audit:     db.Collection(AuditCollection),
+		now:       time.Now,
 	}
 }
 
@@ -165,7 +180,7 @@ func (s *MongoStore) DecideApproval(ctx context.Context, id string, approved boo
 		status = StatusApproved
 	}
 	// `at` is the caller's decision instant, not s.clock(): the decision is
-	// being made at that moment everywhere (gateway and relay call it with
+	// being made at that moment everywhere (gateway and servers call it with
 	// time.Now()), and comparing it against the store's own clock would let
 	// the row's expiry be evaluated at two instants in one operation.
 	res := s.approvals.FindOneAndUpdate(ctx,
@@ -314,8 +329,8 @@ func (s *MongoStore) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 	return out, nil
 }
 
-// MarkServerInterrupted expires one server's pending rows at relay startup.
-// Scoped by server because six relays share the collection and a restart of
+// MarkServerInterrupted expires one server's pending rows at server startup.
+// Scoped by server because all servers share the collection and a restart of
 // one must not touch another's live hold. Deliberately unscoped by createdAt,
 // unlike the gateway-wide MarkInterrupted: this process owns the server's
 // queue from boot, so there is no live hold of its own to protect.
@@ -333,7 +348,7 @@ func (s *MongoStore) MarkServerInterrupted(ctx context.Context, server string, a
 }
 
 // MarkInterrupted expires pending rows at startup and deletes expired ones,
-// matching the memory backend: no "pending" row may outlive the relay that
+// matching the memory backend: no "pending" row may outlive the server that
 // owned its wait.
 func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, error) {
 	if _, err := s.approvals.DeleteMany(ctx, bson.M{
@@ -345,7 +360,7 @@ func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, 
 	// createdAt < at, not just status=pending: a Create landing between the
 	// delete and this update belongs to this startup, not the dead one, and
 	// expiring it would kill a live hold's row. Both stamps are wall clock from
-	// processes on this one host (the relay and gateway share the stack), so a
+	// processes on this one host (the servers and gateway share the stack), so a
 	// skew is an NTP fault, not a supported deployment; ObjectID time would be
 	// the next step if the two ever ran on different clocks.
 	res, err := s.approvals.UpdateMany(ctx,

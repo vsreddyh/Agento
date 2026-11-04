@@ -22,7 +22,10 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	"agento/internal/memory"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -152,7 +155,7 @@ func main() {
 
 	// Without Mongo the gateway serves from an in-process store the agent
 	// cannot see, so proposals would vanish. Refusing to start would fail the
-	// container's pi-mcp-list gate and take all six servers down with it; an
+	// container's pi-mcp-list gate and take all eight wired servers down with it; an
 	// in-process store with a loud warning keeps the server connectable while
 	// saying plainly that saves here will not reach the app.
 	// Index ownership lives solely in pi-gateway (EnsureIndexes on startup):
@@ -166,9 +169,17 @@ func main() {
 		store = ms
 	}
 
+	// Gate shares the domain store's client when there is one
+	// (ADR-0011 Stage 2). Ephemeral (no Mongo): the gate is unshared, so
+	// gated tools deny fail-closed (gate_unavailable audit).
+	var gate approvals.Store = approvals.NewMemoryStore()
+	if ms, ok := store.(*memory.MongoStore); ok {
+		gate = approvals.NewOn(ms.DB())
+	}
+
 	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "save_memory",
+	approvalgate.AddTool(s, "memory", gate, &mcp.Tool{Name: "save_memory",
 		Description: "Remember ONE durable thing the user explicitly told you: a preference, a format rule, a correction, a fact about their life or work. Write it in their terms (" +
 			"\"wants weekly reports as a table\", not \"likes tables\"). The item is saved as PENDING and shown in the app; the user confirms it before it affects answers. " +
 			"Call this when they correct you or state a lasting preference, not for passing context or anything they have not said. Do not save secrets, credentials or one-off details."},
@@ -198,7 +209,7 @@ func main() {
 			})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_memory",
+	approvalgate.AddTool(s, "memory", gate, &mcp.Tool{Name: "list_memory",
 		Description: "List what is remembered for this profile, newest first, optionally filtered by topic and/or status. Use it when the user asks what you remember, or before saving something that may already be recorded. Items include status: only confirmed items are applied to answers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			f, errMsg := prepareList(profile, in)
@@ -218,6 +229,14 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(items), "items": items, "persistent": !ephemeral})
 		})
 
+	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
+	// between CreateApproval and decision leaves a pending row no live
+	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, serr := gate.MarkServerInterrupted(sweepCtx, "memory", time.Now()); serr != nil {
+		log.Printf("memory: startup sweep failed: %v", serr)
+	}
+	cancel()
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "memory:", err)
 		os.Exit(1)

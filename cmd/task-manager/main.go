@@ -15,7 +15,10 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	"agento/internal/mongostore"
 	"agento/internal/tasks"
 
@@ -340,9 +343,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("task-manager: %v", err)
 	}
+	// Gate shares the domain store's client (ADR-0011 Stage 2):
+	// zero new Mongo clients.
+	gate := approvals.NewOn(store.DB())
 	s := mcp.NewServer(&mcp.Implementation{Name: "task-manager", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "create_task",
 		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). Optional: speak_name, a verb phrase for voice reminders (e.g. name 'Power Bill' → speak_name 'pay the power bill'); blank falls back to name. The repeat is ONE of three mutually exclusive shapes — never combine them: structured interval (repeat_every 1-28 with repeat_unit days|weeks|months|years), structured selected days (repeat_days = an array of weekdays from mon,tue,wed,thu,fri,sat,sun, always WEEKLY, and due_date MUST be one of them), or a custom condition (repeat_custom true with repeat_rule = the user's words verbatim). All of them empty/0/[] = one-shot. Prefer the structured shapes: the server rolls those over itself; only a custom condition is yours to advance."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := createTask(ctx, store, in)
@@ -352,7 +358,7 @@ func main() {
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_tasks",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "list_tasks",
 		Description: "List tasks. state open (default) | done | all; overdue=true keeps open tasks due before today (requires state=open); search matches name/description; limit caps rows (default 200, max 500) and truncated says whether more exist. A limit of zero or negative gives the default, a huge one is clamped to the max, and a mistyped limit is an argument error."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listTasksInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, truncated, err := store.List(ctx, in.State, in.Overdue, in.Search, in.Limit)
@@ -362,7 +368,7 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "truncated": truncated, "tasks": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "get_task",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "get_task",
 		Description: "Fetch one task by id."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Get(ctx, in.ID)
@@ -372,7 +378,7 @@ func main() {
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "update_task",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "update_task",
 		Description: "Edit name/speak_name/description/due_date/due_time/estimated_minutes/repeat/parallelable. Omit a key to leave it alone; send speak_name \"\" to clear it back to the name fallback. Supplied values must satisfy create_task's mandatory rules (empty description/due fields rejected). The repeat accepts the same five keys (repeat_every/repeat_unit/repeat_days/repeat_custom/repeat_rule) and is validated as a whole; OMIT ALL FIVE repeat keys to leave the recurrence alone; sending repeat_rule \"\" with no structured key clears the whole rule (one-shot). Switching shapes means sending the new one and zeroing the old (e.g. moving to repeat_days: send repeat_every 0, repeat_unit \"\"). Repeat_days is an array of weekdays (mon..sun), always weekly, and due_date must be one of them. expected_revision: pass the revision the task showed when read; a mismatch means someone else wrote first and the edit is rejected, so re-read and retry. Works on open or done tasks."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
@@ -432,7 +438,7 @@ func main() {
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "complete_task",
 		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, call skip_task instead. A STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, in.ID)
@@ -469,7 +475,7 @@ func main() {
 			return result(out)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "skip_task",
 		Description: "Skip the current occurrence WITHOUT claiming the work was done (retained 3 days like a completion, then auto-deleted; `reopen_task` restores it). Call when the work did NOT happen: a STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over exactly like complete_task and the next occurrence is returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task the same way as after a custom completion."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, in.ID, in.Reason)
@@ -505,7 +511,7 @@ func main() {
 			return result(out)
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "reopen_task",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "reopen_task",
 		Description: "Reopen a completed or skipped task (clears completion and the skip marker, cancels the 3-day expiry)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in reopenTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Reopen(ctx, in.ID)
@@ -516,7 +522,7 @@ func main() {
 			return result(map[string]any{"ok": true, "task": doc})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_task",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "delete_task",
 		Description: "Permanently delete a task (open or done)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.Delete(ctx, in.ID)
@@ -547,7 +553,7 @@ func main() {
 			return result(map[string]any{"ok": true, "deleted": deleted})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "task_history",
+	approvalgate.AddTool(s, "task-manager", gate, &mcp.Tool{Name: "task_history",
 		Description: "Read the change log: every create, update, complete, skip, reopen and delete, with the op, the task id, who made it (source) and when (at). The log is kept 90 days, so it still answers for a task that was completed and auto-deleted after 3 days — use it when the user asks what happened to a task, or when a task changed without the agent doing it. Filters: task_id (one task — the 24-character hex id create_task returned), op (a single comma-separated string, not an array: create, update, delete, complete, skip, reopen, duplicate — duplicate appears only for duplicates made through a batch), since (an INCLUSIVE RFC3339 timestamp string, fractional seconds accepted, e.g. 2026-10-21T00:00:00Z), limit (default 200, max 500; zero or negative gives the default, a huge one is clamped). A mistyped or null filter — an array or a number for task_id, op or since, a string or a fractional number for limit, a null anywhere — is an argument type error, not omitted. Newest first. A malformed task_id, op or since is refused rather than answered with an empty history. `source` is a self-attested LABEL ('mcp' for this server, the app's own label otherwise), not an authenticated identity."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in taskHistoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := taskHistory(ctx, store, in)
@@ -557,6 +563,14 @@ func main() {
 			return result(out)
 		})
 
+	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
+	// between CreateApproval and decision leaves a pending row no live
+	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, serr := gate.MarkServerInterrupted(sweepCtx, "task-manager", time.Now()); serr != nil {
+		log.Printf("task-manager: startup sweep failed: %v", serr)
+	}
+	cancel()
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "task-manager:", err)
 		os.Exit(1)

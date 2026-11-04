@@ -121,10 +121,14 @@ type Config struct {
 	RunStore runs.Store
 
 	// ApprovalStore persists gate approvals and the audit trail (#313). Nil
-	// means an in-memory store. The relay (cmd/mcp-gate) opens the same
+	// means an in-memory store. Each MCP server opens the same
 	// collections from its own process via the shared MONGODB_URI/MONGODB_DB
-	// pair; both sides fall back to memory independently when Mongo is
-	// unreachable.
+	// pair; every MCP server except memory and browser hard-requires Mongo
+	// (log.Fatalf without it, and the entrypoint pi mcp list gate then
+	// refuses boot), so a gateway-side fallback only meets memory's and
+	// browser's ephemeral gates: anything else is down together, and the
+	// outage reads as degraded backlog plus gate_unavailable denies — not
+	// silently increased throughput.
 	ApprovalStore approvals.Store
 
 	// MemoryStore is the per-profile memory store (#315). Nil means an
@@ -217,7 +221,7 @@ type Server struct {
 	runs *runManager
 
 	// approvals serves the gate decision and audit reads. Stateless: the
-	// relay polls the store, so every gateway process answers identically.
+	// servers poll the store, so every gateway process answers identically.
 	approvals approvals.Store
 
 	// memory backs the memory routes and the per-turn prompt prefix. Scoped by
@@ -624,8 +628,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Approval gates + audit trail (#313). A sibling of the above: the relay
-	// holds sensitive tool calls, the app decides them here.
+	// Approval gates + audit trail (#313). A sibling of the above: the servers
+	// hold sensitive tool calls, the app decides them here.
 	if rest == "api/approvals" || strings.HasPrefix(rest, "api/approvals/") {
 		s.handleApprovals(w, r, rest)
 		return

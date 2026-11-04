@@ -1,13 +1,13 @@
 // Command calendar is the Calendar connector MCP server (#316).
 // Storage: MongoDB (connectors grant, sealed) + the Calendar API itself.
-// Runs over stdio for MCP clients, behind mcp-gate like every server.
+// Runs over stdio for MCP clients, with the approval gate in-process like every server.
 //
 // What this is for: listing upcoming events and building draft events. What
 // it is NOT for: creating events or sending invites — create_event /
-// send_invite are registered only so the relay refuses them with "create a
+// send_invite are registered only so the gate refuses them with "create a
 // draft instead" (see connectors.IsDraftOnlySend) instead of answering an
 // unknown tool. The grant carries readonly: the token is incapable of
-// writing even if the relay check vanished.
+// writing even if the gate check vanished.
 package main
 
 import (
@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"agento/internal/approvalgate"
+	"agento/internal/approvals"
 	cal "agento/internal/calendar"
 	"agento/internal/connectors"
 
@@ -138,9 +140,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("calendar: %v", err)
 	}
+	// Gate shares the connectors store's client (ADR-0011 Stage 2):
+	// zero new Mongo clients.
+	gate := approvals.NewOn(store.DB())
 	s := mcp.NewServer(&mcp.Implementation{Name: "calendar", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_events",
+	approvalgate.AddTool(s, "calendar", gate, &mcp.Tool{Name: "list_events",
 		Description: "List upcoming events (default calendar 'primary', default window the next 30 days), soonest first. Returns when + what, no sync metadata. Lists are capped at 50 silently (a full page means narrow the window, not that only 50 exist)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listEventsInput) (*mcp.CallToolResult, map[string]any, error) {
 			from, err := parseBound(in.From, "from")
@@ -158,7 +163,7 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "events": rows})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "get_event",
+	approvalgate.AddTool(s, "calendar", gate, &mcp.Tool{Name: "get_event",
 		Description: "Get one event by id (the id from list_events)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getEventInput) (*mcp.CallToolResult, map[string]any, error) {
 			e, err := client.Get(ctx, in.Calendar, in.ID)
@@ -168,7 +173,7 @@ func main() {
 			return result(map[string]any{"ok": true, "event": e})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "create_event_draft",
+	approvalgate.AddTool(s, "calendar", gate, &mcp.Tool{Name: "create_event_draft",
 		Description: "Build a draft event (validated, sent nowhere — the grant is readonly). Attendees are single bare ASCII addresses (count uncapped in v1); summary caps at 200 runes, location at 500 (refused, not truncated); description is trimmed and capped at 5000 with a truncated flag. The agent presents the draft to the user; actual creation waits for the approval-gate flow that covers calendar writes. Start/end are RFC3339 date-times or YYYY-MM-DD dates (both ends must match in kind); end must be after start."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in createEventDraftInput) (*mcp.CallToolResult, map[string]any, error) {
 			d, err := cal.Draft(in.Summary, in.Description, in.Location, in.Start, in.End, in.Attendees)
@@ -179,19 +184,27 @@ func main() {
 				"note": "draft only — nothing was created or sent; present it to the user"})
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "create_event",
+	approvalgate.AddTool(s, "calendar", gate, &mcp.Tool{Name: "create_event",
 		Description: "DISABLED in v1: creating events is refused, build a draft instead and let the user confirm it."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ createEventInput) (*mcp.CallToolResult, map[string]any, error) {
-			// Unreachable through the relay (it refuses first), defense in
+			// Unreachable through the gate (it refuses first), defense in
 			// depth for direct callers. Same message either way.
 			return fail(errors.New(connectors.RefusalMessage))
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "send_invite",
+	approvalgate.AddTool(s, "calendar", gate, &mcp.Tool{Name: "send_invite",
 		Description: "DISABLED in v1: sending invites is refused, build a draft instead and let the user confirm it."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ createEventInput) (*mcp.CallToolResult, map[string]any, error) {
 			return fail(errors.New(connectors.RefusalMessage))
 		})
 
+	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
+	// between CreateApproval and decision leaves a pending row no live
+	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if _, serr := gate.MarkServerInterrupted(sweepCtx, "calendar", time.Now()); serr != nil {
+		log.Printf("calendar: startup sweep failed: %v", serr)
+	}
+	cancel()
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "calendar:", err)
 		os.Exit(1)

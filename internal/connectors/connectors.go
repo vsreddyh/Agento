@@ -84,7 +84,7 @@ func ScopesFor(id string) []string {
 
 // ExposedTools names every tool a connector MCP server publishes, by
 // server id. Single source of truth for the rename-sync contract: the
-// policy table (approvals.gatedTools), the relay refusal, the cmd
+// policy table (approvals.gatedTools), the gate refusal, the cmd
 // policy tests, and TestConnectorPolicySync all read this list.
 // Adding a server tool updates it here first, and every consumer fails
 // loudly until it follows — no two hand-written copies to drift apart.
@@ -232,13 +232,13 @@ func TrimCredential(s string) string {
 }
 
 // IsDraftOnlySend reports whether (server, tool) is a send path that v1
-// refuses outright. Draft tools run (free or gated by the relay); send tools
-// never reach the server — the relay answers Pi with RefusalMessage.
+// refuses outright. Draft tools run (free or gated); send tools
+// never reach the server — the gate answers Pi with RefusalMessage.
 //
-// Case-insensitive on both parts: r.server comes from the operator-controlled
-// --server flag, and an exact-case match would let a "Gmail" mcp.json entry
-// bypass both this refusal and the approval backstop. Same hardening the
-// follow-up mcp.json wiring must keep (pin lowercase names).
+// Case-insensitive on both parts: the server id is the code literal each
+// binary registers with, and an exact-case match would let a "Gmail"
+// literal bypass both this refusal and the approval backstop. Same
+// hardening the cmd policy tests pin (lowercase literals).
 //
 // Follow-up obligation: keep this list in sync with the wired servers'
 // real tool names. Pinned by TestIsDraftOnlySendMatchesServers alongside

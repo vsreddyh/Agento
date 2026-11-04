@@ -72,8 +72,13 @@ func FromEnv() (*MongoStore, error) {
 	return New(uri, db)
 }
 
+// DB exposes the store's database so the in-process approval gate
+// (ADR-0011 Stage 2) shares this client instead of dialing its own.
+func (s *MongoStore) DB() *mongoDrv.Database { return s.coll.Database() }
+
 // EnsureIndexes creates the states TTL (pending attempts die on their own;
-// the relay-style sweep other stores need does not exist here by design)
+// the approval-gate startup sweep other stores run does not exist here by
+// design — an OAuth state has no holder to orphan)
 // plus the connector lookup the supersede/scrub deletes filter on. The
 // connectors collection needs none: two fixed rows keyed by _id.
 func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
