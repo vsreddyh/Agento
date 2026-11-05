@@ -4,7 +4,7 @@
 //
 // The unit is one client per store, not per process: most stores dial their
 // own client through mongostore.Open -> ConnectURI, so long-lived steady state
-// is ~17 clients — 7 domain children with their own store plus the browser's
+// is ~18 clients — 8 domain children with their own store plus the browser's
 // single gate client (browser holds no domain store), 6 stores inside
 // pi-gateway, 3 in health-api. One-shot dials (retention, cmd/mongo)
 // are excluded from the count. The in-process approval gate (ADR-0011
@@ -33,9 +33,9 @@ const (
 	//
 	// The driver default is 100 per member, which is dimensioning for load this
 	// deployment will never see: two users, one assistant turn at a time, and
-	// each server handles a single tool call sequentially. With ~17 clients
+	// each server handles a single tool call sequentially. With ~18 clients
 	// the default lets a loaded stack hold thousands of connections (idle
-	// holds monitors only, ~17 x 3 = ~51, since minPoolSize is 0), and the
+	// holds monitors only, ~18 x 3 = ~54, since minPoolSize is 0), and the
 	// 2026-10-31 outage showed why that matters — churn against that ceiling
 	// (#423) is what took the cluster down, not steady-state count (#424).
 	//
@@ -130,7 +130,7 @@ func Client() (*mongo.Client, error) {
 // ConnectURI dials an explicit URI (for stores targeting a specific database,
 // e.g. tests on a throwaway DB independent of process env). It shares the pool
 // defaults with Client(): a store that dials its own client is still one of the
-// ~17 clients whose connections add up.
+// ~18 clients whose connections add up.
 func ConnectURI(uri string) (*mongo.Client, error) {
 	return mongo.Connect(context.Background(), clientOptions(uri))
 }
