@@ -184,8 +184,10 @@ internal fun SchedulerScreen(
             }
             // Unparseable rows are a gateway-shape problem the user can
             // report, not an empty schedule: the count sits above the
-            // rows it describes (#430).
-            if (jobsDropped > 0 && jobs.isNotEmpty()) {
+            // rows it describes — held off while a reload flies so the
+            // previous page's count never advertises as the page being
+            // fetched (#430).
+            if (!busy && jobsDropped > 0 && jobs.isNotEmpty()) {
                 HintLine(
                     text = jobDropMessage(jobsDropped),
                     modifier = Modifier.padding(horizontal = 12.dp),
