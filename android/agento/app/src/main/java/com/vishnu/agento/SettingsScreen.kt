@@ -109,6 +109,14 @@ internal fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val toasts = remember(scope) { ToastCenter(scope) }
     var error by remember { mutableStateOf("") }
+    // Probe state for the Connection section: declared here (not next to
+    // the Test button) so Save can clear the report AND the section
+    // footer below can read it — both sit outside the card the button
+    // lives in. A stale "Connected" must not outlive a failed refetch,
+    // and the "not set up yet" hint must not show next to a probe
+    // report that already explains the empty catalog (#430).
+    var testing by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
     // Bumped on every resume so the hub's widget count reflects a
     // placement added (or removed) while the app was in the background —
     // same reason the widget section re-reads.
@@ -260,12 +268,6 @@ internal fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             /** Saves server fields (chat config per tab saves from its own page). */
-                            // Declared here (not next to the Test button
-                            // below) so Save can clear the probe report:
-                            // a stale "Connected" must not outlive a
-                            // failed refetch (#430).
-                            var testing by remember { mutableStateOf(false) }
-                            var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
                             Button(onClick = {
                                 val api = ChatApi(context)
                                 val prefs = context.getSharedPreferences(
