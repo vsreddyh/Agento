@@ -29,10 +29,17 @@ import java.time.format.DateTimeFormatter
  */
 class HealthConnectManager(context: Context) {
 
-    /** Null when Health Connect is missing/unusable — callers treat null as "no data". */
+    /** Null when Health Connect is missing/unusable. Callers must NOT read
+     * null as "no data" (#435): [available] exists so an absent platform is
+     * reported as unavailable, not as an empty day. */
     private val client: HealthConnectClient? = runCatching {
         HealthConnectClient.getOrCreate(context)
     }.getOrNull()
+
+    /** True when the Health Connect client exists on this device. False is
+     * a device/install state, never a statement about the user's data
+     * (#435) — an empty day and an absent platform are different facts. */
+    val available: Boolean get() = client != null
 
     /** Static helpers: permission set, install diagnostics, timestamp format. */
     companion object {

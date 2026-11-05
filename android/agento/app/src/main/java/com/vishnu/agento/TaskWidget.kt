@@ -315,6 +315,12 @@ class TaskWidget : AppWidgetProvider() {
         @Volatile var cachedViews: Map<String, List<ServerTask>> = emptyMap()
             private set
 
+        // When each cached state was last fetched successfully (#435):
+        // in-memory like the cache it describes. A stale render (fetch
+        // failed, cache used) names this time so yesterday's rows can never
+        // pass for live data.
+        @Volatile private var cachedAt: Map<String, Long> = emptyMap()
+
         // Last fetch failure per server state (#130). Survives across
         // pulls so the empty view can name the reason (and offer a
         // tap-to-retry) instead of a dead generic error.
@@ -696,7 +702,11 @@ class TaskWidget : AppWidgetProvider() {
                         }
                 }
             }
-            if (views.isNotEmpty()) cachedViews = cachedViews + views
+            if (views.isNotEmpty()) {
+                val now = System.currentTimeMillis()
+                cachedViews = cachedViews + views
+                cachedAt = cachedAt + views.keys.associateWith { now }
+            }
             // Drop errors for states that just succeeded so a stale
             // message can never outlive its failure (#130 review).
             lastErrors = (lastErrors + errors) - views.keys
@@ -715,7 +725,16 @@ class TaskWidget : AppWidgetProvider() {
                 // the same order, and a second prefs read could straddle a
                 // settings write.
                 val sort = sortFor(appCtx, id)
-                val tasks = views[view.state]?.sortedForWidget(sort)
+                val fresh = views[view.state]
+                // Cache used because THIS state's fetch failed (#435): a
+                // failed fetch must never render as live data. Render the
+                // cached rows but badge them with when they were fetched.
+                val staleAt = if (fresh == null && cachedViews[view.state] != null) {
+                    cachedAt[view.state]
+                } else {
+                    null
+                }
+                val tasks = fresh?.sortedForWidget(sort)
                     ?: cachedViews[view.state]?.sortedForWidget(sort)
                 if (scrollableFor(appCtx, id) && tasks != null &&
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.S
@@ -739,7 +758,7 @@ class TaskWidget : AppWidgetProvider() {
                 // One wedged placement must not abort the rest (#130).
                 runCatching {
                     mgr.updateAppWidget(
-                        id, render(appCtx, id, view, tasks, tasks == null, detail))
+                        id, render(appCtx, id, view, tasks, tasks == null, detail, staleAt))
                 }.onFailure {
                     Log.w("TaskWidget", "updateAppWidget failed for id=$id", it)
                 }
@@ -770,6 +789,8 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             errorDetail: String? = null,
+            /** Fetch time of the cached rows on screen, null when live (#435). */
+            staleAt: Long? = null,
         ): RemoteViews {
             val open = Intent(context, MainActivity::class.java).setAction(ACTION_TASKS)
             val openPending = PendingIntent.getActivity(
@@ -843,7 +864,7 @@ class TaskWidget : AppWidgetProvider() {
                     setTextViewText(R.id.task_widget_view, view.title)
                     setTextViewText(R.id.task_widget_title, view.title)
                     setTextViewText(R.id.task_widget_count,
-                        countText(context, view, tasks, error, capped = true))
+                        countText(context, view, tasks, error, capped = true, staleAt = staleAt))
                 }
             }
             // E: the collection widget, on the same proven chrome.
@@ -893,7 +914,7 @@ class TaskWidget : AppWidgetProvider() {
                 // toggle button is gone (it never rendered on this host).
                 setTextViewText(R.id.task_widget_title, view.title)
                 setTextViewText(R.id.task_widget_count,
-                    countText(context, view, tasks, error))
+                    countText(context, view, tasks, error, staleAt = staleAt))
                 val empty = emptyText(context, tasks, error, errorDetail)
                 setTextViewText(R.id.task_widget_empty, empty)
                 // Hide the empty line when rows are showing: an empty
@@ -929,13 +950,15 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             capped: Boolean = false,
+            /** When the rows on screen were fetched, null for live data (#435). */
+            staleAt: Long? = null,
         ): String {
             val plural = when (view) {
                 TaskWidgetView.Open -> R.plurals.task_widget_open
                 TaskWidgetView.Done -> R.plurals.task_widget_done
                 TaskWidgetView.All -> R.plurals.task_widget_all
             }
-            return when {
+            val base = when {
                 tasks == null && !error -> context.getString(R.string.task_widget_loading)
                 tasks == null -> context.getString(R.string.task_widget_error)
                 tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
@@ -944,6 +967,12 @@ class TaskWidget : AppWidgetProvider() {
                         " · showing " + STATIC_ROW_LIMIT
                 else -> context.resources.getQuantityString(plural, tasks.size, tasks.size)
             }
+            // Cache used after a failed fetch (#435): say so. Rows rendered
+            // without this read as live data, which is fabricated freshness.
+            if (staleAt == null) return base
+            val when0 = android.text.format.DateFormat.getTimeFormat(context)
+                .format(java.util.Date(staleAt))
+            return base + " · " + context.getString(R.string.task_widget_stale, when0)
         }
     }
 }

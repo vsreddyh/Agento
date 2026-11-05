@@ -19,19 +19,28 @@ object SyncRunner {
         }
         return try {
             val manager = HealthConnectManager(context)
-            val granted = manager.grantedPermissions()
-            if (granted.intersect(HealthConnectManager.PERMISSIONS).isEmpty()) {
-                SyncResult(false, null, "Health Connect permissions not granted")
+            // Absent platform first (#435): without this the null client
+            // answers an empty permission set, and the sync reports "not
+            // granted" — a permissions story for a device that has no
+            // Health Connect at all. Never post an empty payload either:
+            // that would look like a day with no data.
+            if (!manager.available) {
+                SyncResult(false, null, "Health Connect unavailable on this device")
             } else {
-                val client = SyncClient(context)
-                val prefs = context.getSharedPreferences(
-                    AgentoApp.PREFS_NAME, Context.MODE_PRIVATE,
-                )
-                val firstSyncDone = prefs.getBoolean("first_sync_done", false)
-                if (!firstSyncDone) {
-                    backfill(client, manager)
+                val granted = manager.grantedPermissions()
+                if (granted.intersect(HealthConnectManager.PERMISSIONS).isEmpty()) {
+                    SyncResult(false, null, "Health Connect permissions not granted")
                 } else {
-                    client.post(manager.collectToday())
+                    val client = SyncClient(context)
+                    val prefs = context.getSharedPreferences(
+                        AgentoApp.PREFS_NAME, Context.MODE_PRIVATE,
+                    )
+                    val firstSyncDone = prefs.getBoolean("first_sync_done", false)
+                    if (!firstSyncDone) {
+                        backfill(client, manager)
+                    } else {
+                        client.post(manager.collectToday())
+                    }
                 }
             }
         } catch (e: Exception) {

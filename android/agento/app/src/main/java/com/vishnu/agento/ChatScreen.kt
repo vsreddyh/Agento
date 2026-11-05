@@ -1301,6 +1301,7 @@ internal fun ChatTab(
             activeId = state.threadId,
             loadError = state.threadsError,
             onRetryLoad = vm::retryThreadsLoad,
+            saveError = state.threadsSaveError,
             onSearch = vm::searchThreads,
             onSwitch = { tts.stop(); vm.switchThread(it); showThreads = false },
             onNew = { tts.stop(); vm.newConversation() },
@@ -1436,6 +1437,8 @@ internal fun ThreadSheet(
     /** Corrupt-file banner (#431): "" when the last load succeeded. */
     loadError: String = "",
     onRetryLoad: () -> Unit = {},
+    /** Failed-write banner (#435): "" when the last save landed. */
+    saveError: String = "",
 ) {
     var query by remember { mutableStateOf("") }
     var renaming by remember { mutableStateOf<ThreadSummary?>(null) }
@@ -1450,6 +1453,16 @@ internal fun ThreadSheet(
                 ErrorCard(raw = loadError, onRetry = onRetryLoad)
                 Spacer(modifier = Modifier.height(4.dp))
                 HintLine("Data kept on disk — retry, or export the raw file from Settings → Backup.")
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            if (saveError.isNotEmpty()) {
+                // Loud and persistent, no retry button (#435): memory is
+                // ahead of disk until a later save lands, so the list below
+                // is NOT what the next launch shows. Freeing storage is the
+                // fix, and that is outside this sheet.
+                ErrorCard(raw = saveError)
+                Spacer(modifier = Modifier.height(4.dp))
+                HintLine("Newest messages are only in memory — free up storage, then send again.")
                 Spacer(modifier = Modifier.height(8.dp))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {

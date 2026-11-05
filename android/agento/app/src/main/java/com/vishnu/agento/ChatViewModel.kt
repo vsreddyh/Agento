@@ -64,6 +64,11 @@ data class ChatUiState(
      * as an empty list, so without this the sheet reads it as "no
      * conversations". "" when the last load succeeded or no file exists. */
     val threadsError: String = "",
+    /** Last thread-file save failure (#435): "" when the last write landed.
+     * Memory is ahead of disk until a save succeeds, so the sheet banners it
+     * persistently — the next cold start would otherwise quietly show the
+     * older conversation. */
+    val threadsSaveError: String = "",
     /** Reachability of the server; null = not checked yet. */
     val online: Boolean? = null,
     /** Distinct tool names seen live this turn (pi-gateway's progress frames). */
@@ -383,6 +388,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         // Corrupt file loads as empty (#431): banner it
                         // instead of showing "no conversations".
                         threadsError = ChatThreads.loadError(tab),
+                        threadsSaveError = ChatThreads.saveError(tab),
                     )
                 } else {
                     // A user op already published newer state — just mark ready so the UI unblocks.
@@ -914,6 +920,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val snapshot = merged ?: threads.filter { it.messages.isNotEmpty() }
         viewModelScope.launch(Dispatchers.IO) {
             ChatThreads.save(appCtx, tab, snapshot)
+            val err = ChatThreads.saveError(tab)
+            withContext(Dispatchers.Main) {
+                if (_state.value.threadsSaveError == err) return@withContext
+                val firstFailure =
+                    err.isNotEmpty() && _state.value.threadsSaveError.isEmpty()
+                _state.value = _state.value.copy(threadsSaveError = err)
+                // Loud at the moment it happens (#435): the banner is
+                // persistent, but a user in the middle of a conversation
+                // should not have to open the sheet to learn the turn was
+                // not saved.
+                if (firstFailure) notify(err, ToastKind.Error)
+            }
         }
     }
 
@@ -939,6 +957,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             threads = summaries(),
             threadsError = ChatThreads.loadError(tab),
+            threadsSaveError = ChatThreads.saveError(tab),
         )
         return merged.filter { it.messages.isNotEmpty() }
     }
@@ -986,7 +1005,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     }
                 } else {
                     _state.value = _state.value.copy(
-                        threadsError = ChatThreads.loadError(tab))
+                        threadsError = ChatThreads.loadError(tab),
+                        threadsSaveError = ChatThreads.saveError(tab))
                 }
             }
         }
@@ -1013,6 +1033,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 pendingAttachments = emptyList(),
                 notices = retainedNotices(),
                 threadsError = ChatThreads.loadError(tab),
+                threadsSaveError = ChatThreads.saveError(tab),
             )
         } else {
             val fresh = ChatThread(id = ChatThreads.newId(), updatedAt = ChatThreads.now())
@@ -1025,6 +1046,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 pendingAttachments = emptyList(),
                 notices = retainedNotices(),
                 threadsError = ChatThreads.loadError(tab),
+                threadsSaveError = ChatThreads.saveError(tab),
             )
         }
         // An import replaces the threads out from under the turn: any held

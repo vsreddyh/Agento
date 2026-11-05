@@ -180,6 +180,17 @@ object ChatThreads {
      * load succeeded or no file exists. */
     fun loadError(tab: String): String = lastLoadError[tab] ?: ""
 
+    /** Last write failure per tab (#435): disk full, OOM, a read-only
+     * volume. Memory and disk now diverge, so the next cold start shows
+     * the older conversation with no other sign — the UI must say so.
+     * Cleared by the next save that actually lands. */
+    private val lastSaveError: MutableMap<String, String> =
+        java.util.concurrent.ConcurrentHashMap()
+
+    /** The last thread-file write failure for [tab], or "" when the last
+     * save succeeded. */
+    fun saveError(tab: String): String = lastSaveError[tab] ?: ""
+
     @androidx.annotation.WorkerThread
     fun load(context: Context, tab: String): List<ChatThread> {
         requireIoThread("ChatThreads.load")
@@ -292,6 +303,9 @@ object ChatThreads {
             val out = canonicalizeUnchanged(cached?.first, cached?.second, capped)
             file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), out), Charsets.UTF_8)
             lastCanonical[tab] = capped to out
+            // The write landed; whatever failed before no longer describes
+            // the file (#435).
+            lastSaveError.remove(tab)
             // The load cache is dropped here (#339): the app's own write
             // invalidates the stamp fast path, so a same-size write inside
             // one mtime tick can never serve a stale list.
@@ -303,6 +317,10 @@ object ChatThreads {
             // The JVM stub of Log throws, and this path is unit tested, so
             // the call is guarded.
             runCatching { android.util.Log.e("ChatThreads", "save failed for $tab", e) }
+            // And surfaced (#435): a persistent banner in the thread sheet,
+            // not only logcat, because memory is now ahead of disk.
+            lastSaveError[tab] =
+                "Conversations couldn't be saved — storage may be full."
         }
     }
 
