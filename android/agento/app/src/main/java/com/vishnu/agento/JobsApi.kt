@@ -42,32 +42,34 @@ data class JobList(
     val dropped: Int = 0,
 )
 
-/** One job row: null when the row carries no usable id. */
+/** One job row: null when the row carries no usable id.
+ * Every string reads through [optJsonStr]: a bare `optString` would
+ * coerce JSON null to the literal string "null", surfacing phantom
+ * rows and "null" text (#430). */
 internal fun parseJob(o: JSONObject): CronJob? {
-    val id = o.optString("id", "")
-        .ifEmpty { o.optString("job_id", "") }
-        .trim()
+    val id = optJsonStr(o, "id")
+        .ifEmpty { optJsonStr(o, "job_id") }
     if (id.isEmpty()) return null
     val paused = when {
         o.has("paused") -> o.optBoolean("paused")
         o.has("enabled") -> !o.optBoolean("enabled", true)
-        o.has("state") -> o.optString("state", "").lowercase() == "paused"
-        o.has("status") -> o.optString("status", "").lowercase() == "paused"
+        o.has("state") -> optJsonStr(o, "state").lowercase() == "paused"
+        o.has("status") -> optJsonStr(o, "status").lowercase() == "paused"
         else -> null
     }
     return CronJob(
         id = id,
-        name = o.optString("name", "").trim(),
-        prompt = o.optString("prompt", "").trim(),
-        schedule = o.optString("schedule", "")
-            .ifEmpty { o.optString("cron", "") }.trim(),
+        name = optJsonStr(o, "name"),
+        prompt = optJsonStr(o, "prompt"),
+        schedule = optJsonStr(o, "schedule")
+            .ifEmpty { optJsonStr(o, "cron") },
         paused = paused,
-        lastRun = o.optString("last_run", "")
-            .ifEmpty { o.optString("lastRun", "") }.trim(),
-        nextRun = o.optString("next_run", "")
-            .ifEmpty { o.optString("nextRun", "") }.trim(),
-        delivery = o.optString("delivery", "")
-            .ifEmpty { o.optString("deliver", "") }.trim(),
+        lastRun = optJsonStr(o, "last_run")
+            .ifEmpty { optJsonStr(o, "lastRun") },
+        nextRun = optJsonStr(o, "next_run")
+            .ifEmpty { optJsonStr(o, "nextRun") },
+        delivery = optJsonStr(o, "delivery")
+            .ifEmpty { optJsonStr(o, "deliver") },
         runs = o.optJSONArray("runs")?.let { arr ->
             buildList {
                 for (i in 0 until arr.length()) {
@@ -75,7 +77,7 @@ internal fun parseJob(o: JSONObject): CronJob? {
                     add(
                         CronRun(
                             at = r.optLong("at", 0L),
-                            text = r.optString("text", "").trim(),
+                            text = optJsonStr(r, "text"),
                             missed = r.optBoolean("missed", false),
                         )
                     )

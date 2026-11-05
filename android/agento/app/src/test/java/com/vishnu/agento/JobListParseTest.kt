@@ -51,6 +51,21 @@ class JobListParseTest {
     }
 
     @Test
+    fun `explicit JSON nulls read as missing`() {
+        // Same optJsonStr guard as tasks: a bare optString would coerce
+        // a null id to the literal string "null" — a phantom row.
+        val page = parseJobList(
+            """{"jobs":[
+                {"id":null,"name":"x"},
+                {"id":"a","name":null,"prompt":null}
+            ]}""",
+        )
+        assertEquals(listOf("a"), page.jobs.map { it.id })
+        assertEquals("", page.jobs.single().name)
+        assertEquals(1, page.dropped)
+    }
+
+    @Test
     fun `envelope failure names the shape`() {
         try {
             parseJobList("""{"runs":[]}""")

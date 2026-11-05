@@ -86,6 +86,22 @@ class TaskListParseTest {
     }
 
     @Test
+    fun `explicit JSON nulls read as missing`() {
+        // optJsonStr (#130): a bare optString would coerce these to the
+        // literal string "null" — a phantom row and "null" text.
+        val page = parseTaskListPage(
+            """{"tasks":[
+                {"id":null,"name":"x"},
+                {"id":"a","name":null},
+                {"id":"b","name":"B","description":null}
+            ]}""",
+        )
+        assertEquals(listOf("b"), page.tasks.map { it.id })
+        assertEquals("", page.tasks.single().description)
+        assertEquals(2, page.dropped)
+    }
+
+    @Test
     fun `drop message names the count`() {
         assertEquals(
             "1 task could not be parsed — the server sent a row this app cannot read.",

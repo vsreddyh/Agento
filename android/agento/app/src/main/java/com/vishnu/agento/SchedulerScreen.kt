@@ -88,14 +88,16 @@ internal fun SchedulerScreen(
                 onFailure = { e ->
                     // Rows on screen stay up, so a failure they survive
                     // must toast — the card below only renders on an
-                    // empty list (#430).
+                    // empty list (#430). The drop count describes the
+                    // rows still on screen, so it resets only when the
+                    // screen falls through to the error card.
                     val msg = e.message ?: e.javaClass.simpleName
                     if (silent || jobs.isNotEmpty()) {
                         toasts.toast(friendlyError(msg).title, ToastKind.Error)
                     } else {
                         error = msg
+                        jobsDropped = 0
                     }
-                    jobsDropped = 0
                     loaded = true
                 },
             )
@@ -161,7 +163,10 @@ internal fun SchedulerScreen(
                     modifier = Modifier.padding(12.dp),
                 )
             }
-            if (loaded && jobs.isEmpty() && error.isEmpty() && jobsDropped == 0) {
+            // Gated on !busy: a retry clears the error up front, and the
+            // independent ifs would otherwise flash the empty state
+            // under the spinner before the new page lands (#430).
+            if (!busy && loaded && jobs.isEmpty() && error.isEmpty() && jobsDropped == 0) {
                 EmptyState(
                     icon = Icons.Filled.Schedule,
                     title = "No scheduled jobs",

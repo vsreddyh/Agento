@@ -371,13 +371,13 @@ fun repeatLabel(
 fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
 
 /** Lenient string read: Android's `optString` coerces JSON null to
- * the string "null", so every nullable/completedAt-style field must
- * go through here (#130).
+ * the string "null", so every nullable string field must go through
+ * here (#130).
  *
- * Task-scoped name on purpose: the package already has a stricter
- * top-level `optStr` (MemoryApi) that blanks non-string values, which
- * would silently change number fields here if this shadowed it. */
-internal fun optTaskStr(o: JSONObject, key: String): String =
+ * Neutral name on purpose: the package already has a stricter top-level
+ * `optStr` (MemoryApi) that blanks non-string values, which would
+ * silently change number fields here if this shadowed it. */
+internal fun optJsonStr(o: JSONObject, key: String): String =
     if (o.isNull(key)) "" else o.optString(key, "").trim()
 
 /** Lenient weekday-selection read (#304): a missing or mistyped key is an
@@ -400,10 +400,10 @@ internal fun optTaskDays(o: JSONObject, key: String): List<String> {
  * counts those drops in [TaskList.dropped] instead of shrinking the
  * list silently). */
 internal fun parseTask(o: JSONObject): ServerTask? {
-    val id = optTaskStr(o, "id")
-        .ifEmpty { optTaskStr(o, "_id") }
+    val id = optJsonStr(o, "id")
+        .ifEmpty { optJsonStr(o, "_id") }
     if (id.isEmpty()) return null
-    val name = optTaskStr(o, "name")
+    val name = optJsonStr(o, "name")
     if (name.isEmpty()) return null
     // estimated_minutes may encode as int, long, or double.
     val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
@@ -416,22 +416,22 @@ internal fun parseTask(o: JSONObject): ServerTask? {
     return ServerTask(
         id = id,
         name = name,
-        speakName = optTaskStr(o, "speak_name"),
-        description = optTaskStr(o, "description"),
-        dueDate = optTaskStr(o, "due_date"),
-        dueTime = optTaskStr(o, "due_time"),
+        speakName = optJsonStr(o, "speak_name"),
+        description = optJsonStr(o, "description"),
+        dueDate = optJsonStr(o, "due_date"),
+        dueTime = optJsonStr(o, "due_time"),
         estimatedMinutes = mins.coerceAtLeast(0),
         repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
-        repeatUnit = optTaskStr(o, "repeat_unit"),
+        repeatUnit = optJsonStr(o, "repeat_unit"),
         repeatDays = optTaskDays(o, "repeat_days"),
         repeatCustom = o.optBoolean("repeat_custom", false),
-        repeatRule = optTaskStr(o, "repeat_rule"),
+        repeatRule = optJsonStr(o, "repeat_rule"),
         parallelable = o.optBoolean("parallelable", false),
         // Missing on pre-revision servers: 0 matches the backfill, so
         // an old server and a new app still agree (#184).
         revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
-        completedAt = optTaskStr(o, "completedAt"),
-        createdAt = optTaskStr(o, "createdAt"),
+        completedAt = optJsonStr(o, "completedAt"),
+        createdAt = optJsonStr(o, "createdAt"),
         contractVersion = version,
         skipped = o.optBoolean("skipped", false),
     )
@@ -945,9 +945,9 @@ class TasksApi(context: Context) {
                 if (next == null) {
                     task
                 } else {
-                    // optTaskStr, not optString: a JSON null would arrive as the
+                    // optJsonStr, not optString: a JSON null would arrive as the
                     // literal string "null" and reach the toast.
-                    task.copy(nextDueDate = optTaskStr(next, "due_date"))
+                    task.copy(nextDueDate = optJsonStr(next, "due_date"))
                 }
             }
         }
@@ -979,7 +979,7 @@ class TasksApi(context: Context) {
                     // ID (source id, or the new copy's id for duplicate), so
                     // a missing one is a contract violation, not a gap to
                     // paper over.
-                    val id = optTaskStr(item, "id")
+                    val id = optJsonStr(item, "id")
                     if (id.isEmpty()) throw RuntimeException("Unexpected response shape")
                     // Version handling mirrors resolve(): each half versioned
                     // on its own, warn-not-throw on disagreement.
@@ -991,7 +991,7 @@ class TasksApi(context: Context) {
                     }
                     noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
                     if (next != null) {
-                        task = task.copy(nextDueDate = optTaskStr(next, "due_date"))
+                        task = task.copy(nextDueDate = optJsonStr(next, "due_date"))
                     }
                     // Field-level assertion for update ops, mirroring the
                     // single-task edit: the request op carries the fields,
@@ -1016,7 +1016,7 @@ class TasksApi(context: Context) {
                         BulkItemResult(
                             index = item.optInt("index", i),
                             id = id,
-                            op = optTaskStr(item, "op"),
+                            op = optJsonStr(item, "op"),
                             task = task,
                             nextDueDate = task.nextDueDate,
                         ),
