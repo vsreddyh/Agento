@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -456,6 +457,16 @@ internal fun parseTaskListPage(body: String): TaskList {
     for (i in 0 until arr.length()) {
         val task = arr.optJSONObject(i)?.let { parseTask(it) }
         if (task != null) out.add(task) else dropped++
+    }
+    if (dropped > 0) {
+        // Diagnostics for the readers with no screen: the widget and
+        // reminder paths take `.tasks` and never see the count, but
+        // their log lines surface in Settings → About diagnostics.
+        // runCatching: Log is stubbed (throws) on the JVM unit-test
+        // classpath, same guard as ApprovalsApi.
+        runCatching {
+            Log.w("TasksApi", "dropped $dropped unparseable task row(s) in list response")
+        }
     }
     return TaskList(out, root.optBoolean("truncated", false), dropped)
 }

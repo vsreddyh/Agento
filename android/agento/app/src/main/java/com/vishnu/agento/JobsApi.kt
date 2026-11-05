@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -112,6 +113,13 @@ internal fun parseJobList(body: String): JobList {
     for (i in 0 until arr.length()) {
         val job = arr.optJSONObject(i)?.let { parseJob(it) }
         if (job != null) out.add(job) else dropped++
+    }
+    if (dropped > 0) {
+        // Same diagnostics deal as the task page: background readers
+        // take `.jobs` and never see the count (see TasksApi).
+        runCatching {
+            Log.w("JobsApi", "dropped $dropped unparseable job row(s) in list response")
+        }
     }
     return JobList(out, dropped)
 }
