@@ -21,6 +21,10 @@ class FriendlyErrorTest {
             "1 job could not be parsed",
             friendlyError(jobDropMessage(1)).title,
         )
+        assertEquals(
+            "2 providers could not be parsed",
+            friendlyError(catalogDropMessage(2)).title,
+        )
     }
 
     @Test

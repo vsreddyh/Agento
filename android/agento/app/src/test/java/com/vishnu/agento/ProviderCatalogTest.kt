@@ -74,13 +74,28 @@ class ProviderCatalogTest {
     }
 
     @Test
+    fun `all dropped names the count instead of the empty gate`() {
+        // Zero usable rows out of unparseable ones is a data failure,
+        // not an empty inventory: the picker headlines the count.
+        try {
+            parseCatalog("""{"providers":[{"name":"x"},42]}""")
+            throw AssertionError("must throw, not read as no providers")
+        } catch (e: RuntimeException) {
+            assertEquals(
+                "2 providers could not be parsed — the server sent rows this app cannot read.",
+                e.message,
+            )
+        }
+    }
+
+    @Test
     fun `drop message names the count`() {
         assertEquals(
-            "1 provider could not be read — the server sent a row this app cannot parse.",
+            "1 provider could not be parsed — the server sent a row this app cannot read.",
             catalogDropMessage(1),
         )
         assertEquals(
-            "3 providers could not be read — the server sent rows this app cannot parse.",
+            "3 providers could not be parsed — the server sent rows this app cannot read.",
             catalogDropMessage(3),
         )
     }

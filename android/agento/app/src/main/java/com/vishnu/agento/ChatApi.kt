@@ -407,7 +407,15 @@ internal fun parseCatalog(body: String): ProviderCatalog {
         }
     }
     if (out.isEmpty()) {
-        throw RuntimeException("No providers in catalog")
+        // Every row unparseable is not an empty inventory: the count is
+        // the error, so the picker headlines it instead of showing the
+        // credential hint (compare tasks/jobs, which return the count
+        // alongside zero rows, #430).
+        throw if (dropped > 0) {
+            RuntimeException(catalogDropMessage(dropped))
+        } else {
+            RuntimeException("No providers in catalog")
+        }
     }
     return ProviderCatalog(out, dropped)
 }
@@ -415,9 +423,9 @@ internal fun parseCatalog(body: String): ProviderCatalog {
 /** Shared copy for unparseable catalog rows (#430): the count, not the rows. */
 internal fun catalogDropMessage(dropped: Int): String =
     if (dropped == 1) {
-        "1 provider could not be read — the server sent a row this app cannot parse."
+        "1 provider could not be parsed — the server sent a row this app cannot read."
     } else {
-        "$dropped providers could not be read — the server sent rows this app cannot parse."
+        "$dropped providers could not be parsed — the server sent rows this app cannot read."
     }
 
 /**
@@ -661,7 +669,16 @@ class ChatApi(context: Context) {
                                 }
                             }
                             gatewayOk = providers > 0
-                            if (!gatewayOk) gatewayError = "No providers in catalog"
+                            if (!gatewayOk) {
+                                // All rows unparseable is not an empty
+                                // inventory: headline the count like
+                                // parseCatalog does (#430).
+                                gatewayError = if (dropped > 0) {
+                                    catalogDropMessage(dropped)
+                                } else {
+                                    "No providers in catalog"
+                                }
+                            }
                         }
                     }
                 }
