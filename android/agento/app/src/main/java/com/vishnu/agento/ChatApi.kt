@@ -506,9 +506,12 @@ class ChatApi(context: Context) {
                     if (arr != null) {
                         for (i in 0 until arr.length()) {
                             val o = arr.optJSONObject(i) ?: continue
-                            val slug = o.optString("slug", "").trim()
+                            // optJsonStr, not optString: a JSON null would
+                            // coerce to the literal "null" — a phantom
+                            // provider past the empty-is-failure gate (#430).
+                            val slug = optJsonStr(o, "slug")
                             if (slug.isEmpty()) continue
-                            val label = o.optString("name", "").trim().ifEmpty { slug }
+                            val label = optJsonStr(o, "name").ifEmpty { slug }
                             val models = mutableListOf<String>()
                             val marr = o.optJSONArray("models")
                             if (marr != null) {

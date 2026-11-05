@@ -88,11 +88,12 @@ internal fun SchedulerScreen(
                 onFailure = { e ->
                     // Rows on screen stay up, so a failure they survive
                     // must toast — the card below only renders on an
-                    // empty list (#430). The drop count describes the
-                    // rows still on screen, so it resets only when the
-                    // screen falls through to the error card.
+                    // empty list (#430). An empty list must card even on
+                    // a silent reload, or the toast clears to a false
+                    // empty. The drop count describes the rows still on
+                    // screen, so it resets only with the error card.
                     val msg = e.message ?: e.javaClass.simpleName
-                    if (silent || jobs.isNotEmpty()) {
+                    if (jobs.isNotEmpty()) {
                         toasts.toast(friendlyError(msg).title, ToastKind.Error)
                     } else {
                         error = msg
