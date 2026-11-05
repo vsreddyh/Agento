@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -33,6 +34,20 @@ class JobListParseTest {
         )
         assertEquals(listOf("k"), page.jobs.map { it.id })
         assertEquals(2, page.dropped)
+    }
+
+    @Test
+    fun `explicit null tri-state reads as unknown`() {
+        // hasValue (#430): bare has+optBoolean would coerce an explicit
+        // null to false — a positive Active signal instead of unknown.
+        val page = parseJobList(
+            """{"jobs":[
+                {"id":"a","paused":null,"state":null,"status":null},
+                {"id":"b","enabled":null,"paused":true}
+            ]}""",
+        )
+        assertNull(page.jobs[0].paused)
+        assertEquals(true, page.jobs[1].paused)
     }
 
     @Test(expected = RuntimeException::class)

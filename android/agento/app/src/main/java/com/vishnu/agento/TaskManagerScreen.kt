@@ -1142,10 +1142,13 @@ internal fun TaskManagerScreen(
                         Text("Retry")
                     }
                 } else if (visible.isEmpty()) {
-                    // The drop warning is page-level, not row-level: a
-                    // search that matches nothing must not hide it (#430).
+                    // Both page-level warnings survive filtering: a query
+                    // matching nothing must not hide them (#430).
                     if (droppedCount > 0) {
                         HintLine(taskDropMessage(droppedCount))
+                    }
+                    if (listTruncated) {
+                        HintLine("The server held back rows — showing the first ${tasks.size}.")
                     }
                     EmptyState(
                         icon = Icons.Filled.Search,

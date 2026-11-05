@@ -158,11 +158,17 @@ internal fun SchedulerScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             if (jobs.isEmpty() && (error.isNotEmpty() || (loaded && jobsDropped > 0))) {
-                ErrorCard(
-                    raw = error.ifEmpty { jobDropMessage(jobsDropped) },
-                    onRetry = { load() },
-                    modifier = Modifier.padding(12.dp),
-                )
+                // Gated off while busy: a retry clears the error up front
+                // but a stale drop count describes the previous page, so
+                // showing it under the spinner would advertise old news
+                // as the current page (#430).
+                if (!busy) {
+                    ErrorCard(
+                        raw = error.ifEmpty { jobDropMessage(jobsDropped) },
+                        onRetry = { load() },
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
             }
             // Gated on !busy: a retry clears the error up front, and the
             // independent ifs would otherwise flash the empty state

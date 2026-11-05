@@ -42,6 +42,12 @@ data class JobList(
     val dropped: Int = 0,
 )
 
+/** Presence that treats explicit JSON null as absent (#430): `has`
+ * alone is true for a null value, which would read a null tri-state as
+ * a value instead of unknown. */
+internal fun hasValue(o: JSONObject, key: String): Boolean =
+    o.has(key) && !o.isNull(key)
+
 /** One job row: null when the row carries no usable id.
  * Every string reads through [optJsonStr]: a bare `optString` would
  * coerce JSON null to the literal string "null", surfacing phantom
@@ -51,10 +57,10 @@ internal fun parseJob(o: JSONObject): CronJob? {
         .ifEmpty { optJsonStr(o, "job_id") }
     if (id.isEmpty()) return null
     val paused = when {
-        o.has("paused") -> o.optBoolean("paused")
-        o.has("enabled") -> !o.optBoolean("enabled", true)
-        o.has("state") -> optJsonStr(o, "state").lowercase() == "paused"
-        o.has("status") -> optJsonStr(o, "status").lowercase() == "paused"
+        hasValue(o, "paused") -> o.optBoolean("paused")
+        hasValue(o, "enabled") -> !o.optBoolean("enabled", true)
+        hasValue(o, "state") -> optJsonStr(o, "state").lowercase() == "paused"
+        hasValue(o, "status") -> optJsonStr(o, "status").lowercase() == "paused"
         else -> null
     }
     return CronJob(

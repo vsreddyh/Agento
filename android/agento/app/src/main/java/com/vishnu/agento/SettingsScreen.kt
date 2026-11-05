@@ -306,6 +306,18 @@ internal fun SettingsScreen(
                                         report = r
                                         if (r == null) {
                                             error = "Server URL not configured"
+                                        } else if (r.gatewayOk) {
+                                            // The probe answers but the picker
+                                            // reads the catalog: heal a failed
+                                            // preload now, or the footer
+                                            // claims "Connected" next to a
+                                            // stale catalog error (#430).
+                                            catalog = runCatching {
+                                                api.fetchCatalog(catalogPath(api), refresh = true).getOrThrow()
+                                            }.getOrElse { e ->
+                                                error = e.message ?: e.javaClass.simpleName
+                                                catalog
+                                            }
                                         }
                                         testing = false
                                     }
