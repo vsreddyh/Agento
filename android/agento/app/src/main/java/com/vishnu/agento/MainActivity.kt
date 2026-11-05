@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
@@ -48,6 +49,7 @@ private enum class Destination(val title: String) {
     TaskManager("Task Manager"),
     Storage("Files"),
     Scheduler("Scheduler"),
+    Reports("∃-Mail"),
     Skills("Skills"),
     Tools("Tools"),
     Settings("Settings"),
@@ -59,6 +61,7 @@ private fun Destination.icon() = when (this) {
     Destination.TaskManager -> Icons.Filled.Assignment
     Destination.Storage -> Icons.Filled.Folder
     Destination.Scheduler -> Icons.Filled.Schedule
+    Destination.Reports -> Icons.Filled.Mail
     Destination.Skills -> Icons.Filled.Extension
     Destination.Tools -> Icons.Filled.Build
     Destination.Settings -> Icons.Filled.Settings
@@ -267,6 +270,18 @@ class MainActivity : ComponentActivity() {
                     // One reader for the drawer, so the subtitle honours the
                     // same retired-key fallbacks and clamping as the request.
                     val chatApi = remember { ChatApi(context) }
+                    // ∃-Mail drawer badge (unread count, #365): fetched once
+                    // at startup and refreshed by the inbox screen itself on
+                    // every load (open, star, delete) via onUnreadChanged —
+                    // refresh-on-open, no poll, no push in v1. Null = unknown
+                    // (never configured or not yet fetched), so no badge.
+                    var reportsUnread by remember { mutableStateOf<Int?>(null) }
+                    LaunchedEffect(Unit) {
+                        ReportsApi(context).list(chatApi.pathFor("chat")).fold(
+                            onSuccess = { reportsUnread = it.count { r -> !r.read } },
+                            onFailure = { },
+                        )
+                    }
                     // Built-in TTS: one engine for the Chat tab,
                     // shut down with the activity. Auto-read is a single
                     // global toggle (prefs `tts_auto`) in each chat's bar,
@@ -359,6 +374,10 @@ class MainActivity : ComponentActivity() {
                                     deepLinkJobId = schedulerTargetId.value,
                                     onDeepLinkConsumed = { schedulerTargetId.value = null },
                                 )
+                                Destination.Reports -> ReportsScreen(
+                                    onMenu = { scope.launch { drawerState.open() } },
+                                    onUnreadChanged = { reportsUnread = it },
+                                )
                                 Destination.Skills -> SkillsScreen(
                                     wc = wc,
                                     onMenu = { scope.launch { drawerState.open() } },
@@ -389,6 +408,7 @@ class MainActivity : ComponentActivity() {
                                         DrawerContent(
                                             dest = dest, section = section,
                                             settingsOpen = settingsOpen,
+                                            reportsUnread = reportsUnread,
                                             modelFor = ::drawerModel,
                                             onDest = { go(it) },
                                             onSection = { go(Destination.Settings, it) },
@@ -407,6 +427,7 @@ class MainActivity : ComponentActivity() {
                                         RailContent(
                                             dest = dest, section = section,
                                             settingsOpen = settingsOpen,
+                                            reportsUnread = reportsUnread,
                                             onDest = { go(it) },
                                             onSection = { go(Destination.Settings, it) },
                                             onToggleSettings = {
@@ -425,6 +446,7 @@ class MainActivity : ComponentActivity() {
                                         DrawerContent(
                                             dest = dest, section = section,
                                             settingsOpen = settingsOpen,
+                                            reportsUnread = reportsUnread,
                                             modelFor = ::drawerModel,
                                             permanent = true,
                                             onDest = { go(it) },
@@ -457,14 +479,15 @@ private fun DrawerContent(
     onToggleSettings: () -> Unit,
     permanent: Boolean = false,
     modelFor: (Destination) -> String? = { null },
+    reportsUnread: Int? = null,
 ) {
     if (permanent) {
         PermanentDrawerSheet(modifier = Modifier.widthIn(max = 280.dp)) {
-            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings, modelFor)
+            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings, modelFor, reportsUnread)
         }
     } else {
         ModalDrawerSheet {
-            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings, modelFor)
+            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings, modelFor, reportsUnread)
         }
     }
 }
@@ -478,8 +501,9 @@ private fun DrawerList(
     onSection: (SettingSection) -> Unit,
     onToggleSettings: () -> Unit,
     modelFor: (Destination) -> String? = { null },
+    reportsUnread: Int? = null,
 ) {
-    // Scrollable (#105): 8 destinations plus the settings subsections
+    // Scrollable (#105): 9 destinations plus the settings subsections
     // overflow short screens — without this the bottom items are cut off
     // with no way to reach them.
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
@@ -537,6 +561,14 @@ private fun DrawerList(
                             }
                         }
                     },
+                    // ∃-Mail unread badge (#365): refresh-on-open, no poll.
+                    // Null/zero = nothing to surface, so no badge.
+                    badge = {
+                        val n = reportsUnread
+                        if (d == Destination.Reports && n != null && n > 0) {
+                            Badge { Text(if (n > 99) "99+" else "$n") }
+                        }
+                    },
                     icon = { Icon(d.icon(), contentDescription = null) },
                     selected = dest == d,
                     onClick = { onDest(d) },
@@ -556,6 +588,7 @@ private fun RailContent(
     onDest: (Destination) -> Unit,
     onSection: (SettingSection) -> Unit,
     onToggleSettings: () -> Unit,
+    reportsUnread: Int? = null,
 ) {
     // Scrollable like the drawer (#105): the rail overflows the same way
     // on short landscape screens.
@@ -579,10 +612,22 @@ private fun RailContent(
                     }
                 }
             } else {
+                // Rail has no badge slot (unlike the drawer item above), so
+                // the ∃-Mail unread count wraps the icon instead. Same
+                // refresh-on-open rule: null/zero shows no badge.
+                val unread = reportsUnread
                 NavigationRailItem(
                     selected = dest == d,
                     onClick = { onDest(d) },
-                    icon = { Icon(d.icon(), contentDescription = d.title) },
+                    icon = {
+                        if (d == Destination.Reports && unread != null && unread > 0) {
+                            BadgedBox(badge = { Badge { Text(if (unread > 99) "99+" else "$unread") } }) {
+                                Icon(d.icon(), contentDescription = d.title)
+                            }
+                        } else {
+                            Icon(d.icon(), contentDescription = d.title)
+                        }
+                    },
                     label = { Text(d.title) },
                 )
             }

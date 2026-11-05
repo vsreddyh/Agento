@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.18.0]
+- **∃-Mail inbox: agents file reports, you read them (#365).** New inbox
+  screen (drawer) listing agent-filed markdown reports newest-first, with
+  unread badge, open-marks-read, star toggle, and delete-with-confirm.
+  Bodies render markdown natively; inline/block LaTeX math is compiled on
+  the server and displayed offline via a vendored KaTeX stylesheet — the app
+  ships no math compiler. Read + unstarred reports are pruned after 7 days
+  (unread/starred never); there are no compose/reply/send paths.
+
 ## [5.17.3]
 - **Approval-gate comments describe the in-process gate (ADR-0011).** No
   behaviour change: the approvals API said an audit row was a "proxied"
