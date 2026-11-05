@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.6]
+- **Inexact alarms are visible (#436).** The reminders switch now reads
+  "ON — inexact: reminders may be late." whenever the exact-alarm grant is
+  missing, instead of looking identical to the exact path. Each alarm
+  records which path it was armed on (`setExactAndAllowWhileIdle` vs the
+  inexact fallback, including the revoked-grant retry), and a reminder
+  notification armed inexactly carries "Inexact alarm — it may arrive late
+  (exact alarms aren't allowed)." so a late fire is explainable instead of
+  looking like an app bug.
+
 ## [6.0.5]
 - **Stale and failed data says so (#435).** The task widget badges cached rows
   after a failed fetch ("12 open · updated 09:14 — refresh failed") instead of

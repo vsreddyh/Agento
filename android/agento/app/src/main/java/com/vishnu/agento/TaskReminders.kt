@@ -320,6 +320,9 @@ private fun addIfFuture(
 object TaskReminders {
 
     private const val PREF_ARMED = "task_reminder_armed"
+    /** Keys armed through the inexact fallback (#436): the alarm still
+     * fires, but the OS may hold it back, and nothing else records that. */
+    private const val PREF_INEXACT = "task_reminder_inexact"
     private const val PREF_BUDGET = "task_reminder_budget"
     /** Backed up (see SettingsBackup.BOOLEAN_KEYS): internal so the backup
      * test pins the key by reference, not by a string literal that could
@@ -490,8 +493,17 @@ object TaskReminders {
             // after the upgrade, for the old "due now" moment.
             if (key.contains('#')) cancelKind(appCtx, key) else cancelLegacy(appCtx, key)
         }
+        // Which path each newly armed alarm landed on (#436), collected so
+        // the write below carries the markers with the armed set.
+        val exactArmed = HashSet<String>()
+        val inexactArmed = HashSet<String>()
         for (bid in wanted.values) {
-            if (bid.key in capped) armAlarm(appCtx, bid.key, bid.fire)
+            if (bid.key !in capped) continue
+            when (armAlarm(appCtx, bid.key, bid.fire)) {
+                true -> exactArmed.add(bid.key)
+                false -> inexactArmed.add(bid.key)
+                null -> Unit
+            }
         }
         val byKey = candidates.associateBy { it.key }
         val kept = capped.mapNotNull(byKey::get)
@@ -499,8 +511,15 @@ object TaskReminders {
         // Armed set and the budget that describes it go in together: a
         // crash between two applies would leave the reported numbers
         // describing an alarm set that is no longer the live one.
+        // Inexact markers only describe armed keys: drop any orphaned by
+        // this pass, keep carried nags' marks, and re-add what this pass
+        // armed inexactly (a key armed exact again loses its old mark).
+        val inexactKeep = (prefs(appCtx)
+            .getStringSet(PREF_INEXACT, emptySet()).orEmpty() intersect keep) -
+            exactArmed + inexactArmed
         prefs(appCtx).edit {
             putStringSet(PREF_ARMED, keep)
+            putStringSet(PREF_INEXACT, inexactKeep)
             putString(
                 PREF_BUDGET,
                 Budget(
@@ -565,7 +584,7 @@ object TaskReminders {
         val appCtx = context.applicationContext
         val key = alarmKey(taskId, ReminderKind.Overdue)
         val at = System.currentTimeMillis() + OVERDUE_EVERY_MINUTES * 60_000L
-        armAlarm(appCtx, key, at)
+        armAlarm(appCtx, key, at)?.let { markInexact(appCtx, key, inexact = !it) }
         val armed = prefs(appCtx).getStringSet(PREF_ARMED, emptySet()).orEmpty()
         if (key !in armed) {
             prefs(appCtx).edit {
@@ -614,21 +633,49 @@ object TaskReminders {
      * SecurityException; falling back per alarm keeps one revocation from
      * aborting the loop.
      */
-    private fun armAlarm(appCtx: Context, key: String, at: Long) {
+    private fun armAlarm(appCtx: Context, key: String, at: Long): Boolean? {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             mgr.canScheduleExactAlarms()
         val op = operation(appCtx, key)
-        val armedOk = runCatching {
-            if (exact) {
+        // Which path the alarm actually landed on (#436): true = exact,
+        // false = inexact, null = neither call worked (nothing to describe).
+        if (exact && runCatching {
                 mgr.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
-            } else {
-                mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
-            }
-        }.isSuccess
-        if (!armedOk && exact) {
-            runCatching { mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op) }
+            }.isSuccess
+        ) {
+            return true
         }
+        // No grant, or the exact call threw because the grant was revoked
+        // between the check and the call: fall back per alarm so one
+        // revocation cannot abort the loop.
+        return if (runCatching {
+                mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+            }.isSuccess
+        ) {
+            false
+        } else {
+            null
+        }
+    }
+
+    /** Records one key's inexact mode, so the alert it raises can say it
+     * may be late (#436). Single-key callers only (the nag re-arm);
+     * [refreshInner] writes the whole set in one pass. */
+    private fun markInexact(appCtx: Context, key: String, inexact: Boolean) {
+        val cur = prefs(appCtx).getStringSet(PREF_INEXACT, emptySet()).orEmpty()
+        val next = if (inexact) cur + key else cur - key
+        if (next != cur) {
+            prefs(appCtx).edit { putStringSet(PREF_INEXACT, next) }
+        }
+    }
+
+    /** True when [taskId]'s [kind] alarm is armed through the inexact
+     * fallback (#436): the receiver badges that alert as possibly late. */
+    internal fun armedInexact(context: Context, taskId: String, kind: ReminderKind): Boolean {
+        val appCtx = context.applicationContext
+        return alarmKey(taskId, kind) in
+            prefs(appCtx).getStringSet(PREF_INEXACT, emptySet()).orEmpty()
     }
 
     /** Alarm identity is one per task *and* kind: "<taskId>#<kind>". */
@@ -873,11 +920,15 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // not to read on a lock screen (issue #160).
         val window = task?.let { reminderWindowLine(it) }.orEmpty()
         val fetchFailed = outcome?.isSuccess != true
+        // Inexact arming is invisible otherwise (#436): the toggle reads ON
+        // and a late fire looks like a bug rather than a denied exact grant.
+        val inexact = TaskReminders.armedInexact(appCtx, taskId, kind)
         val big = buildList {
             add(message)
             // The alert still fires (a missed alarm is worse than an ugly
             // one) but never looks healthy (#431).
             if (fetchFailed) add("Task details couldn't be loaded — check the server connection.")
+            if (inexact) add("Inexact alarm — it may arrive late (exact alarms aren't allowed).")
             if (taskDesc.isNotEmpty()) add(taskDesc)
             if (window.isNotEmpty()) add(window)
         }.joinToString("\n")

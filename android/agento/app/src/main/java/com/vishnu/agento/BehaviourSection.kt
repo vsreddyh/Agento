@@ -309,7 +309,14 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     ) {
         SwitchRow(
             text = "Due-time reminders",
-            sub = "Moved here from the Task Manager bell — one switch, same alarms.",
+            // The switch reads ON whether or not the exact grant exists
+            // (#436): without the badge, a denied grant is invisible and a
+            // late fire looks like an app bug instead of a system limit.
+            sub = if (remindersOn && !exactAlarms) {
+                "ON — inexact: reminders may be late."
+            } else {
+                "Moved here from the Task Manager bell — one switch, same alarms."
+            },
             checked = remindersOn,
             onChange = ::setReminders,
         )
@@ -317,7 +324,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             HintLine("Notifications are blocked — reminders stay off until allowed.")
         }
         if (remindersOn && !exactAlarms) {
-            HintLine("Exact alarms aren't allowed — reminders still fire, but may be inexact until allowed in system settings.")
+            HintLine("Exact alarms aren't allowed — allow them in system settings or reminders stay inexact.")
         }
         OptionMenu(
             label = "Warn me",
