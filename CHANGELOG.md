@@ -8,6 +8,17 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.7]
+- **Reset values announce themselves (#437).** A new `ValueResets` recorder
+  reports any stored value coerced to a default — what key, the raw value, and
+  what replaced it — as a toast (from wherever it was recorded, background
+  included), deduplicated per key+value so a repeatedly-read bad pref does not
+  spam. Wired into: the Task Manager filter/sort names, per-placement widget
+  view/density/sort, the stored interrupted-by cause, and non-numeric
+  `estimated_minutes`/`repeat_every`/`revision` from the server. Absent values
+  and values that already equal their default are still silent: absence is not
+  corruption.
+
 ## [6.0.6]
 - **Inexact alarms are visible (#436).** The reminders switch now reads
   "ON — inexact: reminders may be late." whenever the exact-alarm grant is

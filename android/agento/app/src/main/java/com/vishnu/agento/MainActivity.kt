@@ -314,17 +314,24 @@ class MainActivity : ComponentActivity() {
                     }
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val wc = windowClassFor(maxWidth)
-                        // Activity-level toast surface for speech failures
-                        // (#434): reminders fire from a broadcast with no
-                        // screen of their own, so the message is recorded in
-                        // TtsFailures and shown here on the next frame —
-                        // whichever destination is open.
-                        val ttsToasts = remember(scope) { ToastCenter(scope) }
+                        // Activity-level toast surface for process-wide
+                        // failures: reminders fire from a broadcast with no
+                        // screen of their own (#434), and value resets can
+                        // be recorded by a background parse (#437). Both are
+                        // shown here on the next frame — whichever
+                        // destination is open.
+                        val appToasts = remember(scope) { ToastCenter(scope) }
                         val ttsFailure by TtsFailures.last.collectAsState()
                         LaunchedEffect(ttsFailure) {
                             val f = ttsFailure ?: return@LaunchedEffect
-                            ttsToasts.toast(f.message, ToastKind.Error)
+                            appToasts.toast(f.message, ToastKind.Error)
                             TtsFailures.consume(f)
+                        }
+                        val valueReset by ValueResets.last.collectAsState()
+                        LaunchedEffect(valueReset) {
+                            val r = valueReset ?: return@LaunchedEffect
+                            appToasts.toast(r.message, ToastKind.Error)
+                            ValueResets.consume(r)
                         }
                         val navContent: @Composable () -> Unit = {
                             when (dest) {
@@ -430,7 +437,7 @@ class MainActivity : ComponentActivity() {
                         // Overlay, not a Scaffold slot: every destination
                         // owns its own Scaffold, so a host inside one would
                         // vanish on the others.
-                        ToastHost(ttsToasts, modifier = Modifier.align(Alignment.TopEnd))
+                        ToastHost(appToasts, modifier = Modifier.align(Alignment.TopEnd))
                     }
                 }
             }

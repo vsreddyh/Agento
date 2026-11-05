@@ -114,11 +114,19 @@ internal fun TaskManagerScreen(
     // fires — not the snapshot that was current when it was armed.
     fun filterNow(): ServerTaskFilter =
         runCatching { ServerTaskFilter.valueOf(filterName) }
-            .getOrDefault(ServerTaskFilter.Open)
+            .getOrElse {
+                // Never silently (#437): a stored name this build can't
+                // resolve changed the user's view for no visible reason.
+                ValueResets.record("task list filter", filterName, ServerTaskFilter.Open)
+                ServerTaskFilter.Open
+            }
     val filter = filterNow()
     var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
     val sort = runCatching { ServerTaskSort.valueOf(sortName) }
-        .getOrDefault(ServerTaskSort.Start)
+        .getOrElse {
+            ValueResets.record("task list sort", sortName, ServerTaskSort.Start)
+            ServerTaskSort.Start
+        }
     var query by rememberSaveable { mutableStateOf("") }
     var sortMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ServerTask?>(null) }

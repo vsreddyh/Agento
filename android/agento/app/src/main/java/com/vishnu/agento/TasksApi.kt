@@ -483,6 +483,16 @@ class TasksApi(context: Context) {
         return canonicalRepeatDays(raw)
     }
 
+    /**
+     * Reports a numeric field whose stored encoding was not a number (#437):
+     * a mistyped server value used to read as 0 minutes / 0 repeats / rev 0
+     * with nothing said. Absent and explicit null are not corruption.
+     */
+    private fun noteNonNumeric(key: String, raw: Any?, became: Int) {
+        if (raw == null || raw === JSONObject.NULL || raw is Number) return
+        ValueResets.record(key, raw, became)
+    }
+
     private fun parseTask(o: JSONObject): ServerTask? {
         // Canonical `id` only (#433): no `_id` fallback — a row without it
         // is dropped like any other unparseable row (#430 counts these).
@@ -490,8 +500,17 @@ class TasksApi(context: Context) {
         if (id.isEmpty()) return null
         val name = optStr(o, "name")
         if (name.isEmpty()) return null
-        // estimated_minutes may encode as int, long, or double.
-        val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
+        // estimated_minutes may encode as int, long, or double; a
+        // non-numeric encoding used to become 0 in silence (#437).
+        val minsRaw = o.opt("estimated_minutes")
+        val mins = (minsRaw as? Number)?.toInt() ?: 0
+        noteNonNumeric("task estimated_minutes", minsRaw, mins)
+        val repeatsRaw = o.opt("repeat_every")
+        val repeats = (repeatsRaw as? Number)?.toInt() ?: 0
+        noteNonNumeric("task repeat_every", repeatsRaw, repeats)
+        val revisionRaw = o.opt("revision")
+        val revision = (revisionRaw as? Number)?.toInt() ?: 0
+        noteNonNumeric("task revision", revisionRaw, revision)
         // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
         // read-modify-write per row is 200 I/Os for one fact — and a
         // read-then-write that is not atomic can regress (sees v3, then a late
@@ -506,7 +525,7 @@ class TasksApi(context: Context) {
             dueDate = optStr(o, "due_date"),
             dueTime = optStr(o, "due_time"),
             estimatedMinutes = mins.coerceAtLeast(0),
-            repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
+            repeatEvery = repeats,
             repeatUnit = optStr(o, "repeat_unit"),
             repeatDays = optDays(o, "repeat_days"),
             repeatCustom = o.optBoolean("repeat_custom", false),
@@ -514,7 +533,7 @@ class TasksApi(context: Context) {
             parallelable = o.optBoolean("parallelable", false),
             // Missing on pre-revision servers: 0 matches the backfill, so
             // an old server and a new app still agree (#184).
-            revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
+            revision = revision,
             completedAt = optStr(o, "completedAt"),
             createdAt = optStr(o, "createdAt"),
             contractVersion = version,

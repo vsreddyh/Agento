@@ -521,22 +521,37 @@ class TaskWidget : AppWidgetProvider() {
         /** This placement's view, defaulting to Open. */
         fun viewFor(context: Context, appWidgetId: Int): TaskWidgetView {
             val name = prefs(context).getString("task_widget_view_$appWidgetId", null)
-            return TaskWidgetView.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetView.Open
+            val match = TaskWidgetView.entries.firstOrNull { it.name == name }
+            if (match == null && name != null) {
+                // Absent (first run) is not corruption (#437); a stored
+                // name this build can't resolve is.
+                ValueResets.record("task widget view", name, TaskWidgetView.Open)
+            }
+            return match ?: TaskWidgetView.Open
         }
 
         /** This placement's density, defaulting to Comfortable. */
         fun densityFor(context: Context, appWidgetId: Int): TaskWidgetDensity {
             val name = prefs(context).getString("task_widget_density_$appWidgetId", null)
-            return TaskWidgetDensity.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetDensity.Comfortable
+            val match = TaskWidgetDensity.entries.firstOrNull { it.name == name }
+            if (match == null && name != null) {
+                // Absent (first run) is not corruption (#437); a stored
+                // name this build can't resolve is.
+                ValueResets.record("task widget density", name, TaskWidgetDensity.Comfortable)
+            }
+            return match ?: TaskWidgetDensity.Comfortable
         }
 
         /** This placement's row order, defaulting to Server (fetch order). */
         fun sortFor(context: Context, appWidgetId: Int): TaskWidgetSort {
             val name = prefs(context).getString("task_widget_sort_$appWidgetId", null)
-            return TaskWidgetSort.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetSort.Server
+            val match = TaskWidgetSort.entries.firstOrNull { it.name == name }
+            if (match == null && name != null) {
+                // Absent (first run) is not corruption (#437); a stored
+                // name this build can't resolve is.
+                ValueResets.record("task widget sort", name, TaskWidgetSort.Server)
+            }
+            return match ?: TaskWidgetSort.Server
         }
 
         /** Whether this placement's rows show the due line. */

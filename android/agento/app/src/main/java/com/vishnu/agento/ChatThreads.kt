@@ -444,7 +444,14 @@ object ChatThreads {
      * throwing: a message with the wrong label is trivial, an unreadable thread is not.
      */
     private fun interruptedBy(raw: String): InterruptedBy =
-        InterruptedBy.entries.firstOrNull { it.storageKey == raw } ?: InterruptedBy.USER
+        InterruptedBy.entries.firstOrNull { it.storageKey == raw } ?: run {
+            // A blank field is the pre-#214 absent default, not corruption;
+            // any other unrecognised value silently became USER before (#437).
+            if (raw.isNotEmpty()) {
+                ValueResets.record("interrupted cause", raw, InterruptedBy.USER.storageKey)
+            }
+            InterruptedBy.USER
+        }
 
     // NAMED arguments, deliberately. These were 14 positional values into a 13-field
     // constructor, which compiles fine and then silently misassigns the day a field is
