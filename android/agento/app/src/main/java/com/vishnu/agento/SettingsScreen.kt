@@ -143,6 +143,10 @@ internal fun SettingsScreen(
      * and no retry (#430). */
     LaunchedEffect(settingsRefresh) {
         error = ""
+        // A probe report belongs to one attempt: a settings import
+        // refetches for new creds, so the old report must not outlive
+        // it next to the fresh result (#430).
+        report = null
         catalogLoading = true
         val api = ChatApi(context)
         catalog = runCatching {
@@ -314,12 +318,12 @@ internal fun SettingsScreen(
                                 error = ""
                                 report = null
                                 catalogLoading = true
-                                toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
                                 scope.launch {
                                     api.fetchCatalog(catalogPath(api), refresh = true).fold(
                                         onSuccess = { page ->
                                             catalog = page.providers
                                             catalogDropped = page.dropped
+                                            toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
                                         },
                                         onFailure = { e ->
                                             error = e.message ?: e.javaClass.simpleName
@@ -328,7 +332,7 @@ internal fun SettingsScreen(
                                     )
                                     catalogLoading = false
                                 }
-                            }, modifier = Modifier.fillMaxWidth()) {
+                            }, enabled = !testing && !catalogLoading, modifier = Modifier.fillMaxWidth()) {
                                 Text("Save server")
                             }
                             OutlinedButton(
@@ -374,7 +378,7 @@ internal fun SettingsScreen(
                                         testing = false
                                     }
                                 },
-                                enabled = !testing,
+                                enabled = !testing && !catalogLoading,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Text(if (testing) "Testing…" else "Test connection")
