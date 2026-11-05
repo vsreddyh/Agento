@@ -1,7 +1,7 @@
 # chat
 
 General operator for Vishnu's money, food and health tracking, plus tasks and
-projects. Eight MCP tool backends, all in-repo Go binaries.
+projects. Nine MCP tool backends, all in-repo Go binaries.
 
 ## How to reach the backends
 
