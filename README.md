@@ -180,9 +180,10 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── money/               # miser-money MCP (accounts + transactions; code in cmd/ + internal/)
 │   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
 │   ├── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
-│   └── notes/               # notes MCP (permanent markdown notes + lists; code in cmd/ + internal/)
+│   ├── notes/               # notes MCP (permanent markdown notes + lists; code in cmd/ + internal/)
+│   └── reports/             # reports MCP (∃-Mail inbox writer, 7-day retention; code in cmd/ + internal/)
 ├── pi/                    # The Pi agent dir, bind-mounted at /opt/pi
-│   ├── mcp.json            # the eight MCP servers Pi spawns (seven domain + browser);
+│   ├── mcp.json            # the nine MCP servers Pi spawns (eight domain + browser);
 │   │                       # gmail/calendar stay unwired until Google OAuth is configured (#424)
 │   ├── settings.json       # Pi's own knobs (tool selection, retry, cache warming)
 │   ├── AGENTS.md           # rules shared by every profile
@@ -196,6 +197,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── cookbook/          # cookbook MCP server (stdio)
 │   ├── health-check/      # health-check MCP server (stdio)
 │   ├── notes/             # notes MCP server (stdio)
+│   ├── reports/           # reports MCP server — ∃-Mail inbox writer (stdio)
 │   ├── task-manager/      # tasks MCP server (stdio)
 │   ├── project-manager/   # projects MCP server (stdio)
 │   ├── memory/            # memory MCP server (stdio)
@@ -203,7 +205,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── gmail/             # Gmail connector MCP server (stdio)
 │   ├── calendar/          # Calendar connector MCP server (stdio)
 │   └── pi-gateway/        # OpenAI-compatible gateway + pi spawner
-├── internal/              # Shared Go packages (mongo, validate, money, cookbook, healthcheck, notes)
+├── internal/              # Shared Go packages (mongo, validate, money, cookbook, healthcheck, notes, reports)
 ├── scripts/
 │   ├── hermes.sh            # Main orchestration CLI
 │   ├── retention.sh         # Retention execution wrapper

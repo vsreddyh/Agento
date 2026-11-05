@@ -41,6 +41,10 @@ Batch with `Promise.allSettled()`.
   `update_project`, `delete_project`.
 - **notes** (6): `create_note`, `get_note`, `list_notes`, `search_notes`,
   `update_note`, `delete_note` (the only gated one).
+- **reports** (3): `create_report`, `get_report`, `list_reports`. Files the
+  ∃-Mail inbox the user reads in the app — markdown with `$..$`/`$$..$$`
+  LaTeX, stored verbatim, compiled server-side on read. No update/delete
+  tools: those verbs belong to the app, not the filing path.
 - **memory** (2): `save_memory`, `list_memory`. Saves are per-profile facts
   that start **pending**: the user confirms them on the app's Memory screen
   before they are injected into a turn, so say what you saved rather than

@@ -3,6 +3,7 @@
 //	money        transactions autowiped when older than 90 days
 //	health-check hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
 //	cookbook     permanent — no-op
+//	reports      read+unstarred pruned after 7 days; unread/starred NEVER touched
 //	story/resumes git repos — no-op
 //
 // Only the remote MongoDB is touched (MONGODB_URI / MONGODB_DB from env).
@@ -74,6 +75,34 @@ func run() int {
 			}
 		}
 		fmt.Printf("%shealth-check: would remove %d from %s older than %s\n", prefix, n, c, foodCutoff)
+	}
+
+	// ∃-Mail inbox (#365): conditional 7-day retention. A report is deleted
+	// only when age(createdAt) > 7d AND read AND NOT starred — unread stays
+	// regardless of age (never delete what the user has not seen), starred
+	// stays regardless of age (the star is an explicit keep). createdAt is a
+	// BSON DateTime, so the cutoff is a DateTime like task_mutations, not a
+	// date string like money/health.
+	reportsCutoff := primitive.NewDateTimeFromTime(today.AddDate(0, 0, -7))
+	reportsFilt := bson.M{
+		"createdAt": bson.M{"$lt": reportsCutoff},
+		"read":      true,
+		"starred":   false,
+	}
+	reportsN, err := d.Collection("reports").CountDocuments(ctx, reportsFilt)
+	if err != nil {
+		fmt.Printf("[retention] reports count failed: %v\n", err)
+		return 1
+	}
+	if !*dry {
+		if _, err := d.Collection("reports").DeleteMany(ctx, reportsFilt); err != nil {
+			fmt.Printf("[retention] reports prune failed: %v\n", err)
+			return 1
+		}
+	}
+	if reportsN > 0 {
+		fmt.Printf("%sreports: would remove %d read+unstarred older than %s\n",
+			prefix, reportsN, reportsCutoff.Time().UTC().Format("2006-01-02"))
 	}
 
 	// Tasks: reconcile recurrence, do not prune (#180). This is the only thing in the

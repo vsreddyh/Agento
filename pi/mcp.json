@@ -23,6 +23,9 @@
     },
     "browser": {
       "command": "/usr/local/bin/browser"
+    },
+    "reports": {
+      "command": "/usr/local/bin/reports"
     }
   }
 }

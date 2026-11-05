@@ -9,7 +9,7 @@ state (see `.gitignore`).
 | path | committed | purpose |
 |---|---|---|
 | `settings.json` | yes | Pi's own knobs — tool selection, retry, cache warming. **Not** personality. |
-| `mcp.json` | yes | The MCP servers Pi spawns: miser-money, cookbook, health-check, task-manager, project-manager, notes, memory, browser (gmail/calendar stay unwired until Google OAuth is configured, #424). |
+| `mcp.json` | yes | The MCP servers Pi spawns: miser-money, cookbook, health-check, task-manager, project-manager, notes, memory, browser, reports (gmail/calendar stay unwired until Google OAuth is configured, #424). |
 | `AGENTS.md` | yes | rules shared by **every** profile. Pi layers this into all of them, so every line is in every request — keep it short and keep only what is true of all of them. |
 | `profiles/<name>/AGENTS.md` | yes | one per profile (`chat` only since #289). Each profile's own instructions and personality. |
 | `profiles/<name>/skills/` | yes | Per-profile skills. **Not discovered as laid out** — see the profile-skills finding below; loaded by an explicit `--skill` path per profile. |
