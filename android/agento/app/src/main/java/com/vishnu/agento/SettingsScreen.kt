@@ -407,10 +407,12 @@ internal fun SettingsScreen(
                         }
                         if (error.isNotEmpty()) {
                             ErrorCard(raw = error)
-                        } else if (catalogLoading) {
-                            // Preload or Save refetch in flight: the stale
-                            // counts — or the clean-empty hint — must not
-                            // read as final while the fetch runs (#430).
+                        } else if (testing || catalogLoading) {
+                            // Probe or catalog fetch in flight: neither the
+                            // stale counts nor the clean-empty hint may read
+                            // as final while it runs — the section already
+                            // spins the button row, this holds the footer
+                            // to the same story (#430).
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         } else if (catalog.isNotEmpty()) {
                             val count = catalog.sumOf { it.models.size }
