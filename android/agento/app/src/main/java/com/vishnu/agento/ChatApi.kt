@@ -352,6 +352,72 @@ data class ProviderOption(
     val models: List<String>,
 )
 
+/** A picker-inventory page: the rows, and how many rows arrived
+ * unparseable (non-object rows or rows without a usable slug) and were
+ * skipped rather than shown (#430). A nonzero [dropped] means the
+ * server spoke rows this app cannot read. */
+data class ProviderCatalog(
+    val providers: List<ProviderOption>,
+    val dropped: Int = 0,
+)
+
+/** Parses one picker-inventory page (#430): the `providers` envelope,
+ * the rows, and how many rows arrived unparseable.
+ *
+ * No provider rows at all is a failure ("No providers in catalog"),
+ * never a clean empty the picker would backfill with the offline list;
+ * an unparseable body is an "Unexpected response shape" failure, like
+ * the task/job pages. */
+internal fun parseCatalog(body: String): ProviderCatalog {
+    val out = mutableListOf<ProviderOption>()
+    val root = runCatching { JSONObject(body) }.getOrNull()
+        ?: throw RuntimeException("Unexpected response shape")
+    val arr = root.optJSONArray("providers")
+    var dropped = 0
+    if (arr != null) {
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i)
+            // optJsonStr, not optString: a JSON null would coerce to the
+            // literal "null" — a phantom provider past the
+            // empty-is-failure gate (#430).
+            val slug = o?.let { optJsonStr(it, "slug") }.orEmpty()
+            if (o == null || slug.isEmpty()) {
+                dropped++
+                continue
+            }
+            val label = optJsonStr(o, "name").ifEmpty { slug }
+            val models = mutableListOf<String>()
+            val marr = o.optJSONArray("models")
+            if (marr != null) {
+                for (j in 0 until marr.length()) {
+                    val m = marr.opt(j)
+                    if (m is String && m.isNotBlank()) models.add(m.trim())
+                }
+            }
+            out.add(ProviderOption(slug, label, models))
+        }
+    }
+    if (dropped > 0) {
+        // Diagnostics for readers that only take `.providers`
+        // (see TasksApi).
+        runCatching {
+            Log.w("ChatApi", "dropped $dropped unparseable catalog row(s) in inventory response")
+        }
+    }
+    if (out.isEmpty()) {
+        throw RuntimeException("No providers in catalog")
+    }
+    return ProviderCatalog(out, dropped)
+}
+
+/** Shared copy for unparseable catalog rows (#430): the count, not the rows. */
+internal fun catalogDropMessage(dropped: Int): String =
+    if (dropped == 1) {
+        "1 provider could not be read — the server sent a row this app cannot parse."
+    } else {
+        "$dropped providers could not be read — the server sent rows this app cannot parse."
+    }
+
 /**
  * Minimal OpenAI-compatible chat client for the pi-gateway server
  * (via the single-URL proxy). One server URL + single app
@@ -477,11 +543,12 @@ class ChatApi(context: Context) {
 
     /** Fetches the Hermes provider-aware picker inventory that backs the
      * dynamic provider/model dropdowns (`slug` + display `name` + string
-     * `models` per row). Lenient by design: rows without a slug are skipped,
-     * non-string model entries are skipped, and an empty result is a failure
-     * so the picker shows an error instead of the offline list masquerading
+     * `models` per row). Lenient by design: rows without a slug are
+     * skipped and counted ([ProviderCatalog.dropped]), non-string model
+     * entries are skipped, and an empty result is a failure so the
+     * picker shows an error instead of the offline list masquerading
      * as live data (#430). */
-    suspend fun fetchCatalog(path: String, refresh: Boolean = false): Result<List<ProviderOption>> =
+    suspend fun fetchCatalog(path: String, refresh: Boolean = false): Result<ProviderCatalog> =
         withContext(Dispatchers.IO) {
             val base = baseUrl()
             if (base.isEmpty()) {
@@ -501,32 +568,7 @@ class ChatApi(context: Context) {
                             RuntimeException("HTTP ${response.code}: ${body.take(200)}")
                         )
                     }
-                    val providers = mutableListOf<ProviderOption>()
-                    val arr = JSONObject(body).optJSONArray("providers")
-                    if (arr != null) {
-                        for (i in 0 until arr.length()) {
-                            val o = arr.optJSONObject(i) ?: continue
-                            // optJsonStr, not optString: a JSON null would
-                            // coerce to the literal "null" — a phantom
-                            // provider past the empty-is-failure gate (#430).
-                            val slug = optJsonStr(o, "slug")
-                            if (slug.isEmpty()) continue
-                            val label = optJsonStr(o, "name").ifEmpty { slug }
-                            val models = mutableListOf<String>()
-                            val marr = o.optJSONArray("models")
-                            if (marr != null) {
-                                for (j in 0 until marr.length()) {
-                                    val m = marr.opt(j)
-                                    if (m is String && m.isNotBlank()) models.add(m.trim())
-                                }
-                            }
-                            providers.add(ProviderOption(slug, label, models))
-                        }
-                    }
-                    if (providers.isEmpty()) {
-                        return@withContext Result.failure(RuntimeException("No providers in catalog"))
-                    }
-                    Result.success(providers)
+                    Result.success(parseCatalog(body))
                 }
             } catch (e: Exception) {
                 Result.failure(e)

@@ -135,7 +135,7 @@ internal fun SettingsScreen(
         error = ""
         val api = ChatApi(context)
         catalog = runCatching {
-            api.fetchCatalog(catalogPath(api)).getOrThrow()
+            api.fetchCatalog(catalogPath(api)).getOrThrow().providers
         }.getOrElse { e ->
             error = e.message ?: e.javaClass.simpleName
             emptyList()
@@ -196,7 +196,11 @@ internal fun SettingsScreen(
                         SettingsHub(
                             serverStatus = if (state.serverUrl.isBlank()) {
                                 "Not set up"
-                            } else if (catalog.isNotEmpty()) {
+                            } else if (catalog.isNotEmpty() && error.isEmpty()) {
+                                // Gated on a clean fetch: a failed refetch
+                                // keeps the previous good list, but the hub
+                                // must not call it "Connected" next to the
+                                // Connection section's error (#430).
                                 "Connected"
                             } else {
                                 state.serverUrl
@@ -293,7 +297,7 @@ internal fun SettingsScreen(
                                 toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
                                 scope.launch {
                                     api.fetchCatalog(catalogPath(api), refresh = true).fold(
-                                        onSuccess = { list -> catalog = list },
+                                        onSuccess = { page -> catalog = page.providers },
                                         onFailure = { e ->
                                             error = e.message ?: e.javaClass.simpleName
                                         },
@@ -320,7 +324,7 @@ internal fun SettingsScreen(
                                             // claims "Connected" next to a
                                             // stale catalog error (#430).
                                             catalog = runCatching {
-                                                api.fetchCatalog(catalogPath(api), refresh = true).getOrThrow()
+                                                api.fetchCatalog(catalogPath(api), refresh = true).getOrThrow().providers
                                             }.getOrElse { e ->
                                                 error = e.message ?: e.javaClass.simpleName
                                                 catalog

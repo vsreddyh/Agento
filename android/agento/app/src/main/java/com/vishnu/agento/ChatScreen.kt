@@ -1614,6 +1614,10 @@ internal fun TabModelSheet(
     var model by remember { mutableStateOf("") }
     var effort by remember { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
+    // Rows the server sent but the picker could not read: surfaced as a
+    // count, like the task/job pages, instead of a silently shorter
+    // live list (#430).
+    var catalogDropped by remember { mutableStateOf(0) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     // Bumped by the error card's Retry: refetches without leaving the sheet.
@@ -1628,10 +1632,17 @@ internal fun TabModelSheet(
         val api = ChatApi(appContext)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
-        }.getOrElse { e ->
-            error = e.message ?: e.javaClass.simpleName
-            emptyList()
-        }
+        }.fold(
+            onSuccess = { page ->
+                catalogDropped = page.dropped
+                page.providers
+            },
+            onFailure = { e ->
+                error = e.message ?: e.javaClass.simpleName
+                catalogDropped = 0
+                emptyList()
+            },
+        )
         loading = false
     }
     fun save(p: String, m: String, e: String) {
@@ -1733,6 +1744,12 @@ internal fun TabModelSheet(
                 provider.isNotBlank() && modelOptionsFor(options, provider).isEmpty() -> {
                     HintLine("This provider has no models listed — reopen this picker to retry.")
                 }
+            }
+            // Unparseable rows shrink the live list: the count rides
+            // below the status block, like the task/job pages (#430).
+            if (catalogDropped > 0) {
+                Spacer(modifier = Modifier.height(4.dp))
+                HintLine(catalogDropMessage(catalogDropped))
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
