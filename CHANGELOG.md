@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.3]
+- **Voice input failures show errors (#432).** One-shot mic: an empty or
+  cancelled result now toasts ("Didn't catch that — tap the mic to try
+  again." / "Voice input cancelled.") instead of returning silence. Live
+  mode: when barge-in detection fails after its bounded retry, a persistent
+  "Barge-in unavailable — tap End to start a new session." line shows for
+  the rest of the session, so tap-to-talk is distinguishable from a working
+  detector that never triggered.
+
 ## [6.0.2]
 - **Local data failures surface instead of plausible defaults (#431).** A
   corrupt thread file banners "couldn't load conversations" in the thread

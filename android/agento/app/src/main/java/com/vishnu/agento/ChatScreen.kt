@@ -2005,6 +2005,10 @@ internal fun ChatScreen(
     // the actual stop(): the holder must never claim "stopped" while the
     // recorder still holds the mic, or vice versa.
     val detectCtl = remember(tab) { DetectCtl() }
+    // True when barge-in detection could not start after its bounded retry
+    // (#432): the session keeps working as tap-to-talk, but the user must
+    // be able to tell a dead mic from "just never barged in".
+    var bargeUnavailable by remember(tab) { mutableStateOf(false) }
     // Session generation for stale detector triggers (#317): the detector
     // posts via scope.launch, so a trigger fired just before hang-up can
     // land after it. endLive/startLive bump this; onBargeIn only honors the
@@ -2118,6 +2122,8 @@ internal fun ChatScreen(
         interrupt.stop()
         detectCtl.running = false
         detectCtl.phase = -1
+        // A new session retries detection from scratch (#432).
+        bargeUnavailable = false
         liveRec.cancel()
         tts.stop()
         if (reason != null) toasts.toast(reason, ToastKind.Error)
@@ -2141,6 +2147,18 @@ internal fun ChatScreen(
         // lag a fast typist the same way.
         if (heard.isNotEmpty()) {
             onAppendPending(heard)
+        } else {
+            // Never silent (#432): a cancelled dialog and a recognized
+            // nothing both used to fold into "" with no signal, so the user
+            // could not tell "didn't hear me" from "errored".
+            toasts.toast(
+                if (result.resultCode == Activity.RESULT_OK) {
+                    "Didn't catch that — tap the mic to try again."
+                } else {
+                    "Voice input cancelled."
+                },
+                ToastKind.Error,
+            )
         }
     }
     fun startVoice() {
@@ -2428,6 +2446,7 @@ internal fun ChatScreen(
             // change retries; a truly dead mic fails fast each time and
             // the loop runs tap-to-talk.
             detectCtl.running = interrupt.start(scope)
+            if (detectCtl.running) bargeUnavailable = false
             if (!detectCtl.running) {
                 // One bounded retry (#317): a long tool task sits in a
                 // single phase, so an entry failure would leave the whole
@@ -2446,6 +2465,11 @@ internal fun ChatScreen(
                 delay(DETECT_RETRY_MS)
                 if (detecting && detectPhase == detectCtl.phase) {
                     detectCtl.running = interrupt.start(scope)
+                    // Both attempts failed (#432): publish it. The session
+                    // still runs tap-to-talk, but silently — a persistent
+                    // indicator is the only way to tell it from a working
+                    // detection that simply never triggered.
+                    if (!detectCtl.running) bargeUnavailable = true
                 }
             }
         } else if (!detecting && detectCtl.running) {
@@ -2878,6 +2902,17 @@ internal fun ChatScreen(
                     // picker above. Gated by conversation like the store
                     // path: a card for a thread already left never renders
                     // on the new one.
+                    // Barge-in unavailable (#432): the live session is
+                    // running as tap-to-talk after both detector starts
+                    // failed. Persistent, because it describes the whole
+                    // session — a one-off toast would be missed while the
+                    // user watches the transcript.
+                    if (liveMode && bargeUnavailable) {
+                        HintLine(
+                            "Barge-in unavailable — tap End to start a new session.",
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
+                    }
                     val questionNow = state.pendingQuestion
                         .takeIf { it != null && questionAttaches(it, state.threadId) }
                     if (questionNow != null) {
