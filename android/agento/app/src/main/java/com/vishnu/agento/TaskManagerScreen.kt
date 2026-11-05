@@ -1142,6 +1142,11 @@ internal fun TaskManagerScreen(
                         Text("Retry")
                     }
                 } else if (visible.isEmpty()) {
+                    // The drop warning is page-level, not row-level: a
+                    // search that matches nothing must not hide it (#430).
+                    if (droppedCount > 0) {
+                        HintLine(taskDropMessage(droppedCount))
+                    }
                     EmptyState(
                         icon = Icons.Filled.Search,
                         title = "No matches",

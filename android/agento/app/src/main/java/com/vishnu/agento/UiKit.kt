@@ -225,6 +225,17 @@ fun friendlyError(raw: String): FriendlyError {
             "Nothing available yet",
             "Check the server side, then reload and try again.",
         )
+        has("could not be parsed") -> {
+            // App-generated drop counts (#430): the count leads the raw
+            // string ("N tasks could not be parsed — ..."), so headline
+            // it instead of a generic title — the number is the news,
+            // not a detail to expand for.
+            FriendlyError(
+                r.substringBefore(" — "),
+                "The server sent rows this app doesn't understand. " +
+                    "Check Settings → App updates for a newer app, then retry.",
+            )
+        }
         else -> FriendlyError(
             "Something went wrong",
             "Please try again. Details below can help diagnose it.",
