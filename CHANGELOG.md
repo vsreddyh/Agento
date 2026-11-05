@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.1.0]
+- **Connectors screen (#440).** New Settings → Connectors section with one row
+  per connector (Gmail, Calendar): live status, the exact scopes a tap grants
+  (`gmail.read`/`gmail.draft`, `calendar.read`/`calendar.draft`), a Connect
+  button that opens the one-time Google consent URL in the browser, and a
+  per-connector Disconnect. The app polls the list while a consent page is
+  outstanding and resolves automatically when the row flips to connected.
+  Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
+  unconfigured servers read as "not set up". The app never sees
+  code/verifier/token (server-only exchange), and disconnect stops future
+  access without wiping already-fetched chat history.
+
 ## [6.0.7]
 - **Reset values announce themselves (#437).** A new `ValueResets` recorder
   reports any stored value coerced to a default — what key, the raw value, and

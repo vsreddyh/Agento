@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
@@ -78,6 +79,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 internal enum class SettingSection(val title: String) {
     Connection("Connection"),
+    Connectors("Connectors"),
     Health("Health sync"),
     Appearance("Appearance"),
     Widget("Home-screen widget"),
@@ -349,6 +351,9 @@ internal fun SettingsScreen(
                         } else {
                             HintLine("No providers loaded yet — save the server above first.")
                         }
+                    }
+                    SettingSection.Connectors -> {
+                        ConnectorsSection(toasts)
                     }
                     // #61: the "Chat backend" subsection is removed (provider +
                     // model are picked on each tab's own page; nothing to show).
@@ -653,6 +658,7 @@ internal fun SettingsHub(
     val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, behaviourStatus, widgetStatus, usageStatus, appVersion) {
         listOf(
             HubRow(SettingSection.Connection, serverStatus),
+            HubRow(SettingSection.Connectors, "Gmail · Calendar"),
             HubRow(SettingSection.Health, healthStatus),
             HubRow(SettingSection.Appearance, themeStatus),
             HubRow(SettingSection.Widget, widgetStatus),
@@ -704,6 +710,7 @@ internal data class HubRow(val section: SettingSection, val status: String)
 
 internal fun SettingSection.hubIcon() = when (this) {
     SettingSection.Connection -> Icons.Filled.Cloud
+    SettingSection.Connectors -> Icons.Filled.Link
     SettingSection.Health -> Icons.Filled.Favorite
     SettingSection.Appearance -> Icons.Filled.DarkMode
     SettingSection.Widget -> Icons.Filled.Dashboard
