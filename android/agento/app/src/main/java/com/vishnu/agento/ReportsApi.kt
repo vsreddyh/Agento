@@ -116,9 +116,8 @@ internal fun formatReportTime(raw: String): String {
 /**
  * ∃-Mail client over health-api (`/api/reports`, same bearer auth as the
  * other health-api clients). Unprefixed: unlike the gateway APIs, health-api
- * routes live under `/api/*`, not `/p/<profile>/*` — a profile prefix here
- * would route to pi-gateway and 404. Parsing is lenient across server
- * versions; missing fields show as blank rather than failing the whole list.
+ * routes live outside `/p/profile`, so a profile prefix here would route to
+ * pi-gateway and 404. Parsing is lenient across server versions; missing fields show as blank rather than failing the whole list.
  * No compose/reply/send paths exist — the inbox is read-only.
  */
 class ReportsApi(context: Context) {
