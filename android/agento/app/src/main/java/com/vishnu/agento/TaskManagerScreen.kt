@@ -1118,7 +1118,7 @@ internal fun TaskManagerScreen(
                     ) {
                         Text("Retry")
                     }
-                } else if (tasks.isEmpty()) {
+                } else if (tasks.isEmpty() && droppedCount == 0) {
                     EmptyState(
                         icon = Icons.Filled.Assignment,
                         title = when (filter) {
@@ -1130,6 +1130,17 @@ internal fun TaskManagerScreen(
                         actionLabel = "New task",
                         onAction = { editing = ServerTaskDraft() },
                     )
+                } else if (tasks.isEmpty()) {
+                    // Every row unparseable: the page is a failure, not an
+                    // empty list — the state above would claim there is
+                    // nothing to do (#430).
+                    ErrorCard(raw = taskDropMessage(droppedCount))
+                    OutlinedButton(
+                        onClick = { refreshTick++ },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Retry")
+                    }
                 } else if (visible.isEmpty()) {
                     EmptyState(
                         icon = Icons.Filled.Search,
@@ -1180,13 +1191,7 @@ internal fun TaskManagerScreen(
                     // can report, not a filter: the count sits with the
                     // count line, above the rows it describes (#430).
                     if (droppedCount > 0) {
-                        HintLine(
-                            if (droppedCount == 1) {
-                                "1 task could not be parsed — the server sent a row this app cannot read."
-                            } else {
-                                "$droppedCount tasks could not be parsed — the server sent rows this app cannot read."
-                            }
-                        )
+                        HintLine(taskDropMessage(droppedCount))
                     }
                     // Time sections (skipped on the Done filter, where due
                     // buckets carry no meaning); within a section the
@@ -2654,6 +2659,14 @@ internal fun formatLastSynced(syncedAt: Long, nowMillis: Long): String? {
 /** True when the failure is a revision race: someone else wrote first. */
 internal fun isConflict(e: Throwable): Boolean =
     "HTTP 409" in (e.message ?: "")
+
+/** Shared copy for unparseable task rows (#430): the count, not the rows. */
+internal fun taskDropMessage(dropped: Int): String =
+    if (dropped == 1) {
+        "1 task could not be parsed — the server sent a row this app cannot read."
+    } else {
+        "$dropped tasks could not be parsed — the server sent rows this app cannot read."
+    }
 
 /**
  * How many tasks one bulk selection may hold (#345). Matches the server's

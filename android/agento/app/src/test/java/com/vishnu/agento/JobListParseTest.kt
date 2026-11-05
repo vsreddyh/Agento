@@ -59,4 +59,16 @@ class JobListParseTest {
             assertEquals("Unexpected response shape", e.message)
         }
     }
+
+    @Test
+    fun `drop message names the count`() {
+        assertEquals(
+            "1 job could not be parsed — the server sent a row this app cannot read.",
+            jobDropMessage(1),
+        )
+        assertEquals(
+            "3 jobs could not be parsed — the server sent rows this app cannot read.",
+            jobDropMessage(3),
+        )
+    }
 }

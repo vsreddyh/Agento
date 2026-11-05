@@ -84,4 +84,16 @@ class TaskListParseTest {
             assertEquals("Unexpected response shape", e.message)
         }
     }
+
+    @Test
+    fun `drop message names the count`() {
+        assertEquals(
+            "1 task could not be parsed — the server sent a row this app cannot read.",
+            taskDropMessage(1),
+        )
+        assertEquals(
+            "3 tasks could not be parsed — the server sent rows this app cannot read.",
+            taskDropMessage(3),
+        )
+    }
 }
