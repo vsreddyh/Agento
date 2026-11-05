@@ -109,6 +109,14 @@ internal fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val toasts = remember(scope) { ToastCenter(scope) }
     var error by remember { mutableStateOf("") }
+    // Probe state for the Connection section: declared here (not next to
+    // the Test button) so Save can clear the report AND the section
+    // footer below can read it — both sit outside the card the button
+    // lives in. A stale "Connected" must not outlive a failed refetch,
+    // and the "not set up yet" hint must not show next to a probe
+    // report that already explains the empty catalog (#430).
+    var testing by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
     // Bumped on every resume so the hub's widget count reflects a
     // placement added (or removed) while the app was in the background —
     // same reason the widget section re-reads.
@@ -116,16 +124,45 @@ internal fun SettingsScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
+    // True while a catalog fetch is in flight (preload or Save
+    // refetch): without it the footer reads the in-flight state as
+    // final — a stale "Connected" for old creds, or a clean-empty
+    // flash — like the picker would show without its spinner arm (#430).
+    var catalogLoading by remember { mutableStateOf(true) }
+    // Rows the server sent but the picker could not read: surfaced as a
+    // count in the section footer, like the picker sheet (#430). Reset
+    // with the catalog on every fetch; a failed fetch sets `error`
+    // instead, and the error card explains.
+    var catalogDropped by remember { mutableStateOf(0) }
     // Bumped after a settings import so the fields below reload from prefs.
     var settingsRefresh by remember { mutableIntStateOf(0) }
 
-    /** Preloads the live provider/model catalog (pickers live per tab now). */
+    /** Preloads the live provider/model catalog (pickers live per tab now).
+     * A failure surfaces in `error` like any other connection problem —
+     * defaulting to empty would read as "not set up yet" with no error
+     * and no retry (#430). */
     LaunchedEffect(settingsRefresh) {
         error = ""
+        // A probe report belongs to one attempt: a settings import
+        // refetches for new creds, so the old report must not outlive
+        // it next to the fresh result (#430).
+        report = null
+        catalogLoading = true
         val api = ChatApi(context)
         catalog = runCatching {
-            api.fetchCatalog(catalogPath(api)).getOrDefault(emptyList())
-        }.getOrDefault(emptyList())
+            api.fetchCatalog(catalogPath(api)).getOrThrow()
+        }.fold(
+            onSuccess = { page ->
+                catalogDropped = page.dropped
+                page.providers
+            },
+            onFailure = { e ->
+                error = e.message ?: e.javaClass.simpleName
+                catalogDropped = 0
+                emptyList()
+            },
+        )
+        catalogLoading = false
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -182,7 +219,11 @@ internal fun SettingsScreen(
                         SettingsHub(
                             serverStatus = if (state.serverUrl.isBlank()) {
                                 "Not set up"
-                            } else if (catalog.isNotEmpty()) {
+                            } else if (catalog.isNotEmpty() && error.isEmpty()) {
+                                // Gated on a clean fetch: a failed refetch
+                                // keeps the previous good list, but the hub
+                                // must not call it "Connected" next to the
+                                // Connection section's error (#430).
                                 "Connected"
                             } else {
                                 state.serverUrl
@@ -275,20 +316,25 @@ internal fun SettingsScreen(
                                     remove("auth_token")
                                 }
                                 error = ""
-                                toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
+                                report = null
+                                catalogLoading = true
                                 scope.launch {
                                     api.fetchCatalog(catalogPath(api), refresh = true).fold(
-                                        onSuccess = { list -> catalog = list },
+                                        onSuccess = { page ->
+                                            catalog = page.providers
+                                            catalogDropped = page.dropped
+                                            toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
+                                        },
                                         onFailure = { e ->
                                             error = e.message ?: e.javaClass.simpleName
+                                            catalogDropped = 0
                                         },
                                     )
+                                    catalogLoading = false
                                 }
-                            }, modifier = Modifier.fillMaxWidth()) {
+                            }, enabled = !testing && !catalogLoading, modifier = Modifier.fillMaxWidth()) {
                                 Text("Save server")
                             }
-                            var testing by remember { mutableStateOf(false) }
-                            var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
                             OutlinedButton(
                                 onClick = {
                                     testing = true
@@ -300,11 +346,39 @@ internal fun SettingsScreen(
                                         report = r
                                         if (r == null) {
                                             error = "Server URL not configured"
+                                        } else if (!r.gatewayOk) {
+                                            // No heal refetch runs on a failed
+                                            // probe, so drop the previous good
+                                            // catalog — otherwise the footer
+                                            // and hub keep reporting
+                                            // "Connected" next to the probe
+                                            // error (#430).
+                                            catalog = emptyList()
+                                            catalogDropped = 0
+                                        } else if (r.gatewayOk) {
+                                            // The probe answers but the picker
+                                            // reads the catalog: heal a failed
+                                            // preload now, or the footer
+                                            // claims "Connected" next to a
+                                            // stale catalog error (#430).
+                                            catalog = runCatching {
+                                                api.fetchCatalog(catalogPath(api), refresh = true).getOrThrow()
+                                            }.fold(
+                                                onSuccess = { page ->
+                                                    catalogDropped = page.dropped
+                                                    page.providers
+                                                },
+                                                onFailure = { e ->
+                                                    error = e.message ?: e.javaClass.simpleName
+                                                    catalogDropped = 0
+                                                    catalog
+                                                },
+                                            )
                                         }
                                         testing = false
                                     }
                                 },
-                                enabled = !testing,
+                                enabled = !testing && !catalogLoading,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Text(if (testing) "Testing…" else "Test connection")
@@ -315,12 +389,20 @@ internal fun SettingsScreen(
                             val rep = report
                             if (rep != null) {
                                 if (rep.gatewayOk && rep.syncOk) {
-                                    HintLine("Connected — chat (${rep.providers} provider(s), ${rep.models} model(s)) and sync both reachable.")
-                                    catalog = catalog.ifEmpty {
-                                        LlmProvider.entries.map {
-                                            ProviderOption(it.id, it.id, emptyList())
-                                        }
-                                    }
+                                    // Probe counts only: never backfill
+                                    // `catalog` with the offline list here —
+                                    // that would masquerade as live inventory
+                                    // and the footer below would count it
+                                    // (#430). The picker reads the real
+                                    // catalog (or its error) on open. The
+                                    // drop count rides in the same line (not
+                                    // a second stacked warning): the same
+                                    // inventory must never read clean here
+                                    // and lossy one card below.
+                                    HintLine(
+                                        "Connected — chat (${rep.providers} provider(s), ${rep.models} model(s)) and sync both reachable." +
+                                            if (rep.dropped > 0) " ${catalogDropMessage(rep.dropped)}" else "",
+                                    )
                                 } else {
                                     if (!rep.gatewayOk) {
                                         ErrorCard(raw = rep.gatewayError.ifEmpty { "Chat backend unreachable" })
@@ -336,12 +418,31 @@ internal fun SettingsScreen(
                         }
                         if (error.isNotEmpty()) {
                             ErrorCard(raw = error)
+                        } else if (testing || catalogLoading) {
+                            // Probe or catalog fetch in flight: neither the
+                            // stale counts nor the clean-empty hint may read
+                            // as final while it runs — the section already
+                            // spins the button row, this holds the footer
+                            // to the same story (#430).
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         } else if (catalog.isNotEmpty()) {
                             val count = catalog.sumOf { it.models.size }
                             HintLine("Connected — ${catalog.size} provider(s), $count model(s). Pick a model on each assistant's page.")
-                        } else {
+                            // Unparseable rows shrink the live list the
+                            // counts above describe: the count rides with
+                            // them, like the picker sheet (#430).
+                            if (catalogDropped > 0) {
+                                HintLine(catalogDropMessage(catalogDropped))
+                            }
+                        } else if (report == null) {
+                            // Reached only when not loading (arm above):
+                            // the catalog simply never loaded.
                             HintLine("No providers loaded yet — save the server above first.")
                         }
+                        // No final else: when a probe report exists but the
+                        // catalog is empty, the report's own cards already
+                        // explain — the "not set up yet" hint would
+                        // misdirect into re-saving (#430).
                     }
                     // #61: the "Chat backend" subsection is removed (provider +
                     // model are picked on each tab's own page; nothing to show).

@@ -1614,9 +1614,15 @@ internal fun TabModelSheet(
     var model by remember { mutableStateOf("") }
     var effort by remember { mutableStateOf("") }
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
+    // Rows the server sent but the picker could not read: surfaced as a
+    // count, like the task/job pages, instead of a silently shorter
+    // live list (#430).
+    var catalogDropped by remember { mutableStateOf(0) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
-    LaunchedEffect(tab) {
+    // Bumped by the error card's Retry: refetches without leaving the sheet.
+    var reloadTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(tab, reloadTick) {
         loading = true
         error = ""
         val prefs = appContext.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
@@ -1626,10 +1632,17 @@ internal fun TabModelSheet(
         val api = ChatApi(appContext)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
-        }.getOrElse { e ->
-            error = e.message ?: e.javaClass.simpleName
-            emptyList()
-        }
+        }.fold(
+            onSuccess = { page ->
+                catalogDropped = page.dropped
+                page.providers
+            },
+            onFailure = { e ->
+                error = e.message ?: e.javaClass.simpleName
+                catalogDropped = 0
+                emptyList()
+            },
+        )
         loading = false
     }
     fun save(p: String, m: String, e: String) {
@@ -1646,7 +1659,17 @@ internal fun TabModelSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.height(12.dp))
-            val options = providerOptionsFor(catalog, provider)
+            val options = providerOptionsFor(
+                catalog,
+                provider,
+                // A failed fetch is an error state, not the offline list
+                // masquerading as live data (#430). The error is sticky
+                // until a refetch: picks must not dismiss it into a
+                // clean-empty read. While loading (no error yet) the
+                // fallback stays, so the dropdowns are usable under
+                // the spinner.
+                allowOffline = error.isEmpty(),
+            )
             val shownProvider = options.firstOrNull { it.slug == provider }
                 ?.let { providerDisplay(it.slug, it.label) }
                 ?: provider.ifEmpty { "Choose a provider…" }
@@ -1657,7 +1680,6 @@ internal fun TabModelSheet(
                 onPick = {
                     if (it != provider) model = ""
                     provider = it
-                    error = ""
                     save(provider, model, effort)
                 },
             )
@@ -1674,7 +1696,6 @@ internal fun TabModelSheet(
                         model,
                         ChatApi(context).effortFor(tab, model),
                     )
-                    error = ""
                     save(provider, model, effort)
                 },
             )
@@ -1691,7 +1712,6 @@ internal fun TabModelSheet(
                 options = effortOptions.map { e -> e to EffortCatalog.labelFor(e) },
                 onPick = {
                     effort = it
-                    error = ""
                     save(provider, model, effort)
                 },
             )
@@ -1713,16 +1733,27 @@ internal fun TabModelSheet(
                     }
                 }
                 error.isNotEmpty() -> {
-                    ErrorCard(raw = error)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    HintLine("Check Server URL + Password in Settings, then reopen this picker.")
+                    // No extra hint line: the card already headlines a
+                    // failure-specific next step (auth, network, shape,
+                    // drops...), and a generic credential line would
+                    // contradict it for failures creds can't fix (#430).
+                    ErrorCard(raw = error, onRetry = { reloadTick++ })
                 }
-                catalog.isEmpty() -> {
-                    HintLine("No providers found — check Settings → Server.")
-                }
+                // No empty-catalog arm on purpose: a completed fetch with
+                // no error always carries providers (fetchCatalog fails
+                // on empty), so empty here can only mean "still loading"
+                // or "failed" — both covered above.
                 provider.isNotBlank() && modelOptionsFor(options, provider).isEmpty() -> {
-                    HintLine("This provider has no models listed — try Reload below.")
+                    HintLine("This provider has no models listed — reopen this picker to retry.")
                 }
+            }
+            // Unparseable rows shrink the live list: the previous page's
+            // count must not advertise as the page being fetched, so the
+            // hint stays off while loading (same gating as the scheduler
+            // drop card, #430).
+            if (catalogDropped > 0 && !loading) {
+                Spacer(modifier = Modifier.height(4.dp))
+                HintLine(catalogDropMessage(catalogDropped))
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -3910,10 +3941,23 @@ internal fun providerDisplay(slug: String, label: String): String =
     if (label == slug) slug else "$label ($slug)"
 
 /** Dropdown options for a tab: live catalog, else known slugs; the saved
- * value is always kept so legacy/unknown slugs are never lost. */
-internal fun providerOptionsFor(catalog: List<ProviderOption>, saved: String): List<ProviderOption> {
-    val base = catalog.ifEmpty {
+ * value is always kept so legacy/unknown slugs are never lost.
+ *
+ * The offline fallback is only honest while the catalog is still loading
+ * — never as a stand-in for a failed fetch ([allowOffline] = false): a
+ * gateway failure must surface as an error ("could not load models"),
+ * not as the offline list masquerading as live data (#430). A completed
+ * fetch with no error always carries providers (fetchCatalog fails on
+ * empty), so the fallback never stands in for a successful empty. */
+internal fun providerOptionsFor(
+    catalog: List<ProviderOption>,
+    saved: String,
+    allowOffline: Boolean = true,
+): List<ProviderOption> {
+    val base = if (catalog.isEmpty() && allowOffline) {
         LlmProvider.entries.map { ProviderOption(it.id, it.id, emptyList()) }
+    } else {
+        catalog
     }
     return if (saved.isNotBlank() && base.none { it.slug == saved }) {
         listOf(ProviderOption(saved, "$saved (saved)", emptyList())) + base

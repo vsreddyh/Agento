@@ -486,16 +486,20 @@ class TaskWidget : AppWidgetProvider() {
             }
         }.getOrDefault("(log unavailable)")
 
-        /** Lines worth keeping: our own widget code, or a host-side widget
-         * failure signature. Deliberately specific — a generic "widget"
-         * match would drag in every other app's widget lines from the
+        /** Lines worth keeping: our own widget code, our own API parse
+         * diagnostics (drop/shape warnings from Tasks/Jobs/Chat/Approvals
+         * log under their own tags, #430), or a host-side widget failure
+         * signature. Deliberately specific — a generic "widget" match
+         * would drag in every other app's widget lines from the
          * system-wide buffer. */
-        private fun widgetLine(l: String): Boolean =
+        internal fun widgetLine(l: String): Boolean =
             l.contains("TaskWidget") || l.contains("AndroidRuntime") ||
                 l.contains("FATAL") || l.contains("RemoteViews") ||
                 l.contains("AppWidget") || l.contains("System.err") ||
                 l.contains("agento") || l.contains("com.vishnu") ||
-                l.contains("RemoteCollection")
+                l.contains("RemoteCollection") ||
+                l.contains("TasksApi") || l.contains("JobsApi") ||
+                l.contains("ChatApi") || l.contains("ApprovalsApi")
 
         // Bearer secrets must never ride along when the user pastes the
         // log into chat. Redacts key=value pairs for the usual secret

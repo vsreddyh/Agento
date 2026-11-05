@@ -33,6 +33,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+
+/** Shared copy for unparseable job rows (#430): the count, not the rows. */
+internal fun jobDropMessage(dropped: Int): String =
+    if (dropped == 1) {
+        "1 job could not be parsed — the server sent a row this app cannot read."
+    } else {
+        "$dropped jobs could not be parsed — the server sent rows this app cannot read."
+    }
+
 /** Gateway scheduler: native cron jobs over the Jobs API (same auth as
  * chat, through the proxy's /p/ route — no server changes needed).
  * Each job is a stored cron chat: one prompt, one response per fire, short
@@ -48,6 +57,10 @@ internal fun SchedulerScreen(
     val toasts = remember(scope) { ToastCenter(scope) }
     var jobs by remember { mutableStateOf<List<CronJob>>(emptyList()) }
     var error by remember { mutableStateOf("") }
+    // Rows the server sent but this app could not parse: the count rides
+    // with the page so the screen says so instead of shrinking silently
+    // (#430). Reset with the rows on failure.
+    var jobsDropped by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<CronJob?>(null) }
@@ -63,15 +76,29 @@ internal fun SchedulerScreen(
         scope.launch {
             JobsApi(context).list(path()).fold(
                 onSuccess = {
-                    jobs = it
+                    jobs = it.jobs
+                    jobsDropped = it.dropped
+                    error = ""
                     loaded = true
                     // Same discovery as the background worker, over the
                     // rows just fetched rather than a second fetch: a
                     // response that landed while away notifies on open.
-                    CronCheck.notifyFresh(context, it)
+                    CronCheck.notifyFresh(context, it.jobs)
                 },
                 onFailure = { e ->
-                    error = e.message ?: e.javaClass.simpleName
+                    // Rows on screen stay up, so a failure they survive
+                    // must toast — the card below only renders on an
+                    // empty list (#430). An empty list must card even on
+                    // a silent reload, or the toast clears to a false
+                    // empty. The drop count describes the rows still on
+                    // screen, so it resets only with the error card.
+                    val msg = e.message ?: e.javaClass.simpleName
+                    if (jobs.isNotEmpty()) {
+                        toasts.toast(friendlyError(msg).title, ToastKind.Error)
+                    } else {
+                        error = msg
+                        jobsDropped = 0
+                    }
                     loaded = true
                 },
             )
@@ -130,17 +157,40 @@ internal fun SchedulerScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            if (error.isNotEmpty() && jobs.isEmpty()) {
-                ErrorCard(raw = error, onRetry = { load() },
-                    modifier = Modifier.padding(12.dp))
+            if (jobs.isEmpty() && (error.isNotEmpty() || (loaded && jobsDropped > 0))) {
+                // Gated off while busy: a retry clears the error up front
+                // but a stale drop count describes the previous page, so
+                // showing it under the spinner would advertise old news
+                // as the current page (#430).
+                if (!busy) {
+                    ErrorCard(
+                        raw = error.ifEmpty { jobDropMessage(jobsDropped) },
+                        onRetry = { load() },
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
             }
-            if (loaded && jobs.isEmpty() && error.isEmpty()) {
+            // Gated on !busy: a retry clears the error up front, and the
+            // independent ifs would otherwise flash the empty state
+            // under the spinner before the new page lands (#430).
+            if (!busy && loaded && jobs.isEmpty() && error.isEmpty() && jobsDropped == 0) {
                 EmptyState(
                     icon = Icons.Filled.Schedule,
                     title = "No scheduled jobs",
                     subtitle = "Jobs run prompts on a schedule, even when the app is closed.",
                     actionLabel = "New job",
                     onAction = { creating = true },
+                )
+            }
+            // Unparseable rows are a gateway-shape problem the user can
+            // report, not an empty schedule: the count sits above the
+            // rows it describes — held off while a reload flies so the
+            // previous page's count never advertises as the page being
+            // fetched (#430).
+            if (!busy && jobsDropped > 0 && jobs.isNotEmpty()) {
+                HintLine(
+                    text = jobDropMessage(jobsDropped),
+                    modifier = Modifier.padding(horizontal = 12.dp),
                 )
             }
             LazyColumn(

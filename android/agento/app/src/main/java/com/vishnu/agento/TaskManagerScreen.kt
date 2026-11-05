@@ -102,6 +102,10 @@ internal fun TaskManagerScreen(
     // Whether the server held back rows beyond its cap: the list below
     // must say so rather than silently ending mid-collection (#168).
     var listTruncated by remember { mutableStateOf(false) }
+    // Rows the server sent but this app could not parse (empty id/name):
+    // the count rides with the page so the list says so instead of
+    // shrinking silently (#430). Reset with the rows, like listTruncated.
+    var droppedCount by remember { mutableStateOf(0) }
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
@@ -294,6 +298,7 @@ internal fun TaskManagerScreen(
                 val leaving = exiting.filterValues { it == filter }.keys
                 tasks = mergeRefresh(page.tasks, tasks, leaving)
                 listTruncated = page.truncated
+                droppedCount = page.dropped
                 error = ""
                 // Which filter these rows are the answer for (#308): recorded
                 // with the rows themselves, so the enter-animation effect never
@@ -327,6 +332,7 @@ internal fun TaskManagerScreen(
                     // them: a failed fetch leaves yesterday's rows up, and they
                     // must not keep advertising yesterday's truncation.
                     listTruncated = false
+                    droppedCount = 0
                 }
                 false
             },
@@ -1112,7 +1118,7 @@ internal fun TaskManagerScreen(
                     ) {
                         Text("Retry")
                     }
-                } else if (tasks.isEmpty()) {
+                } else if (tasks.isEmpty() && droppedCount == 0) {
                     EmptyState(
                         icon = Icons.Filled.Assignment,
                         title = when (filter) {
@@ -1124,7 +1130,26 @@ internal fun TaskManagerScreen(
                         actionLabel = "New task",
                         onAction = { editing = ServerTaskDraft() },
                     )
+                } else if (tasks.isEmpty()) {
+                    // Every row unparseable: the page is a failure, not an
+                    // empty list — the state above would claim there is
+                    // nothing to do (#430).
+                    ErrorCard(raw = taskDropMessage(droppedCount))
+                    OutlinedButton(
+                        onClick = { refreshTick++ },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Retry")
+                    }
                 } else if (visible.isEmpty()) {
+                    // Both page-level warnings survive filtering: a query
+                    // matching nothing must not hide them (#430).
+                    if (droppedCount > 0) {
+                        HintLine(taskDropMessage(droppedCount))
+                    }
+                    if (listTruncated) {
+                        HintLine("The server held back rows — showing the first ${tasks.size}.")
+                    }
                     EmptyState(
                         icon = Icons.Filled.Search,
                         title = "No matches",
@@ -1170,6 +1195,12 @@ internal fun TaskManagerScreen(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // Unparseable rows are a gateway-shape problem the user
+                    // can report, not a filter: the count sits with the
+                    // count line, above the rows it describes (#430).
+                    if (droppedCount > 0) {
+                        HintLine(taskDropMessage(droppedCount))
+                    }
                     // Time sections (skipped on the Done filter, where due
                     // buckets carry no meaning); within a section the
                     // current sort still applies. IST-pinned (#124).
@@ -2636,6 +2667,14 @@ internal fun formatLastSynced(syncedAt: Long, nowMillis: Long): String? {
 /** True when the failure is a revision race: someone else wrote first. */
 internal fun isConflict(e: Throwable): Boolean =
     "HTTP 409" in (e.message ?: "")
+
+/** Shared copy for unparseable task rows (#430): the count, not the rows. */
+internal fun taskDropMessage(dropped: Int): String =
+    if (dropped == 1) {
+        "1 task could not be parsed — the server sent a row this app cannot read."
+    } else {
+        "$dropped tasks could not be parsed — the server sent rows this app cannot read."
+    }
 
 /**
  * How many tasks one bulk selection may hold (#345). Matches the server's

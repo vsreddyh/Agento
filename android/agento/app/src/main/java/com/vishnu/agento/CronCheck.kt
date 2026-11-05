@@ -47,7 +47,7 @@ internal object CronCheck {
     suspend fun check(context: Context): Int {
         val appCtx = context.applicationContext
         val jobs = withContext(Dispatchers.IO) {
-            JobsApi(appCtx).list(ChatApi(appCtx).pathFor("chat")).getOrNull()
+            JobsApi(appCtx).list(ChatApi(appCtx).pathFor("chat")).getOrNull()?.jobs
         } ?: return 0
         return notifyFresh(appCtx, jobs)
     }
