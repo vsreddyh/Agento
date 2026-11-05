@@ -366,36 +366,38 @@ data class ProviderCatalog(
  *
  * No provider rows at all is a failure ("No providers in catalog"),
  * never a clean empty the picker would backfill with the offline list;
- * an unparseable body is an "Unexpected response shape" failure, like
- * the task/job pages. */
+ * an unparseable body — or a body with no `providers` array at all — is
+ * an "Unexpected response shape" failure, like the task/job pages. */
 internal fun parseCatalog(body: String): ProviderCatalog {
     val out = mutableListOf<ProviderOption>()
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException("Unexpected response shape")
+    // No multi-envelope fallback here (unlike tasks/jobs): the picker
+    // inventory has exactly one shape, so a missing array is a shape
+    // mismatch, not an empty inventory.
     val arr = root.optJSONArray("providers")
+        ?: throw RuntimeException("Unexpected response shape")
     var dropped = 0
-    if (arr != null) {
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i)
-            // optJsonStr, not optString: a JSON null would coerce to the
-            // literal "null" — a phantom provider past the
-            // empty-is-failure gate (#430).
-            val slug = o?.let { optJsonStr(it, "slug") }.orEmpty()
-            if (o == null || slug.isEmpty()) {
-                dropped++
-                continue
-            }
-            val label = optJsonStr(o, "name").ifEmpty { slug }
-            val models = mutableListOf<String>()
-            val marr = o.optJSONArray("models")
-            if (marr != null) {
-                for (j in 0 until marr.length()) {
-                    val m = marr.opt(j)
-                    if (m is String && m.isNotBlank()) models.add(m.trim())
-                }
-            }
-            out.add(ProviderOption(slug, label, models))
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i)
+        // optJsonStr, not optString: a JSON null would coerce to the
+        // literal "null" — a phantom provider past the
+        // empty-is-failure gate (#430).
+        val slug = o?.let { optJsonStr(it, "slug") }.orEmpty()
+        if (o == null || slug.isEmpty()) {
+            dropped++
+            continue
         }
+        val label = optJsonStr(o, "name").ifEmpty { slug }
+        val models = mutableListOf<String>()
+        val marr = o.optJSONArray("models")
+        if (marr != null) {
+            for (j in 0 until marr.length()) {
+                val m = marr.opt(j)
+                if (m is String && m.isNotBlank()) models.add(m.trim())
+            }
+        }
+        out.add(ProviderOption(slug, label, models))
     }
     if (dropped > 0) {
         // Diagnostics for readers that only take `.providers`
@@ -611,6 +613,7 @@ class ChatApi(context: Context) {
             var gatewayOk = false
             var providers = 0
             var models = 0
+            var dropped = 0
             var gatewayError = ""
             try {
                 client.newCall(Request.Builder()
@@ -625,12 +628,15 @@ class ChatApi(context: Context) {
                         val arr = JSONObject(body).optJSONArray("providers")
                         if (arr != null) {
                             for (i in 0 until arr.length()) {
-                                val o = arr.optJSONObject(i) ?: continue
-                                // Same null guard as fetchCatalog above: a
-                                // bare optString would count {"slug": null}
-                                // as provider "null" (#430).
-                                val slug = optJsonStr(o, "slug")
-                                if (slug.isEmpty()) continue
+                                val o = arr.optJSONObject(i)
+                                // Same null guard as fetchCatalog: a bare
+                                // optString would count {"slug": null} as
+                                // provider "null" (#430).
+                                val slug = o?.let { optJsonStr(it, "slug") }.orEmpty()
+                                if (o == null || slug.isEmpty()) {
+                                    dropped++
+                                    continue
+                                }
                                 providers++
                                 val marr = o.optJSONArray("models")
                                 if (marr != null) {
@@ -654,6 +660,14 @@ class ChatApi(context: Context) {
                 }
             } catch (e: Exception) {
                 gatewayError = e.message ?: e.javaClass.simpleName
+            }
+            if (dropped > 0) {
+                // Diagnostics for the probe's silent skips (the picker
+                // sheet and Settings footer count their own, see
+                // parseCatalog).
+                runCatching {
+                    Log.w("ChatApi", "probe dropped $dropped unparseable catalog row(s)")
+                }
             }
             var syncOk = false
             var syncError = ""

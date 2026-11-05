@@ -58,11 +58,11 @@ class ProviderCatalogTest {
     }
 
     @Test
-    fun `empty names the catalog and garbage the shape`() {
+    fun `empty names the catalog and wrong shapes name the shape`() {
         for ((body, message) in listOf(
             """{"providers":[]}""" to "No providers in catalog",
             "not json at all" to "Unexpected response shape",
-            """{"other":[]}""" to "No providers in catalog",
+            """{"other":[]}""" to "Unexpected response shape",
         )) {
             try {
                 parseCatalog(body)

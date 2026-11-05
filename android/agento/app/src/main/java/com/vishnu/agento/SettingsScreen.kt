@@ -124,6 +124,11 @@ internal fun SettingsScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
+    // Rows the server sent but the picker could not read: surfaced as a
+    // count in the section footer, like the picker sheet (#430). Reset
+    // with the catalog on every fetch; a failed fetch sets `error`
+    // instead, and the error card explains.
+    var catalogDropped by remember { mutableStateOf(0) }
     // Bumped after a settings import so the fields below reload from prefs.
     var settingsRefresh by remember { mutableIntStateOf(0) }
 
@@ -135,11 +140,18 @@ internal fun SettingsScreen(
         error = ""
         val api = ChatApi(context)
         catalog = runCatching {
-            api.fetchCatalog(catalogPath(api)).getOrThrow().providers
-        }.getOrElse { e ->
-            error = e.message ?: e.javaClass.simpleName
-            emptyList()
-        }
+            api.fetchCatalog(catalogPath(api)).getOrThrow()
+        }.fold(
+            onSuccess = { page ->
+                catalogDropped = page.dropped
+                page.providers
+            },
+            onFailure = { e ->
+                error = e.message ?: e.javaClass.simpleName
+                catalogDropped = 0
+                emptyList()
+            },
+        )
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -297,9 +309,13 @@ internal fun SettingsScreen(
                                 toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
                                 scope.launch {
                                     api.fetchCatalog(catalogPath(api), refresh = true).fold(
-                                        onSuccess = { page -> catalog = page.providers },
+                                        onSuccess = { page ->
+                                            catalog = page.providers
+                                            catalogDropped = page.dropped
+                                        },
                                         onFailure = { e ->
                                             error = e.message ?: e.javaClass.simpleName
+                                            catalogDropped = 0
                                         },
                                     )
                                 }
@@ -324,11 +340,18 @@ internal fun SettingsScreen(
                                             // claims "Connected" next to a
                                             // stale catalog error (#430).
                                             catalog = runCatching {
-                                                api.fetchCatalog(catalogPath(api), refresh = true).getOrThrow().providers
-                                            }.getOrElse { e ->
-                                                error = e.message ?: e.javaClass.simpleName
-                                                catalog
-                                            }
+                                                api.fetchCatalog(catalogPath(api), refresh = true).getOrThrow()
+                                            }.fold(
+                                                onSuccess = { page ->
+                                                    catalogDropped = page.dropped
+                                                    page.providers
+                                                },
+                                                onFailure = { e ->
+                                                    error = e.message ?: e.javaClass.simpleName
+                                                    catalogDropped = 0
+                                                    catalog
+                                                },
+                                            )
                                         }
                                         testing = false
                                     }
@@ -369,6 +392,12 @@ internal fun SettingsScreen(
                         } else if (catalog.isNotEmpty()) {
                             val count = catalog.sumOf { it.models.size }
                             HintLine("Connected — ${catalog.size} provider(s), $count model(s). Pick a model on each assistant's page.")
+                            // Unparseable rows shrink the live list the
+                            // counts above describe: the count rides with
+                            // them, like the picker sheet (#430).
+                            if (catalogDropped > 0) {
+                                HintLine(catalogDropMessage(catalogDropped))
+                            }
                         } else if (report == null) {
                             HintLine("No providers loaded yet — save the server above first.")
                         }
