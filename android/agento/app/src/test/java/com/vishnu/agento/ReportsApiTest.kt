@@ -70,13 +70,13 @@ class ReportsApiTest {
     fun `parseReportDetail reads segments and engine`() {
         val d = parseReportDetail(
             JSONObject(
-                """{"id":"r1","title":"T","body_md":"a $x$ b","math_engine":"katex 0.16.21",""" +
+                """{"id":"r1","title":"T","body_md":"a ${'$'}x${'$'} b","math_engine":"katex 0.16.21",""" +
                     """"segments":[{"kind":"text","text":"a "},""" +
                     """{"kind":"math","tex":"x","html":"<span>k</span>"}]}""",
             ),
         )!!
         assertEquals("r1", d.id)
-        assertEquals("a $x$ b", d.bodyMd)
+        assertEquals("a ${'$'}x${'$'} b", d.bodyMd)
         assertEquals("katex 0.16.21", d.mathEngine)
         assertEquals(2, d.segments.size)
         assertEquals("text", d.segments[0].kind)
@@ -89,5 +89,20 @@ class ReportsApiTest {
         assertTrue(d.segments.isEmpty())
         assertEquals("plain", d.bodyMd)
         assertNull(parseReportDetail(JSONObject("""{"title":"no id"}""")))
+    }
+
+    @Test
+    fun `formatReportTime reads server millis`() {
+        // 1762345678901 = 5 Nov 2026 17:57 IST. The server emits BSON
+        // DateTime as millis; an earlier test fed ISO only, which parses but
+        // never appears on the wire — production showed the raw number.
+        assertEquals("5 Nov 17:57", formatReportTime("1762345678901"))
+    }
+
+    @Test
+    fun `formatReportTime falls back to ISO then raw`() {
+        assertEquals("4 Nov 15:30", formatReportTime("2026-11-04T10:00:00Z"))
+        assertEquals("", formatReportTime("  "))
+        assertEquals("not-a-date", formatReportTime("not-a-date"))
     }
 }

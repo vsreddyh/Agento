@@ -58,12 +58,10 @@ internal fun ReportsScreen(
     var openId by remember { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<ReportSummary?>(null) }
 
-    fun path(): String = ChatApi(context).pathFor("chat")
-
     fun load(silent: Boolean = false) {
         if (!silent) { busy = true; error = "" }
         scope.launch {
-            ReportsApi(context).list(path()).fold(
+            ReportsApi(context).list().fold(
                 onSuccess = {
                     reports = it
                     loaded = true
@@ -100,7 +98,6 @@ internal fun ReportsScreen(
     if (open != null) {
         ReportDetailView(
             reportId = open,
-            path = path(),
             onBack = {
                 openId = null
                 load(silent = true)
@@ -166,7 +163,7 @@ internal fun ReportsScreen(
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
-                                    val meta = formatSyncTime(report.createdAt)
+                                    val meta = formatReportTime(report.createdAt)
                                     if (meta.isNotEmpty()) {
                                         Text(
                                             meta,
@@ -177,7 +174,7 @@ internal fun ReportsScreen(
                                 }
                                 IconButton(onClick = {
                                     mutate(
-                                        { ReportsApi(context).patch(path(), report.id, null, !report.starred) },
+                                        { ReportsApi(context).patch(report.id, null, !report.starred) },
                                         if (!report.starred) "Report starred." else "Report unstarred.",
                                     )
                                 }) {
@@ -223,7 +220,7 @@ internal fun ReportsScreen(
                 TextButton(onClick = {
                     deleting = null
                     mutate(
-                        { ReportsApi(context).delete(path(), deleteTarget.id) },
+                        { ReportsApi(context).delete(deleteTarget.id) },
                         "Report deleted.",
                     )
                 }) { Text("Delete") }
@@ -246,7 +243,6 @@ internal fun ReportsScreen(
 @Composable
 private fun ReportDetailView(
     reportId: String,
-    path: String,
     onBack: () -> Unit,
     onDeleted: () -> Unit,
     onChanged: () -> Unit,
@@ -262,7 +258,7 @@ private fun ReportDetailView(
     fun markReadIfNeeded(d: ReportDetail) {
         if (d.read) return
         scope.launch {
-            ReportsApi(context).patch(path, d.id, true, null).fold(
+            ReportsApi(context).patch(d.id, true, null).fold(
                 onSuccess = {
                     detail = d.copy(read = true)
                     onChanged()
@@ -275,7 +271,7 @@ private fun ReportDetailView(
     LaunchedEffect(reportId) {
         busy = true
         error = ""
-        ReportsApi(context).get(path, reportId).fold(
+        ReportsApi(context).get(reportId).fold(
             onSuccess = { d ->
                 if (d == null) {
                     error = "Report not found — it may have been deleted."
@@ -304,7 +300,7 @@ private fun ReportDetailView(
                     if (d != null) {
                         IconButton(onClick = {
                             scope.launch {
-                                ReportsApi(context).patch(path, d.id, null, !d.starred).fold(
+                                ReportsApi(context).patch(d.id, null, !d.starred).fold(
                                     onSuccess = {
                                         detail = d.copy(starred = !d.starred)
                                         onChanged()
@@ -345,7 +341,7 @@ private fun ReportDetailView(
             val d = detail
             if (d != null) {
                 val meta = listOfNotNull(
-                    formatSyncTime(d.createdAt).takeIf { it.isNotEmpty() },
+                    formatReportTime(d.createdAt).takeIf { it.isNotEmpty() },
                     d.source.takeIf { it.isNotEmpty() },
                 ).joinToString(" · ")
                 Column(
@@ -377,7 +373,7 @@ private fun ReportDetailView(
                 TextButton(onClick = {
                     confirmingDelete = false
                     scope.launch {
-                        ReportsApi(context).delete(path, reportId).fold(
+                        ReportsApi(context).delete(reportId).fold(
                             onSuccess = {
                                 toasts.toast("Report deleted.", ToastKind.Success)
                                 onDeleted()

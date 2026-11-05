@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /** One ∃-Mail report summary (list rows carry no body — `get` fetches it). */
@@ -97,10 +98,28 @@ internal fun parseReportDetail(o: JSONObject): ReportDetail? {
 }
 
 /**
- * ∃-Mail client over health-api (`/api/reports`, same bearer auth and
- * profile-path prefix as the other API clients). Parsing is lenient across
- * server versions; missing fields show as blank rather than failing the
- * whole list. No compose/reply/send paths exist — the inbox is read-only.
+ * Formats a report `createdAt` for display. The server emits BSON DateTime as
+ * millis (same convention as the other stores), so millis parse first; ISO
+ * instants parse as a fallback; anything else shows verbatim rather than
+ * hiding the value. IST-pinned like every displayed time, month in English.
+ */
+internal fun formatReportTime(raw: String): String {
+    val clean = raw.trim()
+    if (clean.isEmpty()) return ""
+    val instant = runCatching { java.time.Instant.ofEpochMilli(clean.toLong()) }.getOrNull()
+        ?: runCatching { java.time.Instant.parse(clean) }.getOrNull()
+        ?: return raw
+    return instant.atZone(IST)
+        .format(java.time.format.DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.ENGLISH))
+}
+
+/**
+ * ∃-Mail client over health-api (`/api/reports`, same bearer auth as the
+ * other health-api clients). Unprefixed: unlike the gateway APIs, health-api
+ * routes live under `/api/*`, not `/p/<profile>/*` — a profile prefix here
+ * would route to pi-gateway and 404. Parsing is lenient across server
+ * versions; missing fields show as blank rather than failing the whole list.
+ * No compose/reply/send paths exist — the inbox is read-only.
  */
 class ReportsApi(context: Context) {
 
@@ -114,6 +133,10 @@ class ReportsApi(context: Context) {
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
+
+        /** Path encoding (`+` is a space in form encoding, not in a path). */
+        internal fun encode(v: String): String =
+            java.net.URLEncoder.encode(v, Charsets.UTF_8.name()).replace("+", "%20")
     }
 
     private fun base(): String {
@@ -168,31 +191,31 @@ class ReportsApi(context: Context) {
     }
 
     /** Lists reports, newest first. Summaries carry no bodies. */
-    suspend fun list(path: String): Result<List<ReportSummary>> =
+    suspend fun list(): Result<List<ReportSummary>> =
         withContext(Dispatchers.IO) {
-            call("GET", "$path/api/reports?sort=newest").map { parseSummaries(it) }
+            call("GET", "/api/reports?sort=newest").map { parseSummaries(it) }
         }
 
     /** Gets one report with server-rendered math segments. */
-    suspend fun get(path: String, id: String): Result<ReportDetail?> =
+    suspend fun get(id: String): Result<ReportDetail?> =
         withContext(Dispatchers.IO) {
-            call("GET", "$path/api/reports/$id").map { body ->
+            call("GET", "/api/reports/${encode(id.trim())}").map { body ->
                 runCatching { parseReportDetail(JSONObject(body)) }.getOrNull()
             }
         }
 
     /** Marks read and/or toggles the star. Only sent keys change. */
-    suspend fun patch(path: String, id: String, read: Boolean?, starred: Boolean?): Result<Unit> =
+    suspend fun patch(id: String, read: Boolean?, starred: Boolean?): Result<Unit> =
         withContext(Dispatchers.IO) {
             val body = JSONObject()
             if (read != null) body.put("read", read)
             if (starred != null) body.put("starred", starred)
-            call("PATCH", "$path/api/reports/$id", body).map { }
+            call("PATCH", "/api/reports/${encode(id.trim())}", body).map { }
         }
 
     /** Hard-deletes one report. No undo, no trash — the client confirms first. */
-    suspend fun delete(path: String, id: String): Result<Unit> =
+    suspend fun delete(id: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            call("DELETE", "$path/api/reports/$id").map { }
+            call("DELETE", "/api/reports/${encode(id.trim())}").map { }
         }
 }

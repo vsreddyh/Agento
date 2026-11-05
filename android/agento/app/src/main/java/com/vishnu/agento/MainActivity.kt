@@ -277,7 +277,7 @@ class MainActivity : ComponentActivity() {
                     // (never configured or not yet fetched), so no badge.
                     var reportsUnread by remember { mutableStateOf<Int?>(null) }
                     LaunchedEffect(Unit) {
-                        ReportsApi(context).list(chatApi.pathFor("chat")).fold(
+                        ReportsApi(context).list().fold(
                             onSuccess = { reportsUnread = it.count { r -> !r.read } },
                             onFailure = { },
                         )
