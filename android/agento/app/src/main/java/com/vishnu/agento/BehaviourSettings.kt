@@ -465,9 +465,17 @@ object BehaviourSettings {
  * The voice is matched by name against THIS engine's voices (Voice objects
  * are engine-specific); a stored name the engine no longer offers is left
  * alone rather than failing the utterance. Never throws (OEM binder
- * breakage is a warning, like the callers already treat it).
+ * breakage is swallowed, like the callers already treat it) — but the
+ * voice outcome is returned, because a swallowed voice-setter throw is the
+ * wrong-voice silence #434 fixes everywhere else (#450 review): the callers
+ * decide the note off SET success, not mere existence.
+ *
+ * @return false when a stored voice was requested but is not set afterwards
+ * (missing from this engine or the setter threw); true when no stored voice
+ * is requested or the set landed. Rate/pitch failures never fail this —
+ * they are quality, not wrong-voice.
  */
-fun applyStoredTtsSettings(tts: TextToSpeech, appCtx: Context) {
+fun applyStoredTtsSettings(tts: TextToSpeech, appCtx: Context): Boolean {
     // Compared as stored Long pcts, never as floats: exact, and skipped at
     // defaults so untouched installs speak exactly like 5.12.0.
     runCatching {
@@ -479,9 +487,8 @@ fun applyStoredTtsSettings(tts: TextToSpeech, appCtx: Context) {
         if (pct != BehaviourSettings.DEFAULT_TTS_PCT) tts.setPitch(pct / 100f)
     }
     val want = BehaviourSettings.ttsVoice(appCtx)
-    if (want.isNotEmpty()) {
-        runCatching {
-            tts.voices?.firstOrNull { it.name == want }?.let { tts.voice = it }
-        }
-    }
+    if (want.isEmpty()) return true
+    return runCatching {
+        tts.voices?.firstOrNull { it.name == want }?.let { tts.voice = it } != null
+    }.getOrDefault(false)
 }

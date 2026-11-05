@@ -2097,7 +2097,15 @@ internal fun ChatScreen(
     fun stopThen(action: () -> Unit): () -> Unit = { tts.stop(); action() }
     fun speakMessage(key: String, text: String): Boolean {
         if (!tts.toggle(key, text)) {
-            toasts.toast("Voice output unavailable.", ToastKind.Error)
+            // Same text as the init-failure report (#450 review): same root
+            // cause (engine never initialized), one wording — and routed
+            // through TtsFailures like the pending path, not the
+            // composition-scoped toast center, so a rotation between the tap
+            // and the frame doesn't drop it.
+            TtsFailures.report(
+                "Text-to-speech engine unavailable — read-aloud is off until it initializes.",
+                ToastKind.Error,
+            )
             return false
         }
         return true

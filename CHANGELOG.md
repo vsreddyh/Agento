@@ -8,6 +8,28 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.4]
+- **Speech failures are loud instead of silent (#434).** Every TTS path that
+  used to end in log-only silence now reports: read-aloud errors mid-queue and
+  chunks the engine rejects toast "Read-aloud stopped/failed…"; reminder speech
+  that throws, is rejected, times out, is dropped from a full queue, or can't
+  start the engine says a reminder couldn't be read aloud; an engine that won't
+  initialize says read-aloud is off when read-aloud is tapped (live milestone
+  cues stay silent by decision — a dead engine never becomes cue-ready). A
+  wrong-locale fallback ("speaking English instead"), no usable voice, and a
+  stored voice that won't apply are reported too, since wrong-language speech
+  is worse than an error. The
+  Settings voice picker now distinguishes a broken engine (persistent
+  "isn't answering" hint, Reload retries) from a legitimately empty voice list.
+  Failures collected from background reminder broadcasts surface as a toast on
+  the next foreground frame while the process is still alive (in-memory —
+  a broadcast process that dies first loses them). Reports that arrive in a
+  burst each surface once (up to 64 buffered; beyond that the newest are
+  dropped), provided the app stays foreground while they display —
+  backgrounding mid-display still lets the 4.5s dismiss timer run.
+  Init-time fallbacks only report when speech is actually attempted, never on
+  a launch nobody asked to hear.
+
 ## [6.0.3]
 - **Voice input failures show errors (#432).** One-shot mic: an empty
   result now toasts "Didn't catch that — tap the mic to try again." (Error);

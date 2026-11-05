@@ -30,11 +30,14 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.core.content.edit
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -313,6 +316,29 @@ class MainActivity : ComponentActivity() {
                     }
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val wc = windowClassFor(maxWidth)
+                        // Activity-level toast surface for speech failures
+                        // (#434): reminders fire from a broadcast with no
+                        // screen of their own, so the message is recorded in
+                        // TtsFailures and shown here on the next frame —
+                        // whichever destination is open. A queue, not
+                        // last-wins: bursts report once each (#450 review).
+                        // Collected only while RESUMED (#450 review): an
+                        // alive-but-backgrounded activity would otherwise
+                        // consume the buffer into an invisible toast that
+                        // dismisses before the user opens the app — the
+                        // buffered events then replay on the next resume. The
+                        // display queue itself is process-scoped
+                        // (TtsToastQueue): an activity-scoped queue would
+                        // drop already-collected bursts on rotation.
+                        val ttsToasts = remember { TtsToastQueue.center }
+                        val ttsLifecycle = LocalLifecycleOwner.current.lifecycle
+                        LaunchedEffect(Unit) {
+                            ttsLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                                TtsFailures.events.collect { f ->
+                                    ttsToasts.toast(f.message, f.kind)
+                                }
+                            }
+                        }
                         val navContent: @Composable () -> Unit = {
                             when (dest) {
                                 Destination.Chat -> ChatTab(
@@ -414,6 +440,10 @@ class MainActivity : ComponentActivity() {
                                 ) { Box { navContent() } }
                             }
                         }
+                        // Overlay, not a Scaffold slot: every destination
+                        // owns its own Scaffold, so a host inside one would
+                        // vanish on the others.
+                        ToastHost(ttsToasts, modifier = Modifier.align(Alignment.TopEnd))
                     }
                 }
             }
