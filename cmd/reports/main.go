@@ -95,7 +95,7 @@ func main() {
 		})
 
 	approvalgate.AddTool(s, "reports", gate, &mcp.Tool{Name: "get_report",
-		Description: "Get one report by id (the id from list_reports). Returns the full body_md plus server-rendered math segments. Titles are not unique, so a title will not resolve."},
+		Description: "Get one report by id (the id from list_reports). Returns the full body_md with math stored verbatim — pre-rendered segments are served by the read API, not here. Titles are not unique, so a title will not resolve."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getReportInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.GetReport(ctx, in.ID)
 			if err != nil {

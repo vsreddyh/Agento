@@ -48,7 +48,7 @@ ARG NODE_IMAGE=node@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee99
 # workspace is owned by host uid 10000, so a non-root process cannot write the
 # agent's session trees and repo checkouts there. See docker/pi/entrypoint.sh.
 #
-# Binary set: 11 MCP servers (gmail/calendar are new) plus pi-gateway. Two binaries from the
+# Binary set: 11 MCP servers (reports is new) plus pi-gateway. Two binaries from the
 # old image are intentionally omitted, and neither is agent-reachable:
 #   retention — a one-shot lifecycle job. It runs as its own compose service
 #               (`podman-compose run --rm retention`) on its own image

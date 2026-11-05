@@ -239,7 +239,7 @@ func deleteReport(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if !found {
-		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown report '" + id + "'"})
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown report '" + reports.ShortID(id) + "'"})
 		return
 	}
 	writeJSON(w, http.StatusOK, bson.M{"deleted": true})
