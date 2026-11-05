@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.18.2]
+- **Gateway failures surface instead of reading as empty (#430).**
+  A failed model-catalog fetch leaves the provider/model picker in an
+  error state with retry — the offline list is no longer shown
+  masquerading as live data. Task rows the server sent but the app
+  cannot parse are counted ("N tasks could not be parsed") instead of
+  silently shrinking the list, and a response with none of the known
+  list envelopes fails with a visible error (tasks and scheduler)
+  instead of reading as "no tasks"/"no scheduled jobs".
+
 ## [5.18.1]
 - **Updater never installs a non-release APK (#429).** The release-asset
   fallback is gone: when a release carries no `release` APK, the check

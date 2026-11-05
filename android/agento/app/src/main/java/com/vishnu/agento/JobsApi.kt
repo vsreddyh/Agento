@@ -33,11 +33,76 @@ data class CronRun(
     val missed: Boolean = false,
 )
 
+/** One job row: null when the row carries no usable id. */
+internal fun parseJob(o: JSONObject): CronJob? {
+    val id = o.optString("id", "")
+        .ifEmpty { o.optString("job_id", "") }
+        .trim()
+    if (id.isEmpty()) return null
+    val paused = when {
+        o.has("paused") -> o.optBoolean("paused")
+        o.has("enabled") -> !o.optBoolean("enabled", true)
+        o.has("state") -> o.optString("state", "").lowercase() == "paused"
+        o.has("status") -> o.optString("status", "").lowercase() == "paused"
+        else -> null
+    }
+    return CronJob(
+        id = id,
+        name = o.optString("name", "").trim(),
+        prompt = o.optString("prompt", "").trim(),
+        schedule = o.optString("schedule", "")
+            .ifEmpty { o.optString("cron", "") }.trim(),
+        paused = paused,
+        lastRun = o.optString("last_run", "")
+            .ifEmpty { o.optString("lastRun", "") }.trim(),
+        nextRun = o.optString("next_run", "")
+            .ifEmpty { o.optString("nextRun", "") }.trim(),
+        delivery = o.optString("delivery", "")
+            .ifEmpty { o.optString("deliver", "") }.trim(),
+        runs = o.optJSONArray("runs")?.let { arr ->
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val r = arr.optJSONObject(i) ?: continue
+                    add(
+                        CronRun(
+                            at = r.optLong("at", 0L),
+                            text = r.optString("text", "").trim(),
+                            missed = r.optBoolean("missed", false),
+                        )
+                    )
+                }
+            }
+        }.orEmpty(),
+    )
+}
+
+/** Parses one job-list page (#430): the `jobs`/`data`/`items` envelope.
+ *
+ * A body with none of the known envelopes — or no JSON body at all —
+ * is a parse failure, never a clean empty: it throws
+ * "Unexpected response shape" so the scheduler shows an error instead
+ * of reading "no scheduled jobs". */
+internal fun parseJobList(body: String): List<CronJob> {
+    val out = mutableListOf<CronJob>()
+    val root = runCatching { JSONObject(body) }.getOrNull()
+        ?: throw RuntimeException("Unexpected response shape")
+    val arr = root.optJSONArray("jobs")
+        ?: root.optJSONArray("data")
+        ?: root.optJSONArray("items")
+        ?: throw RuntimeException("Unexpected response shape")
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        parseJob(o)?.let { out.add(it) }
+    }
+    return out
+}
+
 /**
  * Scheduler client over the gateway's native Jobs API (same bearer auth as
  * chat, served through the proxy's /p/ route — no server changes needed).
- * Parsing is lenient across gateway versions; missing fields show as blank
- * rather than failing the whole list.
+ * Per-row parsing stays lenient across gateway versions (missing fields
+ * show as blank rather than failing the whole list), but an
+ * unrecognised list envelope is a failure, never an empty list (#430).
  */
 class JobsApi(context: Context) {
 
@@ -95,67 +160,10 @@ class JobsApi(context: Context) {
         }
     }
 
-    private fun parseJob(o: JSONObject): CronJob? {
-        val id = o.optString("id", "")
-            .ifEmpty { o.optString("job_id", "") }
-            .trim()
-        if (id.isEmpty()) return null
-        val paused = when {
-            o.has("paused") -> o.optBoolean("paused")
-            o.has("enabled") -> !o.optBoolean("enabled", true)
-            o.has("state") -> o.optString("state", "").lowercase() == "paused"
-            o.has("status") -> o.optString("status", "").lowercase() == "paused"
-            else -> null
-        }
-        return CronJob(
-            id = id,
-            name = o.optString("name", "").trim(),
-            prompt = o.optString("prompt", "").trim(),
-            schedule = o.optString("schedule", "")
-                .ifEmpty { o.optString("cron", "") }.trim(),
-            paused = paused,
-            lastRun = o.optString("last_run", "")
-                .ifEmpty { o.optString("lastRun", "") }.trim(),
-            nextRun = o.optString("next_run", "")
-                .ifEmpty { o.optString("nextRun", "") }.trim(),
-            delivery = o.optString("delivery", "")
-                .ifEmpty { o.optString("deliver", "") }.trim(),
-            runs = o.optJSONArray("runs")?.let { arr ->
-                buildList {
-                    for (i in 0 until arr.length()) {
-                        val r = arr.optJSONObject(i) ?: continue
-                        add(
-                            CronRun(
-                                at = r.optLong("at", 0L),
-                                text = r.optString("text", "").trim(),
-                                missed = r.optBoolean("missed", false),
-                            )
-                        )
-                    }
-                }
-            }.orEmpty(),
-        )
-    }
-
-    private fun parseList(body: String): List<CronJob> {
-        val out = mutableListOf<CronJob>()
-        val root = runCatching { JSONObject(body) }.getOrNull() ?: return out
-        val arr = root.optJSONArray("jobs")
-            ?: root.optJSONArray("data")
-            ?: root.optJSONArray("items")
-        if (arr != null) {
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                parseJob(o)?.let { out.add(it) }
-            }
-        }
-        return out
-    }
-
     /** Lists jobs on the scheduler profile (gateway home). */
     suspend fun list(path: String): Result<List<CronJob>> =
         withContext(Dispatchers.IO) {
-            call("GET", "$path/api/jobs").map { parseList(it) }
+            call("GET", "$path/api/jobs").map { parseJobList(it) }
         }
 
     /** Creates a job: prompt + schedule expression + delivery target. */

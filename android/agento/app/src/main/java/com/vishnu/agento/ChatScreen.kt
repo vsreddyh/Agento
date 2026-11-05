@@ -1616,9 +1616,16 @@ internal fun TabModelSheet(
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
-    LaunchedEffect(tab) {
+    // Sticky for the sheet session: a pick dismisses the error card
+    // (`error = ""` below) but must not bring back the offline list as
+    // live data — only a refetch clears this (#430).
+    var catalogFailed by remember { mutableStateOf(false) }
+    // Bumped by the error card's Retry: refetches without leaving the sheet.
+    var reloadTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(tab, reloadTick) {
         loading = true
         error = ""
+        catalogFailed = false
         val prefs = appContext.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         provider = (prefs.getString("provider_$tab", "") ?: "").trim()
         model = (prefs.getString("model_$tab", "") ?: "").trim()
@@ -1628,6 +1635,7 @@ internal fun TabModelSheet(
             api.fetchCatalog(catalogPath(api)).getOrThrow()
         }.getOrElse { e ->
             error = e.message ?: e.javaClass.simpleName
+            catalogFailed = true
             emptyList()
         }
         loading = false
@@ -1646,7 +1654,15 @@ internal fun TabModelSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.height(12.dp))
-            val options = providerOptionsFor(catalog, provider)
+            val options = providerOptionsFor(
+                catalog,
+                provider,
+                // A failed fetch is an error state, not the offline list
+                // masquerading as live data (#430); same while loading.
+                // Sticky past an error-card dismiss: only a refetch
+                // re-enables the fallback.
+                allowOffline = !loading && !catalogFailed,
+            )
             val shownProvider = options.firstOrNull { it.slug == provider }
                 ?.let { providerDisplay(it.slug, it.label) }
                 ?: provider.ifEmpty { "Choose a provider…" }
@@ -1713,15 +1729,15 @@ internal fun TabModelSheet(
                     }
                 }
                 error.isNotEmpty() -> {
-                    ErrorCard(raw = error)
+                    ErrorCard(raw = error, onRetry = { reloadTick++ })
                     Spacer(modifier = Modifier.height(4.dp))
-                    HintLine("Check Server URL + Password in Settings, then reopen this picker.")
+                    HintLine("Could not load models — check Server URL + Password in Settings, then retry.")
                 }
                 catalog.isEmpty() -> {
                     HintLine("No providers found — check Settings → Server.")
                 }
                 provider.isNotBlank() && modelOptionsFor(options, provider).isEmpty() -> {
-                    HintLine("This provider has no models listed — try Reload below.")
+                    HintLine("This provider has no models listed — reopen this picker to retry.")
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -3910,10 +3926,22 @@ internal fun providerDisplay(slug: String, label: String): String =
     if (label == slug) slug else "$label ($slug)"
 
 /** Dropdown options for a tab: live catalog, else known slugs; the saved
- * value is always kept so legacy/unknown slugs are never lost. */
-internal fun providerOptionsFor(catalog: List<ProviderOption>, saved: String): List<ProviderOption> {
-    val base = catalog.ifEmpty {
+ * value is always kept so legacy/unknown slugs are never lost.
+ *
+ * The offline fallback is only honest while the catalog is still loading
+ * or arrived empty on its own — never as a stand-in for a failed fetch
+ * ([allowOffline] = false): a gateway failure must surface as an error
+ * ("could not load models"), not as the offline list masquerading as
+ * live data (#430). */
+internal fun providerOptionsFor(
+    catalog: List<ProviderOption>,
+    saved: String,
+    allowOffline: Boolean = true,
+): List<ProviderOption> {
+    val base = if (catalog.isEmpty() && allowOffline) {
         LlmProvider.entries.map { ProviderOption(it.id, it.id, emptyList()) }
+    } else {
+        catalog
     }
     return if (saved.isNotBlank() && base.none { it.slug == saved }) {
         listOf(ProviderOption(saved, "$saved (saved)", emptyList())) + base

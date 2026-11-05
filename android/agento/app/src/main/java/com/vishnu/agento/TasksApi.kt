@@ -66,10 +66,15 @@ data class ServerTask(
     val nextDueDate: String = "",
 )
 
-/** A bounded list response: the rows, and whether more exist. */
+/** A bounded list response: the rows, whether more exist, and how many
+ * rows arrived unparseable (empty id/name) and were skipped rather than
+ * shown (#430). A nonzero [dropped] means the server spoke rows this app
+ * cannot read — the list surfaces the count instead of shrinking
+ * silently. */
 data class TaskList(
     val tasks: List<ServerTask>,
     val truncated: Boolean = false,
+    val dropped: Int = 0,
 )
 
 /**
@@ -365,12 +370,103 @@ fun repeatLabel(
 /** True while the task is still open (never completed). */
 fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
 
+/** Lenient string read: Android's `optString` coerces JSON null to
+ * the string "null", so every nullable/completedAt-style field must
+ * go through here (#130).
+ *
+ * Task-scoped name on purpose: the package already has a stricter
+ * top-level `optStr` (MemoryApi) that blanks non-string values, which
+ * would silently change number fields here if this shadowed it. */
+internal fun optTaskStr(o: JSONObject, key: String): String =
+    if (o.isNull(key)) "" else o.optString(key, "").trim()
+
+/** Lenient weekday-selection read (#304): a missing or mistyped key is an
+ * empty selection rather than a parse failure — the whole parse path is
+ * lenient across shapes, and the round-trip compare is what reports a
+ * server that stored something the app did not ask for. Values are
+ * canonicalised on the way in so a display and a comparison both start from
+ * the same spelling the server stores. */
+internal fun optTaskDays(o: JSONObject, key: String): List<String> {
+    val arr = o.optJSONArray(key) ?: return emptyList()
+    val raw = mutableListOf<String>()
+    for (i in 0 until arr.length()) {
+        val s = arr.optString(i, "").trim()
+        if (s.isNotEmpty()) raw.add(s)
+    }
+    return canonicalRepeatDays(raw)
+}
+
+/** One task row: null when the row carries no usable id or name (#430
+ * counts those drops in [TaskList.dropped] instead of shrinking the
+ * list silently). */
+internal fun parseTask(o: JSONObject): ServerTask? {
+    val id = optTaskStr(o, "id")
+        .ifEmpty { optTaskStr(o, "_id") }
+    if (id.isEmpty()) return null
+    val name = optTaskStr(o, "name")
+    if (name.isEmpty()) return null
+    // estimated_minutes may encode as int, long, or double.
+    val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
+    // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
+    // read-modify-write per row is 200 I/Os for one fact — and a
+    // read-then-write that is not atomic can regress (sees v3, then a late
+    // v2 write wins). The callers record the batch max once, under one
+    // lock, instead (#185 review).
+    val version = parseContractVersion(o.opt("contract_version"))
+    return ServerTask(
+        id = id,
+        name = name,
+        speakName = optTaskStr(o, "speak_name"),
+        description = optTaskStr(o, "description"),
+        dueDate = optTaskStr(o, "due_date"),
+        dueTime = optTaskStr(o, "due_time"),
+        estimatedMinutes = mins.coerceAtLeast(0),
+        repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
+        repeatUnit = optTaskStr(o, "repeat_unit"),
+        repeatDays = optTaskDays(o, "repeat_days"),
+        repeatCustom = o.optBoolean("repeat_custom", false),
+        repeatRule = optTaskStr(o, "repeat_rule"),
+        parallelable = o.optBoolean("parallelable", false),
+        // Missing on pre-revision servers: 0 matches the backfill, so
+        // an old server and a new app still agree (#184).
+        revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
+        completedAt = optTaskStr(o, "completedAt"),
+        createdAt = optTaskStr(o, "createdAt"),
+        contractVersion = version,
+        skipped = o.optBoolean("skipped", false),
+    )
+}
+
+/** Parses one task-list page (#430): the `tasks`/`data`/`items`
+ * envelope, the rows, and how many rows arrived unparseable.
+ *
+ * A body with none of the known envelopes is a parse failure, never a
+ * clean empty — like the single-task paths, it throws
+ * "Unexpected response shape" so the list shows an error instead of
+ * reading "no tasks". */
+internal fun parseTaskListPage(body: String): TaskList {
+    val out = mutableListOf<ServerTask>()
+    val root = JSONObject(body)
+    val arr = root.optJSONArray("tasks")
+        ?: root.optJSONArray("data")
+        ?: root.optJSONArray("items")
+        ?: throw RuntimeException("Unexpected response shape")
+    var dropped = 0
+    for (i in 0 until arr.length()) {
+        val task = arr.optJSONObject(i)?.let { parseTask(it) }
+        if (task != null) out.add(task) else dropped++
+    }
+    return TaskList(out, root.optBoolean("truncated", false), dropped)
+}
+
 /**
  * Client for the user's tasks (same bearer auth as chat/sync, served
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
  * validation the agent uses over MCP. Parsing is lenient across shapes;
- * rows without an id or name are skipped, missing fields blank.
+ * rows without an id or name are skipped and counted
+ * ([TaskList.dropped]), missing fields blank. A body with none of the
+ * known list envelopes is a parse failure, never a clean empty (#430).
  */
 class TasksApi(context: Context) {
 
@@ -468,66 +564,6 @@ class TasksApi(context: Context) {
         return (prefs.getString("auth_token", "") ?: "").trim()
     }
 
-    /** Lenient string read: Android's `optString` coerces JSON null to
-     * the string "null", so every nullable/completedAt-style field must
-     * go through here (#130). */
-    private fun optStr(o: JSONObject, key: String): String =
-        if (o.isNull(key)) "" else o.optString(key, "").trim()
-
-    /** Lenient weekday-selection read (#304): a missing or mistyped key is an
-     * empty selection rather than a parse failure — the whole parse path is
-     * lenient across shapes, and the round-trip compare is what reports a
-     * server that stored something the app did not ask for. Values are
-     * canonicalised on the way in so a display and a comparison both start from
-     * the same spelling the server stores. */
-    private fun optDays(o: JSONObject, key: String): List<String> {
-        val arr = o.optJSONArray(key) ?: return emptyList()
-        val raw = mutableListOf<String>()
-        for (i in 0 until arr.length()) {
-            val s = arr.optString(i, "").trim()
-            if (s.isNotEmpty()) raw.add(s)
-        }
-        return canonicalRepeatDays(raw)
-    }
-
-    private fun parseTask(o: JSONObject): ServerTask? {
-        val id = optStr(o, "id")
-            .ifEmpty { optStr(o, "_id") }
-        if (id.isEmpty()) return null
-        val name = optStr(o, "name")
-        if (name.isEmpty()) return null
-        // estimated_minutes may encode as int, long, or double.
-        val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
-        // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
-        // read-modify-write per row is 200 I/Os for one fact — and a
-        // read-then-write that is not atomic can regress (sees v3, then a late
-        // v2 write wins). The callers record the batch max once, under one
-        // lock, instead (#185 review).
-        val version = parseContractVersion(o.opt("contract_version"))
-        return ServerTask(
-            id = id,
-            name = name,
-            speakName = optStr(o, "speak_name"),
-            description = optStr(o, "description"),
-            dueDate = optStr(o, "due_date"),
-            dueTime = optStr(o, "due_time"),
-            estimatedMinutes = mins.coerceAtLeast(0),
-            repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
-            repeatUnit = optStr(o, "repeat_unit"),
-            repeatDays = optDays(o, "repeat_days"),
-            repeatCustom = o.optBoolean("repeat_custom", false),
-            repeatRule = optStr(o, "repeat_rule"),
-            parallelable = o.optBoolean("parallelable", false),
-            // Missing on pre-revision servers: 0 matches the backfill, so
-            // an old server and a new app still agree (#184).
-            revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
-            completedAt = optStr(o, "completedAt"),
-            createdAt = optStr(o, "createdAt"),
-            contractVersion = version,
-            skipped = o.optBoolean("skipped", false),
-        )
-    }
-
     /**
      * Records a task contract version: the running max of what this install
      * has spoken (#185).
@@ -576,17 +612,7 @@ class TasksApi(context: Context) {
             }
             val query = if (limit > 0) "/api/tasks?state=$s&limit=$limit" else "/api/tasks?state=$s"
             call("GET", query).map { body ->
-                val out = mutableListOf<ServerTask>()
-                val root = JSONObject(body)
-                val arr = root.optJSONArray("tasks")
-                    ?: root.optJSONArray("data")
-                    ?: root.optJSONArray("items")
-                    ?: return@map TaskList(out)
-                for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    parseTask(o)?.let { out.add(it) }
-                }
-                TaskList(out, root.optBoolean("truncated", false))
+                parseTaskListPage(body)
             }.also { r -> r.getOrNull()?.let { noteContractVersion(it.tasks) } }
         }
 
@@ -918,9 +944,9 @@ class TasksApi(context: Context) {
                 if (next == null) {
                     task
                 } else {
-                    // optStr, not optString: a JSON null would arrive as the
+                    // optTaskStr, not optString: a JSON null would arrive as the
                     // literal string "null" and reach the toast.
-                    task.copy(nextDueDate = optStr(next, "due_date"))
+                    task.copy(nextDueDate = optTaskStr(next, "due_date"))
                 }
             }
         }
@@ -952,7 +978,7 @@ class TasksApi(context: Context) {
                     // ID (source id, or the new copy's id for duplicate), so
                     // a missing one is a contract violation, not a gap to
                     // paper over.
-                    val id = optStr(item, "id")
+                    val id = optTaskStr(item, "id")
                     if (id.isEmpty()) throw RuntimeException("Unexpected response shape")
                     // Version handling mirrors resolve(): each half versioned
                     // on its own, warn-not-throw on disagreement.
@@ -964,7 +990,7 @@ class TasksApi(context: Context) {
                     }
                     noteContractVersion(maxOf(task.contractVersion, nextVersion ?: 0))
                     if (next != null) {
-                        task = task.copy(nextDueDate = optStr(next, "due_date"))
+                        task = task.copy(nextDueDate = optTaskStr(next, "due_date"))
                     }
                     // Field-level assertion for update ops, mirroring the
                     // single-task edit: the request op carries the fields,
@@ -989,7 +1015,7 @@ class TasksApi(context: Context) {
                         BulkItemResult(
                             index = item.optInt("index", i),
                             id = id,
-                            op = optStr(item, "op"),
+                            op = optTaskStr(item, "op"),
                             task = task,
                             nextDueDate = task.nextDueDate,
                         ),
