@@ -57,6 +57,11 @@ class ChatTts(context: Context) {
                 }
             } else {
                 pending = null
+                // Engine init failure (#434): the toggle reported it to the
+                // caller, but the reminder path had no surface at all.
+                TtsFailures.report(
+                    "Text-to-speech engine unavailable — read-aloud is off until it initializes.",
+                )
             }
         }
         engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -69,17 +74,26 @@ class ChatTts(context: Context) {
                     _speakingKey.value = null
                 }
             }
+            /** A mid-queue failure (#434): the readout just stopped, which
+             * looked exactly like finishing. Clear the state AND say so. */
+            private fun failed(utteranceId: String, code: String) {
+                runCatching { android.util.Log.w("ChatTts", "utterance failed: $code") }
+                TtsFailures.report("Read-aloud stopped — the speech engine reported an error.")
+                finished(utteranceId)
+            }
             override fun onDone(utteranceId: String) = finished(utteranceId)
             @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String) = finished(utteranceId)
-            override fun onError(utteranceId: String, errorCode: Int) = finished(utteranceId)
+            override fun onError(utteranceId: String) = failed(utteranceId, "unknown")
+            override fun onError(utteranceId: String, errorCode: Int) =
+                failed(utteranceId, errorCode.toString())
         })
     }
 
     /** Device default first, US English fallback; keeps whatever works. */
     private fun pickLanguage() {
         val tts = engine ?: return
-        val candidates = listOf(Locale.getDefault(), Locale.US)
+        val default = Locale.getDefault()
+        val candidates = listOf(default, Locale.US)
         for (loc in candidates) {
             runCatching {
                 val r = tts.isLanguageAvailable(loc)
@@ -88,10 +102,20 @@ class ChatTts(context: Context) {
                     r == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE
                 ) {
                     tts.language = loc
+                    // Speaking the wrong language silently is a failure the
+                    // user cannot hear as one (#434) — say so once.
+                    if (loc != default) {
+                        TtsFailures.report(
+                            "No voice for ${default.displayName} — speaking English instead.",
+                        )
+                    }
                     return
                 }
             }
         }
+        // Nothing matched (not even US English): the engine is unusable for
+        // speech. Pick nothing rather than pretend a language was set.
+        TtsFailures.report("No usable text-to-speech voice is installed.")
     }
 
     /**
@@ -140,6 +164,9 @@ class ChatTts(context: Context) {
                 // A rejected chunk never fires onDone — clear state now
                 // instead of sticking on the stop icon.
                 stop()
+                // And say it (#434): clearing the icon alone reads as "the
+                // readout finished".
+                TtsFailures.report("Read-aloud failed — the speech engine rejected the text.")
                 return
             }
         }

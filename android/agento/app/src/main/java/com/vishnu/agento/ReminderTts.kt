@@ -56,7 +56,16 @@ object ReminderTts {
         override fun onDone(utteranceId: String) = finished()
         @Deprecated("Deprecated in Java")
         override fun onError(utteranceId: String) = finished()
-        override fun onError(utteranceId: String, errorCode: Int) = finished()
+        override fun onError(utteranceId: String, errorCode: Int) {
+            // Queue-advancing is right (a dropped alarm line is worse than an
+            // ugly one), but a log line is not an error surface (#434): a
+            // reminder the user never heard now says so on the next open.
+            Log.w("ReminderTts", "utterance error $errorCode, advancing queue")
+            TtsFailures.report(
+                "A reminder could not be read aloud — the speech engine reported an error.",
+            )
+            finished()
+        }
     }
 
     internal fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
@@ -131,7 +140,8 @@ object ReminderTts {
             if (tts != null) {
                 // Prefer the device default, fall back to US English: the
                 // first available language wins, not the last one tried.
-                val candidates = listOf(Locale.getDefault(), Locale.US)
+                val default = Locale.getDefault()
+                val candidates = listOf(default, Locale.US)
                 val picked = candidates.firstOrNull { loc ->
                     runCatching {
                         val r = tts.isLanguageAvailable(loc)
@@ -143,6 +153,15 @@ object ReminderTts {
                 // The setter throws on some OEMs (missing data, illegal locale)
                 // on the binder thread — fall back to the default voice.
                 if (picked != null) runCatching { tts.language = picked }
+                // Wrong-language speech is worse than an error (#434): say
+                // so instead of reading the reminder in English silently.
+                if (picked != null && picked != default) {
+                    TtsFailures.report(
+                        "No voice for ${default.displayName} — reminders are read in English.",
+                    )
+                } else if (picked == null) {
+                    TtsFailures.report("No usable text-to-speech voice is installed.")
+                }
             }
             pump()
         } else {
@@ -159,6 +178,9 @@ object ReminderTts {
             }
             runCatching { dead?.shutdown() }
             Log.w("ReminderTts", "engine init failed, keeping queued speech for retry")
+            TtsFailures.report(
+                "Reminder speech is unavailable — the text-to-speech engine failed to start.",
+            )
         }
     }
 
@@ -225,6 +247,9 @@ object ReminderTts {
             }.getOrNull()
             if (rc == null) {
                 Log.w("ReminderTts", "speak threw, advancing queue")
+                TtsFailures.report(
+                    "A reminder could not be read aloud — the speech engine failed.",
+                )
                 synchronized(lock) { speaking = false }
                 continue
             }
@@ -233,6 +258,9 @@ object ReminderTts {
             // the next one in this loop, not via recursion: a broken engine
             // with N queued items would otherwise recurse N deep.
             Log.w("ReminderTts", "speak rejected, advancing queue")
+            TtsFailures.report(
+                "A reminder could not be read aloud — the speech engine rejected the text.",
+            )
             synchronized(lock) { speaking = false }
         }
     }

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -313,6 +314,18 @@ class MainActivity : ComponentActivity() {
                     }
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val wc = windowClassFor(maxWidth)
+                        // Activity-level toast surface for speech failures
+                        // (#434): reminders fire from a broadcast with no
+                        // screen of their own, so the message is recorded in
+                        // TtsFailures and shown here on the next frame —
+                        // whichever destination is open.
+                        val ttsToasts = remember(scope) { ToastCenter(scope) }
+                        val ttsFailure by TtsFailures.last.collectAsState()
+                        LaunchedEffect(ttsFailure) {
+                            val f = ttsFailure ?: return@LaunchedEffect
+                            ttsToasts.toast(f.message, ToastKind.Error)
+                            TtsFailures.consume(f)
+                        }
                         val navContent: @Composable () -> Unit = {
                             when (dest) {
                                 Destination.Chat -> ChatTab(
@@ -414,6 +427,10 @@ class MainActivity : ComponentActivity() {
                                 ) { Box { navContent() } }
                             }
                         }
+                        // Overlay, not a Scaffold slot: every destination
+                        // owns its own Scaffold, so a host inside one would
+                        // vanish on the others.
+                        ToastHost(ttsToasts, modifier = Modifier.align(Alignment.TopEnd))
                     }
                 }
             }
