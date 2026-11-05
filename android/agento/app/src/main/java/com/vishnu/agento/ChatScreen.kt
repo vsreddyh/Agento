@@ -1745,9 +1745,11 @@ internal fun TabModelSheet(
                     HintLine("This provider has no models listed — reopen this picker to retry.")
                 }
             }
-            // Unparseable rows shrink the live list: the count rides
-            // below the status block, like the task/job pages (#430).
-            if (catalogDropped > 0) {
+            // Unparseable rows shrink the live list: the previous page's
+            // count must not advertise as the page being fetched, so the
+            // hint stays off while loading (same gating as the scheduler
+            // drop card, #430).
+            if (catalogDropped > 0 && !loading) {
                 Spacer(modifier = Modifier.height(4.dp))
                 HintLine(catalogDropMessage(catalogDropped))
             }

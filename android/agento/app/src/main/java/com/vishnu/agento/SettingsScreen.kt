@@ -124,10 +124,10 @@ internal fun SettingsScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
-    // True while the preload above is in flight: without it the footer
-    // reads the initial empty catalog as "not set up yet" for seconds
-    // on a slow network — a clean-empty flash, like the picker would
-    // show without its spinner arm (#430).
+    // True while a catalog fetch is in flight (preload or Save
+    // refetch): without it the footer reads the in-flight state as
+    // final — a stale "Connected" for old creds, or a clean-empty
+    // flash — like the picker would show without its spinner arm (#430).
     var catalogLoading by remember { mutableStateOf(true) }
     // Rows the server sent but the picker could not read: surfaced as a
     // count in the section footer, like the picker sheet (#430). Reset
@@ -313,6 +313,7 @@ internal fun SettingsScreen(
                                 }
                                 error = ""
                                 report = null
+                                catalogLoading = true
                                 toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
                                 scope.launch {
                                     api.fetchCatalog(catalogPath(api), refresh = true).fold(
@@ -325,6 +326,7 @@ internal fun SettingsScreen(
                                             catalogDropped = 0
                                         },
                                     )
+                                    catalogLoading = false
                                 }
                             }, modifier = Modifier.fillMaxWidth()) {
                                 Text("Save server")
@@ -340,6 +342,15 @@ internal fun SettingsScreen(
                                         report = r
                                         if (r == null) {
                                             error = "Server URL not configured"
+                                        } else if (!r.gatewayOk) {
+                                            // No heal refetch runs on a failed
+                                            // probe, so drop the previous good
+                                            // catalog — otherwise the footer
+                                            // and hub keep reporting
+                                            // "Connected" next to the probe
+                                            // error (#430).
+                                            catalog = emptyList()
+                                            catalogDropped = 0
                                         } else if (r.gatewayOk) {
                                             // The probe answers but the picker
                                             // reads the catalog: heal a failed
@@ -396,6 +407,11 @@ internal fun SettingsScreen(
                         }
                         if (error.isNotEmpty()) {
                             ErrorCard(raw = error)
+                        } else if (catalogLoading) {
+                            // Preload or Save refetch in flight: the stale
+                            // counts — or the clean-empty hint — must not
+                            // read as final while the fetch runs (#430).
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         } else if (catalog.isNotEmpty()) {
                             val count = catalog.sumOf { it.models.size }
                             HintLine("Connected — ${catalog.size} provider(s), $count model(s). Pick a model on each assistant's page.")
@@ -405,10 +421,10 @@ internal fun SettingsScreen(
                             if (catalogDropped > 0) {
                                 HintLine(catalogDropMessage(catalogDropped))
                             }
-                        } else if (report == null && !catalogLoading) {
-                            HintLine("No providers loaded yet — save the server above first.")
                         } else if (report == null) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            // Reached only when not loading (arm above):
+                            // the catalog simply never loaded.
+                            HintLine("No providers loaded yet — save the server above first.")
                         }
                         // No final else: when a probe report exists but the
                         // catalog is empty, the report's own cards already
