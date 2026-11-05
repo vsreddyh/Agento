@@ -119,13 +119,19 @@ internal fun SettingsScreen(
     // Bumped after a settings import so the fields below reload from prefs.
     var settingsRefresh by remember { mutableIntStateOf(0) }
 
-    /** Preloads the live provider/model catalog (pickers live per tab now). */
+    /** Preloads the live provider/model catalog (pickers live per tab now).
+     * A failure surfaces in `error` like any other connection problem —
+     * defaulting to empty would read as "not set up yet" with no error
+     * and no retry (#430). */
     LaunchedEffect(settingsRefresh) {
         error = ""
         val api = ChatApi(context)
         catalog = runCatching {
-            api.fetchCatalog(catalogPath(api)).getOrDefault(emptyList())
-        }.getOrDefault(emptyList())
+            api.fetchCatalog(catalogPath(api)).getOrThrow()
+        }.getOrElse { e ->
+            error = e.message ?: e.javaClass.simpleName
+            emptyList()
+        }
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -315,12 +321,13 @@ internal fun SettingsScreen(
                             val rep = report
                             if (rep != null) {
                                 if (rep.gatewayOk && rep.syncOk) {
+                                    // Probe counts only: never backfill
+                                    // `catalog` with the offline list here —
+                                    // that would masquerade as live inventory
+                                    // and the footer below would count it
+                                    // (#430). The picker reads the real
+                                    // catalog (or its error) on open.
                                     HintLine("Connected — chat (${rep.providers} provider(s), ${rep.models} model(s)) and sync both reachable.")
-                                    catalog = catalog.ifEmpty {
-                                        LlmProvider.entries.map {
-                                            ProviderOption(it.id, it.id, emptyList())
-                                        }
-                                    }
                                 } else {
                                     if (!rep.gatewayOk) {
                                         ErrorCard(raw = rep.gatewayError.ifEmpty { "Chat backend unreachable" })

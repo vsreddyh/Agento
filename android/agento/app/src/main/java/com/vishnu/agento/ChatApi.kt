@@ -584,7 +584,10 @@ class ChatApi(context: Context) {
                         if (arr != null) {
                             for (i in 0 until arr.length()) {
                                 val o = arr.optJSONObject(i) ?: continue
-                                val slug = o.optString("slug", "").trim()
+                                // Same null guard as fetchCatalog above: a
+                                // bare optString would count {"slug": null}
+                                // as provider "null" (#430).
+                                val slug = optJsonStr(o, "slug")
                                 if (slug.isEmpty()) continue
                                 providers++
                                 val marr = o.optJSONArray("models")
