@@ -93,7 +93,10 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			"update_project", "delete_project"},
 		"notes": {"create_note", "get_note", "list_notes", "search_notes",
 			"update_note", "delete_note"},
-		"memory": {"save_memory", "list_memory"},
+		// ∃-Mail inbox (#365): agents file, the user reads. No update/delete
+		// tools — the app's PATCH/DELETE over health-api own those verbs.
+		"reports": {"create_report", "get_report", "list_reports"},
+		"memory":  {"save_memory", "list_memory"},
 		"browser": {"browser_goto", "browser_read", "browser_screenshot",
 			"browser_save_evidence"},
 		// First connectors v1 (#316): servers not yet wired, but the policy
@@ -122,8 +125,8 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			t.Errorf("server %s table has %d rules for %d tools", server, len(rules), len(tools))
 		}
 	}
-	if n != 68 {
-		t.Errorf("pinned %d tools, want the 68 inventoried", n)
+	if n != 71 {
+		t.Errorf("pinned %d tools, want the 71 inventoried", n)
 	}
 }
 

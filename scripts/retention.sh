@@ -14,6 +14,8 @@ set -euo pipefail
 #   money       transactions autowiped when the oldest entry is >90 days old
 #   health-check hc_meals + hc_days pruned after 30 days; hc_weight is NEVER touched
 #   cookbook    permanent — no-op
+#   reports     read+unstarred pruned when createdAt is >7 days old;
+#               unread and starred are NEVER touched
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE="$REPO/docker/docker-compose.yml"

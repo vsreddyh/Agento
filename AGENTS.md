@@ -60,7 +60,8 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   (`podman-compose run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
-   permanent; story/resumes (git repos) are no-ops. It also **reconciles** tasks:
+   permanent; story/resumes (git repos) are no-ops; reports (∃-Mail) prunes
+   read+unstarred >7d (never unread/starred). It also **reconciles** tasks:
    completed structured repeats with no successor are REPORTED (#180), never
    repaired — rollover is a side effect of `Complete`, so a repeat can stop
    recurring with nothing else noticing.

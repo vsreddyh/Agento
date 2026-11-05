@@ -113,7 +113,7 @@ disk, orphaned and unmanaged.)
 
 ## Remote MongoDB & Storage Model
 
-Domain data for `money`, `health-check`, `cookbook`, `task-manager`, `project-manager`, and `notes` is managed in MongoDB (default database: `hermes`, configurable via `MONGODB_DB`):
+Domain data for `money`, `health-check`, `cookbook`, `task-manager`, `project-manager`, `notes`, and `reports` is managed in MongoDB (default database: `hermes`, configurable via `MONGODB_DB`):
 
 | Collection | Associated Bot | Schema / Keys |
 |---|---|---|
@@ -129,6 +129,7 @@ Domain data for `money`, `health-check`, `cookbook`, `task-manager`, `project-ma
 | `task_mutations` | Task-manager | The change log (#176): one row per mutation — `op` (create\|update\|delete\|complete\|skip\|reopen\|duplicate — `duplicate` appears only for batch duplicates), `task_id`, `source` (which caller, self-attested), `detail` (changed fields / rollover outcome), `at` — from **both** writers, since the agent and the app share one password and one collection. Served read-only as `GET /api/tasks/mutations?task_id=&op=&since=&limit=` and as the `task_history` MCP tool (#350). It outlives its subject on purpose: a completed task is TTL-deleted after 3 days, so the log is the only record left of it. Pruned at 90 days. Indexed for the two reads that matter: `{task_id, at}` (one task's history, newest first) and `{at, _id}` (the whole log, newest first), plus the prefixed singles, kept only because removing an index is a migration |
 | `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Testing\|Blocked\|Paused\|Done), `note`, `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab |
 | `notes` | Notes | `title` (NOT unique — notes are addressed by id), `body` (markdown, one list item per line), `tags[]` (lowercased), `pinned` (bool), `createdAt`, `updatedAt` — **permanent**, shared across profiles |
+| `reports` | Reports (∃-Mail, #365) | `title`, `body_md` (markdown with `$..$`/`$$..$$` LaTeX, compiled server-side on read), `source` (filing skill/agent), `read`, `starred`, `createdAt` — **7-day conditional retention**: pruned when `createdAt < today - 7d AND read AND NOT starred`; unread/starred never pruned |
 
 ### Database Helper CLI
 Bots and scripts interact with MongoDB using the `mongo` Go CLI (`cmd/mongo/main.go`). It is **not** in the pi image — no skill invokes it, and agents reach MongoDB through the MCP servers rather than a shell — so it is built by hand when an operator needs it:
@@ -153,6 +154,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `hc_weight` | Permanent | **Never pruned** |
 | `cookbook_*` | Permanent | **Never pruned** |
 | `notes` | Permanent | **Never pruned** |
+| `reports` (#365) | > 7 days, conditional | Pruned when `createdAt < today - 7d AND read AND NOT starred` — unread/starred never pruned |
 | `task_mutations` | > 90 days | Pruned when `at < today - 90d` — the task audit log (#176) |
 | `tasks_changes` | Permanent | **Never pruned** — one single-document counter, not a log (#178) |
 | `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |

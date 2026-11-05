@@ -31,6 +31,7 @@ podman-compose -f docker/docker-compose.yml run --rm retention --dry-run  # safe
 ```
 
 Retention prunes money > 90d, `hc_meals`/`hc_days` > 30d, never `hc_weight`.
+`reports` (∃-Mail): read+unstarred pruned after 7d; unread/starred never touched.
 
 ## Talking to the gateway
 

@@ -48,7 +48,7 @@ func (s *MongoStore) logf(format string, args ...any) {
 // so the gate adds no client of its own — the 8 relay approvals clients go
 // away with cmd/mcp-gate instead of moving into the servers. The one
 // exception is browser, which holds no domain store and therefore dials its
-// single gate client (net −7 clients across the eight, ~17 total).
+// single gate client (net −8 clients across the nine, ~18 total).
 func NewOn(db *mongoDrv.Database) *MongoStore {
 	return &MongoStore{
 		approvals: db.Collection(ApprovalsCollection),

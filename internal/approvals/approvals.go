@@ -217,6 +217,12 @@ var gatedTools = map[string]map[string]bool{
 		"create_note": false, "get_note": false, "list_notes": false,
 		"search_notes": false, "update_note": false, "delete_note": true,
 	},
+	// ∃-Mail inbox (#365): agents file, the user reads. Filing and reading
+	// run free like notes; deletion is the app's verb over health-api, not a
+	// tool, so no row gates it here.
+	"reports": {
+		"create_report": false, "get_report": false, "list_reports": false,
+	},
 	"memory": {
 		// A memory write is the point of the tool, and it starts pending: the
 		// second confirmation (use it or not) is the one that matters. Gating

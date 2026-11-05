@@ -34,7 +34,7 @@ func wantDirectEntry(id string) mcpEntry {
 	}
 }
 
-// knownServers is every id pi/mcp.json may legally contain: the eight wired
+// knownServers is every id pi/mcp.json may legally contain: the nine wired
 // domain/browser servers plus the two connectors, which come and go with OAuth.
 // The domain literals twin the keys in pi/mcp.json — a domain
 // rename must update both files together, and the stray-id check below is what
@@ -45,7 +45,7 @@ func wantDirectEntry(id string) mcpEntry {
 var knownServers = map[string]bool{
 	"miser-money": true, "cookbook": true, "health-check": true,
 	"task-manager": true, "project-manager": true, "notes": true,
-	"memory": true, "browser": true,
+	"memory": true, "browser": true, "reports": true,
 	Gmail: true, Calendar: true,
 }
 
