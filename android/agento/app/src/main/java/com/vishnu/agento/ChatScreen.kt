@@ -1726,9 +1726,10 @@ internal fun TabModelSheet(
                     Spacer(modifier = Modifier.height(4.dp))
                     HintLine("Could not load models — check Server URL + Password in Settings, then retry.")
                 }
-                catalog.isEmpty() -> {
-                    HintLine("No providers found — check Settings → Server.")
-                }
+                // No empty-catalog arm on purpose: a completed fetch with
+                // no error always carries providers (fetchCatalog fails
+                // on empty), so empty here can only mean "still loading"
+                // or "failed" — both covered above.
                 provider.isNotBlank() && modelOptionsFor(options, provider).isEmpty() -> {
                     HintLine("This provider has no models listed — reopen this picker to retry.")
                 }
@@ -3922,10 +3923,11 @@ internal fun providerDisplay(slug: String, label: String): String =
  * value is always kept so legacy/unknown slugs are never lost.
  *
  * The offline fallback is only honest while the catalog is still loading
- * or arrived empty on its own — never as a stand-in for a failed fetch
- * ([allowOffline] = false): a gateway failure must surface as an error
- * ("could not load models"), not as the offline list masquerading as
- * live data (#430). */
+ * — never as a stand-in for a failed fetch ([allowOffline] = false): a
+ * gateway failure must surface as an error ("could not load models"),
+ * not as the offline list masquerading as live data (#430). A completed
+ * fetch with no error always carries providers (fetchCatalog fails on
+ * empty), so the fallback never stands in for a successful empty. */
 internal fun providerOptionsFor(
     catalog: List<ProviderOption>,
     saved: String,
