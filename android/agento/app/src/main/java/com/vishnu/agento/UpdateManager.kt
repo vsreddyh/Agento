@@ -110,8 +110,6 @@ object UpdateManager {
                 val assets = json.optJSONArray("assets")
                 var apkUrl = ""
                 var apkSize = 0L
-                var fallbackUrl = ""
-                var fallbackSize = 0L
                 if (assets != null) {
                     for (i in 0 until assets.length()) {
                         val a = assets.optJSONObject(i) ?: continue
@@ -119,12 +117,8 @@ object UpdateManager {
                         if (!name.endsWith(".apk")) continue
                         val url = a.optString("browser_download_url")
                         if (url.isEmpty()) continue
-                        if (fallbackUrl.isEmpty()) {
-                            fallbackUrl = url
-                            fallbackSize = a.optLong("size")
-                        }
-                        // Release flavor is the updater's target; debug is
-                        // only a fallback so the button still works.
+                        // Release flavor only: never install a non-release
+                        // APK as a silent substitute (#429).
                         if ("release" in name.lowercase()) {
                             apkUrl = url
                             apkSize = a.optLong("size")
@@ -132,8 +126,6 @@ object UpdateManager {
                         }
                     }
                 }
-                if (apkUrl.isEmpty()) apkUrl = fallbackUrl
-                if (apkSize == 0L) apkSize = fallbackSize
                 if (apkUrl.isEmpty()) {
                     return@withContext Result.failure(
                         RuntimeException("Release $tag has no APK asset")
