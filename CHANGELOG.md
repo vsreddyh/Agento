@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.4.0]
+- **In-chat connector mentions (#441).** Typing `@` in the composer offers
+  `@gmail` / `@calendar` rows; tapping one inserts the mention and the turn
+  sends wire-verbatim for the agent (which holds the connector tools) to
+  resolve — stored text untouched, `@<id>` rendering as a chip like
+  `/skill:` commands. Any message carrying the server's dead-grant wording
+  ("reconnect in Settings") renders a reconnect card that navigates to
+  Settings → Connectors instead of ever asking for a password or token in
+  chat.
+
 ## [6.3.0]
 - **Connectors screen (#440).** New Settings → Connectors section with one row
   per connector (Gmail, Calendar): live status, the exact scopes a tap grants

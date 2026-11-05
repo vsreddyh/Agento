@@ -415,6 +415,8 @@ internal fun ChatTab(
     targetAutosend: Boolean = false,
     autosendGen: Int = 0,
     onTargetConsumed: () -> Unit = {},
+    /** Opens Settings → Connectors for the dead-grant prompt (#441). */
+    onOpenConnectors: () -> Unit = {},
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
     // Keyed by tab — the ViewModel survives recomposition.
@@ -1150,6 +1152,11 @@ internal fun ChatTab(
             slashQuery(state.pending) != null && state.pending != state.slashDismissedAt
         },
         onPickSkill = vm::pickSkill, onDismissSlash = vm::dismissSlash,
+        mention = state.mention.takeIf {
+            mentionQuery(state.pending) != null && state.pending != state.mentionDismissedAt
+        },
+        onPickMention = vm::pickMention, onDismissMention = vm::dismissMention,
+        onOpenConnectors = onOpenConnectors,
         onAnswerQuestion = vm::answerQuestion, onCancelQuestion = vm::cancelQuestion,
         onQuestionDraft = vm::setQuestionDraft, onSend = {
             // Staging empties on send: the next live sentence starts a new
@@ -1874,6 +1881,12 @@ internal fun ChatScreen(
     slash: SlashPickerState? = null,
     onPickSkill: (String) -> Unit = {},
     onDismissSlash: () -> Unit = {},
+    /** `@` connector mention picker (#441): same gate shape as [slash]. */
+    mention: MentionPickerState? = null,
+    onPickMention: (String) -> Unit = {},
+    onDismissMention: () -> Unit = {},
+    /** Opens Settings → Connectors (expired-grant reconnect prompt). */
+    onOpenConnectors: () -> Unit = {},
     /** ask_user card (#373): answer/cancel/draft for the pending dialog. */
     onAnswerQuestion: (String) -> Unit = {},
     onCancelQuestion: () -> Unit = {},
@@ -2972,6 +2985,16 @@ internal fun ChatScreen(
                             onDismiss = onDismissSlash,
                         )
                     }
+                    // `@` connector mention picker (#441): same anchor as
+                    // the slash card, mutually exclusive by trigger.
+                    val mentionNow = mention
+                    if (mentionNow != null) {
+                        MentionPickerCard(
+                            state = mentionNow,
+                            onPick = onPickMention,
+                            onDismiss = onDismissMention,
+                        )
+                    }
                     // ask_user card (#373): the agent is blocked on this
                     // answer, so the card sits above the composer like the
                     // picker above. Gated by conversation like the store
@@ -3436,28 +3459,55 @@ internal fun ChatScreen(
                                                     // as blank lines — trimmed for
                                                     // display, never for the wire.
                                                     // A sent skill command renders as
-                                                    // a chip plus the remainder (#372):
-                                                    // still projection-only, the
-                                                    // stored string is untouched.
-                                                    val cmd = parseSkillCommand(msg.content)
-                                                    if (cmd != null) {
-                                                        SkillChip(cmd.name)
-                                                        if (cmd.args.isNotBlank()) {
+                                                    // a chip plus the remainder (#372),
+                                                    // and a connector mention the same
+                                                    // way (#441): still projection-only,
+                                                    // the stored string is untouched.
+                                                    val mentionCmd = parseConnectorMention(msg.content)
+                                                    if (mentionCmd != null) {
+                                                        ConnectorChip(mentionCmd.name)
+                                                        if (mentionCmd.args.isNotBlank()) {
                                                             Spacer(modifier = Modifier.height(4.dp))
                                                             SelectionContainer {
                                                                 Text(
-                                                                    cmd.args.trimEnd(),
+                                                                    mentionCmd.args.trimEnd(),
                                                                     style = MaterialTheme.typography.bodyMedium,
                                                                 )
                                                             }
                                                         }
                                                     } else {
-                                                        SelectionContainer {
-                                                            Text(
-                                                                msg.content.trimEnd().ifEmpty { "…" },
-                                                                style = MaterialTheme.typography.bodyMedium,
-                                                            )
+                                                        val cmd = parseSkillCommand(msg.content)
+                                                        if (cmd != null) {
+                                                            SkillChip(cmd.name)
+                                                            if (cmd.args.isNotBlank()) {
+                                                                Spacer(modifier = Modifier.height(4.dp))
+                                                                SelectionContainer {
+                                                                    Text(
+                                                                        cmd.args.trimEnd(),
+                                                                        style = MaterialTheme.typography.bodyMedium,
+                                                                    )
+                                                                }
+                                                            }
+                                                        } else {
+                                                            SelectionContainer {
+                                                                Text(
+                                                                    msg.content.trimEnd().ifEmpty { "…" },
+                                                                    style = MaterialTheme.typography.bodyMedium,
+                                                                )
+                                                            }
                                                         }
+                                                    }
+                                                    // Dead-grant reconnect prompt (#441):
+                                                    // an expired/disconnected grant in
+                                                    // this flow surfaces as a way back to
+                                                    // Settings → Connectors, never as a
+                                                    // password/token ask. Rendered, not
+                                                    // fetched: the marker substring is
+                                                    // what every server dead-grant message
+                                                    // carries.
+                                                    if (hasReconnectHint(msg.content)) {
+                                                        Spacer(modifier = Modifier.height(4.dp))
+                                                        ReconnectCard(onOpen = onOpenConnectors)
                                                     }
                                                 }
                                             }
@@ -3946,6 +3996,123 @@ internal fun SkillChip(name: String) {
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
         )
+    }
+}
+
+/**
+ * `@` connector mention picker card (#441): anchored above the composer
+ * like the slash card. The list is the two known ids, filtered by the
+ * trigger query — no fetch, so no loading/error states. Tapping inserts
+ * `@<id> ` and closes.
+ */
+@Composable
+internal fun MentionPickerCard(
+    state: MentionPickerState,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val rows = remember(state.query, state.connectors) {
+        val q = state.query.lowercase(java.util.Locale.ROOT)
+        state.connectors.filter { it.startsWith(q) }
+    }
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (state.query.isEmpty()) "Mention a connector" else "Connectors matching “${state.query}”",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+            if (rows.isEmpty()) {
+                Text(
+                    "No matching connectors.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            } else {
+                rows.forEach { id ->
+                    Surface(
+                        onClick = { onPick(id) },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surface,
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text(
+                                "@$id",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                if (id == "gmail") "Search and read mail" else "Upcoming events",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Render-time connector chip (#441): a sent `@<id> …` turn shows
+ * `@<id>` plus the remainder as normal text. Syntax-only
+ * ([parseConnectorMention]) — like [SkillChip], the stored string is
+ * untouched and a mention sent while disconnected still chips (the
+ * reconnect card beside it says what to do).
+ */
+@Composable
+internal fun ConnectorChip(name: String) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Text(
+            "@$name",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/**
+ * Dead-grant reconnect prompt (#441): a message carrying the server's
+ * reconnect hint renders a way back to Settings → Connectors. Never a
+ * password/token ask — the button only navigates.
+ */
+@Composable
+internal fun ReconnectCard(onOpen: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(
+                "That connector session expired or was never connected.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Reconnect in Settings — never paste a password or token in chat.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = onOpen) {
+                Text("Open Connectors")
+            }
+        }
     }
 }
 
