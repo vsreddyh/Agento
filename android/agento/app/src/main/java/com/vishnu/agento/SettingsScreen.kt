@@ -260,6 +260,12 @@ internal fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             /** Saves server fields (chat config per tab saves from its own page). */
+                            // Declared here (not next to the Test button
+                            // below) so Save can clear the probe report:
+                            // a stale "Connected" must not outlive a
+                            // failed refetch (#430).
+                            var testing by remember { mutableStateOf(false) }
+                            var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
                             Button(onClick = {
                                 val api = ChatApi(context)
                                 val prefs = context.getSharedPreferences(
@@ -281,6 +287,7 @@ internal fun SettingsScreen(
                                     remove("auth_token")
                                 }
                                 error = ""
+                                report = null
                                 toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
                                 scope.launch {
                                     api.fetchCatalog(catalogPath(api), refresh = true).fold(
@@ -293,8 +300,6 @@ internal fun SettingsScreen(
                             }, modifier = Modifier.fillMaxWidth()) {
                                 Text("Save server")
                             }
-                            var testing by remember { mutableStateOf(false) }
-                            var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
                             OutlinedButton(
                                 onClick = {
                                     testing = true
@@ -358,9 +363,13 @@ internal fun SettingsScreen(
                         } else if (catalog.isNotEmpty()) {
                             val count = catalog.sumOf { it.models.size }
                             HintLine("Connected — ${catalog.size} provider(s), $count model(s). Pick a model on each assistant's page.")
-                        } else {
+                        } else if (report == null) {
                             HintLine("No providers loaded yet — save the server above first.")
                         }
+                        // No final else: when a probe report exists but the
+                        // catalog is empty, the report's own cards already
+                        // explain — the "not set up yet" hint would
+                        // misdirect into re-saving (#430).
                     }
                     // #61: the "Chat backend" subsection is removed (provider +
                     // model are picked on each tab's own page; nothing to show).
