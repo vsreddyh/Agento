@@ -60,8 +60,10 @@ func authorize(r *http.Request) (int, string) {
 	// every accepted token with subtle.ConstantTimeCompare and accumulate
 	// with OR — no early return. Unequal-length candidates are skipped, so
 	// token length is not fully hidden (0 vs 1 compares); accepted as
-	// low-risk per #416 (single shared secret, noisy network). An empty
-	// PASSWORD still fails closed above (503) before reaching here.
+	// low-risk per #416 (shared secret(s) over a noisy network, and the
+	// multi-token case only widens the length signal, not the content
+	// oracle this fix removes). An empty PASSWORD still fails closed
+	// above (503) before reaching here.
 	match := 0
 	for t := range toks {
 		if len(got) == len(t) {
