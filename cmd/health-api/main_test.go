@@ -33,6 +33,27 @@ func TestAuthorize(t *testing.T) {
 	if code, _ := authorize(req); code != 0 {
 		t.Fatalf("valid token: got %d", code)
 	}
+	// Same-length wrong token reaches the constant-time compare (#416).
+	req.Header.Set("Authorization", "Bearer test-secret-12345679")
+	if code, _ := authorize(req); code != http.StatusUnauthorized {
+		t.Fatalf("same-length wrong token: got %d", code)
+	}
+}
+
+func TestAuthorizeMultiToken(t *testing.T) {
+	t.Setenv("PASSWORD", "alpha-12345678, beta-12345678")
+	for _, tok := range []string{"alpha-12345678", "beta-12345678"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/health/sync", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		if code, _ := authorize(req); code != 0 {
+			t.Fatalf("token %q: got %d", tok, code)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/health/sync", nil)
+	req.Header.Set("Authorization", "Bearer gamma-1234567")
+	if code, _ := authorize(req); code != http.StatusUnauthorized {
+		t.Fatalf("unknown token: got %d", code)
+	}
 }
 
 func TestLocalDate(t *testing.T) {

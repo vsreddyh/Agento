@@ -11,6 +11,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -53,7 +54,20 @@ func authorize(r *http.Request) (int, string) {
 	if h == "" || !strings.HasPrefix(h, "Bearer ") {
 		return http.StatusUnauthorized, "missing bearer token"
 	}
-	if !toks[strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))] {
+	got := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	// Constant-time bearer comparison (#416): map lookup short-circuits
+	// on the first differing byte (timing oracle), so compare against
+	// every accepted token with subtle.ConstantTimeCompare and accumulate
+	// with OR — no early return. Lengths are folded into the comparison
+	// by comparing only equal-length candidates; an empty PASSWORD still
+	// fails closed above (503) before reaching here.
+	match := 0
+	for t := range toks {
+		if len(got) == len(t) {
+			match |= subtle.ConstantTimeCompare([]byte(got), []byte(t))
+		}
+	}
+	if match != 1 {
 		return http.StatusUnauthorized, "invalid token"
 	}
 	return 0, ""
