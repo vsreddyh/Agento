@@ -252,6 +252,11 @@ services:
       # never prompt, never trust unknown hosts (a GitHub key rotation fails loudly
       # until known_hosts is updated on the VPS).
       GIT_SSH_COMMAND: "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes"
+      # Fatal restart bound (#423): the entrypoint sleeps this many seconds
+      # before exiting after its MCP probe exhausts retries, so the
+      # `restart: unless-stopped` loop below cannot spin. Non-numeric or 0
+      # falls back to 60 inside the entrypoint.
+      PI_FATAL_RESTART_DELAY: ${PI_FATAL_RESTART_DELAY:-60}
     healthcheck:
       # /healthz is unauthenticated by design, so the probe needs no credential.
       # This URL is INSIDE the container, so it uses the container port (8643) and

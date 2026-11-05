@@ -115,7 +115,10 @@ if [ -f "$PI_CODING_AGENT_DIR/mcp.json" ]; then
   # during a handshake outage — each boot opens 8 concurrent handshakes, so
   # the loop also amplified load on Atlas. Config failures (missing secrets,
   # missing settings.json) still die fast above; only this connectivity
-  # probe retries, since only it can be transient.
+  # probe retries. A permanently broken MCP server (bad mcp.json, missing
+  # binary, bad auth) pays the ~30s backoff plus the fatal delay below on
+  # every cycle — that is the bound, not a fast path: still ~1 restart/min
+  # instead of ~10.
   attempt=1
   max_attempts=5
   delay=2
@@ -133,6 +136,9 @@ if [ -f "$PI_CODING_AGENT_DIR/mcp.json" ]; then
       # ~10 restarts/min forever on an unrecoverable error. Sleep here to
       # bound the loop at ~1 restart/min instead.
       fatal_delay="${PI_FATAL_RESTART_DELAY:-60}"
+      case "$fatal_delay" in
+        ''|*[!0-9]*|'0') fatal_delay=60 ;;
+      esac
       log "MCP servers still unreachable after $max_attempts attempts; sleeping ${fatal_delay}s before exit so the restart loop cannot spin"
       sleep "$fatal_delay"
       die "one or more MCP servers failed to connect"
