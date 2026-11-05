@@ -784,7 +784,8 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // the id, and `GET /api/tasks/{id}` answers in one query where the
         // list made every nag quadratic (#168). Null means gone
         // (done/deleted after arming — drop the alarm, stay silent); a
-        // failed fetch is unknowable, so the alert still goes out generic.
+        // failed fetch is unknowable, so the alert still goes out — marked
+        // as a failed fetch (#431), never as clean generic data.
         val outcome = withTimeoutOrNull(10_000) {
             TasksApi(appCtx).get(taskId)
         }
@@ -820,7 +821,14 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 TaskReminders.rearmOverdue(appCtx, taskId)
             }
         }
-        val name = task?.name.orEmpty().ifEmpty { FALLBACK_TASK_NAME }
+        val name = task?.name.orEmpty().ifEmpty {
+            // Failed fetch, not a blank-titled task (#431): reaching here
+            // with task == null means the lookup failed (a gone task
+            // returns early above), so the title must say so instead of
+            // posting the clean generic "Task due".
+            if (outcome?.isSuccess != true) "$FALLBACK_TASK_NAME — couldn't load details"
+            else FALLBACK_TASK_NAME
+        }
         val today = LocalDate.now(IST)
         val dueLine = if (task != null) {
             friendlyDue(task.dueDate, task.dueTime, today)
@@ -865,8 +873,12 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // parallel flag and the estimate are things to look up in the app,
         // not to read on a lock screen (issue #160).
         val window = task?.let { reminderWindowLine(it) }.orEmpty()
+        val fetchFailed = outcome?.isSuccess != true
         val big = buildList {
             add(message)
+            // The alert still fires (a missed alarm is worse than an ugly
+            // one) but never looks healthy (#431).
+            if (fetchFailed) add("Task details couldn't be loaded — check the server connection.")
             if (taskDesc.isNotEmpty()) add(taskDesc)
             if (window.isNotEmpty()) add(window)
         }.joinToString("\n")

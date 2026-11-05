@@ -8,6 +8,16 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [5.18.3]
+- **Failed reminder fetches never look healthy (#431).** When the task
+  lookup behind an alarm fails, the notification still fires on cadence
+  (a missed alarm is worse than an ugly one) but its title reads
+  "Task due — couldn't load details" and the expanded view carries a
+  "Task details couldn't be loaded" line — instead of the clean generic
+  title that was indistinguishable from a healthy reminder. A gone task
+  (null on success) still cancels silently; a blank-titled task still
+  falls back to the plain default.
+
 ## [5.18.2]
 - **Gateway failures surface instead of reading as empty (#430).**
   A failed model-catalog fetch leaves the picker and Settings → Server
