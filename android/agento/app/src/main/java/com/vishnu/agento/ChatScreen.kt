@@ -1733,18 +1733,11 @@ internal fun TabModelSheet(
                     }
                 }
                 error.isNotEmpty() -> {
+                    // No extra hint line: the card already headlines a
+                    // failure-specific next step (auth, network, shape,
+                    // drops...), and a generic credential line would
+                    // contradict it for failures creds can't fix (#430).
                     ErrorCard(raw = error, onRetry = { reloadTick++ })
-                    // Credential guidance only for failures creds can fix:
-                    // drop-count and shape errors already carry their own
-                    // next step (app update) in the card above, and
-                    // re-saving creds loops without fixing a server-shape
-                    // mismatch (#430). The copies are pinned by
-                    // ProviderCatalogTest, so these matches cannot drift
-                    // silently.
-                    if ("could not be parsed" !in error && "Unexpected response shape" !in error) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        HintLine("Could not load models — check Server URL + Password in Settings, then retry.")
-                    }
                 }
                 // No empty-catalog arm on purpose: a completed fetch with
                 // no error always carries providers (fetchCatalog fails
