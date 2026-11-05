@@ -58,9 +58,10 @@ func authorize(r *http.Request) (int, string) {
 	// Constant-time bearer comparison (#416): map lookup short-circuits
 	// on the first differing byte (timing oracle), so compare against
 	// every accepted token with subtle.ConstantTimeCompare and accumulate
-	// with OR — no early return. Lengths are folded into the comparison
-	// by comparing only equal-length candidates; an empty PASSWORD still
-	// fails closed above (503) before reaching here.
+	// with OR — no early return. Unequal-length candidates are skipped, so
+	// token length is not fully hidden (0 vs 1 compares); accepted as
+	// low-risk per #416 (single shared secret, noisy network). An empty
+	// PASSWORD still fails closed above (503) before reaching here.
 	match := 0
 	for t := range toks {
 		if len(got) == len(t) {
