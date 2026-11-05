@@ -1734,8 +1734,16 @@ internal fun TabModelSheet(
                 }
                 error.isNotEmpty() -> {
                     ErrorCard(raw = error, onRetry = { reloadTick++ })
-                    Spacer(modifier = Modifier.height(4.dp))
-                    HintLine("Could not load models — check Server URL + Password in Settings, then retry.")
+                    // Credential guidance only for non-shape failures: a
+                    // drop-count error already carries its own next step
+                    // (app update) in the card above, and re-saving creds
+                    // loops without fixing a shape mismatch (#430). The
+                    // copy is pinned by ProviderCatalogTest, so this match
+                    // cannot drift silently.
+                    if ("could not be parsed" !in error) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        HintLine("Could not load models — check Server URL + Password in Settings, then retry.")
+                    }
                 }
                 // No empty-catalog arm on purpose: a completed fetch with
                 // no error always carries providers (fetchCatalog fails

@@ -394,11 +394,12 @@ internal fun SettingsScreen(
                                     // that would masquerade as live inventory
                                     // and the footer below would count it
                                     // (#430). The picker reads the real
-                                    // catalog (or its error) on open.
+                                    // catalog (or its error) on open. The
+                                    // heal refetch below voices the same
+                                    // rows' drop count in the footer, so the
+                                    // probe stays silent here instead of
+                                    // stacking an identical line.
                                     HintLine("Connected — chat (${rep.providers} provider(s), ${rep.models} model(s)) and sync both reachable.")
-                                    if (rep.dropped > 0) {
-                                        HintLine(catalogDropMessage(rep.dropped))
-                                    }
                                 } else {
                                     if (!rep.gatewayOk) {
                                         ErrorCard(raw = rep.gatewayError.ifEmpty { "Chat backend unreachable" })

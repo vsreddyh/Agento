@@ -594,8 +594,6 @@ class ChatApi(context: Context) {
         val syncOk: Boolean,
         val providers: Int = 0,
         val models: Int = 0,
-        /** Rows the probe skipped as unparseable, like [ProviderCatalog.dropped]. */
-        val dropped: Int = 0,
         val gatewayError: String = "",
         val syncError: String = "",
     )
@@ -712,7 +710,7 @@ class ChatApi(context: Context) {
             }
             Result.success(ConnectionReport(
                 gatewayOk = gatewayOk, syncOk = syncOk,
-                providers = providers, models = models, dropped = dropped,
+                providers = providers, models = models,
                 gatewayError = gatewayError, syncError = syncError,
             ))
     }
