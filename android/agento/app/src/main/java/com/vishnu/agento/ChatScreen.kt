@@ -1616,16 +1616,11 @@ internal fun TabModelSheet(
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
-    // Sticky for the sheet session: a pick dismisses the error card
-    // (`error = ""` below) but must not bring back the offline list as
-    // live data — only a refetch clears this (#430).
-    var catalogFailed by remember { mutableStateOf(false) }
     // Bumped by the error card's Retry: refetches without leaving the sheet.
     var reloadTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(tab, reloadTick) {
         loading = true
         error = ""
-        catalogFailed = false
         val prefs = appContext.getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
         provider = (prefs.getString("provider_$tab", "") ?: "").trim()
         model = (prefs.getString("model_$tab", "") ?: "").trim()
@@ -1635,7 +1630,6 @@ internal fun TabModelSheet(
             api.fetchCatalog(catalogPath(api)).getOrThrow()
         }.getOrElse { e ->
             error = e.message ?: e.javaClass.simpleName
-            catalogFailed = true
             emptyList()
         }
         loading = false
@@ -1658,10 +1652,12 @@ internal fun TabModelSheet(
                 catalog,
                 provider,
                 // A failed fetch is an error state, not the offline list
-                // masquerading as live data (#430); same while loading.
-                // Sticky past an error-card dismiss: only a refetch
-                // re-enables the fallback.
-                allowOffline = !loading && !catalogFailed,
+                // masquerading as live data (#430). The error is sticky
+                // until a refetch: picks must not dismiss it into a
+                // clean-empty read. While loading (no error yet) the
+                // fallback stays, so the dropdowns are usable under
+                // the spinner.
+                allowOffline = error.isEmpty(),
             )
             val shownProvider = options.firstOrNull { it.slug == provider }
                 ?.let { providerDisplay(it.slug, it.label) }
@@ -1673,7 +1669,6 @@ internal fun TabModelSheet(
                 onPick = {
                     if (it != provider) model = ""
                     provider = it
-                    error = ""
                     save(provider, model, effort)
                 },
             )
@@ -1690,7 +1685,6 @@ internal fun TabModelSheet(
                         model,
                         ChatApi(context).effortFor(tab, model),
                     )
-                    error = ""
                     save(provider, model, effort)
                 },
             )
@@ -1707,7 +1701,6 @@ internal fun TabModelSheet(
                 options = effortOptions.map { e -> e to EffortCatalog.labelFor(e) },
                 onPick = {
                     effort = it
-                    error = ""
                     save(provider, model, effort)
                 },
             )

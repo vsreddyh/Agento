@@ -5,32 +5,34 @@ import org.junit.Test
 
 /**
  * Issue #430: an unrecognised job-list envelope must fail loudly instead
- * of rendering "No scheduled jobs". These tests pin [parseJobList]: the
- * known envelopes parse, and anything else throws.
+ * of rendering "No scheduled jobs", and unparseable rows must be counted
+ * instead of shrinking the list silently. These tests pin [parseJobList].
  */
 class JobListParseTest {
 
     @Test
     fun `jobs envelope parses rows`() {
-        val jobs = parseJobList(
+        val page = parseJobList(
             """{"jobs":[{"id":"j1","name":"Morning"},{"id":"j2"}]}""",
         )
-        assertEquals(listOf("j1", "j2"), jobs.map { it.id })
-        assertEquals("Morning", jobs[0].name)
+        assertEquals(listOf("j1", "j2"), page.jobs.map { it.id })
+        assertEquals("Morning", page.jobs[0].name)
+        assertEquals(0, page.dropped)
     }
 
     @Test
     fun `data and items envelopes parse too`() {
-        assertEquals(1, parseJobList("""{"data":[{"id":"a"}]}""").size)
-        assertEquals(1, parseJobList("""{"items":[{"id":"a"}]}""").size)
+        assertEquals(1, parseJobList("""{"data":[{"id":"a"}]}""").jobs.size)
+        assertEquals(1, parseJobList("""{"items":[{"id":"a"}]}""").jobs.size)
     }
 
     @Test
-    fun `job_id fallback works and id-less rows are skipped`() {
-        val jobs = parseJobList(
-            """{"jobs":[{"job_id":"k","name":"K"},{"name":"no id"}]}""",
+    fun `job_id fallback works and unparseable rows are counted`() {
+        val page = parseJobList(
+            """{"jobs":[{"job_id":"k","name":"K"},{"name":"no id"},42]}""",
         )
-        assertEquals(listOf("k"), jobs.map { it.id })
+        assertEquals(listOf("k"), page.jobs.map { it.id })
+        assertEquals(2, page.dropped)
     }
 
     @Test(expected = RuntimeException::class)

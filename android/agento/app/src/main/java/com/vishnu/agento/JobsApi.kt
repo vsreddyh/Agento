@@ -33,6 +33,15 @@ data class CronRun(
     val missed: Boolean = false,
 )
 
+/** A job-list page: the rows, and how many rows arrived unparseable
+ * (non-object rows or rows without a usable id) and were skipped rather
+ * than shown (#430). A nonzero [dropped] means the server spoke rows
+ * this app cannot read. */
+data class JobList(
+    val jobs: List<CronJob>,
+    val dropped: Int = 0,
+)
+
 /** One job row: null when the row carries no usable id. */
 internal fun parseJob(o: JSONObject): CronJob? {
     val id = o.optString("id", "")
@@ -76,13 +85,14 @@ internal fun parseJob(o: JSONObject): CronJob? {
     )
 }
 
-/** Parses one job-list page (#430): the `jobs`/`data`/`items` envelope.
+/** Parses one job-list page (#430): the `jobs`/`data`/`items` envelope,
+ * the rows, and how many rows arrived unparseable.
  *
  * A body with none of the known envelopes — or no JSON body at all —
  * is a parse failure, never a clean empty: it throws
  * "Unexpected response shape" so the scheduler shows an error instead
  * of reading "no scheduled jobs". */
-internal fun parseJobList(body: String): List<CronJob> {
+internal fun parseJobList(body: String): JobList {
     val out = mutableListOf<CronJob>()
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException("Unexpected response shape")
@@ -90,11 +100,12 @@ internal fun parseJobList(body: String): List<CronJob> {
         ?: root.optJSONArray("data")
         ?: root.optJSONArray("items")
         ?: throw RuntimeException("Unexpected response shape")
+    var dropped = 0
     for (i in 0 until arr.length()) {
-        val o = arr.optJSONObject(i) ?: continue
-        parseJob(o)?.let { out.add(it) }
+        val job = arr.optJSONObject(i)?.let { parseJob(it) }
+        if (job != null) out.add(job) else dropped++
     }
-    return out
+    return JobList(out, dropped)
 }
 
 /**
@@ -161,7 +172,7 @@ class JobsApi(context: Context) {
     }
 
     /** Lists jobs on the scheduler profile (gateway home). */
-    suspend fun list(path: String): Result<List<CronJob>> =
+    suspend fun list(path: String): Result<JobList> =
         withContext(Dispatchers.IO) {
             call("GET", "$path/api/jobs").map { parseJobList(it) }
         }

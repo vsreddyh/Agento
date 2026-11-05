@@ -48,6 +48,10 @@ internal fun SchedulerScreen(
     val toasts = remember(scope) { ToastCenter(scope) }
     var jobs by remember { mutableStateOf<List<CronJob>>(emptyList()) }
     var error by remember { mutableStateOf("") }
+    // Rows the server sent but this app could not parse: the count rides
+    // with the page so the screen says so instead of shrinking silently
+    // (#430). Reset with the rows on failure.
+    var jobsDropped by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<CronJob?>(null) }
@@ -63,15 +67,17 @@ internal fun SchedulerScreen(
         scope.launch {
             JobsApi(context).list(path()).fold(
                 onSuccess = {
-                    jobs = it
+                    jobs = it.jobs
+                    jobsDropped = it.dropped
                     loaded = true
                     // Same discovery as the background worker, over the
                     // rows just fetched rather than a second fetch: a
                     // response that landed while away notifies on open.
-                    CronCheck.notifyFresh(context, it)
+                    CronCheck.notifyFresh(context, it.jobs)
                 },
                 onFailure = { e ->
                     error = e.message ?: e.javaClass.simpleName
+                    jobsDropped = 0
                     loaded = true
                 },
             )
@@ -141,6 +147,19 @@ internal fun SchedulerScreen(
                     subtitle = "Jobs run prompts on a schedule, even when the app is closed.",
                     actionLabel = "New job",
                     onAction = { creating = true },
+                )
+            }
+            // Unparseable rows are a gateway-shape problem the user can
+            // report, not an empty schedule: the count sits above the
+            // rows it describes (#430).
+            if (jobsDropped > 0) {
+                HintLine(
+                    text = if (jobsDropped == 1) {
+                        "1 job could not be parsed — the server sent a row this app cannot read."
+                    } else {
+                        "$jobsDropped jobs could not be parsed — the server sent rows this app cannot read."
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp),
                 )
             }
             LazyColumn(

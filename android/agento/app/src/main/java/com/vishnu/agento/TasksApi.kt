@@ -446,7 +446,8 @@ internal fun parseTask(o: JSONObject): ServerTask? {
  * reading "no tasks". */
 internal fun parseTaskListPage(body: String): TaskList {
     val out = mutableListOf<ServerTask>()
-    val root = JSONObject(body)
+    val root = runCatching { JSONObject(body) }.getOrNull()
+        ?: throw RuntimeException("Unexpected response shape")
     val arr = root.optJSONArray("tasks")
         ?: root.optJSONArray("data")
         ?: root.optJSONArray("items")
