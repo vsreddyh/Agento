@@ -112,7 +112,7 @@ func main() {
 	registerProjects(mux)
 	// Rate limiting wraps everything, and lives here because main is the only place
 	// that knows the whole handler set (#176). The API is network-reachable and
-	// authed by ONE shared password, so without a counter a stuck client retrying in
+	// authed by shared password(s), so without a counter a stuck client retrying in
 	// a loop — or anyone holding that password — is an unbounded write load on a
 	// shared production MongoDB.
 	//
