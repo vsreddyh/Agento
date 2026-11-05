@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.2.4]
+- **Voice input failures show errors (#432).** One-shot mic: an empty
+  result now toasts "Didn't catch that — tap the mic to try again." (Error);
+  an incomplete one toasts "Voice input didn't complete — tap the mic to
+  try again." (Info — the recognizer reports its own errors as cancelled,
+  and a genuine Back-button cancel is a benign no-op). Live mode: when
+  barge-in detection fails its bounded retry — or dies mid-session, which a
+  watchdog promotes to the same flag — a persistent "Barge-in unavailable —
+  end the live session and start a new one." line shows until detection
+  recovers or the session ends, so tap-to-talk is distinguishable from a
+  working detector that never triggered.
+
 ## [6.2.3]
 - **Settings sidebar loses its duplicate subsections (#418).** The drawer
   and rail show one Settings entry that opens the hub; subsection rows are

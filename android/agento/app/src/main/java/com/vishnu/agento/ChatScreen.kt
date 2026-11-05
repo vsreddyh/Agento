@@ -2048,6 +2048,10 @@ internal fun ChatScreen(
     // the actual stop(): the holder must never claim "stopped" while the
     // recorder still holds the mic, or vice versa.
     val detectCtl = remember(tab) { DetectCtl() }
+    // True when barge-in detection could not start after its bounded retry
+    // (#432): the session keeps working as tap-to-talk, but the user must
+    // be able to tell a dead mic from "just never barged in".
+    var bargeUnavailable by remember(tab) { mutableStateOf(false) }
     // Session generation for stale detector triggers (#317): the detector
     // posts via scope.launch, so a trigger fired just before hang-up can
     // land after it. endLive/startLive bump this; onBargeIn only honors the
@@ -2161,6 +2165,8 @@ internal fun ChatScreen(
         interrupt.stop()
         detectCtl.running = false
         detectCtl.phase = -1
+        // A new session retries detection from scratch (#432).
+        bargeUnavailable = false
         liveRec.cancel()
         tts.stop()
         if (reason != null) toasts.toast(reason, ToastKind.Error)
@@ -2184,6 +2190,22 @@ internal fun ChatScreen(
         // lag a fast typist the same way.
         if (heard.isNotEmpty()) {
             onAppendPending(heard)
+        } else {
+            // Never silent (#432): a cancelled dialog and a recognized
+            // nothing both used to fold into "" with no signal, so the user
+            // could not tell "didn't hear me" from "errored". Non-OK is not
+            // necessarily a user cancel (#449 review): the recognizer
+            // answers CANCELED for its own errors too, so the wording stays
+            // neutral — and a genuine Back-button cancel is a benign no-op
+            // (Info, like the other picker/launcher no-ops), not an Error.
+            if (result.resultCode == Activity.RESULT_OK) {
+                toasts.toast("Didn't catch that — tap the mic to try again.", ToastKind.Error)
+            } else {
+                toasts.toast(
+                    "Voice input didn't complete — tap the mic to try again.",
+                    ToastKind.Info,
+                )
+            }
         }
     }
     fun startVoice() {
@@ -2268,6 +2290,11 @@ internal fun ChatScreen(
         interrupt.stop()
         detectCtl.running = false
         detectCtl.phase = -1
+        // A stuck true from a previous session must not describe a session
+        // that never failed (#449 review): startLive owns the same fresh
+        // slate as endLive, so it clears the flag directly instead of
+        // depending on endLive having run.
+        bargeUnavailable = false
         // A killed turn arrives claimed (see above); a fresh start clears
         // any stale claim from the previous session and opens a new trigger
         // generation, so pre-start detector firings can't leak into it.
@@ -2471,6 +2498,7 @@ internal fun ChatScreen(
             // change retries; a truly dead mic fails fast each time and
             // the loop runs tap-to-talk.
             detectCtl.running = interrupt.start(scope)
+            if (detectCtl.running) bargeUnavailable = false
             if (!detectCtl.running) {
                 // One bounded retry (#317): a long tool task sits in a
                 // single phase, so an entry failure would leave the whole
@@ -2489,6 +2517,11 @@ internal fun ChatScreen(
                 delay(DETECT_RETRY_MS)
                 if (detecting && detectPhase == detectCtl.phase) {
                     detectCtl.running = interrupt.start(scope)
+                    // Either attempt decides the flag (#449 review): a
+                    // retry success after a failure must clear what the
+                    // failure set — otherwise the banner claims
+                    // "unavailable" while the detector is running.
+                    bargeUnavailable = !detectCtl.running
                 }
             }
         } else if (!detecting && detectCtl.running) {
@@ -2502,6 +2535,26 @@ internal fun ChatScreen(
         // A cut cue would otherwise leave a stale true behind and the next
         // driver run would double the stream-end effect's own listen.
         wasSpeaking = speakingKey != null && !cueSpeaking
+    }
+    // Watchdog: a started detector can still die mid-phase (#449 review —
+    // 20 bad reads bail the job, a mid-listen drop kills it), leaving
+    // detectCtl.running true with nothing listening. The driver above only
+    // runs on transitions, so a long single-phase tool task would sit
+    // tap-to-talk with no banner until the next phase change. Poll while
+    // the session lives and promote the death to the same indicator. The
+    // expectation flag (not `detecting`) is the comparison, so legitimate
+    // stops — which always clear the flag alongside stop() — stay quiet;
+    // and a fired barge is not a death (LiveInterrupt.fired), so a working
+    // cut-in never banners as "unavailable".
+    LaunchedEffect(liveMode) {
+        if (!liveMode) return@LaunchedEffect
+        while (true) {
+            delay(5_000L)
+            if (detectCtl.running && !interrupt.isAlive() && !interrupt.fired) {
+                detectCtl.running = false
+                bargeUnavailable = true
+            }
+        }
     }
     // Tool milestones (#317): while a live turn streams, announce newly
     // appearing tools once per change so a long task is audible. The cue
@@ -2921,6 +2974,20 @@ internal fun ChatScreen(
                     // picker above. Gated by conversation like the store
                     // path: a card for a thread already left never renders
                     // on the new one.
+                    // Barge-in unavailable (#432): the live session is
+                    // running as tap-to-talk after detector starts failed
+                    // (or the detector died mid-session — see the watchdog
+                    // below). Persistent while detection is down: a one-off
+                    // toast would be missed while the user watches the
+                    // transcript, and recovery (or session end) clears it.
+                    // Worded as two taps (#449 review): the button only ends
+                    // the session, a new one starts from Start.
+                    if (liveMode && bargeUnavailable) {
+                        HintLine(
+                            "Barge-in unavailable — end the live session and start a new one.",
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
+                    }
                     val questionNow = state.pendingQuestion
                         .takeIf { it != null && questionAttaches(it, state.threadId) }
                     if (questionNow != null) {
