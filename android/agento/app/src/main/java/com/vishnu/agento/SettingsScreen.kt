@@ -124,6 +124,11 @@ internal fun SettingsScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
     // Live picker inventory (providers + their models); empty until loaded.
     var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
+    // True while the preload above is in flight: without it the footer
+    // reads the initial empty catalog as "not set up yet" for seconds
+    // on a slow network — a clean-empty flash, like the picker would
+    // show without its spinner arm (#430).
+    var catalogLoading by remember { mutableStateOf(true) }
     // Rows the server sent but the picker could not read: surfaced as a
     // count in the section footer, like the picker sheet (#430). Reset
     // with the catalog on every fetch; a failed fetch sets `error`
@@ -138,6 +143,7 @@ internal fun SettingsScreen(
      * and no retry (#430). */
     LaunchedEffect(settingsRefresh) {
         error = ""
+        catalogLoading = true
         val api = ChatApi(context)
         catalog = runCatching {
             api.fetchCatalog(catalogPath(api)).getOrThrow()
@@ -152,6 +158,7 @@ internal fun SettingsScreen(
                 emptyList()
             },
         )
+        catalogLoading = false
     }
 
     /** Refreshes health state after any permission flow returns. */
@@ -398,8 +405,10 @@ internal fun SettingsScreen(
                             if (catalogDropped > 0) {
                                 HintLine(catalogDropMessage(catalogDropped))
                             }
-                        } else if (report == null) {
+                        } else if (report == null && !catalogLoading) {
                             HintLine("No providers loaded yet — save the server above first.")
+                        } else if (report == null) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
                         // No final else: when a probe report exists but the
                         // catalog is empty, the report's own cards already

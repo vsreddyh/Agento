@@ -625,8 +625,15 @@ class ChatApi(context: Context) {
                     if (!response.isSuccessful) {
                         gatewayError = "HTTP ${response.code}: ${body.take(200)}"
                     } else {
-                        val arr = JSONObject(body).optJSONArray("providers")
-                        if (arr != null) {
+                        val root = runCatching { JSONObject(body) }.getOrNull()
+                        // Same shape rule as parseCatalog: a body with no
+                        // providers array is a shape mismatch, not an
+                        // empty inventory — and a non-JSON body must not
+                        // surface the raw JSONException text (#430).
+                        val arr = root?.optJSONArray("providers")
+                        if (arr == null) {
+                            gatewayError = "Unexpected response shape"
+                        } else {
                             for (i in 0 until arr.length()) {
                                 val o = arr.optJSONObject(i)
                                 // Same null guard as fetchCatalog: a bare
@@ -653,9 +660,9 @@ class ChatApi(context: Context) {
                                     }
                                 }
                             }
+                            gatewayOk = providers > 0
+                            if (!gatewayOk) gatewayError = "No providers in catalog"
                         }
-                        gatewayOk = providers > 0
-                        if (!gatewayOk) gatewayError = "No providers in catalog"
                     }
                 }
             } catch (e: Exception) {
