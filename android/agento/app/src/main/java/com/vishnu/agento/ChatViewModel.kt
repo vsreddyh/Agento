@@ -434,6 +434,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun onPending(v: String) {
         _state.value = _state.value.copy(pending = v)
         updateSlash(v)
+        updateMention(v)
     }
 
     /** Slash picker cache per profile path: fetched invocable list + fetch time.
@@ -592,6 +593,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             pending = insertSkillCommand(cur, name),
             slash = SlashPickerState(),
             slashDismissedAt = null,
+            mention = MentionPickerState(), mentionDismissedAt = null,
         )
     }
 
@@ -602,6 +604,58 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             slash = SlashPickerState(),
             slashDismissedAt = _state.value.pending,
+            mention = MentionPickerState(), mentionDismissedAt = _state.value.pending,
+        )
+    }
+
+    /**
+     * `@` mention picker update (#441): static two-row list, no fetch.
+     * Same gate shape as [updateSlash] — dismiss lock, text gate — minus
+     * the network: filtering two known ids needs no cache, TTL, or
+     * in-flight guard. Runs alongside [updateSlash] on every keystroke;
+     * the triggers (`/` vs `@` prefix) are mutually exclusive, so at most
+     * one ever holds rows.
+     */
+    private fun updateMention(text: String) {
+        if (_state.value.mentionDismissedAt != null && text != _state.value.mentionDismissedAt) {
+            _state.value = _state.value.copy(mentionDismissedAt = null)
+        }
+        val dismissed = _state.value.mentionDismissedAt
+        val query = mentionQuery(text)
+        if (query == null || text == dismissed) {
+            if (_state.value.mention != MentionPickerState()) {
+                _state.value = _state.value.copy(mention = MentionPickerState())
+            }
+            return
+        }
+        val rows = MENTIONABLE_CONNECTORS.filter {
+            it.startsWith(query.lowercase(java.util.Locale.ROOT))
+        }
+        val next = MentionPickerState(query = query, connectors = rows)
+        if (_state.value.mention != next) {
+            _state.value = _state.value.copy(mention = next)
+        }
+    }
+
+    /** Picker row tap: the `@` token becomes `@<name> `, the picker
+     * closes, and the keyboard stays up with the cursor at the end. */
+    fun pickMention(name: String) {
+        val cur = _state.value.pending
+        if (!cur.startsWith("@")) return
+        _state.value = _state.value.copy(
+            pending = insertConnectorMention(cur, name),
+            slash = SlashPickerState(),
+            slashDismissedAt = null,
+            mention = MentionPickerState(),
+            mentionDismissedAt = null,
+        )
+    }
+
+    fun dismissMention() {
+        // Locked to the current text like [dismissSlash].
+        _state.value = _state.value.copy(
+            mention = MentionPickerState(),
+            mentionDismissedAt = _state.value.pending,
         )
     }
 
@@ -1137,6 +1191,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             // warm rows with it, keeping state and UI in agreement.
             slash = SlashPickerState(),
             slashDismissedAt = null,
+            mention = MentionPickerState(), mentionDismissedAt = null,
             // The notice queue drops Infos with them (Errors survive).
             pendingAttachments = emptyList(),
             notices = retainedNotices(),
@@ -1248,6 +1303,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // the lock keys on exact composer text, which dies here.
                 slash = SlashPickerState(),
                 slashDismissedAt = null,
+                mention = MentionPickerState(), mentionDismissedAt = null,
                 // Staged photos die with the text draft: a parked photo firing into
                 // the wrong thread is a silent mis-send.
                 pendingAttachments = emptyList(),

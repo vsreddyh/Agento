@@ -350,6 +350,9 @@ class MainActivity : ComponentActivity() {
                                         chatThreadId.value = null
                                         chatAutosend.value = false
                                     },
+                                    onOpenConnectors = {
+                                        go(Destination.Settings, SettingSection.Connectors)
+                                    },
                                     onAutoSpeak = {
                                         autoSpeak = it
                                         BehaviourSettings.setTtsAuto(context, it)
