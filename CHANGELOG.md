@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.3]
+- **Voice input failures show errors (#432).** One-shot mic: an empty
+  result now toasts "Didn't catch that — tap the mic to try again." (Error);
+  an incomplete one toasts "Voice input didn't complete — tap the mic to
+  try again." (Info — the recognizer reports its own errors as cancelled,
+  and a genuine Back-button cancel is a benign no-op). Live mode: when
+  barge-in detection fails its bounded retry — or dies mid-session, which a
+  watchdog promotes to the same flag — a persistent "Barge-in unavailable —
+  end the live session and start a new one." line shows until detection
+  recovers or the session ends, so tap-to-talk is distinguishable from a
+  working detector that never triggered.
+
 ## [6.0.2]
 - **Local data failures surface instead of plausible defaults (#431).** A
   corrupt thread file banners "couldn't load conversations" in the thread
