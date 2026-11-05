@@ -225,6 +225,11 @@ fun friendlyError(raw: String): FriendlyError {
             "Nothing available yet",
             "Check the server side, then reload and try again.",
         )
+        has("unexpected response shape") -> FriendlyError(
+            "The server sent a response this app doesn't understand",
+            "Check Settings → App updates for a newer app, then retry. " +
+                "Details below carry the raw error.",
+        )
         has("could not be parsed") -> {
             // App-generated drop counts (#430): the count leads the raw
             // string ("N tasks could not be parsed — ..."), so headline

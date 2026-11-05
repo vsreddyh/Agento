@@ -12,6 +12,15 @@ import org.junit.Test
 class FriendlyErrorTest {
 
     @Test
+    fun `shape errors headline the mismatch`() {
+        assertEquals(
+            "The server sent a response this app doesn't understand",
+            friendlyError("Unexpected response shape").title,
+        )
+        assertTrue(friendlyError("Unexpected response shape").nextStep.contains("App updates"))
+    }
+
+    @Test
     fun `drop counts headline the raw count`() {
         assertEquals(
             "3 tasks could not be parsed",

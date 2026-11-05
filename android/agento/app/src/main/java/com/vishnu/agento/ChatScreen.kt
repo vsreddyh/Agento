@@ -1734,13 +1734,14 @@ internal fun TabModelSheet(
                 }
                 error.isNotEmpty() -> {
                     ErrorCard(raw = error, onRetry = { reloadTick++ })
-                    // Credential guidance only for non-shape failures: a
-                    // drop-count error already carries its own next step
-                    // (app update) in the card above, and re-saving creds
-                    // loops without fixing a shape mismatch (#430). The
-                    // copy is pinned by ProviderCatalogTest, so this match
-                    // cannot drift silently.
-                    if ("could not be parsed" !in error) {
+                    // Credential guidance only for failures creds can fix:
+                    // drop-count and shape errors already carry their own
+                    // next step (app update) in the card above, and
+                    // re-saving creds loops without fixing a server-shape
+                    // mismatch (#430). The copies are pinned by
+                    // ProviderCatalogTest, so these matches cannot drift
+                    // silently.
+                    if ("could not be parsed" !in error && "Unexpected response shape" !in error) {
                         Spacer(modifier = Modifier.height(4.dp))
                         HintLine("Could not load models — check Server URL + Password in Settings, then retry.")
                     }
