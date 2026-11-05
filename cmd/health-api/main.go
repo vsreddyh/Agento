@@ -4,8 +4,9 @@
 // remote MongoDB collection the health-check bot also reads (hc_days —
 // one doc per date, same shape the MCP writes).
 //
-// Auth: single PASSWORD bearer token (matches the Password field in the
-// Agento app Settings; same credential as gateway chat).
+// Auth: bearer token(s) from PASSWORD (comma-separated = multi-token;
+// matches the Password field in the Agento app Settings, same credential
+// as gateway chat).
 //
 // Env: MONGODB_URI (required), MONGODB_DB (default: hermes), PASSWORD.
 package main
