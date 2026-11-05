@@ -396,6 +396,9 @@ internal fun SettingsScreen(
                                     // (#430). The picker reads the real
                                     // catalog (or its error) on open.
                                     HintLine("Connected — chat (${rep.providers} provider(s), ${rep.models} model(s)) and sync both reachable.")
+                                    if (rep.dropped > 0) {
+                                        HintLine(catalogDropMessage(rep.dropped))
+                                    }
                                 } else {
                                     if (!rep.gatewayOk) {
                                         ErrorCard(raw = rep.gatewayError.ifEmpty { "Chat backend unreachable" })

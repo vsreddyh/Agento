@@ -364,10 +364,12 @@ data class ProviderCatalog(
 /** Parses one picker-inventory page (#430): the `providers` envelope,
  * the rows, and how many rows arrived unparseable.
  *
- * No provider rows at all is a failure ("No providers in catalog"),
- * never a clean empty the picker would backfill with the offline list;
- * an unparseable body — or a body with no `providers` array at all — is
- * an "Unexpected response shape" failure, like the task/job pages. */
+ * No usable rows at all is a failure, never a clean empty the picker
+ * would backfill with the offline list: a genuinely empty `providers`
+ * array reports "No providers in catalog", while an array of only
+ * unparseable rows reports the drop count. An unparseable body — or a
+ * body with no `providers` array at all — is an "Unexpected response
+ * shape" failure, like the task/job pages. */
 internal fun parseCatalog(body: String): ProviderCatalog {
     val out = mutableListOf<ProviderOption>()
     val root = runCatching { JSONObject(body) }.getOrNull()
@@ -592,6 +594,8 @@ class ChatApi(context: Context) {
         val syncOk: Boolean,
         val providers: Int = 0,
         val models: Int = 0,
+        /** Rows the probe skipped as unparseable, like [ProviderCatalog.dropped]. */
+        val dropped: Int = 0,
         val gatewayError: String = "",
         val syncError: String = "",
     )
@@ -708,7 +712,7 @@ class ChatApi(context: Context) {
             }
             Result.success(ConnectionReport(
                 gatewayOk = gatewayOk, syncOk = syncOk,
-                providers = providers, models = models,
+                providers = providers, models = models, dropped = dropped,
                 gatewayError = gatewayError, syncError = syncError,
             ))
     }
