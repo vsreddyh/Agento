@@ -137,7 +137,10 @@ if [ -f "$PI_CODING_AGENT_DIR/mcp.json" ]; then
       # bound the loop at ~1 restart/min instead.
       fatal_delay="${PI_FATAL_RESTART_DELAY:-60}"
       fatal_delay="${fatal_delay//[[:space:]]/}"
-      if ! [ "$fatal_delay" -gt 0 ] 2>/dev/null; then fatal_delay=60; fi
+      if ! [ "$fatal_delay" -gt 0 ] 2>/dev/null; then
+        log "invalid PI_FATAL_RESTART_DELAY '${PI_FATAL_RESTART_DELAY:-60}', using 60s"
+        fatal_delay=60
+      fi
       log "MCP servers still unreachable after $max_attempts attempts; sleeping ${fatal_delay}s before exit so the restart loop cannot spin"
       sleep "$fatal_delay"
       die "one or more MCP servers failed to connect"
