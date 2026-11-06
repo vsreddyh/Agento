@@ -578,6 +578,13 @@ object TaskReminders {
                 cancelPosted(appCtx, taskId)
             }
         }
+        // Late toggle check (#470 review): a disable landing anywhere
+        // above — the fetch, the snapshot purge, the lock wait — must not
+        // let this stale pass arm over the wiped set or rewrite PREF_ARMED
+        // under it. Return before the first side effect, not just before
+        // the computation: the check-then-arm sliver past here is
+        // inherent, everything before it is closable.
+        if (!isEnabled(appCtx)) return RefreshOutcome.Ok
         for (key in armed) {
             if (key in keep) continue
             // Keys from 4.4 and earlier were a bare task id, armed with

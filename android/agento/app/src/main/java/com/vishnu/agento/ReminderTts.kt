@@ -150,6 +150,13 @@ object ReminderTts {
          * constructions and tests keep compiling.
          */
         val epoch: Long = 0L,
+        /**
+         * Global generation at enqueue time: [dropAll] bumps it, so a
+         * failure captured before a disable but reported after a quick
+         * re-enable still reads stale ([reportFailure]'s isEnabled gate
+         * passes again by then). Untouched by [dropTask].
+         */
+        val generation: Long = 0L,
     )
 
     private val queue = ArrayDeque<QueuedSpeech>()
@@ -163,6 +170,15 @@ object ReminderTts {
      * entries are pointer-sized and process-lifetime like the queue.
      */
     private val dropEpoch = HashMap<String, Long>()
+    /**
+     * Global drop generation, bumped by [dropAll]. A disable must
+     * invalidate every in-flight capture at once — including ones whose
+     * owners entries are already gone (timeout/throw/reject capture then
+     * clean up), which no per-task collection can enumerate. Stamped on
+     * items next to [QueuedSpeech.epoch]; [dropTask] leaves it alone so
+     * one task's drop never silences another's live items.
+     */
+    private var dropGeneration = 0L
     /**
      * Utterance ids already reported as ENGINE_INIT while kept for retry.
      * A dead engine fires one init callback per ensureEngine, but the queue
@@ -331,10 +347,13 @@ object ReminderTts {
                 initReported.remove(d.id)
                 out.add(d)
             }
-            // Stamp the drop generation: a task-drop landing between a
+            // Stamp both drop generations: a task-drop landing between a
             // failure's capture and its report must swallow it, not
             // resurrect the tag (#470 review — see reportFailure).
-            val stamped = item.copy(epoch = dropEpoch.getOrDefault(task.id, 0L))
+            val stamped = item.copy(
+                epoch = dropEpoch.getOrDefault(task.id, 0L),
+                generation = dropGeneration,
+            )
             queue.addLast(stamped)
             owners[stamped.id] = stamped
             out
@@ -527,9 +546,12 @@ object ReminderTts {
         // Drop-after-capture guard (#470 review): every failure report is
         // captured under the lock and posted after it, so a task-drop
         // landing in between would resurrect the tag just cancelled. The
-        // item's generation pins the capture: a bump since means a drop
-        // owns this evidence now, so swallow it.
-        val live = synchronized(lock) { item.epoch == (dropEpoch[item.taskId] ?: 0L) }
+        // item's generations pin the capture: a task bump since means its
+        // drop owns this evidence, and a global bump since means a disable
+        // does — either way, swallow it.
+        val live = synchronized(lock) {
+            item.epoch == (dropEpoch[item.taskId] ?: 0L) && item.generation == dropGeneration
+        }
         if (!live) return
         runCatching {
             mainHandler.post {
@@ -707,6 +729,10 @@ object ReminderTts {
         synchronized(lock) {
             val purged = purgeTaskSpeech(queue, owners, initReported, speakingId, null)
             hadSpeech = purged.dropped > 0 || purged.inFlight
+            // Global bump: thread-held captures (timeout/throw/reject clean
+            // owners at capture, so no per-task collection can name them)
+            // must still read stale after a quick re-enable (#470 review).
+            dropGeneration += 1
             // Unconditional: assigning false/null when idle is harmless,
             // and a stale generation must never resume a cleared queue.
             speaking = false
@@ -720,6 +746,22 @@ object ReminderTts {
         cancelLiveFailureNotices(appCtx)
         if (hadSpeech) {
             runCatching { Log.w("ReminderTts", "reminders disabled, dropped all queued speech") }
+        }
+    }
+
+    /**
+     * Liveness re-check before speaking (#470 review): every drop path
+     * removes the owners entry, so its absence means the utterance died
+     * while dequeued. Drops silently and resets the flags the item was
+     * dequeued under (same wedge as the DND drop). True when live.
+     */
+    private fun confirmUtteranceLive(id: String): Boolean = synchronized(lock) {
+        if (!owners.containsKey(id)) {
+            speaking = false
+            speakingId = null
+            false
+        } else {
+            true
         }
     }
 
@@ -798,17 +840,10 @@ object ReminderTts {
             // removes the owners entry, so its absence means this
             // utterance died while dequeued — drop silently and reset the
             // flags it was dequeued under (same wedge as the DND drop).
-            // The check-then-speak sliver itself is inherent.
-            val live = synchronized(lock) {
-                if (!owners.containsKey(next.id)) {
-                    speaking = false
-                    speakingId = null
-                    false
-                } else {
-                    true
-                }
-            }
-            if (!live) continue
+            // Re-checked again right before speak: the slow voice block
+            // below is binder IPC a drop can land inside. The
+            // check-then-speak sliver itself is inherent.
+            if (!confirmUtteranceLive(next.id)) continue
             // DND/ringer flipped quiet after enqueue (#470 review): the
             // enqueue gate's visual-only rule applies at dequeue too — drop
             // silently, not loudly. This is not a failure (the visual alert
@@ -869,6 +904,14 @@ object ReminderTts {
             }
             // A throw (broken OEM binder state) counts like ERROR: clear and
             // advance. Uncaught here it would escape from onDone/onError's thread.
+            // Late liveness re-check (#470 review): a drop landing inside
+            // the slow voice block above would otherwise speak for a dead
+            // task and re-post its tag. Retracts the point's notice too —
+            // the voice block may have just posted VOICE_MISSING for it.
+            if (!confirmUtteranceLive(next.id)) {
+                appCtxRef?.let { cancelFailureFor(it, next.taskId, next.kindKey) }
+                continue
+            }
             val rc = runCatching {
                 eng.speak(next.text, TextToSpeech.QUEUE_ADD, null, next.id)
             }.getOrNull()

@@ -38,7 +38,13 @@ see GitHub Releases for older notes.
   extending the visual-only rule past the enqueue gate on all three sides.
   The toggle is honored at both ends of every fetch: an alarm firing into
   a disable drops silently (no visual, no nag re-arm), and a refresh
-  overtaken by one never arms over the wiped set.
+  overtaken by one never arms over the wiped set. Failure reports carry
+  the drop generations stamped at enqueue, so a task-drop or disable
+  landing between capture and post swallows the report instead of
+  resurrecting a cancelled tag — including across a quick re-enable.
+  pump() re-checks utterance liveness right before speaking (a drop
+  inside the slow voice block retracts the point's notice too), not just
+  at dequeue.
   Stopping speech always clears its flags and advances the queue (a
   callback-less stop must not wedge it). A refresh that cancels a task's
   last triggers purges its posted visuals, failure notices and queued
