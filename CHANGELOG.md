@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.2.1]
+- **Inexact alarms say so (#436).** The Due-time reminders toggle no
+  longer reads exact when the exact-alarm grant is missing: its own
+  sub-line carries a persistent "Inexact — reminders may be late" badge
+  (on or off), with a hint explaining reminders fire inexact until the
+  grant is allowed in system settings. Each posted reminder's expanded
+  view carries the same badge as its last line, so a late fire traces to
+  its cause in-app instead of reading as an app bug.
+
 ## [6.2.0]
 - **Stale and failed data says so (#435).** The task widget badges cached
   rows after a failed fetch ("12 open · updated 09:14 — refresh failed", with
