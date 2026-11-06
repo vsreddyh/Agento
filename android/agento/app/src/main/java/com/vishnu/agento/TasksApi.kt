@@ -518,22 +518,29 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
             }
         }
     }
-    fun num(key: String, default: Int = 0): Int {
+    fun num(key: String, default: Int = 0): CoercedInt {
         val r = optTaskInt(o, key, default)
         if (r.raw != null) {
             note("task ${id.take(24)}: $key ${r.raw}->${r.value}")
         }
-        return r.value
+        return r
+    }
+    // One lenient read with a floor per numeric field (#437, #480
+    // review): a mistyped value resets to the default with a note, and a
+    // well-typed negative is clamped to 0 with a note of its own — every
+    // numeric reset notifies, not just the estimate's. The revision floor
+    // matches its "0 = pre-version/backfill" rule (#184): a negative
+    // revision is corruption, never a version.
+    fun clampedNum(key: String, default: Int = 0): Int {
+        val r = num(key, default)
+        val v = r.value.coerceAtLeast(0)
+        if (v != r.value) {
+            note("task ${id.take(24)}: $key ${r.value}->$v")
+        }
+        return v
     }
     // estimated_minutes may encode as int, long, or double.
-    val minsRaw = num("estimated_minutes")
-    // A negative estimate is well-typed but still a reset: the clamp
-    // below rewrites it to 0, so it notifies like any other reset rather
-    // than passing as a default (#437 review).
-    val mins = minsRaw.coerceAtLeast(0)
-    if (mins != minsRaw) {
-        note("task ${id.take(24)}: estimated_minutes $minsRaw->$mins")
-    }
+    val mins = clampedNum("estimated_minutes")
     // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
     // read-modify-write per row is 200 I/Os for one fact — and a
     // read-then-write that is not atomic can regress (sees v3, then a late
@@ -547,8 +554,8 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
         description = optJsonStr(o, "description"),
         dueDate = optJsonStr(o, "due_date"),
         dueTime = optJsonStr(o, "due_time"),
-        estimatedMinutes = mins.coerceAtLeast(0),
-        repeatEvery = num("repeat_every"),
+        estimatedMinutes = mins,
+        repeatEvery = clampedNum("repeat_every"),
         repeatUnit = optJsonStr(o, "repeat_unit"),
         repeatDays = optTaskDays(o, "repeat_days"),
         repeatCustom = o.optBoolean("repeat_custom", false),
@@ -556,7 +563,7 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
         parallelable = o.optBoolean("parallelable", false),
         // Missing on pre-revision servers: 0 matches the backfill, so
         // an old server and a new app still agree (#184).
-        revision = num("revision"),
+        revision = clampedNum("revision"),
         completedAt = optJsonStr(o, "completedAt"),
         createdAt = optJsonStr(o, "createdAt"),
         contractVersion = version,
@@ -573,15 +580,16 @@ internal const val TASKS_SHAPE_ERROR =
  * rows, how many rows arrived unparseable, and how many rows parsed only
  * by resetting a mistyped numeric field to its default (#437).
  *
- * [state] names the fetch for the diagnostics record ([noteCoercedNotes]):
- * the widget pulls three states and the Task Manager one, and a single
- * global slot would let a background fetch clobber the screen's detail
- * (#480 review). Blank in tests and direct calls.
+ * [state] and [source] name the fetch for the diagnostics record
+ * ([noteCoercedNotes]): the widget pulls three states, the Task Manager
+ * one, reminders another — keying by fetch (source + state) stops one
+ * screen's fetch clobbering or clearing another's detail (#480 review).
+ * Blank in tests and direct calls (no record written without a source).
  *
  * The `data`/`items` fallbacks are gone (#433): a body without a `tasks`
  * array is a loud parse failure with an actionable message, never a clean
  * empty that reads as "no tasks". */
-internal fun parseTaskListPage(body: String, state: String = ""): TaskList {
+internal fun parseTaskListPage(body: String, state: String = "", source: String = ""): TaskList {
     val out = mutableListOf<ServerTask>()
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(TASKS_SHAPE_ERROR)
@@ -622,10 +630,12 @@ internal fun parseTaskListPage(body: String, state: String = ""): TaskList {
                 coercedNotes.take(3).joinToString("; ").take(400))
         }
     }
-    // The diagnostics screen reads this per fetch state, so one screen's
+    // The diagnostics screen reads this per fetch, so one screen's
     // hint points at its own rows — and a clean page clears only its own
-    // state's entry, never another screen's (#480 review).
-    TasksApi.noteCoercedNotes(state, coercedNotes.take(3))
+    // fetch's entry, never another screen's (#480 review).
+    if (source.isNotEmpty()) {
+        TasksApi.noteCoercedNotes(source, state, coercedNotes.take(3))
+    }
     return TaskList(out, root.optBoolean("truncated", false), dropped, coerced, coercedNotes.take(3))
 }
 
@@ -717,29 +727,31 @@ class TasksApi(context: Context) {
         private val versionLock = Any()
 
         /**
-         * The latest numeric-reset notes per fetched state (#437, #480):
-         * each names the row, the key, the raw value and what it became,
-         * capped like the log line. Keyed by list state (`open`/`done`/
-         * `all`) because the widget pulls three states and the Task
-         * Manager one — a single global slot let a background fetch
-         * clobber (or clear) the screen's detail. Read by
-         * [TaskWidget.diagnostics] so the Task Manager's "see Settings →
-         * About diagnostics" hint points at detail that is actually on
-         * that screen, not only in a log tail. A clean page clears only
-         * its own state's entry, so stale notes never outlive their fetch
+         * The latest numeric-reset notes per fetch (#437, #480): each
+         * names the row, the key, the raw value and what it became,
+         * capped like the log line. Keyed by fetch (`source:state` — the
+         * Task Manager pulls one state, the widget three, reminders
+         * another) because any single slot lets one screen's fetch
+         * clobber or clear another's detail — including same-state
+         * fetches at different limits. Read by [TaskWidget.diagnostics]
+         * so each screen's hint points at detail that is actually on that
+         * screen. Writing a fetch prunes its source's other states (only
+         * the latest page per screen is hinted), and a clean page clears
+         * only its own entry — so stale notes never outlive their fetch
          * without erasing another screen's.
          */
         @Volatile
         internal var lastCoercedNotes: Map<String, List<String>> = emptyMap()
             private set
 
-        /** Records one state's page notes (see [lastCoercedNotes]). */
-        internal fun noteCoercedNotes(state: String, notes: List<String>) {
+        /** Records one fetch's notes (see [lastCoercedNotes]). */
+        internal fun noteCoercedNotes(source: String, state: String, notes: List<String>) {
             synchronized(versionLock) {
+                val kept = lastCoercedNotes.filterKeys { !it.startsWith("$source:") }
                 lastCoercedNotes = if (notes.isEmpty()) {
-                    lastCoercedNotes - state
+                    kept
                 } else {
-                    lastCoercedNotes + (state to notes)
+                    kept + ("$source:$state" to notes)
                 }
             }
         }
@@ -790,8 +802,11 @@ class TasksApi(context: Context) {
      * One bounded page: [limit] <= 0 takes the server default (200, max
      * 500), and [TaskList.truncated] says whether more rows exist, so the
      * list never silently ends mid-collection (#168).
+     *
+     * [source] names the caller for the diagnostics record
+     * ([noteCoercedNotes]): each screen's fetch keeps its own entry.
      */
-    suspend fun list(state: String = "open", limit: Int = 0): Result<TaskList> =
+    suspend fun list(state: String = "open", limit: Int = 0, source: String = ""): Result<TaskList> =
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
@@ -803,7 +818,7 @@ class TasksApi(context: Context) {
             }
             val query = if (limit > 0) "/api/tasks?state=$s&limit=$limit" else "/api/tasks?state=$s"
             call("GET", query).map { body ->
-                parseTaskListPage(body, s)
+                parseTaskListPage(body, s, source)
             }.also { r -> r.getOrNull()?.let { noteContractVersion(it.tasks) } }
         }
 

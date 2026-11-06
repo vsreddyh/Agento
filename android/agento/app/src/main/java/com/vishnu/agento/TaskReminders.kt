@@ -518,7 +518,7 @@ object TaskReminders {
         if (!isEnabled(appCtx)) return RefreshOutcome.Ok
         // Limit 500 (server max): the budget below can only arm what it
         // sees, and the default 200 would silently drop tasks past it.
-        val page = TasksApi(appCtx).list("open", limit = 500).getOrNull()
+        val page = TasksApi(appCtx).list("open", limit = 500, source = "reminders").getOrNull()
             ?: return RefreshOutcome.Failed
         // Second half of the entry gate above: an enable→disable toggle
         // inside the fetch window must not let this stale pass arm over

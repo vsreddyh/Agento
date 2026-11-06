@@ -816,7 +816,7 @@ class TaskWidget : AppWidgetProvider() {
                     // 50 rows is the whole visible universe. Do not "fix"
                     // this into an unbounded fetch — the collection behind
                     // it is (#168).
-                    async { v.state to api.list(v.state, limit = 50) }
+                    async { v.state to api.list(v.state, limit = 50, source = "widget") }
                 }.awaitAll().forEach { (state, res) ->
                     res.getOrNull()?.tasks?.let { views[state] = it }
                         ?: run {

@@ -17,12 +17,13 @@ see GitHub Releases for older notes.
   (cleared when the pref is fixed, so diagnostics reflects current state,
   not history), and task rows whose numbers arrive mistyped (e.g.
   `estimated_minutes: "abc"`, a negative estimate clamped to 0, or
-  `"NaN"`/overflow that no task can hold) keep
+  `"NaN"`/overflow that no task can hold — negative repeat and revision
+  clamp likewise) keep
   showing with the reset value while the list carries a hint counting
   them; the key, the raw value and what it became ride both the log and
-  the diagnostics summary — per fetched state, so one screen's fetch can
-  neither clobber nor clear another's — and both channels name the same
-  capped rows, so the hint points at on-screen detail.
+  the diagnostics summary — per fetch source and state, so one screen's
+  fetch can neither clobber nor clear another's — and both channels name
+  the same capped rows, so the hint points at on-screen detail.
   Defaults themselves are unchanged — only the
   rewriting is now visible.
 

@@ -136,28 +136,41 @@ class TaskNumericCoercionTest {
     }
 
     @Test
-    fun `page notes ride the page and the per-state record`() {
+    fun `page notes ride the page and the per-fetch record`() {
         val page = parseTaskListPage(
             """{"tasks":[{"id":"a","name":"A","estimated_minutes":"abc"}]}""",
             "open",
+            "manager",
         )
         assertEquals(1, page.coerced)
         assertEquals(1, page.coercedNotes.size)
         assertTrue(page.coercedNotes.single().contains("estimated_minutes"))
         // Same slice the log prints: one channel, not two subsets (#480).
-        val notes = TasksApi.lastCoercedNotes["open"].orEmpty()
+        val notes = TasksApi.lastCoercedNotes["manager:open"].orEmpty()
         assertEquals(page.coercedNotes, notes)
         try {
-            // Another state's fetch neither clobbers nor clears this one.
-            parseTaskListPage("""{"tasks":[{"id":"b","name":"B"}]}""", "done")
-            assertEquals(1, TasksApi.lastCoercedNotes["open"]?.size)
-            assertTrue("done" !in TasksApi.lastCoercedNotes)
-            // A clean page clears only its own state's entry.
-            parseTaskListPage("""{"tasks":[{"id":"a","name":"A"}]}""", "open")
-            assertTrue("open" !in TasksApi.lastCoercedNotes)
+            // Another writer's fetch neither clobbers nor clears this one —
+            // even on the same state at a different limit.
+            parseTaskListPage("""{"tasks":[{"id":"b","name":"B"}]}""", "open", "widget")
+            assertEquals(1, TasksApi.lastCoercedNotes["manager:open"]?.size)
+            assertTrue("widget:open" !in TasksApi.lastCoercedNotes)
+            // A clean page clears only its own fetch's entry.
+            parseTaskListPage("""{"tasks":[{"id":"a","name":"A"}]}""", "open", "manager")
+            assertTrue("manager:open" !in TasksApi.lastCoercedNotes)
+            // ...while a sibling state entry from an earlier filter survives
+            // only until its own screen rewrites it: writing done prunes
+            // the manager's stale open entry.
+            parseTaskListPage(
+                """{"tasks":[{"id":"c","name":"C","revision":"bogus"}]}""",
+                "done",
+                "manager",
+            )
+            assertTrue("manager:open" !in TasksApi.lastCoercedNotes)
+            assertEquals(1, TasksApi.lastCoercedNotes["manager:done"]?.size)
         } finally {
-            TasksApi.noteCoercedNotes("open", emptyList())
-            TasksApi.noteCoercedNotes("done", emptyList())
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
+            TasksApi.noteCoercedNotes("manager", "done", emptyList())
+            TasksApi.noteCoercedNotes("widget", "open", emptyList())
         }
     }
 
@@ -166,13 +179,35 @@ class TaskNumericCoercionTest {
         val rows = (1..8).joinToString(",") {
             """{"id":"t$it","name":"N","estimated_minutes":"bogus$it"}"""
         }
-        val page = parseTaskListPage("""{"tasks":[$rows]}""", "open")
+        val page = parseTaskListPage("""{"tasks":[$rows]}""", "open", "manager")
         try {
             assertEquals(8, page.coerced)
             assertEquals(3, page.coercedNotes.size)
-            assertEquals(page.coercedNotes, TasksApi.lastCoercedNotes["open"])
+            assertEquals(page.coercedNotes, TasksApi.lastCoercedNotes["manager:open"])
         } finally {
-            TasksApi.noteCoercedNotes("open", emptyList())
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
+        }
+    }
+
+    @Test
+    fun `negative repeat and revision clamp to zero and notify`() {
+        // Only the estimate used to clamp: a negative repeat_every
+        // rendered exactly like a one-shot, and a negative revision passed
+        // clean — both silent rewrites (#480 review).
+        val page = parseTaskListPage(
+            """{"tasks":[{"id":"a","name":"A","repeat_every":-5,"revision":-1}]}""",
+            "open",
+            "manager",
+        )
+        try {
+            assertEquals(0, page.tasks.single().repeatEvery)
+            assertEquals(0, page.tasks.single().revision)
+            assertEquals(1, page.coerced)
+            val notes = TasksApi.lastCoercedNotes["manager:open"].orEmpty()
+            assertTrue("clamp must name repeat_every: $notes", notes.any { it.contains("repeat_every") })
+            assertTrue("clamp must name revision: $notes", notes.any { it.contains("revision") })
+        } finally {
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
         }
     }
 

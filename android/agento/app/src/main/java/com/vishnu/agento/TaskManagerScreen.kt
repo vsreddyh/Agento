@@ -310,7 +310,7 @@ internal fun TaskManagerScreen(
         if (!background) error = ""
         // fold's lambdas are not suspend, so the cursor read below runs after
         // the fold, not inside onSuccess.
-        val loaded = api.list(filter.state).fold(
+        val loaded = api.list(filter.state, source = "manager").fold(
             onSuccess = { page ->
                 // Rows still playing their leave animation are carried over
                 // the fresh page (#308): the server stops listing a task the
