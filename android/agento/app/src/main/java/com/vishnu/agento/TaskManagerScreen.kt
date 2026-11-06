@@ -11,6 +11,7 @@ package com.vishnu.agento
  * and the import list, which carries exactly what this file uses.
  */
 import android.content.Context
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -106,6 +107,11 @@ internal fun TaskManagerScreen(
     // the count rides with the page so the list says so instead of
     // shrinking silently (#430). Reset with the rows, like listTruncated.
     var droppedCount by remember { mutableStateOf(0) }
+    // Rows that parsed only by resetting a mistyped numeric field to its
+    // default (#437): shown, not dropped — but the reset must be visible,
+    // so its count rides with the page like droppedCount and the key/raw/
+    // became detail rides the log line into Settings → About diagnostics.
+    var coercedCount by remember { mutableStateOf(0) }
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
@@ -113,13 +119,34 @@ internal fun TaskManagerScreen(
     // coroutine armed in one composition (the safety-net timer in doComplete)
     // runs after later ones, and has to see the filter that is showing when it
     // fires — not the snapshot that was current when it was armed.
-    fun filterNow(): ServerTaskFilter =
-        runCatching { ServerTaskFilter.valueOf(filterName) }
-            .getOrDefault(ServerTaskFilter.Open)
+    fun filterNow(): ServerTaskFilter = filterForName(filterName)
     val filter = filterNow()
     var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
-    val sort = runCatching { ServerTaskSort.valueOf(sortName) }
-        .getOrDefault(ServerTaskSort.Start)
+    val sort = sortForName(sortName)
+    // A corrupt or version-skewed saved value resets to the default above
+    // (#437) — and that reset toasts once per distinct raw value, naming
+    // what was stored and what it became, instead of the view changing for
+    // no apparent reason.
+    var filterCoercionNoted by remember { mutableStateOf(setOf<String>()) }
+    var sortCoercionNoted by remember { mutableStateOf(setOf<String>()) }
+    LaunchedEffect(filterName) {
+        filterCoercionMessage(filterName)?.let { msg ->
+            if (filterName !in filterCoercionNoted) {
+                filterCoercionNoted = filterCoercionNoted + filterName
+                runCatching { Log.w("TaskManager", "coerced filter $msg") }
+                toasts.toast(msg, ToastKind.Error)
+            }
+        }
+    }
+    LaunchedEffect(sortName) {
+        sortCoercionMessage(sortName)?.let { msg ->
+            if (sortName !in sortCoercionNoted) {
+                sortCoercionNoted = sortCoercionNoted + sortName
+                runCatching { Log.w("TaskManager", "coerced sort $msg") }
+                toasts.toast(msg, ToastKind.Error)
+            }
+        }
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var sortMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ServerTask?>(null) }
@@ -299,6 +326,7 @@ internal fun TaskManagerScreen(
                 tasks = mergeRefresh(page.tasks, tasks, leaving)
                 listTruncated = page.truncated
                 droppedCount = page.dropped
+                coercedCount = page.coerced
                 error = ""
                 // Which filter these rows are the answer for (#308): recorded
                 // with the rows themselves, so the enter-animation effect never
@@ -333,6 +361,7 @@ internal fun TaskManagerScreen(
                     // must not keep advertising yesterday's truncation.
                     listTruncated = false
                     droppedCount = 0
+                    coercedCount = 0
                 }
                 false
             },
@@ -1147,6 +1176,9 @@ internal fun TaskManagerScreen(
                     if (droppedCount > 0) {
                         HintLine(taskDropMessage(droppedCount))
                     }
+                    if (coercedCount > 0) {
+                        HintLine(taskCoercedMessage(coercedCount))
+                    }
                     if (listTruncated) {
                         HintLine("The server held back rows — showing the first ${tasks.size}.")
                     }
@@ -1197,9 +1229,13 @@ internal fun TaskManagerScreen(
                     )
                     // Unparseable rows are a gateway-shape problem the user
                     // can report, not a filter: the count sits with the
-                    // count line, above the rows it describes (#430).
+                    // count line, above the rows it describes (#430). A
+                    // reset value is the same class of signal (#437).
                     if (droppedCount > 0) {
                         HintLine(taskDropMessage(droppedCount))
+                    }
+                    if (coercedCount > 0) {
+                        HintLine(taskCoercedMessage(coercedCount))
                     }
                     // Time sections (skipped on the Done filter, where due
                     // buckets carry no meaning); within a section the
@@ -2674,6 +2710,17 @@ internal fun taskDropMessage(dropped: Int): String =
         "1 task could not be parsed — the server sent a row this app cannot read."
     } else {
         "$dropped tasks could not be parsed — the server sent rows this app cannot read."
+    }
+
+/** Shared copy for reset task values (#437): rows that parsed only by
+ * resetting a mistyped value to its default. The count sits in the list;
+ * the key, raw value and reset value ride the log line, which surfaces in
+ * Settings → About diagnostics. */
+internal fun taskCoercedMessage(coerced: Int): String =
+    if (coerced == 1) {
+        "1 task value was reset to its default — see Settings → About diagnostics for what changed."
+    } else {
+        "$coerced task values were reset to their defaults — see Settings → About diagnostics for what changed."
     }
 
 /**
