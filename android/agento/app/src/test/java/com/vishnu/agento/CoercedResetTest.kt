@@ -340,6 +340,25 @@ class TaskNumericCoercionTest {
     }
 
     @Test
+    fun `sibling prune keeps the landed state and other sources`() {
+        // The manager/factory prune after settling on a state: siblings
+        // go, the landed state and every other source stay (#480 review).
+        try {
+            TasksApi.noteCoercedNotes("manager", "open", listOf("n1"))
+            TasksApi.noteCoercedNotes("manager", "done", listOf("n2"))
+            TasksApi.noteCoercedNotes("widget", "open", listOf("n3"))
+            TasksApi.clearCoercedNotesExcept("manager", "done")
+            assertTrue("manager:open" !in TasksApi.lastCoercedNotes)
+            assertEquals(listOf("n2"), TasksApi.lastCoercedNotes["manager:done"])
+            assertEquals(listOf("n3"), TasksApi.lastCoercedNotes["widget:open"])
+        } finally {
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
+            TasksApi.noteCoercedNotes("manager", "done", emptyList())
+            TasksApi.noteCoercedNotes("widget", "open", emptyList())
+        }
+    }
+
+    @Test
     fun `clearing one source leaves other sources alone`() {
         // The last-widget-gone prune must drop widget entries without
         // touching the manager's, and vice versa (#480 review).

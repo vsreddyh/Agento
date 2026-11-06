@@ -82,12 +82,8 @@ private class TaskFactory(
         runCatching {
             val state = view().state
             today = LocalDate.now(IST)
-            // A cache hit means no fetch happened: prune nothing. A landed
-            // network fetch prunes the factory's other states — the bound
-            // placement may show a different state than the last bind
-            // (reconfig), mirroring the manager's sibling prune (#480
-            // review). A failed fetch prunes nothing: the rows on screen
-            // are still the previous bind.
+            // Cached rows skip the network; a miss fetches synchronously
+            // (blocking is explicitly allowed on this binder thread).
             val cached = TaskWidget.cachedViews[state]
             val fetched = if (cached != null) {
                 null
@@ -100,9 +96,13 @@ private class TaskFactory(
                     }
                 }.getOrNull()
             }
-            if (fetched != null) {
-                TasksApi.clearCoercedNotesExcept("widget-factory", state)
-            }
+            // Every bind settles on this placement's state — cached,
+            // fetched, or empty on failure — so the factory's other states
+            // are stale no matter which path served the rows. Pruned here,
+            // not only on a network fetch: cache hits serve almost every
+            // bind, and a reconfig would otherwise linger next to the new
+            // view (#480 review).
+            TasksApi.clearCoercedNotesExcept("widget-factory", state)
             items = (cached ?: fetched?.tasks.orEmpty()
                 // Same order as the pushed paths (#369): the factory is
                 // the only renderer on API <31, so it sorts its own copy.

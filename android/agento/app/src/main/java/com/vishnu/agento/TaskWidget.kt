@@ -320,21 +320,41 @@ class TaskWidget : AppWidgetProvider() {
         for (id in appWidgetIds) {
             pruneCoercionsFor(id)
         }
-        // Task-notes entries have no per-placement clear: the push path
-        // rewrites all three states per cycle and the factory prunes its
-        // siblings per landed bind, so both stay fresh while any placement
-        // lives. When the last one goes, no fetch will ever refresh or
-        // clear them again — drop the whole source, or About names resets
-        // for widgets that no longer exist (#480 review). Unknown (lookup
-        // threw): keep, so a transient failure cannot delete live detail.
-        val noneRemain = runCatching {
+        // Task-notes entries have no per-placement clear, so a delete can
+        // orphan the states only the gone placement showed (#480 review).
+        // The push path refetches all three states every cycle while any
+        // placement lives, so `widget:*` stays fresh on its own — but the
+        // factory fetches one state per bind and must be pruned here.
+        // Unknown (lookup threw): keep, so a transient failure cannot
+        // delete live detail.
+        val remaining = runCatching {
             AppWidgetManager.getInstance(context)
                 .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
-                .isEmpty()
-        }.getOrDefault(false)
-        if (noneRemain) {
+        }.getOrNull()
+        if (remaining == null) {
+            // Keep everything.
+        } else if (remaining.isEmpty()) {
+            // Last writer gone: no fetch will ever refresh or clear these
+            // again — drop the whole source, or About names resets for
+            // widgets that no longer exist.
             TasksApi.clearCoercedNotesSource("widget")
             TasksApi.clearCoercedNotesSource("widget-factory")
+        } else {
+            // Partial delete: drop factory entries for states no remaining
+            // placement shows. A state whose viewer failed to read keeps
+            // its entry — over-kept detail converges on the next bind,
+            // over-pruned detail is gone until a re-corruption.
+            val gone = appWidgetIds.toSet()
+            val liveStates = remaining.filter { it !in gone }.map { id ->
+                runCatching { viewFor(context, id).state }.getOrNull()
+            }
+            if (liveStates.none { it == null }) {
+                for (s in TaskWidgetView.entries.map { it.state }) {
+                    if (s !in liveStates) {
+                        TasksApi.noteCoercedNotes("widget-factory", s, emptyList())
+                    }
+                }
+            }
         }
     }
 

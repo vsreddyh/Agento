@@ -28,9 +28,10 @@ see GitHub Releases for older notes.
   of the rows it contains, so the two never disagree. the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (each surface that
-  switches states — manager, widget factory — prunes its own stale ones
-  on each landed page, and deleting the last widget drops the widget
-  entries) — the
+  switches states — manager per landed load, widget factory per bind —
+  prunes its own stale ones, deleting the last widget drops the widget
+  entries, a partial delete drops factory states no placement shows, and
+  turning reminders off drops theirs) — the
   log and the page carry the same capped sample while the diagnostics
   record keeps every row (the About line shows the first 500 chars, so
   very large pages reconcile by count, not by full text), so the hint

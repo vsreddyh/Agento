@@ -839,7 +839,9 @@ class TasksApi(context: Context) {
          * state per bound placement) both switch states: without this
          * the old filter's/view's notes would linger next to the new page (#480
          * review). Called on a successful load only — on failure the rows
-         * on screen are still the previous page. Writers with a fixed state set
+         * on screen are still the previous page; the factory calls it on
+         * every bind, which always shows its placement's state (cached,
+         * fetched, or empty). Writers with a fixed state set
          * (reminders, the widget push path) never need it.
          */
         internal fun clearCoercedNotesExcept(source: String, keepState: String) {

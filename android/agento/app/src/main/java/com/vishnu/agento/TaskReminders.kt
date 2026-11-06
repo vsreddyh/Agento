@@ -482,7 +482,15 @@ object TaskReminders {
         prefs(context).edit {
             putBoolean(PREF_ENABLED, enabled)
         }
-        if (enabled) refresh(context) else cancelAll(context)
+        if (enabled) {
+            refresh(context)
+        } else {
+            cancelAll(context)
+            // Disabled means no fetch will ever refresh this entry again —
+            // drop it, or About names resets for a surface the user turned
+            // off (#480 review).
+            TasksApi.clearCoercedNotesSource("reminders")
+        }
     }
 
     private fun prefs(context: Context) =
