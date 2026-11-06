@@ -69,8 +69,11 @@ data class ServerTask(
 
 /** A bounded list response: the rows, whether more exist, how many
  * rows arrived unparseable (empty id/name) and were skipped rather than
- * shown (#430), and how many rows parsed only by resetting a mistyped
- * numeric field to its default (#437). A nonzero [dropped] means the server spoke rows this app
+ * shown (#430), how many rows parsed only by resetting a mistyped
+ * numeric field to its default (#437), and which resets those were
+ * (#480 review): the notes ride the page (not a global slot shared with
+ * other screens' fetches), capped like the log line so both channels
+ * name the same rows. A nonzero [dropped] means the server spoke rows this app
  * cannot read — the list surfaces the count instead of shrinking
  * silently. A nonzero [coerced] means some rows ARE shown but with a
  * reset value (e.g. `estimated_minutes: "abc"` read as 0) — the list
@@ -81,6 +84,7 @@ data class TaskList(
     val truncated: Boolean = false,
     val dropped: Int = 0,
     val coerced: Int = 0,
+    val coercedNotes: List<String> = emptyList(),
 )
 
 /**
@@ -458,11 +462,27 @@ internal data class CoercedInt(val value: Int, val raw: String?)
 internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedInt {
     if (!o.has(key) || o.isNull(key)) return CoercedInt(default, null)
     val v = o.opt(key)
-    if (v is Number) return CoercedInt(v.toInt(), null)
+    // Range-checked through Double: a bare toInt() wraps out-of-range
+    // Longs negative and saturates huge Doubles, both silently (#480
+    // review). Anything unrepresentable resets AND reports.
+    if (v is Number) {
+        val d = v.toDouble()
+        if (!d.isFinite() || d < Int.MIN_VALUE || d > Int.MAX_VALUE) {
+            return CoercedInt(default, v.toString().take(40))
+        }
+        return CoercedInt(v.toInt(), null)
+    }
     if (v is String) {
         val t = v.trim()
         t.toIntOrNull()?.let { return CoercedInt(it, null) }
-        t.toDoubleOrNull()?.let { return CoercedInt(it.toInt(), null) }
+        // Finite only: "NaN"/"Infinity" parse as Double but are not
+        // numbers the task can hold (#480 review).
+        t.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { d ->
+            if (d < Int.MIN_VALUE || d > Int.MAX_VALUE) {
+                return CoercedInt(default, "\"$t\"".take(44))
+            }
+            return CoercedInt(d.toInt(), null)
+        }
         return CoercedInt(default, "\"$t\"".take(44))
     }
     return CoercedInt(default, v.toString().take(40))
@@ -553,10 +573,15 @@ internal const val TASKS_SHAPE_ERROR =
  * rows, how many rows arrived unparseable, and how many rows parsed only
  * by resetting a mistyped numeric field to its default (#437).
  *
+ * [state] names the fetch for the diagnostics record ([noteCoercedNotes]):
+ * the widget pulls three states and the Task Manager one, and a single
+ * global slot would let a background fetch clobber the screen's detail
+ * (#480 review). Blank in tests and direct calls.
+ *
  * The `data`/`items` fallbacks are gone (#433): a body without a `tasks`
  * array is a loud parse failure with an actionable message, never a clean
  * empty that reads as "no tasks". */
-internal fun parseTaskListPage(body: String): TaskList {
+internal fun parseTaskListPage(body: String, state: String = ""): TaskList {
     val out = mutableListOf<ServerTask>()
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(TASKS_SHAPE_ERROR)
@@ -588,17 +613,20 @@ internal fun parseTaskListPage(body: String): TaskList {
     if (coerced > 0) {
         // One line per page, not per row: the rows stay shown (with reset
         // values), and this names what was reset so a version-skewed
-        // writer is visible. Capped detail — the count is the signal.
+        // writer is visible. Capped detail — the count is the signal. The
+        // same first-3 slice rides the page ([TaskList.coercedNotes]) so
+        // the log and the diagnostics summary name the same rows (#480
+        // review).
         runCatching {
             Log.w("TasksApi", "coerced $coerced task row(s) to defaults in list response: " +
                 coercedNotes.take(3).joinToString("; ").take(400))
         }
     }
-    // The diagnostics screen reads this, so the list's hint points at
-    // detail on that screen — always written, so a clean page clears a
-    // stale one (#437 review).
-    TasksApi.noteCoercedNotes(coercedNotes.takeLast(5))
-    return TaskList(out, root.optBoolean("truncated", false), dropped, coerced)
+    // The diagnostics screen reads this per fetch state, so one screen's
+    // hint points at its own rows — and a clean page clears only its own
+    // state's entry, never another screen's (#480 review).
+    TasksApi.noteCoercedNotes(state, coercedNotes.take(3))
+    return TaskList(out, root.optBoolean("truncated", false), dropped, coerced, coercedNotes.take(3))
 }
 
 /**
@@ -689,22 +717,31 @@ class TasksApi(context: Context) {
         private val versionLock = Any()
 
         /**
-         * The latest list page's numeric-reset notes (#437): each names
-         * the row, the key, the raw value and what it became. Capped at 5
-         * — the count is the signal, these are the examples. Read by
+         * The latest numeric-reset notes per fetched state (#437, #480):
+         * each names the row, the key, the raw value and what it became,
+         * capped like the log line. Keyed by list state (`open`/`done`/
+         * `all`) because the widget pulls three states and the Task
+         * Manager one — a single global slot let a background fetch
+         * clobber (or clear) the screen's detail. Read by
          * [TaskWidget.diagnostics] so the Task Manager's "see Settings →
          * About diagnostics" hint points at detail that is actually on
-         * that screen, not only in a log tail. Newest page wins (one
-         * number per response, like [maxContractVersion]); a clean page
-         * clears it so stale notes never outlive their fetch.
+         * that screen, not only in a log tail. A clean page clears only
+         * its own state's entry, so stale notes never outlive their fetch
+         * without erasing another screen's.
          */
         @Volatile
-        internal var lastCoercedNotes: List<String> = emptyList()
+        internal var lastCoercedNotes: Map<String, List<String>> = emptyMap()
             private set
 
-        /** Records one page's numeric-reset notes (see [lastCoercedNotes]). */
-        internal fun noteCoercedNotes(notes: List<String>) {
-            lastCoercedNotes = notes
+        /** Records one state's page notes (see [lastCoercedNotes]). */
+        internal fun noteCoercedNotes(state: String, notes: List<String>) {
+            synchronized(versionLock) {
+                lastCoercedNotes = if (notes.isEmpty()) {
+                    lastCoercedNotes - state
+                } else {
+                    lastCoercedNotes + (state to notes)
+                }
+            }
         }
     }
 
@@ -766,7 +803,7 @@ class TasksApi(context: Context) {
             }
             val query = if (limit > 0) "/api/tasks?state=$s&limit=$limit" else "/api/tasks?state=$s"
             call("GET", query).map { body ->
-                parseTaskListPage(body)
+                parseTaskListPage(body, s)
             }.also { r -> r.getOrNull()?.let { noteContractVersion(it.tasks) } }
         }
 

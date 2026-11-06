@@ -59,6 +59,36 @@ class OptTaskIntTest {
         assertTrue(optTaskInt(obj(true), "k").raw!!.isNotEmpty())
         assertEquals(9, optTaskInt(obj(false), "k", 9).value)
     }
+
+    @Test
+    fun `non-finite doubles reset and report instead of reading clean`() {
+        // toDoubleOrNull accepts these, but no task can hold them: NaN
+        // reads as a clean 0 and infinities as clean extremes without this
+        // guard (#480 review).
+        assertEquals(CoercedInt(0, "\"NaN\""), optTaskInt(obj("NaN"), "k"))
+        assertEquals(0, optTaskInt(obj("NaN"), "k").value)
+        assertTrue(optTaskInt(obj("Infinity"), "k").raw!!.contains("Infinity"))
+        assertTrue(optTaskInt(obj("-Infinity"), "k").raw!!.contains("Infinity"))
+    }
+
+    @Test
+    fun `out-of-range numbers reset and report instead of wrapping`() {
+        // A bare toInt() wraps huge Longs negative and saturates huge
+        // Doubles — both silent rewrites to values that are neither the
+        // raw nor the default (#480 review).
+        val bigString = optTaskInt(obj("9999999999"), "k")
+        assertEquals(0, bigString.value)
+        assertTrue(bigString.raw!!.contains("9999999999"))
+        val bigLong = optTaskInt(obj(5000000000L), "k")
+        assertEquals(0, bigLong.value)
+        assertTrue(bigLong.raw!!.contains("5000000000"))
+        val bigDouble = optTaskInt(obj(1e100), "k")
+        assertEquals(0, bigDouble.value)
+        assertTrue(bigDouble.raw!!.isNotEmpty())
+        // Boundary values still read clean.
+        assertEquals(CoercedInt(Int.MAX_VALUE, null), optTaskInt(obj(Int.MAX_VALUE), "k"))
+        assertEquals(CoercedInt(Int.MIN_VALUE, null), optTaskInt(obj(Int.MIN_VALUE), "k"))
+    }
 }
 
 class TaskNumericCoercionTest {
@@ -106,15 +136,44 @@ class TaskNumericCoercionTest {
     }
 
     @Test
-    fun `the latest page notes land where diagnostics reads them`() {
-        parseTaskListPage("""{"tasks":[{"id":"a","name":"A","estimated_minutes":"abc"}]}""")
-        val notes = TasksApi.lastCoercedNotes
-        assertEquals(1, notes.size)
-        assertTrue("diagnostics must name the key: $notes", notes.single().contains("estimated_minutes"))
-        assertTrue("diagnostics must name the raw value: $notes", notes.single().contains("\"abc\""))
-        // A clean page clears them so stale notes never outlive their fetch.
-        parseTaskListPage("""{"tasks":[{"id":"a","name":"A"}]}""")
-        assertTrue(TasksApi.lastCoercedNotes.isEmpty())
+    fun `page notes ride the page and the per-state record`() {
+        val page = parseTaskListPage(
+            """{"tasks":[{"id":"a","name":"A","estimated_minutes":"abc"}]}""",
+            "open",
+        )
+        assertEquals(1, page.coerced)
+        assertEquals(1, page.coercedNotes.size)
+        assertTrue(page.coercedNotes.single().contains("estimated_minutes"))
+        // Same slice the log prints: one channel, not two subsets (#480).
+        val notes = TasksApi.lastCoercedNotes["open"].orEmpty()
+        assertEquals(page.coercedNotes, notes)
+        try {
+            // Another state's fetch neither clobbers nor clears this one.
+            parseTaskListPage("""{"tasks":[{"id":"b","name":"B"}]}""", "done")
+            assertEquals(1, TasksApi.lastCoercedNotes["open"]?.size)
+            assertTrue("done" !in TasksApi.lastCoercedNotes)
+            // A clean page clears only its own state's entry.
+            parseTaskListPage("""{"tasks":[{"id":"a","name":"A"}]}""", "open")
+            assertTrue("open" !in TasksApi.lastCoercedNotes)
+        } finally {
+            TasksApi.noteCoercedNotes("open", emptyList())
+            TasksApi.noteCoercedNotes("done", emptyList())
+        }
+    }
+
+    @Test
+    fun `page notes cap at the log slice`() {
+        val rows = (1..8).joinToString(",") {
+            """{"id":"t$it","name":"N","estimated_minutes":"bogus$it"}"""
+        }
+        val page = parseTaskListPage("""{"tasks":[$rows]}""", "open")
+        try {
+            assertEquals(8, page.coerced)
+            assertEquals(3, page.coercedNotes.size)
+            assertEquals(page.coercedNotes, TasksApi.lastCoercedNotes["open"])
+        } finally {
+            TasksApi.noteCoercedNotes("open", emptyList())
+        }
     }
 
     @Test
@@ -208,6 +267,28 @@ class WidgetCoercionTest {
         assertEquals("\"Roomy\"->Comfortable", widgetDensityCoercion("Roomy"))
         assertEquals(TaskWidgetSort.Server, widgetSortForName("Priority"))
         assertEquals("\"Priority\"->Server", widgetSortCoercion("Priority"))
+    }
+
+    @Test
+    fun `a fixed pref clears its diagnostics entry without re-logging`() {
+        // #480 review: diagnostics must reflect the current reset state,
+        // not history — while the log still fires once per distinct value.
+        val key = "task_widget_view_9901"
+        try {
+            TaskWidget.noteCoercion(key, "\"Snoozed\"->Open")
+            assertEquals("\"Snoozed\"->Open", TaskWidget.lastCoercions[key])
+            TaskWidget.noteCoercion(key, null)
+            assertTrue(key !in TaskWidget.lastCoercions)
+            // Re-corruption updates diagnostics again (log stays quiet —
+            // the line is already in the log from the first report).
+            TaskWidget.noteCoercion(key, "\"Snoozed\"->Open")
+            assertEquals("\"Snoozed\"->Open", TaskWidget.lastCoercions[key])
+        } finally {
+            TaskWidget.noteCoercion(key, null)
+            synchronized(TaskWidget.coercionLock) {
+                TaskWidget.coercionSeen.remove("$key|\"Snoozed\"->Open")
+            }
+        }
     }
 }
 

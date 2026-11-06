@@ -437,11 +437,13 @@ class TaskWidget : AppWidgetProvider() {
                         .map { (k, v) -> "$k $v" }.joinToString("; ").take(500))
                 }
                 // Task rows that parsed only by resetting a mistyped number
-                // (#437): the latest page's key/raw->became notes, so the
-                // Task Manager's hint points at detail on this screen.
+                // (#437): the latest notes per fetched state, so each
+                // screen's hint points at its own rows' detail (#480).
                 val taskCoerced = TasksApi.lastCoercedNotes
                 if (taskCoerced.isNotEmpty()) {
-                    appendLine("taskCoerced=" + taskCoerced.joinToString("; ").take(500))
+                    appendLine("taskCoerced=" + taskCoerced.toSortedMap()
+                        .map { (s, ns) -> "$s: " + ns.joinToString("; ") }
+                        .joinToString(" | ").take(500))
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
@@ -636,18 +638,26 @@ class TaskWidget : AppWidgetProvider() {
         // key+raw per process, so every render does not re-log the same
         // corruption. Reads and writes under [coercionLock]; the latest
         // reset per key also lands in [lastCoercions] for diagnostics().
-        private val coercionSeen = mutableSetOf<String>()
-        private val coercionLock = Any()
-        @Volatile private var lastCoercions: Map<String, String> = emptyMap()
+        // Internal for the JVM pin below, like the pure coercion helpers.
+        internal val coercionSeen = mutableSetOf<String>()
+        internal val coercionLock = Any()
+        @Volatile internal var lastCoercions: Map<String, String> = emptyMap()
 
-        private fun noteCoercion(key: String, short: String?) {
-            if (short == null) return
-            val fresh = synchronized(coercionLock) {
-                if (!coercionSeen.add("$key|$short")) false
-                else {
-                    lastCoercions = lastCoercions + (key to short)
-                    true
+        internal fun noteCoercion(key: String, short: String?) {
+            // A clean read clears the key: a fixed pref stops advertising
+            // its old reset, so diagnostics reflects the current reset
+            // state rather than history (#480 review). The seen-set keeps
+            // the entry, so a re-corruption updates diagnostics without
+            // re-logging a line the log already holds.
+            if (short == null) {
+                synchronized(coercionLock) {
+                    lastCoercions = lastCoercions - key
                 }
+                return
+            }
+            val fresh = synchronized(coercionLock) {
+                lastCoercions = lastCoercions + (key to short)
+                coercionSeen.add("$key|$short")
             }
             if (fresh) runCatching { Log.w("TaskWidget", "coerced $key $short") }
         }

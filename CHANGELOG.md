@@ -13,12 +13,16 @@ see GitHub Releases for older notes.
   default no longer does it silently: a corrupt or version-skewed Task
   Manager filter/sort toasts once naming what was stored and what it
   became, each widget placement logs its view/density/sort reset (once per
-  value) into Settings → About diagnostics alongside a per-key summary,
-  and task rows whose numbers arrive mistyped (e.g.
-  `estimated_minutes: "abc"`, or a negative estimate clamped to 0) keep
+  value) into Settings → About diagnostics alongside a per-key summary
+  (cleared when the pref is fixed, so diagnostics reflects current state,
+  not history), and task rows whose numbers arrive mistyped (e.g.
+  `estimated_minutes: "abc"`, a negative estimate clamped to 0, or
+  `"NaN"`/overflow that no task can hold) keep
   showing with the reset value while the list carries a hint counting
   them; the key, the raw value and what it became ride both the log and
-  the diagnostics summary, so the hint points at on-screen detail.
+  the diagnostics summary — per fetched state, so one screen's fetch can
+  neither clobber nor clear another's — and both channels name the same
+  capped rows, so the hint points at on-screen detail.
   Defaults themselves are unchanged — only the
   rewriting is now visible.
 
