@@ -534,7 +534,7 @@ class FilterSortCoercionTest {
         assertTrue(v.contains("\\u0085"))
         assertTrue(v.contains("\\u0001"))
         // Named escapes stay named.
-        assertEquals("\"A\\bC\\fD\"->Open", widgetViewCoercion("A\bC\fD"))
+        assertEquals("\"A\\bC\\fD\"->Open", widgetViewCoercion("A\bC\u000CD"))
     }
 
     @Test
