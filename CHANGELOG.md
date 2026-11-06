@@ -36,6 +36,9 @@ see GitHub Releases for older notes.
   at dequeue, audio playing when DND flips is stopped by a ringer-mode
   listener, and the stored-voice check runs after the toggle re-check —
   extending the visual-only rule past the enqueue gate on all three sides.
+  The toggle is honored at both ends of every fetch: an alarm firing into
+  a disable drops silently (no visual, no nag re-arm), and a refresh
+  overtaken by one never arms over the wiped set.
   Stopping speech always clears its flags and advances the queue (a
   callback-less stop must not wedge it). A refresh that cancels a task's
   last triggers purges its posted visuals, failure notices and queued

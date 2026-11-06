@@ -476,6 +476,10 @@ object TaskReminders {
         // sees, and the default 200 would silently drop tasks past it.
         val page = TasksApi(appCtx).list("open", limit = 500).getOrNull()
             ?: return RefreshOutcome.Failed
+        // Second half of the entry gate above: an enable→disable toggle
+        // inside the fetch window must not let this stale pass arm over
+        // the wiped set (#470 review).
+        if (!isEnabled(appCtx)) return RefreshOutcome.Ok
         val tasks = page.tasks
         // IST-pinned (#124): due times are entered as wall-clock IST,
         // so "now" and the arming horizon must read the same zone.
@@ -913,6 +917,13 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     }
 
     private suspend fun post(appCtx: Context, taskId: String, kind: ReminderKind) {
+        // Off means off at both ends of the fetch: a disable landing
+        // before it skips the network entirely, and one landing inside
+        // the fetch window still drops silently — no visual, no rearm, no
+        // speech — instead of posting while disabled or re-arming the nag
+        // over cancelAll's wiped set (#470 review). The check-then-act
+        // sliver past the second check is inherent.
+        if (!TaskReminders.isEnabled(appCtx)) return
         // A stale speech-failure notice for THIS point must not outlive a
         // fresh alert: a retried alarm that now plays would otherwise sit
         // next to its own earlier failure. Other points' notices stay — one
@@ -935,6 +946,9 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // (only a timeout is null), and cancelling on failure would
         // silently drop the alarm for a task that is still open.
         val task = outcome?.getOrNull()
+        // Second half of the entry gate above: a disable inside the fetch
+        // window drops here, before any visual, rearm or speech.
+        if (!TaskReminders.isEnabled(appCtx)) return
         if (outcome?.isSuccess == true && (task == null || !task.isOpen())) {
             TaskReminders.cancelOne(appCtx, taskId)
             // Done/deleted: no future speech for this task, so no point's
