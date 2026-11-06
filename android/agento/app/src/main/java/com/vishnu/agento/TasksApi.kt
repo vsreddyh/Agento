@@ -807,9 +807,11 @@ class TasksApi(context: Context) {
          * fetches at different limits. Read by [TaskWidget.diagnostics]
          * so each screen's hint points at detail that is actually on that
          * screen. A clean page clears only its own entry; sibling states
-         * under one source survive parallel writes, and the one screen
-         * that switches states prunes its stale siblings explicitly
-         * ([clearCoercedNotesExcept]).
+         * under one source survive parallel writes, and each surface that
+         * switches states (manager, widget factory) prunes its stale
+         * siblings explicitly ([clearCoercedNotesExcept]); when a source's
+         * last writer goes away its entries go with it
+         * ([clearCoercedNotesSource]).
          */
         @Volatile
         internal var lastCoercedNotes: Map<String, List<String>> = emptyMap()
@@ -833,17 +835,31 @@ class TasksApi(context: Context) {
 
         /**
          * Drops one source's entries for every state but [keepState].
-         * Only the Task Manager switches states per screen: without this
-         * its old filter's notes would linger next to the new page (#480
+         * The Task Manager (one state per filter) and the widget factory (one
+         * state per bound placement) both switch states: without this
+         * the old filter's/view's notes would linger next to the new page (#480
          * review). Called on a successful load only — on failure the rows
-         * on screen are still the previous page. Every other writer keeps
-         * a fixed state set and never needs it.
+         * on screen are still the previous page. Writers with a fixed state set
+         * (reminders, the widget push path) never need it.
          */
         internal fun clearCoercedNotesExcept(source: String, keepState: String) {
             synchronized(versionLock) {
                 lastCoercedNotes = lastCoercedNotes.filterKeys {
                     it == "$source:$keepState" || !it.startsWith("$source:")
                 }
+            }
+        }
+
+        /**
+         * Drops every entry for one source (#480 review): the task-notes
+         * equivalent of the widget-pref prune. Called when the source's last
+         * writer goes away — no placements left means no fetch will ever
+         * refresh (or clear) those entries again, so they would read as
+         * current state until process restart while being history.
+         */
+        internal fun clearCoercedNotesSource(source: String) {
+            synchronized(versionLock) {
+                lastCoercedNotes = lastCoercedNotes.filterKeys { !it.startsWith("$source:") }
             }
         }
     }

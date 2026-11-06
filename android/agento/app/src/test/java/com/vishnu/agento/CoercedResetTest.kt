@@ -340,6 +340,28 @@ class TaskNumericCoercionTest {
     }
 
     @Test
+    fun `clearing one source leaves other sources alone`() {
+        // The last-widget-gone prune must drop widget entries without
+        // touching the manager's, and vice versa (#480 review).
+        try {
+            TasksApi.noteCoercedNotes("widget", "open", listOf("n1"))
+            TasksApi.noteCoercedNotes("widget-factory", "done", listOf("n2"))
+            TasksApi.noteCoercedNotes("manager", "open", listOf("n3"))
+            TasksApi.clearCoercedNotesSource("widget")
+            assertTrue("widget:open" !in TasksApi.lastCoercedNotes)
+            assertEquals(listOf("n2"), TasksApi.lastCoercedNotes["widget-factory:done"])
+            assertEquals(listOf("n3"), TasksApi.lastCoercedNotes["manager:open"])
+            TasksApi.clearCoercedNotesSource("widget-factory")
+            TasksApi.clearCoercedNotesSource("manager")
+            assertTrue(TasksApi.lastCoercedNotes.isEmpty())
+        } finally {
+            TasksApi.noteCoercedNotes("widget", "open", emptyList())
+            TasksApi.noteCoercedNotes("widget-factory", "done", emptyList())
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
+        }
+    }
+
+    @Test
     fun `coercion notes name the key raw and reset values`() {
         val notes = mutableListOf<String>()
         parseTask(

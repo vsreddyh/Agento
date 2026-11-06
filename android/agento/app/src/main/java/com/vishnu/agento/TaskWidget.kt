@@ -320,6 +320,22 @@ class TaskWidget : AppWidgetProvider() {
         for (id in appWidgetIds) {
             pruneCoercionsFor(id)
         }
+        // Task-notes entries have no per-placement clear: the push path
+        // rewrites all three states per cycle and the factory prunes its
+        // siblings per landed bind, so both stay fresh while any placement
+        // lives. When the last one goes, no fetch will ever refresh or
+        // clear them again — drop the whole source, or About names resets
+        // for widgets that no longer exist (#480 review). Unknown (lookup
+        // threw): keep, so a transient failure cannot delete live detail.
+        val noneRemain = runCatching {
+            AppWidgetManager.getInstance(context)
+                .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
+                .isEmpty()
+        }.getOrDefault(false)
+        if (noneRemain) {
+            TasksApi.clearCoercedNotesSource("widget")
+            TasksApi.clearCoercedNotesSource("widget-factory")
+        }
     }
 
     /** Fetches open tasks off-thread; goAsync keeps the broadcast alive. */
