@@ -217,16 +217,33 @@ internal val SPEECH_SCHEDULE_UPDATE_KEYS = setOf(
 )
 
 /**
- * Whether a bulk update op's fields move speech/schedule state. Null
- * fields mean "unknown" — purge, fail-safe — since an uninspectable
- * update may have moved anything.
+ * Whether a bulk update op's fields move speech/schedule state (#470
+ * review): the spoken text (name/voice phrase), the due instant, and the
+ * estimate that derives the start. Values compare, not keys — a
+ * same-value rewrite (bulk-moving tasks already on that date) purges
+ * nothing, exactly like a no-op single edit and the background
+ * schedule-diff. Null fields, or no previous row to compare against,
+ * mean "unknown": purge, fail-safe.
  */
-internal fun updateMovesSpeech(fields: JSONObject?): Boolean {
+internal fun updateMovesSpeech(fields: JSONObject?, prev: ServerTask? = null): Boolean {
     if (fields == null) return true
     val keys = mutableSetOf<String>()
     val it = fields.keys()
     while (it.hasNext()) keys.add(it.next())
-    return keys.any { it in SPEECH_SCHEDULE_UPDATE_KEYS }
+    if (keys.none { it in SPEECH_SCHEDULE_UPDATE_KEYS }) return false
+    if (prev == null) return true
+    // Raw values, like the single edit: the wire trims server-side, so a
+    // whitespace-only difference still counts as moved (safe direction —
+    // the stored text may genuinely differ).
+    fun str(key: String): String? =
+        if (fields.has(key) && !fields.isNull(key)) fields.optString(key, "") else null
+    fun num(key: String): Int? =
+        if (fields.has(key) && !fields.isNull(key)) (fields.opt(key) as? Number)?.toInt() else null
+    return str("name")?.let { it != prev.name } == true ||
+        str("speak_name")?.let { it != prev.speakName } == true ||
+        str("due_date")?.let { it != prev.dueDate } == true ||
+        str("due_time")?.let { it != prev.dueTime } == true ||
+        num("estimated_minutes")?.let { it != prev.estimatedMinutes } == true
 }
 
 /** Names the `fields` entries [bulkUpdateSent] cannot assert. Empty means

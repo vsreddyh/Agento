@@ -984,14 +984,15 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // only while the task is still open and still past due, so
         // completing, deleting or rescheduling it stops the nagging. The
         // one-shot points are the receiver's job to forget — their time
-        // has passed either way.
+        // has passed either way. Re-arming is DEFERRED, not direct (see
+        // the flag): acting here would let a disable between rearm and
+        // the final notify gate resurrect the nag over the wiped set
+        // (#470 review).
+        var rearmNag = false
         if (kind == ReminderKind.Overdue) {
             val due = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
             if (task != null && due != null && due <= System.currentTimeMillis()) {
-                // Re-checked: a disable between the fetch gate and here
-                // must not resurrect the nag over the wiped set (#470
-                // review). The check-then-arm sliver past here is inherent.
-                if (TaskReminders.isEnabled(appCtx)) TaskReminders.rearmOverdue(appCtx, taskId)
+                rearmNag = true
             } else if (outcome?.isSuccess == true) {
                 // The fetch worked and the task is no longer past due: it
                 // was rescheduled, so stop the nag and say nothing. Past
@@ -1009,8 +1010,8 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 // staying quiet here would end the nag until some unrelated
                 // edit happened to re-derive it. The next successful fetch
                 // drops it the moment the task is gone or rescheduled.
-                // Same toggle re-check as above: no resurrection while off.
-                if (TaskReminders.isEnabled(appCtx)) TaskReminders.rearmOverdue(appCtx, taskId)
+                // Deferred like the still-due arm above.
+                rearmNag = true
             }
         }
         val name = task?.name.orEmpty().ifEmpty {
@@ -1165,8 +1166,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         }
         // Final toggle gate (#470 review): a disable anywhere between
         // the fetch gate and here drops silently instead of posting a
-        // visual while off. Speech gates itself on the same flag.
+        // visual while off — and the deferred nag re-arm below only runs
+        // under a live toggle, so no disable window can resurrect it over
+        // the wiped set. Speech gates itself on the same flag.
         if (!TaskReminders.isEnabled(appCtx)) return
+        if (rearmNag) TaskReminders.rearmOverdue(appCtx, taskId)
         mgr.notify(
             // Tag-based identity ([postedTag]): unique per task *and*
             // reminder point, so a task's start nudge, heads-up and each

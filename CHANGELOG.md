@@ -40,9 +40,12 @@ see GitHub Releases for older notes.
   a disable drops silently (no visual, no nag re-arm), and a refresh
   overtaken by one never arms over the wiped set. The toggle is honored
   at both ends of every fetch and before every side effect: an alarm
-  firing into a disable drops silently (no visual, no nag re-arm), a
+  firing into a disable drops silently (no visual, no nag re-arm — the
+  re-arm is decided early but acted on only under a live toggle), a
   refresh overtaken by one never arms, and an imported toggle reconciles
-  through the same refresh/cancel paths instead of writing the pref raw. Failure reports carry
+  through the same refresh/cancel paths instead of writing the pref raw.
+  Bulk updates purge on value diffs, not key presence, so same-value
+  rewrites keep live speech like no-op single edits. Failure reports carry
   the drop generations stamped at enqueue, so a task-drop or disable
   landing between capture and post swallows the report instead of
   resurrecting a cancelled tag — including across a quick re-enable.

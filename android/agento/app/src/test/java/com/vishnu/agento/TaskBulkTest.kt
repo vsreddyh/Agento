@@ -214,3 +214,46 @@ class BulkUpdateMovesSpeechTest {
         assertTrue(updateMovesSpeech(null))
     }
 }
+
+/**
+ * Bulk-update value diffing (#470 review): key presence purges only when
+ * there is no previous row to compare — a same-value rewrite (moving
+ * tasks already on that date) purges nothing, like a no-op single edit
+ * and the background schedule diff.
+ */
+class BulkUpdateValueDiffTest {
+
+    private val prev = ServerTask(
+        id = "a",
+        name = "Take meds",
+        dueDate = "2026-08-09",
+        dueTime = "09:00",
+        estimatedMinutes = 60,
+    )
+
+    @Test
+    fun `a same-value move purges nothing`() {
+        assertFalse(
+            updateMovesSpeech(
+                JSONObject().put("due_date", "2026-08-09").put("expected_revision", 3),
+                prev,
+            ),
+        )
+    }
+
+    @Test
+    fun `a changed value purges`() {
+        assertTrue(
+            updateMovesSpeech(JSONObject().put("due_date", "2026-08-10"), prev),
+        )
+        assertTrue(
+            updateMovesSpeech(JSONObject().put("estimated_minutes", 30), prev),
+        )
+        assertTrue(updateMovesSpeech(JSONObject().put("name", "Other"), prev))
+    }
+
+    @Test
+    fun `no previous row purges fail-safe`() {
+        assertTrue(updateMovesSpeech(JSONObject().put("due_date", "2026-08-09"), null))
+    }
+}

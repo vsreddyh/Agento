@@ -827,6 +827,10 @@ internal fun TaskManagerScreen(
         // twice). The button state is only the visual hint.
         if (!bulkActionsLive(ids.toSet(), busyIds)) return
         ids.forEach(::markBusy)
+        // Pre-batch rows for the update-purge gate below: read now, not on
+        // success — a background refresh in between would compare against
+        // already-new values and miss the move (#470 review).
+        val prevById = tasks.associateBy { it.id }
         scope.launch {
             try {
                 api.batch(ops).fold(
@@ -847,7 +851,7 @@ internal fun TaskManagerScreen(
                                     ReminderTts.dropTask(context, it)
                                 }
                                 "update" -> verbed.forEach { op ->
-                                    if (updateMovesSpeech(op.fields)) {
+                                    if (updateMovesSpeech(op.fields, prevById[op.id])) {
                                         ReminderTts.dropTask(context, op.id)
                                         ReminderTts.cancelFailures(context, op.id)
                                     }
