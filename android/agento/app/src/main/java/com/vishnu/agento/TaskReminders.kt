@@ -949,12 +949,14 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // A stale speech-failure notice for THIS point must not outlive a
         // fresh alert: a retried alarm that now plays would otherwise sit
         // next to its own earlier failure. Other points' notices stay — one
-        // point firing says nothing about another's speech (#434). Guarded
-        // on audible: a DND/silent fire attempts no speech, so clearing here
-        // would delete evidence with no retry to supersede it.
-        if (!ReminderTts.isSilent(appCtx)) {
-            ReminderTts.cancelFailureFor(appCtx, taskId, kind.key)
-        }
+        // point firing says nothing about another's speech (#434).
+        // Unconditional, including silent fires (#470 review): a silent
+        // fire schedules no speech retry, so guarding on audible would
+        // leave the old tag next to the fresh visual with nothing to ever
+        // supersede it — for a one-shot point, possibly forever. The fresh
+        // visual is the current truth; the failure already toasted when it
+        // happened, and the Log keeps it.
+        ReminderTts.cancelFailureFor(appCtx, taskId, kind.key)
         // One indexed lookup, not the whole open list: the receiver knows
         // the id, and `GET /api/tasks/{id}` answers in one query where the
         // list made every nag quadratic (#168). Null means gone
@@ -973,11 +975,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         if (!TaskReminders.isEnabled(appCtx)) return
         if (outcome?.isSuccess == true && (task == null || !task.isOpen())) {
             TaskReminders.cancelOne(appCtx, taskId)
-            // Done/deleted: no future speech for this task, so no point's
-            // failure notice may outlive it (#434 review) — and no queued
-            // utterance may outlive it either (#470 review).
-            ReminderTts.cancelFailures(appCtx, taskId)
-            ReminderTts.dropTask(appCtx, taskId)
+            // Done/deleted: the full bundle, like an in-app delete — posted
+            // visuals included. Anything less orphans: no future alarm will
+            // fire to clean up after this one (#470 review).
+            TaskReminders.cancelPosted(appCtx, taskId)
             return
         }
         // The overdue nag is the one self-repeating point: keep it going
