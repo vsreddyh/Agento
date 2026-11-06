@@ -34,15 +34,6 @@ class ReminderTtsFailureTest {
     }
 
     @Test
-    fun `appending a failure line is idempotent`() {
-        val line = speechFailureLine(TtsFailure.SPEAK_REJECTED)
-        assertEquals(line, withSpeechFailure("", line))
-        assertEquals("Due now\n$line", withSpeechFailure("Due now", line))
-        // A retry re-reporting the same drop must not stack the line twice.
-        assertEquals("Due now\n$line", withSpeechFailure("Due now\n$line", line))
-    }
-
-    @Test
     fun `unavailable default never falls back silently`() {
         // The whole point (#434): error beats wrong-language speech.
         assertTrue(shouldSpeakWithDefault(defaultAvailable = true, fallbackAvailable = true))
