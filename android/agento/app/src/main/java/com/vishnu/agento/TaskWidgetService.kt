@@ -105,15 +105,14 @@ private class TaskFactory(
                     }
                 }.getOrNull()
             }
-            // Every bind settles on this placement's state — cached,
-            // fetched, or empty on failure. The factory namespace is per
-            // placement (`widget-factory-<id>`), so pruning to this bind's
-            // state can never touch another placement's detail, and a
-            // reconfig drops the old view's notes with the same call that
-            // records the new one (#480 review). Pruned only when the bind
-            // settled on rows (cache hit or landed fetch — never a failed
-            // fetch showing nothing, never a preview bind with no
-            // placement), mirroring the manager's success-only prune.
+            // Pruned only when the bind settled on rows — cache hit or
+            // landed fetch, never a failed fetch showing nothing, never a
+            // preview bind with no placement — mirroring the manager's
+            // success-only prune. The factory namespace is per placement
+            // (`widget-factory-<id>`), so pruning to this bind's state can
+            // never touch another placement's detail, and a reconfig drops
+            // the old view's notes with the same call that records the new
+            // one (#480 review).
             if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID &&
                 (cached != null || fetched != null)
             ) {

@@ -74,6 +74,16 @@ class OptTaskIntTest {
     }
 
     @Test
+    fun `batch 404 matching mirrors the server byte truncation`() {
+        // Non-ASCII long ids echo byte-truncated (40 bytes), not
+        // char-truncated: "é"*50 echoes 20 "é" (#480 review).
+        val uniId = "é".repeat(50)
+        val uniEcho = "é".repeat(20)
+        val msg = "HTTP 404: {\"id\":\"$uniEcho\",\"detail\":\"unknown task '$uniEcho'\"}"
+        assertEquals(listOf(uniId), batchUnknownTaskIds(listOf(uniId, "other"), msg))
+    }
+
+    @Test
     fun `numeric strings read as their number with no coercion`() {
         assertEquals(CoercedInt(90, null), optTaskInt(obj("90"), "k"))
         assertEquals(CoercedInt(7, null), optTaskInt(obj("  7  "), "k"))
@@ -457,6 +467,19 @@ class FilterSortCoercionTest {
         val s = sortCoercionMessage(long)!!
         assertTrue(s.contains("X".repeat(40)))
         assertTrue(!s.contains("X".repeat(41)))
+    }
+
+    @Test
+    fun `quotes and newlines in corrupt values stay escaped and one-line`() {
+        // Same log-injection class the numeric path got visibleTaskRaw
+        // for: the toast/log/diagnostics line must survive hostile stored
+        // values (#480 review).
+        val f = filterCoercionMessage("a\"b\nc")!!
+        assertTrue(f.contains("\"a\\\"b\\nc\""))
+        assertTrue(!f.contains("\n"))
+        val v = widgetViewCoercion("A\"B\nC")!!
+        assertEquals("\"A\\\"B\\nC\"->Open", v)
+        assertTrue(!v.contains("\n"))
     }
 }
 

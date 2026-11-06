@@ -519,13 +519,17 @@ internal fun visibleTaskRaw(v: String): String =
 
 /**
  * Bounded diagnostics slot for one task row's single-read resets (#480):
- * the SHA-256 of the trimmed id, 12 hex chars. Raw ids would let a
- * pathological server grow the map without bound; a raw prefix would alias
- * two long ids into one slot (one row's clean read clearing another's
- * dirty entry). The hash is collision-free for this purpose and fixed-size
- * for any input. Record and clear sites must both go through here: deriving
+ * the SHA-256 of the trimmed id, 12 hex chars (48 bits — collision odds
+ * negligible at this cardinality, birthday bound ~2^24, but not zero;
+ * never treat distinct hashes as distinct rows by guarantee). Raw ids
+ * would let a pathological server grow the map without bound; a raw
+ * prefix would alias two long ids into one slot (one row's clean read
+ * clearing another's dirty entry). The hash is fixed-size for any input.
+ * Record and clear sites must both go through here: deriving
  * one side from the URL-encoded id broke the eviction for exactly the
- * pathological ids the bound exists for (#480 review).
+ * pathological ids the bound exists for (#480 review). The SHA-256
+ * lookup itself never fails on JVM/Android; the take(24) fallback is
+ * defence in depth and aliases by construction.
  */
 internal fun singleCoercionState(id: String): String =
     runCatching {
@@ -536,7 +540,8 @@ internal fun singleCoercionState(id: String): String =
 
 /**
  * Which op ids a batch 404 names (#480): the server truncates echoed ids
- * to 40 (`TruncateBytes`, store.go) and quotes them — JSON double quotes
+ * to 40 bytes (`TruncateBytes`, store.go — mirrored by
+ * [truncateUtf8Bytes]) and quotes them — JSON double quotes
  * in the echoed body, single quotes in the `unknown task '…'` detail — so
  * a full-length match would miss exactly the long ids the bounded-key
  * work exists for, while a bare substring would let id "a" match a
@@ -546,8 +551,10 @@ internal fun singleCoercionState(id: String): String =
 internal fun batchUnknownTaskIds(ids: List<String>, msg: String): List<String> {
     if ("HTTP 404:" !in msg || "unknown task" !in msg) return emptyList()
     return ids.filter { id ->
-        id.isNotEmpty() &&
-            ("\"${id.take(40)}\"" in msg || "'${id.take(40)}'" in msg)
+        // Byte-prefix, mirroring the server's TruncateBytes (not chars:
+        // long non-ASCII ids echo byte-truncated), in both quote forms.
+        val echo = truncateUtf8Bytes(id.trim(), 40)
+        id.isNotEmpty() && ("\"$echo\"" in msg || "'$echo'" in msg)
     }
 }
 

@@ -156,7 +156,7 @@ internal fun widgetViewForName(raw: String?): TaskWidgetView =
  * default itself is fine) or known, otherwise `"raw"->became`. */
 internal fun widgetViewCoercion(raw: String?): String? =
     if (raw == null || TaskWidgetView.entries.any { it.name == raw }) null
-    else "\"${raw.take(40)}\"->${TaskWidgetView.Open.name}"
+    else "${visibleTaskRaw(raw)}->${TaskWidgetView.Open.name}"
 
 /** A stored widget density name, defaulting to Comfortable (#437). */
 internal fun widgetDensityForName(raw: String?): TaskWidgetDensity =
@@ -166,7 +166,7 @@ internal fun widgetDensityForName(raw: String?): TaskWidgetDensity =
 /** Names a widget density reset (#437): null when absent or known. */
 internal fun widgetDensityCoercion(raw: String?): String? =
     if (raw == null || TaskWidgetDensity.entries.any { it.name == raw }) null
-    else "\"${raw.take(40)}\"->${TaskWidgetDensity.Comfortable.name}"
+    else "${visibleTaskRaw(raw)}->${TaskWidgetDensity.Comfortable.name}"
 
 /** A stored widget sort name, defaulting to Server (#437). */
 internal fun widgetSortForName(raw: String?): TaskWidgetSort =
@@ -176,7 +176,7 @@ internal fun widgetSortForName(raw: String?): TaskWidgetSort =
 /** Names a widget sort reset (#437): null when absent or known. */
 internal fun widgetSortCoercion(raw: String?): String? =
     if (raw == null || TaskWidgetSort.entries.any { it.name == raw }) null
-    else "\"${raw.take(40)}\"->${TaskWidgetSort.Server.name}"
+    else "${visibleTaskRaw(raw)}->${TaskWidgetSort.Server.name}"
 
 /** Whether two millis fall on the same device-local calendar day (#435
  * review): a yesterday 09:14 stamp badged as "updated 09:14" reads as
