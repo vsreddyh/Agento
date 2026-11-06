@@ -639,7 +639,7 @@ class TaskWidget : AppWidgetProvider() {
         fun viewFor(context: Context, appWidgetId: Int): TaskWidgetView {
             val key = "task_widget_view_$appWidgetId"
             val name = prefs(context).getString(key, null)
-            noteCoercion(key, widgetViewCoercion(name))
+            noteCoercion(key, widgetViewCoercion(name), name)
             return widgetViewForName(name)
         }
 
@@ -648,7 +648,7 @@ class TaskWidget : AppWidgetProvider() {
         fun densityFor(context: Context, appWidgetId: Int): TaskWidgetDensity {
             val key = "task_widget_density_$appWidgetId"
             val name = prefs(context).getString(key, null)
-            noteCoercion(key, widgetDensityCoercion(name))
+            noteCoercion(key, widgetDensityCoercion(name), name)
             return widgetDensityForName(name)
         }
 
@@ -657,7 +657,7 @@ class TaskWidget : AppWidgetProvider() {
         fun sortFor(context: Context, appWidgetId: Int): TaskWidgetSort {
             val key = "task_widget_sort_$appWidgetId"
             val name = prefs(context).getString(key, null)
-            noteCoercion(key, widgetSortCoercion(name))
+            noteCoercion(key, widgetSortCoercion(name), name)
             return widgetSortForName(name)
         }
 
@@ -670,11 +670,14 @@ class TaskWidget : AppWidgetProvider() {
         internal val coercionLock = Any()
         @Volatile internal var lastCoercions: Map<String, String> = emptyMap()
 
-        internal fun noteCoercion(key: String, short: String?) {
+        internal fun noteCoercion(key: String, short: String?, full: String? = short) {
             // A clean read clears the key AND re-arms the log dedupe: a
             // fixed pref stops advertising its old reset, and a later
             // re-corruption notifies again — a fix is a vintage boundary
             // like a delete, not log spam protection (#480 review).
+            // Dedupe runs on the FULL raw, display on the capped short:
+            // two distinct stored values sharing a 40-char prefix are two
+            // vintages, not one (#480 review).
             if (short == null) {
                 synchronized(coercionLock) {
                     lastCoercions = lastCoercions - key
@@ -682,9 +685,10 @@ class TaskWidget : AppWidgetProvider() {
                 }
                 return
             }
+            val token = "$key|${full ?: short}"
             val fresh = synchronized(coercionLock) {
                 lastCoercions = lastCoercions + (key to short)
-                coercionSeen.add("$key|$short")
+                coercionSeen.add(token)
             }
             if (fresh) runCatching { Log.w("TaskWidget", "coerced $key $short") }
         }

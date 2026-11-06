@@ -14,7 +14,8 @@ see GitHub Releases for older notes.
   Manager filter/sort toasts once per vintage naming what was stored and
   what it became (a clean read re-arms, so a re-corruption notifies
   again), each widget placement logs its view/density/sort reset (once per
-  value per vintage — a fix re-arms the log, so a re-corruption notifies
+  value per vintage — dedupe on the full stored value, display truncated;
+  a fix re-arms the log, so a re-corruption notifies
   again) into Settings → About diagnostics alongside a per-key summary
   (cleared when the pref is fixed or the placement deleted, so
   diagnostics reflects current state, not history), and task rows whose
@@ -30,8 +31,9 @@ see GitHub Releases for older notes.
   instead of riding the log only; a list page evicts the single entries
   of the rows it contains, so the two never disagree; and a 404 naming
   the row evicts it on every verb (already-gone included), not just
-  `get` — batch matches the quoted, server-truncated id, so one gone row cannot evict a
-  live sibling. the key, the raw value and what it became ride both the log and
+  `get` — batch matches the quoted, server-truncated id, and only on a
+  uniquely-echoed row, so one gone row can never evict a live sibling.
+  the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (each surface that
   switches states — manager per landed load, widget factory per settled

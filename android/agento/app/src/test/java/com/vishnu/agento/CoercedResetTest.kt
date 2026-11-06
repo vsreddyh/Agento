@@ -92,6 +92,18 @@ class OptTaskIntTest {
     }
 
     @Test
+    fun `batch 404 matching skips echoes shared by two ids`() {
+        // Same 40-byte prefix echoes identically: clearing on a shared
+        // echo would evict a live sibling with the gone row, so neither
+        // auto-clears — the list-page eviction owns those rows (#480).
+        val idA = "X".repeat(50) + "A"
+        val idB = "X".repeat(50) + "B"
+        val echo = "X".repeat(40)
+        val msg = "HTTP 404: {\"id\":\"$echo\",\"detail\":\"unknown task '$echo'\"}"
+        assertTrue(batchUnknownTaskIds(listOf(idA, idB), msg).isEmpty())
+    }
+
+    @Test
     fun `non-string raws escape like string raws`() {
         // A JSONArray raw carries quotes; any raw can carry controls — one
         // reset stays one log line on every fallback path (#480 review).
@@ -560,10 +572,11 @@ class WidgetCoercionTest {
         // #480 review: a clean read ends the vintage — diagnostics drops
         // the entry and the log dedupe forgets it, so a later
         // re-corruption notifies again (like a delete re-arms a reused id).
+        // Dedupe runs on the full raw, display on the capped short.
         val key = "task_widget_view_9901"
-        val seen = "$key|\"Snoozed\"->Open"
+        val seen = "$key|Snoozed"
         try {
-            TaskWidget.noteCoercion(key, "\"Snoozed\"->Open")
+            TaskWidget.noteCoercion(key, "\"Snoozed\"->Open", "Snoozed")
             assertEquals("\"Snoozed\"->Open", TaskWidget.lastCoercions[key])
             TaskWidget.noteCoercion(key, null)
             assertTrue(key !in TaskWidget.lastCoercions)
@@ -571,10 +584,33 @@ class WidgetCoercionTest {
                 assertTrue(seen !in TaskWidget.coercionSeen)
             }
             // Re-corruption re-registers (and would log again).
-            TaskWidget.noteCoercion(key, "\"Snoozed\"->Open")
+            TaskWidget.noteCoercion(key, "\"Snoozed\"->Open", "Snoozed")
             assertEquals("\"Snoozed\"->Open", TaskWidget.lastCoercions[key])
             synchronized(TaskWidget.coercionLock) {
                 assertTrue(seen in TaskWidget.coercionSeen)
+            }
+        } finally {
+            TaskWidget.noteCoercion(key, null)
+        }
+    }
+
+    @Test
+    fun `distinct long raws sharing a prefix dedupe separately`() {
+        // Dedupe on the full raw: a second corruption with a different
+        // stored value but the same 40-char display prefix is a new
+        // vintage, not a repeat (#480 review).
+        val key = "task_widget_view_9903"
+        val rawA = "X".repeat(40) + "A"
+        val rawB = "X".repeat(40) + "B"
+        val short = "\"" + "X".repeat(40) + "\"->Open"
+        try {
+            TaskWidget.noteCoercion(key, widgetViewCoercion(rawA), rawA)
+            assertEquals(short, TaskWidget.lastCoercions[key])
+            TaskWidget.noteCoercion(key, widgetViewCoercion(rawB), rawB)
+            assertEquals(short, TaskWidget.lastCoercions[key])
+            synchronized(TaskWidget.coercionLock) {
+                assertTrue("$key|$rawA" in TaskWidget.coercionSeen)
+                assertTrue("$key|$rawB" in TaskWidget.coercionSeen)
             }
         } finally {
             TaskWidget.noteCoercion(key, null)
@@ -587,9 +623,9 @@ class WidgetCoercionTest {
         // must not name resets for widgets that no longer exist, and a
         // later placement reusing the id must re-log a real corruption.
         val key = "task_widget_sort_9902"
-        val seen = "$key|\"Priority\"->Server"
+        val seen = "$key|Priority"
         try {
-            TaskWidget.noteCoercion(key, "\"Priority\"->Server")
+            TaskWidget.noteCoercion(key, "\"Priority\"->Server", "Priority")
             assertEquals("\"Priority\"->Server", TaskWidget.lastCoercions[key])
             TaskWidget.pruneCoercionsFor(9902)
             assertTrue(key !in TaskWidget.lastCoercions)

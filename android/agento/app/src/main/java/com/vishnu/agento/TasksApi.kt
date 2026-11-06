@@ -524,6 +524,10 @@ internal fun visibleTaskRaw(v: String): String =
  * fallbacks in [optTaskInt] (a `JSONArray` raw carries quotes too) and the
  * batch 404 matcher: backslash first, then quote and control chars, so a
  * hostile stored value cannot break the quoted note format or span lines.
+ * List delimiters (`;`, `|`) are deliberately NOT escaped: the About line
+ * is human-readable, not machine-parseable — a raw containing them reads
+ * ambiguously, and mangling common values for a parser that does not exist
+ * would trade a rare ambiguity for a certain one (#480 review).
  */
 internal fun escapeTaskRawText(v: String): String =
     v.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -564,18 +568,20 @@ internal fun singleCoercionState(id: String): String =
  */
 internal fun batchUnknownTaskIds(ids: List<String>, msg: String): List<String> {
     if ("HTTP 404:" !in msg || "unknown task" !in msg) return emptyList()
-    return ids.filter { id ->
-        // Byte-prefix, mirroring the server's TruncateBytes (not chars:
-        // long non-ASCII ids echo byte-truncated), in both quote forms —
-        // and JSON-escaped, mirroring Marshal for the subset that can
-        // appear in an id (backslash, quote, \n\r\t): a gone `a"b` echoes
-        // as `a\"b`, never verbatim (#480 review).
+    // Group by echo first: two ids sharing a 40-byte prefix echo
+    // identically, and clearing on a shared echo would evict a live sibling
+    // with the gone row — the truncation dual of the substring aliasing
+    // quoting fixed. Only a uniquely-echoed id auto-clears; colliding ones
+    // keep their entries until a list page re-reads (or drops) the row
+    // (#480 review).
+    val echoes = ids.filter { it.isNotEmpty() }
+        .groupBy { truncateUtf8Bytes(it.trim(), 40) }
+    return echoes.values.filter { it.size == 1 }.flatten().filter { id ->
         val echo = truncateUtf8Bytes(id.trim(), 40)
         val escaped = escapeTaskRawText(echo)
-        id.isNotEmpty() && ("\"$echo\"" in msg || "'$echo'" in msg ||
-            "\"$escaped\"" in msg || "'$escaped'" in msg)
+        ("\"$echo\"" in msg || '$echo' in msg ||
+            "\"$escaped\"" in msg || '$escaped' in msg)
     }
-}
 
 /** One task row: null when the row carries no usable id or name (#430
  * counts those drops in [TaskList.dropped] instead of shrinking the
