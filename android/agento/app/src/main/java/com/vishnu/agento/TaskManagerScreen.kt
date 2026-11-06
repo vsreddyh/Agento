@@ -834,15 +834,19 @@ internal fun TaskManagerScreen(
                         // Same cleanup as the single-task paths, per verb
                         // (#470 review): resolved tasks lose visuals +
                         // notices + speech; moved tasks keep their visuals
-                        // (still live) but lose stale speech; duplicates
-                        // touch nothing existing.
+                        // (still live) but lose stale speech AND failure
+                        // notices, which describe the pre-move schedule;
+                        // duplicates touch nothing existing.
                         for ((verb, verbed) in ops.groupBy({ it.op }, { it.id })) {
                             when (verb) {
                                 "complete", "skip" -> verbed.forEach {
                                     TaskReminders.cancelPosted(context, it)
                                     ReminderTts.dropTask(it)
                                 }
-                                "update" -> verbed.forEach { ReminderTts.dropTask(it) }
+                                "update" -> verbed.forEach {
+                                    ReminderTts.dropTask(it)
+                                    ReminderTts.cancelFailures(context, it)
+                                }
                             }
                         }
                         silentRefresh = true
@@ -1514,9 +1518,12 @@ internal fun TaskManagerScreen(
                                     // The stored text may have changed under a
                                     // queued utterance: drop this task's speech
                                     // so the next fire speaks the saved words,
-                                    // not the stale ones (#470 review). Posted
+                                    // not the stale ones — and its failure
+                                    // notices go too, since they describe the
+                                    // pre-edit schedule (#470 review). Posted
                                     // visuals stay — the task itself is live.
                                     ReminderTts.dropTask(next.id)
+                                    ReminderTts.cancelFailures(context, next.id)
                                     if (prevRow == null) {
                                         // The row was not in the fetched page at
                                         // all: backgrounded (#308) so pulling the

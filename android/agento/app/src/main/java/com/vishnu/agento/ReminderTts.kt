@@ -211,8 +211,12 @@ object ReminderTts {
     }
 
     internal fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
-        // Off means off: an alarm already in flight when the toggle flips
-        // must not enqueue behind the purge in cancelAll (#470 review).
+        // Off means off: refuse new utterances while disabled. The
+        // enqueue-time check spans monitors with cancelAll's purge, so an
+        // alarm already in flight can still land behind it — pump()
+        // re-checks under its own lock and reportFailure() stays silent
+        // while disabled, so nothing queued can speak or notify (#470
+        // review).
         if (!TaskReminders.isEnabled(appCtx)) return
         if (isSilent(appCtx)) return
         appCtxRef = appCtx.applicationContext
@@ -419,8 +423,14 @@ object ReminderTts {
      */
     private fun reportFailure(taskId: String, kindKey: String, taskName: String, failure: TtsFailure) {
         val appCtx = appCtxRef ?: return
+        runCatching {
+            Log.w("ReminderTts", "$line task=$taskId kind=$kindKey")
+        }
+        // Off means off: never toast or post for a disabled reminder set,
+        // however the failure raced the toggle (#470 review). The log line
+        // above still fires — it is diagnostics, not user-visible.
+        if (!TaskReminders.isEnabled(appCtx)) return
         val line = speechFailureLine(failure)
-        Log.w("ReminderTts", "$line task=$taskId kind=$kindKey")
         runCatching {
             mainHandler.post {
                 runCatching {
@@ -535,10 +545,9 @@ object ReminderTts {
      * Drops ALL queued speech (reminders disabled). Like [dropTask] for
      * every task at once, plus the engine itself is stopped: off means
      * off, so an utterance already playing must not finish audibly
-     * either. Called from [TaskReminders.cancelAll], so already-queued
-     * speech can never outlive the toggle — and [speak] refuses new
-     * utterances while disabled, closing the race where an alarm already
-     * in flight enqueues after the purge.
+     * either. Called from [TaskReminders.cancelAll]. Residual races land
+     * on the pump()/reportFailure() guards: an enqueue behind this purge
+     * is silently dropped before speaking, never reported.
      */
     internal fun dropAll() {
         val eng: TextToSpeech?
@@ -579,6 +588,20 @@ object ReminderTts {
                         owners.remove(it)
                     }
                     speakingId = null
+                }
+                // Disabled mid-flight (#470 review): an alarm already in
+                // flight when the toggle flips can enqueue behind cancelAll's
+                // purge (check-then-enqueue spans two monitors), so the
+                // speak decision re-checks here, under this lock, instead of
+                // trusting the enqueue-time check. Purge silently, not
+                // loudly: an expected shutdown is not a failure, and the
+                // disable path already cancelled the notices.
+                val ctx = appCtxRef
+                if (ctx != null && !TaskReminders.isEnabled(ctx)) {
+                    queue.clear()
+                    owners.clear()
+                    initReported.clear()
+                    return
                 }
                 if (!ready || speaking) {
                     // Exit: reported below, outside the lock.
