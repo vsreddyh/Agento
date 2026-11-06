@@ -15,9 +15,11 @@ see GitHub Releases for older notes.
   became, each widget placement logs its view/density/sort reset (once per
   value) into Settings → About diagnostics alongside a per-key summary,
   and task rows whose numbers arrive mistyped (e.g.
-  `estimated_minutes: "abc"`) keep showing with the reset value while the
-  list carries a hint counting them and the log names the key, the raw
-  value and what it became. Defaults themselves are unchanged — only the
+  `estimated_minutes: "abc"`, or a negative estimate clamped to 0) keep
+  showing with the reset value while the list carries a hint counting
+  them; the key, the raw value and what it became ride both the log and
+  the diagnostics summary, so the hint points at on-screen detail.
+  Defaults themselves are unchanged — only the
   rewriting is now visible.
 
 ## [6.2.1]
