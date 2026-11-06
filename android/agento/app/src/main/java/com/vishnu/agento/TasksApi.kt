@@ -735,10 +735,10 @@ class TasksApi(context: Context) {
          * clobber or clear another's detail — including same-state
          * fetches at different limits. Read by [TaskWidget.diagnostics]
          * so each screen's hint points at detail that is actually on that
-         * screen. Writing a fetch prunes its source's other states (only
-         * the latest page per screen is hinted), and a clean page clears
-         * only its own entry — so stale notes never outlive their fetch
-         * without erasing another screen's.
+         * screen. A clean page clears only its own entry; sibling states
+         * under one source survive parallel writes, and the one screen
+         * that switches states prunes its stale siblings explicitly
+         * ([clearCoercedNotesExcept]).
          */
         @Volatile
         internal var lastCoercedNotes: Map<String, List<String>> = emptyMap()
@@ -746,12 +746,32 @@ class TasksApi(context: Context) {
 
         /** Records one fetch's notes (see [lastCoercedNotes]). */
         internal fun noteCoercedNotes(source: String, state: String, notes: List<String>) {
+            // No pruning here: parallel writers under one source (the
+            // widget's three state fetches) must all survive — pruning
+            // same-source siblings on every write keeps only the last
+            // completer (#480 review). Sibling pruning lives with the one
+            // screen that switches states ([clearCoercedNotesExcept]).
             synchronized(versionLock) {
-                val kept = lastCoercedNotes.filterKeys { !it.startsWith("$source:") }
                 lastCoercedNotes = if (notes.isEmpty()) {
-                    kept
+                    lastCoercedNotes - "$source:$state"
                 } else {
-                    kept + ("$source:$state" to notes)
+                    lastCoercedNotes + ("$source:$state" to notes)
+                }
+            }
+        }
+
+        /**
+         * Drops one source's entries for every state but [keepState].
+         * Only the Task Manager switches states per screen: without this
+         * its old filter's notes would linger next to the new page (#480
+         * review). Called on a successful load only — on failure the rows
+         * on screen are still the previous page. Every other writer keeps
+         * a fixed state set and never needs it.
+         */
+        internal fun clearCoercedNotesExcept(source: String, keepState: String) {
+            synchronized(versionLock) {
+                lastCoercedNotes = lastCoercedNotes.filterKeys {
+                    it == "$source:$keepState" || !it.startsWith("$source:")
                 }
             }
         }

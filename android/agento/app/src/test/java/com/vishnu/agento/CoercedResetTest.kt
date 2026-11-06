@@ -157,14 +157,23 @@ class TaskNumericCoercionTest {
             // A clean page clears only its own fetch's entry.
             parseTaskListPage("""{"tasks":[{"id":"a","name":"A"}]}""", "open", "manager")
             assertTrue("manager:open" !in TasksApi.lastCoercedNotes)
-            // ...while a sibling state entry from an earlier filter survives
-            // only until its own screen rewrites it: writing done prunes
-            // the manager's stale open entry.
+            // Parallel writers under one source all survive: a second
+            // state fetch must not prune the first (#480 review).
             parseTaskListPage(
                 """{"tasks":[{"id":"c","name":"C","revision":"bogus"}]}""",
                 "done",
                 "manager",
             )
+            parseTaskListPage(
+                """{"tasks":[{"id":"a","name":"A","estimated_minutes":"abc"}]}""",
+                "open",
+                "manager",
+            )
+            assertEquals(1, TasksApi.lastCoercedNotes["manager:open"]?.size)
+            assertEquals(1, TasksApi.lastCoercedNotes["manager:done"]?.size)
+            // ...while the one screen that switches states prunes its
+            // stale siblings explicitly on each landed page.
+            TasksApi.clearCoercedNotesExcept("manager", "done")
             assertTrue("manager:open" !in TasksApi.lastCoercedNotes)
             assertEquals(1, TasksApi.lastCoercedNotes["manager:done"]?.size)
         } finally {

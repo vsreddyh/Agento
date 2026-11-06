@@ -22,7 +22,8 @@ see GitHub Releases for older notes.
   showing with the reset value while the list carries a hint counting
   them; the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
-  fetch can neither clobber nor clear another's — and both channels name
+  fetch can neither clobber nor clear another's (the one screen that
+  switches states prunes its own stale ones on each landed page) — and both channels name
   the same capped rows, so the hint points at on-screen detail.
   Defaults themselves are unchanged — only the
   rewriting is now visible.

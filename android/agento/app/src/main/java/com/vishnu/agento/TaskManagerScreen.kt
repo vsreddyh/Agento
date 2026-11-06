@@ -330,6 +330,12 @@ internal fun TaskManagerScreen(
                 listTruncated = page.truncated
                 droppedCount = page.dropped
                 coercedCount = page.coerced
+                // This screen switches states per filter: a new page for one
+                // prunes the diagnostics notes of the filters no longer
+                // shown, so About never names another filter's resets next
+                // to this count (#480 review). Failure keeps the old rows —
+                // and their notes — untouched.
+                TasksApi.clearCoercedNotesExcept("manager", filter.state)
                 error = ""
                 // Which filter these rows are the answer for (#308): recorded
                 // with the rows themselves, so the enter-animation effect never
