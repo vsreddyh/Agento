@@ -1299,6 +1299,7 @@ internal fun ChatTab(
             title = title,
             threads = state.threads,
             activeId = state.threadId,
+            saveError = state.threadsSaveError,
             onSearch = vm::searchThreads,
             onSwitch = { tts.stop(); vm.switchThread(it); showThreads = false },
             onNew = { tts.stop(); vm.newConversation() },
@@ -1423,6 +1424,8 @@ internal fun ThreadSheet(
     title: String,
     threads: List<ThreadSummary>,
     activeId: String,
+    /** Failed-write banner (#435): "" when the last save landed. */
+    saveError: String = "",
     onSearch: (String) -> List<ThreadSummary>,
     onSwitch: (String) -> Unit,
     onNew: () -> Unit,
@@ -1446,6 +1449,16 @@ internal fun ThreadSheet(
                 FilledTonalButton(onClick = onNew) { Text("New") }
             }
             Spacer(modifier = Modifier.height(8.dp))
+            if (saveError.isNotEmpty()) {
+                // Loud and persistent, no retry button (#435): memory is
+                // ahead of disk until a later save lands, so the list below
+                // is NOT what the next launch shows. Freeing storage is the
+                // fix, and that is outside this sheet.
+                ErrorCard(raw = saveError)
+                Spacer(modifier = Modifier.height(4.dp))
+                HintLine("Newest messages are only in memory — free up storage, then send again.")
+                Spacer(modifier = Modifier.height(8.dp))
+            }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
