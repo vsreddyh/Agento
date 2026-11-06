@@ -9,16 +9,18 @@ Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
 ## [6.1.0]
-- **Reminder speech failures are loud now (#434).** Every spoken alert that
-  never plays says so: a toast plus a companion "Spoken alert couldn't
+- **Reminder speech failures are loud now (#434).** Every spoken alert the
+  engine drops says so: a toast plus a companion "Spoken alert couldn't
   play" notice next to the reminder (auto-cancel, like the reminder
   itself), instead of Log-only silence that was indistinguishable from
   success. That covers a dead engine, a rejected or interrupted utterance,
   a timeout, and a queue overflow — and a stored voice the engine no
   longer offers still speaks, but says it fell back to the default voice.
-  Notices for an engine failure that later recovers are retracted when the
-  queued speech plays, and dismissed with the reminder, so they never
-  linger. When the device language isn't available in the engine,
+  (DND/silent stays visual-only by design, and a notice for an engine
+  failure that later recovers is retracted when the queued speech plays.)
+  Notices clear when that reminder point fires again or with the task's
+  Complete/Skip actions; otherwise swipe them away like the reminder
+  itself. When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is

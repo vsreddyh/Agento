@@ -783,10 +783,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     }
 
     private suspend fun post(appCtx: Context, taskId: String, kind: ReminderKind) {
-        // A stale speech-failure notice for this task must not outlive a
+        // A stale speech-failure notice for THIS point must not outlive a
         // fresh alert: a retried alarm that now plays would otherwise sit
-        // next to its own earlier failure (#434).
-        ReminderTts.cancelFailures(appCtx, taskId)
+        // next to its own earlier failure. Other points' notices stay — one
+        // point firing says nothing about another's speech (#434).
+        ReminderTts.cancelFailureFor(appCtx, taskId, kind.key)
         // One indexed lookup, not the whole open list: the receiver knows
         // the id, and `GET /api/tasks/{id}` answers in one query where the
         // list made every nag quadratic (#168). Null means gone
