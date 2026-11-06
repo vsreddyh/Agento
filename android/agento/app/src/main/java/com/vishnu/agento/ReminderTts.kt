@@ -551,18 +551,6 @@ object ReminderTts {
             }
         }
     }
-    internal fun dropTask(taskId: String) {
-        val purged = synchronized(lock) {
-            purgeTaskSpeech(queue, owners, initReported, speakingId, taskId)
-        }
-        for ((t, kindKey) in purged.points) cancelFailure(t, kindKey)
-        if (purged.dropped > 0 || purged.inFlight) {
-            runCatching {
-                Log.w("ReminderTts", "dropped ${purged.dropped} queued speech for task=$taskId" +
-                    if (purged.inFlight) " (in-flight finishes silently)" else "")
-            }
-        }
-    }
 
     /**
      * Drops ALL queued speech (reminders disabled). Like [dropTask] for
