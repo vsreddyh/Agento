@@ -45,8 +45,10 @@ private const val POLL_BUDGET_MS = POLL_ROUNDS * POLL_ROUND_MS
  * Flow: Connect opens the one-time Google consent URL in a browser (the
  * app never sees code/verifier/token — server-only exchange, sealed
  * tokens in Mongo). The section then polls the list until the row flips
- * to connected — bounded (~2 min, then "Check again" covers slower
- * consents). Disconnect clears tokens server-side; already-fetched
+ * to connected — bounded (~2 min of wall clock, re-checked every round
+ * so slow round-trips cannot stretch past the attempt TTL, then
+ * "Check again" covers slower consents). Disconnect clears tokens
+ * server-side; already-fetched
  * chat history is NOT wiped (stops the tap, not history — ADR-0009).
  * Expired rows surface the wire `reconnect` hint as a reconnect prompt.
  * Consent happens in the browser: never paste a password or token in chat.
@@ -212,6 +214,18 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
         repeat(rounds) {
             delay(POLL_ROUND_MS)
             if (pendingConnect != pending) return@LaunchedEffect
+            // Wall-clock budget, re-checked every round (#484 review):
+            // round counting alone ignores IO time — a blackholed proxy
+            // (30s read timeouts) would stretch 40 rounds past ~20 min,
+            // past the 10-min attempt TTL, polling a dead single-use
+            // attempt toward a "Still waiting" that can never resolve.
+            // pendingSince == 0 only for waits predating it: those keep
+            // the round count.
+            if (pendingSince != 0L &&
+                SystemClock.uptimeMillis() - pendingSince >= POLL_BUDGET_MS
+            ) {
+                break
+            }
             // Freshness anchor, like refresh: overlapping writers resolve
             // by fetch order (#484 review).
             val roundStart = stampFetch()

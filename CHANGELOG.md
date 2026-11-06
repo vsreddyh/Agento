@@ -13,11 +13,11 @@ see GitHub Releases for older notes.
   per connector (Gmail, Calendar): live status, the exact scopes a tap grants
   (`gmail.read`/`gmail.draft`, `calendar.read`/`calendar.draft`), a Connect
   button that opens the one-time Google consent URL in the browser, and a
-  per-connector Disconnect. The app polls the list for ~2 minutes total
-  across rotations while a consent page is outstanding and resolves
-  automatically when the row flips to connected ("Check again" covers
-  slower consents — the server attempt lives 10 minutes); the dead-server
-  verdict accumulates across rotations with the budget. A missing or empty
+  per-connector Disconnect. The app polls the list for ~2 minutes of wall
+  clock total across rotations while a consent page is outstanding and
+  resolves automatically when the row flips to connected ("Check again"
+  covers slower consents — the server attempt lives 10 minutes); the
+  dead-server verdict accumulates across rotations with the budget. A missing or empty
   `connectors` array fails loudly instead of reading as an empty list, and
   a failed refresh banners even over stale rows (healed by the next good
   list). Overlapping writers resolve by fetch sequence so stale results
