@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Intent
+import android.os.SystemClock
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -63,12 +64,14 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // across rows and actions; reset in finally (no suspension inside,
     // so cancellation still re-arms).
     val mutationArmed = remember { AtomicBoolean(true) }
-    // Freshness generation for list applies (#484 review): refresh and
-    // poll rounds overlap (poll never takes the single-writer CAS), so a
-    // failure landing after a fresher success must not banner over proven
-    // rows. Every successful apply bumps; a failure banners only when
-    // nothing fresher landed during its fetch.
-    val dataGen = remember { AtomicLong(0L) }
+    // Freshness clock for list applies (#484 review): refresh, poll
+    // rounds and disconnect re-lists overlap (poll never takes the
+    // single-writer CAS), so last-writer-wins would plant stale rows and
+    // banners. Each fetch stamps its monotonic start time; an apply lands
+    // only when no fresher fetch has applied since. A counter would order
+    // by application, not by fetch — a later fetch applying first must
+    // not veto fresher data.
+    val freshClock = remember { AtomicLong(0L) }
 
     // Single-writer/read gates, computed once per composition (#484
     // review): concurrent refresh/disconnect writers race (last writer
@@ -96,18 +99,27 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
             try {
                 loading = true
                 error = ""
-                // Freshness anchor for the failure branch below: anything
-                // succeeding after this point proves fresher rows.
-                val gen = dataGen.get()
+                // Freshness anchor: monotonic fetch-start time. Overlapping
+                // writers resolve by fetch order, not by who returns last —
+                // a counter would order by application and let an older
+                // fetch applying last veto fresher data (#484 review).
+                val myStart = SystemClock.uptimeMillis()
                 ConnectorsApi(context).list(path()).fold(
                     onSuccess = { list ->
-                        connectors = list
-                        // Cleared on success, not just at start (#484 review):
-                        // a failed refresh followed by a good one (manual retry
-                        // landing just as the poll round succeeds, or vice
-                        // versa) must not leave its banner over fresh rows.
-                        error = ""
-                        dataGen.incrementAndGet()
+                        // Stale successes must not overwrite fresher rows.
+                        // Resolution below stays unconditional — see the
+                        // poll branch for why.
+                        if (myStart >= freshClock.getAndUpdate { cur ->
+                                if (myStart >= cur) myStart else cur
+                            }
+                        ) {
+                            connectors = list
+                            // Cleared on success, not just at start (#484 review):
+                            // a failed refresh followed by a good one (manual retry
+                            // landing just as the poll round succeeds, or vice
+                            // versa) must not leave its banner over fresh rows.
+                            error = ""
+                        }
                         // A polled row that flipped resolves the wait (#440):
                         // the pending id is connected (or failed visibly via
                         // an expired row carrying the reconnect hint).
@@ -122,10 +134,10 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                         }
                     },
                     onFailure = { e ->
-                        // Only when nothing fresher landed meanwhile: a poll
+                        // Only when nothing fresher applied meanwhile: a
                         // success after this fetch started already proved
                         // the rows (#484 review).
-                        if (dataGen.get() == gen) {
+                        if (myStart >= freshClock.get()) {
                             error = e.message ?: e.javaClass.simpleName
                         }
                     },
@@ -155,6 +167,9 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
         repeat(40) {
             delay(3_000L)
             if (pendingConnect != pending) return@LaunchedEffect
+            // Freshness anchor, like refresh: overlapping writers resolve
+            // by fetch order (#484 review).
+            val roundStart = SystemClock.uptimeMillis()
             ConnectorsApi(context).list(path()).fold(
                 onSuccess = { list ->
                     // Wait key re-checked BEFORE applying (#484 review): a
@@ -163,14 +178,24 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     // cancelled there is no later round to heal it. Refresh
                     // resolutions and newer waits own their own applies.
                     if (pendingConnect != pending) return@LaunchedEffect
-                    connectors = list
+                    // Data apply is freshness-guarded, resolution is not:
+                    // a skipped round must not overwrite fresher rows, but
+                    // a flip this list proves still resolves the wait — a
+                    // flip predates any newer fetch, so newer data either
+                    // shows it too (already resolved, resolver no-ops) or
+                    // the wait is gone (disconnect cleared it).
+                    if (roundStart >= freshClock.getAndUpdate { cur ->
+                            if (roundStart >= cur) roundStart else cur
+                        }
+                    ) {
+                        connectors = list
+                        // Same stale-banner rule as refresh() above: a good
+                        // poll round heals a failed manual refresh (#484
+                        // review).
+                        error = ""
+                    }
                     anyOk = true
                     lastError = ""
-                    // Same stale-banner rule as refresh() above: a good
-                    // poll round heals a failed manual refresh (#484
-                    // review). Bumps freshness like any successful apply.
-                    error = ""
-                    dataGen.incrementAndGet()
                     if (list.any { it.id == pending && (it.isConnected() || it.isExpired()) }) {
                         pendingConnect = null
                         if (list.any { it.id == pending && it.isConnected() }) {
@@ -317,22 +342,25 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                         // heal nothing. Same error slot as
                                         // refresh, so success and failure
                                         // cannot disagree about staleness.
-                                        // Freshness-guarded like refresh: a
-                                        // poll success landing mid-fetch
-                                        // already proved the rows.
-                                        val regen = dataGen.get()
+                                        // Freshness-guarded like every other
+                                        // apply.
+                                        val regen = SystemClock.uptimeMillis()
                                         ConnectorsApi(context).list(path()).fold(
                                             onSuccess = { list ->
-                                                connectors = list
-                                                error = ""
-                                                dataGen.incrementAndGet()
+                                                if (regen >= freshClock.getAndUpdate { cur ->
+                                                        if (regen >= cur) regen else cur
+                                                    }
+                                                ) {
+                                                    connectors = list
+                                                    error = ""
+                                                }
                                                 toasts.toast(
                                                     "Disconnected — future access stopped.",
                                                     kind = ToastKind.Success,
                                                 )
                                             },
                                             onFailure = { e ->
-                                                if (dataGen.get() == regen) {
+                                                if (regen >= freshClock.get()) {
                                                     error = e.message ?: e.javaClass.simpleName
                                                 }
                                                 toasts.toast(
