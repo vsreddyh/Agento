@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DarkMode
@@ -90,8 +91,8 @@ internal enum class SettingSection(val title: String) {
 
 /** App theme mode keys (prefs `theme_mode`; #28). */
 
-/** Settings hub (#60): subsections live in the sidebar and each gets its
- * own screen; model pickers live on each tab's own page (#18). Theme toggle
+/** Settings hub (#60): subsections live in the hub and each gets its
+ * own screen (#418); model pickers live on each tab's own page (#18). Theme toggle
  * lives under Appearance (#28). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,6 +102,7 @@ internal fun SettingsScreen(
     wc: WindowClass = WindowClass.Compact,
     onMenu: () -> Unit = {},
     onPick: (SettingSection) -> Unit = {},
+    onBack: () -> Unit = {},
     themeMode: String = ThemeStore.SYSTEM,
     onTheme: (String) -> Unit = {},
 ) {
@@ -188,8 +190,14 @@ internal fun SettingsScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = onMenu) {
-                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    if (section != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    } else {
+                        IconButton(onClick = onMenu) {
+                            Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                        }
                     }
                 },
                 title = { Text(section?.title ?: "Settings") },

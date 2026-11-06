@@ -20,8 +20,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
@@ -249,7 +247,6 @@ class MainActivity : ComponentActivity() {
                     // Null section = the settings hub overview; a non-null
                     // section opens that subsection directly.
                     var section by remember { mutableStateOf<SettingSection?>(null) }
-                    var settingsOpen by remember { mutableStateOf(false) }
                     // Update-available notification tap (#366): land on
                     // Settings → About, where the App updates section lives.
                     // After `section` is declared: the effect assigns it.
@@ -327,7 +324,6 @@ class MainActivity : ComponentActivity() {
                     fun go(d: Destination, s: SettingSection? = null) {
                         dest = d
                         section = s
-                        if (d != Destination.Settings) settingsOpen = false
                         scope.launch { drawerState.close() }
                     }
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -406,17 +402,10 @@ class MainActivity : ComponentActivity() {
                                     drawerState = drawerState,
                                     drawerContent = {
                                         DrawerContent(
-                                            dest = dest, section = section,
-                                            settingsOpen = settingsOpen,
+                                            dest = dest,
                                             reportsUnread = reportsUnread,
                                             modelFor = ::drawerModel,
                                             onDest = { go(it) },
-                                            onSection = { go(Destination.Settings, it) },
-                                            onToggleSettings = {
-                                                dest = Destination.Settings
-                                                section = null
-                                                settingsOpen = !settingsOpen
-                                            },
                                         )
                                     },
                                 ) { Box { navContent() } }
@@ -425,16 +414,9 @@ class MainActivity : ComponentActivity() {
                                 Row(modifier = Modifier.fillMaxSize()) {
                                     NavigationRail {
                                         RailContent(
-                                            dest = dest, section = section,
-                                            settingsOpen = settingsOpen,
+                                            dest = dest,
                                             reportsUnread = reportsUnread,
                                             onDest = { go(it) },
-                                            onSection = { go(Destination.Settings, it) },
-                                            onToggleSettings = {
-                                                dest = Destination.Settings
-                                                section = null
-                                                settingsOpen = !settingsOpen
-                                            },
                                         )
                                     }
                                     Box(modifier = Modifier.weight(1f)) { navContent() }
@@ -444,18 +426,11 @@ class MainActivity : ComponentActivity() {
                                 PermanentNavigationDrawer(
                                     drawerContent = {
                                         DrawerContent(
-                                            dest = dest, section = section,
-                                            settingsOpen = settingsOpen,
+                                            dest = dest,
                                             reportsUnread = reportsUnread,
                                             modelFor = ::drawerModel,
                                             permanent = true,
                                             onDest = { go(it) },
-                                            onSection = { go(Destination.Settings, it) },
-                                            onToggleSettings = {
-                                                dest = Destination.Settings
-                                                section = null
-                                                settingsOpen = !settingsOpen
-                                            },
                                         )
                                     },
                                 ) { Box { navContent() } }
@@ -472,22 +447,18 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun DrawerContent(
     dest: Destination,
-    section: SettingSection?,
-    settingsOpen: Boolean,
     onDest: (Destination) -> Unit,
-    onSection: (SettingSection) -> Unit,
-    onToggleSettings: () -> Unit,
     permanent: Boolean = false,
     modelFor: (Destination) -> String? = { null },
     reportsUnread: Int? = null,
 ) {
     if (permanent) {
         PermanentDrawerSheet(modifier = Modifier.widthIn(max = 280.dp)) {
-            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings, modelFor, reportsUnread)
+            DrawerList(dest, onDest, modelFor, reportsUnread)
         }
     } else {
         ModalDrawerSheet {
-            DrawerList(dest, section, settingsOpen, onDest, onSection, onToggleSettings, modelFor, reportsUnread)
+            DrawerList(dest, onDest, modelFor, reportsUnread)
         }
     }
 }
@@ -495,142 +466,87 @@ private fun DrawerContent(
 @Composable
 private fun DrawerList(
     dest: Destination,
-    section: SettingSection?,
-    settingsOpen: Boolean,
     onDest: (Destination) -> Unit,
-    onSection: (SettingSection) -> Unit,
-    onToggleSettings: () -> Unit,
     modelFor: (Destination) -> String? = { null },
     reportsUnread: Int? = null,
 ) {
-    // Scrollable (#105): 9 destinations plus the settings subsections
-    // overflow short screens — without this the bottom items are cut off
-    // with no way to reach them.
+    // Scrollable (#105): 9 destinations overflow short screens — without
+    // this the bottom items are cut off with no way to reach them.
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Text(
             "Agento",
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(16.dp),
         )
+        // Settings is a plain destination now (#418): it opens the hub
+        // (section = null via go's default) and the hub rows own
+        // subsection navigation. No chevron, no subsection rows.
         Destination.entries.forEach { d ->
-            if (d == Destination.Settings) {
-                NavigationDrawerItem(
-                    label = { Text(d.title) },
-                    icon = { Icon(d.icon(), contentDescription = null) },
-                    badge = {
-                        Icon(
-                            if (settingsOpen) Icons.Filled.ExpandLess
-                            else Icons.Filled.ExpandMore,
-                            contentDescription = null,
-                        )
-                    },
-                    selected = dest == d,
-                    onClick = onToggleSettings,
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                )
-                // #60: settings subsections live in the
-                // sidebar; each opens its own screen.
-                if (settingsOpen) {
-                    SettingSection.entries.forEach { s ->
-                        NavigationDrawerItem(
-                            label = { Text(s.title) },
-                            selected = dest == Destination.Settings && section == s,
-                            onClick = { onSection(s) },
-                            modifier = Modifier.padding(horizontal = 8.dp)
-                                .padding(start = 24.dp),
-                        )
+            val sub = modelFor(d)
+            NavigationDrawerItem(
+                label = {
+                    Column {
+                        Text(d.title, maxLines = 1)
+                        if (sub != null) {
+                            Text(
+                                sub.ifEmpty { "Not set up" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (sub.isEmpty()) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                            )
+                        }
                     }
-                }
-            } else {
-                val sub = modelFor(d)
-                NavigationDrawerItem(
-                    label = {
-                        Column {
-                            Text(d.title, maxLines = 1)
-                            if (sub != null) {
-                                Text(
-                                    sub.ifEmpty { "Not set up" },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (sub.isEmpty()) {
-                                        MaterialTheme.colorScheme.error
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                    },
-                    // ∃-Mail unread badge (#365): refresh-on-open, no poll.
-                    // Null/zero = nothing to surface, so no badge.
-                    badge = {
-                        val n = reportsUnread
-                        if (d == Destination.Reports && n != null && n > 0) {
-                            Badge { Text(if (n > 99) "99+" else "$n") }
-                        }
-                    },
-                    icon = { Icon(d.icon(), contentDescription = null) },
-                    selected = dest == d,
-                    onClick = { onDest(d) },
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                )
-            }
+                },
+                // ∃-Mail unread badge (#365): refresh-on-open, no poll.
+                // Null/zero = nothing to surface, so no badge.
+                badge = {
+                    val n = reportsUnread
+                    if (d == Destination.Reports && n != null && n > 0) {
+                        Badge { Text(if (n > 99) "99+" else "$n") }
+                    }
+                },
+                icon = { Icon(d.icon(), contentDescription = null) },
+                selected = dest == d,
+                onClick = { onDest(d) },
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
         }
     }
 }
 
-/** Compact rail for medium windows (icon-only + expandable settings). */
+/** Compact rail for medium windows (icon-only). */
 @Composable
 private fun RailContent(
     dest: Destination,
-    section: SettingSection?,
-    settingsOpen: Boolean,
     onDest: (Destination) -> Unit,
-    onSection: (SettingSection) -> Unit,
-    onToggleSettings: () -> Unit,
     reportsUnread: Int? = null,
 ) {
     // Scrollable like the drawer (#105): the rail overflows the same way
     // on short landscape screens.
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Destination.entries.forEach { d ->
-            if (d == Destination.Settings) {
-                NavigationRailItem(
-                    selected = dest == d,
-                    onClick = onToggleSettings,
-                    icon = { Icon(d.icon(), contentDescription = d.title) },
-                    label = { Text(d.title) },
-                )
-                if (settingsOpen) {
-                    SettingSection.entries.forEach { s ->
-                        NavigationRailItem(
-                            selected = dest == Destination.Settings && section == s,
-                            onClick = { onSection(s) },
-                            icon = { },
-                            label = { Text(s.title) },
-                        )
-                    }
-                }
-            } else {
-                // Rail has no badge slot (unlike the drawer item above), so
-                // the ∃-Mail unread count wraps the icon instead. Same
-                // refresh-on-open rule: null/zero shows no badge.
-                val unread = reportsUnread
-                NavigationRailItem(
-                    selected = dest == d,
-                    onClick = { onDest(d) },
-                    icon = {
-                        if (d == Destination.Reports && unread != null && unread > 0) {
-                            BadgedBox(badge = { Badge { Text(if (unread > 99) "99+" else "$unread") } }) {
-                                Icon(d.icon(), contentDescription = d.title)
-                            }
-                        } else {
+            // Rail has no badge slot (unlike the drawer item above), so
+            // the ∃-Mail unread count wraps the icon instead. Same
+            // refresh-on-open rule: null/zero shows no badge.
+            val unread = reportsUnread
+            NavigationRailItem(
+                selected = dest == d,
+                onClick = { onDest(d) },
+                icon = {
+                    if (d == Destination.Reports && unread != null && unread > 0) {
+                        BadgedBox(badge = { Badge { Text(if (unread > 99) "99+" else "$unread") } }) {
                             Icon(d.icon(), contentDescription = d.title)
                         }
-                    },
-                    label = { Text(d.title) },
-                )
-            }
+                    } else {
+                        Icon(d.icon(), contentDescription = d.title)
+                    }
+                },
+                label = { Text(d.title) },
+            )
         }
     }
 }
