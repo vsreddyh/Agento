@@ -21,7 +21,9 @@ see GitHub Releases for older notes.
   Notices clear when that reminder point fires again, when the task goes
   away or reschedules, or on successful Complete/Skip (a failed tap keeps
   both, like the reminder itself); otherwise swipe them away like the
-  reminder itself. When the device language isn't available in the engine,
+  reminder itself. Queued speech purges with the task too: completing it
+  drops its unplayed utterances (an in-flight one finishes silently)
+  instead of speaking a done task or resurrecting its failure notice. When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is

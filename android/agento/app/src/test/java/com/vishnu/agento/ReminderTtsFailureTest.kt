@@ -88,3 +88,82 @@ class ReminderTtsFailureTest {
         assertNull(voiceListHint(listing = false, voices = voices, savedVoice = "a"))
     }
 }
+
+/**
+ * Queued speech purges with its task (#470 review): completing a task
+ * cancels the visual + failure notices but must also dequeue its
+ * utterances, or a stale entry later speaks a done task or re-posts the
+ * tag just cancelled. The engine needs Android; the purge decision is
+ * pure and pinned here.
+ */
+class TtsQueuePurgeTest {
+
+    private fun item(id: String, task: String, kind: String = "due") =
+        ReminderTts.QueuedSpeech(id, "say $id", task, kind, "Task $task")
+
+    private fun state(vararg items: ReminderTts.QueuedSpeech) = Triple(
+        ArrayDeque(items.toList()),
+        items.associate { it.id to it }.toMutableMap(),
+        mutableSetOf<String>(),
+    )
+
+    @Test
+    fun `queued items for the task go, others stay`() {
+        val (queue, owners, reported) = state(
+            item("a1", "A"), item("a2", "A", "start"), item("b1", "B"),
+        )
+        reported.add("a1")
+        val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
+        assertEquals(2, purged.dropped)
+        assertEquals(false, purged.inFlight)
+        assertEquals(setOf("due", "start"), purged.kindKeys)
+        assertEquals(listOf("b1"), queue.map { it.id })
+        assertEquals(setOf("b1"), owners.keys)
+        assertTrue(reported.isEmpty())
+    }
+
+    @Test
+    fun `an in-flight utterance is suppressed, not stopped`() {
+        val (queue, owners, reported) = state(item("a1", "A"), item("b1", "B"))
+        reported.add("a1")
+        // The speaking id is untouched (the audio finishes); only its
+        // owner/reported entries go, so the callback can no longer report
+        // — and the caller cancels its notice instead of orphaning it.
+        val purged = purgeTaskSpeech(queue, owners, reported, "a1", "A")
+        assertEquals(0, purged.dropped)
+        assertEquals(true, purged.inFlight)
+        assertEquals(setOf("due"), purged.kindKeys)
+        assertEquals(listOf("b1"), queue.map { it.id })
+        assertEquals(setOf("b1"), owners.keys)
+        assertTrue(reported.isEmpty())
+    }
+
+    @Test
+    fun `another task speaking is left alone`() {
+        val (queue, owners, reported) = state(item("a1", "A"), item("b1", "B"))
+        val purged = purgeTaskSpeech(queue, owners, reported, "b1", "A")
+        assertEquals(1, purged.dropped)
+        assertEquals(false, purged.inFlight)
+        assertEquals(listOf("b1"), queue.map { it.id })
+        assertEquals(setOf("b1"), owners.keys)
+    }
+
+    @Test
+    fun `a drift leftover owner entry goes too`() {
+        val (queue, owners, reported) = state(item("b1", "B"))
+        owners["ghost"] = item("ghost", "A")
+        val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
+        assertEquals(0, purged.dropped)
+        assertEquals(false, purged.inFlight)
+        assertTrue(purged.kindKeys.isEmpty())
+        assertEquals(setOf("b1"), owners.keys)
+    }
+
+    @Test
+    fun `no match purges nothing`() {
+        val (queue, owners, reported) = state(item("b1", "B"))
+        val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
+        assertEquals(SpeechPurge(0, false, emptySet()), purged)
+        assertEquals(1, queue.size)
+    }
+}

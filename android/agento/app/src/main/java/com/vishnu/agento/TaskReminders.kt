@@ -545,6 +545,10 @@ object TaskReminders {
         // Companion speech-failure notices are per-point too: completing,
         // skipping or dismissing the task must leave none orphaned (#434).
         ReminderTts.cancelFailures(context.applicationContext, taskId)
+        // And its queued speech goes too: a surviving entry would later
+        // speak a completed task or fail and re-post a tag just cancelled
+        // (#470 review).
+        ReminderTts.dropTask(taskId)
     }
 
     /**
@@ -808,8 +812,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         if (outcome?.isSuccess == true && (task == null || !task.isOpen())) {
             TaskReminders.cancelOne(appCtx, taskId)
             // Done/deleted: no future speech for this task, so no point's
-            // failure notice may outlive it (#434 review).
+            // failure notice may outlive it (#434 review) — and no queued
+            // utterance may outlive it either (#470 review).
             ReminderTts.cancelFailures(appCtx, taskId)
+            ReminderTts.dropTask(taskId)
             return
         }
         // The overdue nag is the one self-repeating point: keep it going
@@ -825,9 +831,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 // The fetch worked and the task is no longer past due: it
                 // was rescheduled, so stop the nag and say nothing. Past
                 // points' failure notices go too — they describe a schedule
-                // that no longer exists (#434 review).
+                // that no longer exists (#434 review) — and so does their
+                // queued speech (#470 review).
                 TaskReminders.cancelOne(appCtx, taskId)
                 ReminderTts.cancelFailures(appCtx, taskId)
+                ReminderTts.dropTask(taskId)
                 return
             } else {
                 // Fetch failed: unknowable, so keep the cadence rather than
