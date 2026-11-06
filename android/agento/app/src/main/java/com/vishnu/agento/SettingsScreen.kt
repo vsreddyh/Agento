@@ -1745,6 +1745,17 @@ internal fun hubHealthStatus(
     else -> "Ready"
 }
 
+/** Settings Health card permission line (#435 review): a transiently dead
+ * client forces an empty grant set, so "not granted yet" would imply a
+ * grant that cannot fix anything — the line says unknown instead. Pure
+ * for JVM pinning, like its neighbours. */
+internal fun healthPermLine(permissionsGranted: Boolean, healthTransient: Boolean): String =
+    when {
+        healthTransient -> "Permissions unknown — the client isn't responding"
+        permissionsGranted -> "Permissions granted"
+        else -> "Permissions not granted yet"
+    }
+
 /** Summarizes Health Connect install vs. permission state for Settings. */
 @Composable
 internal fun HealthStatusCard(state: UiState) {
@@ -1756,11 +1767,7 @@ internal fun HealthStatusCard(state: UiState) {
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             val healthText = healthStatusLine(state.healthAvailable, state.healthUpdateRequired)
-            val permText = if (state.permissionsGranted) {
-                "Permissions granted"
-            } else {
-                "Permissions not granted yet"
-            }
+            val permText = healthPermLine(state.permissionsGranted, state.healthTransient)
             Text(healthText, style = MaterialTheme.typography.titleSmall)
             Text(
                 permText,

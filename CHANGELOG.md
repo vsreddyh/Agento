@@ -22,14 +22,19 @@ see GitHub Releases for older notes.
   targets the same full disk, so that path stays best-effort and re-reports
   on the next failed save), so the next launch banners and toasts too; a
   task instruction whose save fails posts an "Instruction not saved" card
-  instead of a "saved" card that deep-links a thread that was never
+  (gated on the failure kind, never the muted success kind; branched on
+  that save's own result, not the tab-global flag a concurrent persist can
+  flip) instead of a "saved" card that deep-links a thread that was never
   persisted. A successful backup import clears the failure state, so a
-  restore never launches into a stale banner. Health sync on a device
+  restore never launches into a stale banner. The restart-seeded banner
+  names the loss ("was lost on restart") instead of claiming memory-only
+  messages that died with the process. Health sync on a device
   without Health Connect reports "Health Connect unavailable on this
   device" ("needs an update" when the SDK says so, like the settings card;
   "isn't responding — try again" for a transient client failure, where the
   settings section offers the same retry instead of a useless permission
-  grant) instead of "permissions not granted", and never posts an empty
+  grant, and the card's permission line reads unknown rather than
+  "not granted") instead of "permissions not granted", and never posts an empty
   day that reads as no data. The settings Health card's update branch was
   dead code behind the availability check; all three surfaces lead with
   the update state now.
