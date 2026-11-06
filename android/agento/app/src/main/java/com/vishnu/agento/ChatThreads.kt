@@ -353,6 +353,15 @@ object ChatThreads {
         }
     }
 
+    /** Clears a recorded write failure for [tab] from memory and disk
+     * (#435 review): a successful out-of-band rewrite (backup import)
+     * replaces the file the failure described, so the banner must not
+     * outlive the restore. A FAILED import keeps both, correctly. */
+    internal fun clearSaveErrorState(context: Context, tab: String) {
+        clearSaveError(tab)
+        setPersistedSaveError(context, tab, false)
+    }
+
     /** Drops the dirty-tracking snapshot for [tab]: an out-of-band writer (the
      * backup import writes the thread file directly, bypassing [save]) must
      * invalidate it, or the next save restores the pre-import bytes. */

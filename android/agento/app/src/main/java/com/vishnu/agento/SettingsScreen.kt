@@ -231,6 +231,7 @@ internal fun SettingsScreen(
                             healthStatus = hubHealthStatus(
                                 healthAvailable = state.healthAvailable,
                                 healthUpdateRequired = state.healthUpdateRequired,
+                                healthTransient = state.healthTransient,
                                 permissionsGranted = state.permissionsGranted,
                                 syncing = state.syncing,
                                 lastSyncAt = state.lastSyncAt,
@@ -476,6 +477,26 @@ internal fun SettingsScreen(
 
                         /** Three-step gate: install Health Connect, grant permissions, then sync. */
                         when {
+                            // SDK available but the client failed to build
+                            // (#435 review): a dead provider, so a permission
+                            // grant cannot fix it — offer a retry instead.
+                            state.healthTransient -> {
+                                SectionCard(
+                                    title = "Health Connect isn't responding",
+                                    subtitle = "The app is installed but isn't answering — retry the sync. Granting permissions again won't fix this.",
+                                ) {
+                                    Button(
+                                        onClick = { viewModel.syncNow() },
+                                        enabled = !state.syncing,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(if (state.syncing) "Syncing…" else "Retry sync")
+                                    }
+                                    if (state.healthPackageInfo.isNotEmpty()) {
+                                        HintLine("Health Connect: ${state.healthPackageInfo}")
+                                    }
+                                }
+                            }
                             !state.healthAvailable -> {
                                 SectionCard(
                                     // An outdated provider is not a missing one
@@ -1705,15 +1726,18 @@ internal fun healthStatusLine(healthAvailable: Boolean, healthUpdateRequired: Bo
     }
 
 /** Hub Health row (#435 review): same order as [healthStatusLine], short
- * strings for the hub. Pure for the same reason. */
+ * strings for the hub. A transiently dead client reads as not responding,
+ * never "setup needed" — setup cannot fix it. Pure for the same reason. */
 internal fun hubHealthStatus(
     healthAvailable: Boolean,
     healthUpdateRequired: Boolean,
+    healthTransient: Boolean,
     permissionsGranted: Boolean,
     syncing: Boolean,
     lastSyncAt: String,
 ): String = when {
     healthUpdateRequired -> "Update needed"
+    healthTransient -> "Not responding"
     !healthAvailable -> "Not installed"
     !permissionsGranted -> "Setup needed"
     syncing -> "Syncing…"
