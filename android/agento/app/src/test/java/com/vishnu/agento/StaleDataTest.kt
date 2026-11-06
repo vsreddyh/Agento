@@ -128,4 +128,43 @@ class StaleDataTest {
             HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE,
         )
     }
+
+    // ── Settings update-required ordering ─────────────────────────────
+
+    @Test
+    fun `update required outranks not installed`() {
+        // The dead-branch class from review: availability-first ordering
+        // made update-required devices read "not installed".
+        assertEquals(
+            "Health Connect needs an update",
+            healthStatusLine(healthAvailable = false, healthUpdateRequired = true),
+        )
+        assertEquals(
+            "Health Connect not installed",
+            healthStatusLine(healthAvailable = false, healthUpdateRequired = false),
+        )
+        assertEquals(
+            "Health Connect ready",
+            healthStatusLine(healthAvailable = true, healthUpdateRequired = false),
+        )
+    }
+
+    @Test
+    fun `hub health row leads with update needed`() {
+        assertEquals(
+            "Update needed",
+            hubHealthStatus(false, true, false, false, ""),
+        )
+        assertEquals(
+            "Not installed",
+            hubHealthStatus(false, false, false, false, ""),
+        )
+        assertEquals(
+            "Setup needed",
+            hubHealthStatus(true, false, false, false, ""),
+        )
+        assertEquals("Syncing…", hubHealthStatus(true, false, true, true, ""))
+        assertEquals("Synced", hubHealthStatus(true, false, true, false, "t"))
+        assertEquals("Ready", hubHealthStatus(true, false, true, false, ""))
+    }
 }
