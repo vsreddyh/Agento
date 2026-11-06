@@ -129,9 +129,12 @@ class ServerApi(context: Context) {
                         continue
                     }
                     val o = item as? JSONObject ?: continue
-                    val name = o.optString("name", "")
-                        .ifEmpty { o.optString("id", "") }
-                        .trim()
+                    // optJsonStr throughout (#130): a bare optString would
+                    // coerce JSON null to the literal string "null", which
+                    // passes the isEmpty gate as a phantom name and defeats
+                    // the id fallback below.
+                    val name = optJsonStr(o, "name")
+                        .ifEmpty { optJsonStr(o, "id") }
                     if (name.isEmpty()) continue
                     val tools = mutableListOf<String>()
                     val tarr = o.optJSONArray("tools")
@@ -140,7 +143,7 @@ class ServerApi(context: Context) {
                             when (val t = tarr.opt(j)) {
                                 is String -> if (t.isNotBlank()) tools.add(t.trim())
                                 is JSONObject -> {
-                                    val tn = t.optString("name", "").trim()
+                                    val tn = optJsonStr(t, "name")
                                     if (tn.isNotEmpty()) tools.add(tn)
                                 }
                             }
@@ -148,8 +151,8 @@ class ServerApi(context: Context) {
                     }
                     out.add(ToolsetInfo(
                         name = name,
-                        label = o.optString("label", "").trim(),
-                        description = o.optString("description", "").trim(),
+                        label = optJsonStr(o, "label"),
+                        description = optJsonStr(o, "description"),
                         enabled = optFlag(o, "enabled", "active"),
                         configured = optFlag(o, "configured"),
                         tools = tools,
@@ -270,17 +273,19 @@ fun parseServerSkillList(body: String): List<SkillInfo> {
             continue
         }
         val o = item as? JSONObject ?: continue
-        val name = o.optString("name", "")
-            .ifEmpty { o.optString("id", "") }
-            .ifEmpty { o.optString("slug", "") }
-            .trim()
+        // optJsonStr throughout (#130): a bare optString would coerce JSON
+        // null to the literal string "null", defeating the id/slug fallback
+        // and rendering phantom names.
+        val name = optJsonStr(o, "name")
+            .ifEmpty { optJsonStr(o, "id") }
+            .ifEmpty { optJsonStr(o, "slug") }
         if (name.isEmpty()) continue
         out.add(SkillInfo(
             name = name,
-            description = o.optString("description", "").trim(),
+            description = optJsonStr(o, "description"),
             enabled = optFlag(o, "enabled", "active"),
-            scope = o.optString("scope", "").trim(),
-            status = o.optString("status", "").trim(),
+            scope = optJsonStr(o, "scope"),
+            status = optJsonStr(o, "status"),
         ))
     }
     return out.distinctBy { it.name.lowercase(Locale.ROOT) }.sortedBy { it.name.lowercase(Locale.ROOT) }

@@ -64,4 +64,19 @@ class ProjectsApiTest {
         )
         assertEquals(listOf("ok"), out.map { it.id })
     }
+
+    @Test
+    fun `explicit JSON nulls read as missing`() {
+        // optJsonStr (#130): a bare optString would coerce these to the
+        // literal string "null" — a phantom id that passes the isEmpty gate.
+        val out = parseProjectList(
+            """{"projects":[
+                {"id":null,"name":"x"},
+                {"id":"a","name":null},
+                {"id":"b","name":"B","note":null}
+            ]}""",
+        )
+        assertEquals(listOf("b"), out.map { it.id })
+        assertEquals("", out.single().note)
+    }
 }

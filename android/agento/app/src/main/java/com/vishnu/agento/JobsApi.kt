@@ -131,9 +131,10 @@ internal fun parseJobList(body: String): JobList {
 /**
  * Scheduler client over the gateway's native Jobs API (same bearer auth as
  * chat, served through the proxy's /p/ route — no server changes needed).
- * Per-row parsing stays lenient across gateway versions (missing fields
- * show as blank rather than failing the whole list), but an
- * unrecognised list envelope is a failure, never an empty list (#430).
+ * Row fields are lenient (missing reads blank), but rows speak the canonical
+ * `schedule`/`delivery`/`paused` shape only — a row carrying a retired alias
+ * is counted unparseable, not rendered blank — and an unrecognised list
+ * envelope is a failure, never an empty list (#430, #433).
  */
 class JobsApi(context: Context) {
 

@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -51,5 +52,17 @@ class ServerApiShapeTest {
                 assertEquals(SESSION_MESSAGES_SHAPE_ERROR, e.message)
             }
         }
+    }
+
+    @Test
+    fun `explicit JSON nulls read as missing`() {
+        // optJsonStr (#130): a bare optString would coerce a null name to
+        // the literal string "null", defeating the id/slug fallback and
+        // rendering a phantom row.
+        assertEquals(
+            listOf("real"),
+            parseServerSkillList("""[{"name":null,"id":"real"}]""").map { it.name },
+        )
+        assertTrue(parseServerSkillList("""{"skills":[{"name":null}]}""").isEmpty())
     }
 }

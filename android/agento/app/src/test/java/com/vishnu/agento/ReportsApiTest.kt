@@ -159,4 +159,13 @@ class ReportsApiTest {
         )
         assertEquals(listOf("ok"), out.map { it.id })
     }
+
+    @Test
+    fun `explicit JSON nulls read as missing`() {
+        // optJsonStr (#130): a bare optString would coerce these to the
+        // literal string "null" — a phantom id that passes the isEmpty gate.
+        assertNull(parseReportSummary(JSONObject("""{"id":null,"title":"x"}""")))
+        val s = parseReportSummary(JSONObject("""{"id":"r1","title":null}"""))!!
+        assertEquals("", s.title)
+    }
 }

@@ -602,7 +602,7 @@ class ChatApi(context: Context) {
      * Tests the server URL against both backends: the gateway picker
      * (authenticated, proves chat works) and /health (proves sync works —
      * served by health-api through the proxy, or the gateway itself on a
-     * direct :8642 URL). Used by Settings → Test connection and the
+     * direct :8643 URL). Used by Settings → Test connection and the
      * offline banner. Never throws — failures land in the report.
      */
     suspend fun testConnection(path: String): Result<ConnectionReport> =

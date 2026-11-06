@@ -56,17 +56,20 @@ fun projectTimeMs(iso: String): Long {
  * (projects.toDoc), so the old `_id` fallback only ever bridged a shape
  * this app does not speak. */
 internal fun parseProject(o: JSONObject): ServerProject? {
-    val id = o.optString("id", "").trim()
+    // Every string through optJsonStr (#130): a bare optString would coerce
+    // JSON null to the literal string "null" — a phantom id that passes the
+    // isEmpty gate and renders as a row.
+    val id = optJsonStr(o, "id")
     if (id.isEmpty()) return null
-    val name = o.optString("name", "").trim()
+    val name = optJsonStr(o, "name")
     if (name.isEmpty()) return null
     return ServerProject(
         id = id,
         name = name,
-        status = o.optString("status", "Todo").trim().ifEmpty { "Todo" },
-        note = o.optString("note", "").trim(),
-        createdAt = o.optString("createdAt", "").trim(),
-        updatedAt = o.optString("updatedAt", "").trim(),
+        status = optJsonStr(o, "status").ifEmpty { "Todo" },
+        note = optJsonStr(o, "note"),
+        createdAt = optJsonStr(o, "createdAt"),
+        updatedAt = optJsonStr(o, "updatedAt"),
     )
 }
 
@@ -91,8 +94,10 @@ internal fun parseProjectList(body: String): List<ServerProject> {
         val o = arr.optJSONObject(i)
         if (o == null) { dropped++; continue }
         // Retired `_id`-only row: the old health-api shape — fail loudly
-        // so version skew never reads as an empty board.
-        if (o.optString("id", "").trim().isEmpty() && hasValue(o, "_id")) {
+        // so version skew never reads as an empty board. optJsonStr, not
+        // optString: a JSON null id must read as missing (#130), not as the
+        // literal "null" that would slip past this guard.
+        if (optJsonStr(o, "id").isEmpty() && hasValue(o, "_id")) {
             throw RuntimeException(PROJECTS_SHAPE_ERROR)
         }
         val p = parseProject(o)
@@ -221,14 +226,14 @@ class ProjectsApi(context: Context) {
                 val text = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
                     // A 404 on an /api/* route almost always means the app's
-                    // Server URL points at the gateway (:8642) instead of the
+                    // Server URL points at the gateway (:8643) instead of the
                     // proxy (:8080) — the gateway serves chat only, while
                     // /api/* lives on health-api behind the proxy. Say so
                     // instead of surfacing a bare "Not Found".
                     if (response.code == 404 && url.startsWith("/api/")) {
                         throw RuntimeException(
                             "HTTP 404: ${text.take(200)} (is the Server URL " +
-                                "the :8080 proxy? Direct :8642 serves chat only)"
+                                "the :8080 proxy? Direct :8643 serves chat only)"
                         )
                     }
                     throw RuntimeException("HTTP ${response.code}: ${text.take(200)}")

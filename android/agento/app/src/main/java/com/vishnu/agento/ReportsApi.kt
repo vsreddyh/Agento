@@ -57,35 +57,38 @@ data class ReportDetail(
 
 internal fun parseReportSummary(o: JSONObject): ReportSummary? {
     // Canonical `id` only (#433): health-api's docOut maps the Mongo `_id`
-    // to `id` on the wire, so the old `_id` fallback is gone.
-    val id = o.optString("id", "").trim()
+    // to `id` on the wire, so the old `_id` fallback is gone. Every string
+    // through optJsonStr (#130): a bare optString would coerce JSON null to
+    // the literal string "null" — a phantom id that passes the isEmpty gate.
+    val id = optJsonStr(o, "id")
     if (id.isEmpty()) return null
     return ReportSummary(
         id = id,
-        title = o.optString("title", "").trim(),
-        createdAt = o.optString("createdAt", "").trim(),
+        title = optJsonStr(o, "title"),
+        createdAt = optJsonStr(o, "createdAt"),
         read = o.optBoolean("read", false),
         starred = o.optBoolean("starred", false),
-        preview = o.optString("preview", "").trim(),
+        preview = optJsonStr(o, "preview"),
     )
 }
 
 internal fun parseReportSegment(o: JSONObject): ReportSegment? {
-    val kind = o.optString("kind", "").trim()
+    val kind = optJsonStr(o, "kind")
     if (kind != "text" && kind != "math") return null
     return ReportSegment(
         kind = kind,
-        text = o.optString("text", ""),
-        tex = o.optString("tex", ""),
-        html = o.optString("html", ""),
+        text = optJsonStr(o, "text"),
+        tex = optJsonStr(o, "tex"),
+        html = optJsonStr(o, "html"),
         display = o.optBoolean("display", false),
     )
 }
 
 internal fun parseReportDetail(o: JSONObject): ReportDetail? {
     // Canonical `id` only (#433): health-api's docOut maps the Mongo `_id`
-    // to `id` on the wire, so the old `_id` fallback is gone.
-    val id = o.optString("id", "").trim()
+    // to `id` on the wire, so the old `_id` fallback is gone. optJsonStr
+    // throughout (#130), same null-coercion guard as the summary.
+    val id = optJsonStr(o, "id")
     if (id.isEmpty()) return null
     val segments = mutableListOf<ReportSegment>()
     val arr = o.optJSONArray("segments")
@@ -97,14 +100,14 @@ internal fun parseReportDetail(o: JSONObject): ReportDetail? {
     }
     return ReportDetail(
         id = id,
-        title = o.optString("title", "").trim(),
-        createdAt = o.optString("createdAt", "").trim(),
-        source = o.optString("source", "").trim(),
+        title = optJsonStr(o, "title"),
+        createdAt = optJsonStr(o, "createdAt"),
+        source = optJsonStr(o, "source"),
         read = o.optBoolean("read", false),
         starred = o.optBoolean("starred", false),
-        bodyMd = o.optString("body_md", ""),
+        bodyMd = optJsonStr(o, "body_md"),
         segments = segments,
-        mathEngine = o.optString("math_engine", "").trim(),
+        mathEngine = optJsonStr(o, "math_engine"),
     )
 }
 
@@ -126,7 +129,9 @@ internal fun parseReportSummaries(body: String): List<ReportSummary> {
         if (o == null) { dropped++; continue }
         // Retired `_id`-only row: the old health-api shape, not a corrupt
         // row — fail loudly so version skew never reads as an empty inbox.
-        if (o.optString("id", "").trim().isEmpty() && hasValue(o, "_id")) {
+        // optJsonStr, not optString: a JSON null id must read as missing
+        // (#130), not as the literal "null" that would slip past this guard.
+        if (optJsonStr(o, "id").isEmpty() && hasValue(o, "_id")) {
             throw RuntimeException(REPORTS_SHAPE_ERROR)
         }
         val s = parseReportSummary(o)
