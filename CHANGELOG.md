@@ -11,8 +11,9 @@ see GitHub Releases for older notes.
 ## [6.2.2]
 - **Reset values say so (#437).** A stored value that falls back to its
   default no longer does it silently: a corrupt or version-skewed Task
-  Manager filter/sort toasts once naming what was stored and what it
-  became, each widget placement logs its view/density/sort reset (once per
+  Manager filter/sort toasts once per vintage naming what was stored and
+  what it became (a clean read re-arms, so a re-corruption notifies
+  again), each widget placement logs its view/density/sort reset (once per
   value per vintage — a fix re-arms the log, so a re-corruption notifies
   again) into Settings → About diagnostics alongside a per-key summary
   (cleared when the pref is fixed or the placement deleted, so
@@ -29,7 +30,8 @@ see GitHub Releases for older notes.
   instead of riding the log only; a list page evicts the single entries
   of the rows it contains, so the two never disagree; and a 404 naming
   the row evicts it on every verb (already-gone included), not just
-  `get`. the key, the raw value and what it became ride both the log and
+  `get` — batch matches the quoted id, so one gone row cannot evict a
+  live sibling. the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (each surface that
   switches states — manager per landed load, widget factory per settled

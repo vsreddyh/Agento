@@ -321,24 +321,23 @@ class TaskWidget : AppWidgetProvider() {
             pruneCoercionsFor(id)
         }
         // Task-notes lifecycle mirrors the pref prune above (#480 review).
-        // The push path refetches all three states every cycle while any
-        // placement lives, so `widget:*` stays fresh on its own and is
-        // dropped only with the last placement. Factory entries are keyed
-        // per placement (`widget-factory-<id>`), so each deleted
-        // placement's entries die with it — precisely, whether or not
-        // siblings remain. Unknown (lookup threw): keep, so a transient
-        // failure cannot delete live detail.
+        // Factory entries are keyed per deleted placement
+        // (`widget-factory-<id>`), so they die with it unconditionally —
+        // the namespace names the deleted id and cannot touch a live
+        // placement's detail, even when the lookup below fails. The push
+        // path refetches all three states every cycle while any placement
+        // lives, so `widget:*` stays fresh on its own and is dropped only
+        // with the last placement; a failed lookup keeps it, so a
+        // transient failure cannot delete live detail.
+        for (id in appWidgetIds) {
+            TasksApi.clearCoercedNotesSource("widget-factory-$id")
+        }
         val remaining = runCatching {
             AppWidgetManager.getInstance(context)
                 .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
         }.getOrNull()
-        if (remaining != null) {
-            if (remaining.isEmpty()) {
-                TasksApi.clearCoercedNotesSource("widget")
-            }
-            for (id in appWidgetIds) {
-                TasksApi.clearCoercedNotesSource("widget-factory-$id")
-            }
+        if (remaining != null && remaining.isEmpty()) {
+            TasksApi.clearCoercedNotesSource("widget")
         }
     }
 

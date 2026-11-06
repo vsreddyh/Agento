@@ -124,30 +124,42 @@ internal fun TaskManagerScreen(
     var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
     val sort = sortForName(sortName)
     // A corrupt or version-skewed saved value resets to the default above
-    // (#437) — and that reset toasts once per distinct raw value, naming
-    // what was stored and what it became, instead of the view changing for
-    // no apparent reason. Saveable like the names themselves: a plain
+    // (#437) — and that reset toasts once per distinct raw value per
+    // vintage, naming what was stored and what it became, instead of the
+    // view changing for no apparent reason. A clean read re-arms the
+    // dedupe, so a fix-then-rebreak notifies again like the widget path
+    // (#480 review). Saveable like the names themselves: a plain
     // remember would reset on rotation while the corrupt name survives,
     // re-toasting the same value (#437 review). Lists, not sets — a Set
     // is not Bundle-saveable (see BulkSelectionSaver below).
     var filterCoercionNoted by rememberSaveable { mutableStateOf(listOf<String>()) }
     var sortCoercionNoted by rememberSaveable { mutableStateOf(listOf<String>()) }
     LaunchedEffect(filterName) {
-        filterCoercionMessage(filterName)?.let { msg ->
-            if (filterName !in filterCoercionNoted) {
-                filterCoercionNoted = filterCoercionNoted + filterName
-                runCatching { Log.w("TaskManager", "coerced filter $msg") }
-                toasts.toast(msg, ToastKind.Error)
+        val filterMsg = filterCoercionMessage(filterName)
+        if (filterMsg == null) {
+            // Clean read ends the vintage: forget the raw so a later
+            // re-corruption notifies again, mirroring the widget path
+            // (#480 review). Guarded — no state write, no recomposition
+            // loop on ordinary clean names.
+            if (filterName in filterCoercionNoted) {
+                filterCoercionNoted = filterCoercionNoted - filterName
             }
+        } else if (filterName !in filterCoercionNoted) {
+            filterCoercionNoted = filterCoercionNoted + filterName
+            runCatching { Log.w("TaskManager", "coerced filter $filterMsg") }
+            toasts.toast(filterMsg, ToastKind.Error)
         }
     }
     LaunchedEffect(sortName) {
-        sortCoercionMessage(sortName)?.let { msg ->
-            if (sortName !in sortCoercionNoted) {
-                sortCoercionNoted = sortCoercionNoted + sortName
-                runCatching { Log.w("TaskManager", "coerced sort $msg") }
-                toasts.toast(msg, ToastKind.Error)
+        val sortMsg = sortCoercionMessage(sortName)
+        if (sortMsg == null) {
+            if (sortName in sortCoercionNoted) {
+                sortCoercionNoted = sortCoercionNoted - sortName
             }
+        } else if (sortName !in sortCoercionNoted) {
+            sortCoercionNoted = sortCoercionNoted + sortName
+            runCatching { Log.w("TaskManager", "coerced sort $sortMsg") }
+            toasts.toast(sortMsg, ToastKind.Error)
         }
     }
     var query by rememberSaveable { mutableStateOf("") }

@@ -856,10 +856,11 @@ class TasksApi(context: Context) {
          * (one state per bound placement, in its own per-placement
          * namespace) prune to the settled state: without this
          * the old filter's/view's notes would linger next to the new page (#480
-         * review). Called on a successful load only — on failure the rows
-         * on screen are still the previous page; the factory calls it on
-         * every bind, which always shows its placement's state (cached,
-         * fetched, or empty). Writers with a fixed state set
+         * review). Called when a surface settles on rows: the manager on
+         * each successful load, the factory on each bind that settled on
+         * rows (cache hit or landed fetch — never a failed fetch showing
+         * nothing, never a preview bind), mirroring the manager's
+         * success-only call. Writers with a fixed state set
          * (reminders, the widget push path) never need it.
          */
         internal fun clearCoercedNotesExcept(source: String, keepState: String) {
@@ -1363,12 +1364,15 @@ class TasksApi(context: Context) {
             }.also { r ->
                 // A whole-call 404 names no row in its URL: drop only the
                 // entries the error itself names, so live rows keep theirs
-                // (#480 review). Success needs no clear — each item parse
-                // just re-recorded its row's current entry.
+                // (#480 review). Quoted: the id rides the server's JSON
+                // body as a string, and a bare substring would let id "a"
+                // match a message naming only "ab". Success needs no
+                // clear — each item parse just re-recorded its row's
+                // current entry.
                 val msg = r.exceptionOrNull()?.message ?: ""
                 if ("HTTP 404:" in msg && "unknown task" in msg) {
                     for (op in ops) {
-                        if (op.id.isNotEmpty() && op.id in msg) {
+                        if (op.id.isNotEmpty() && "\"${op.id}\"" in msg) {
                             noteCoercedNotes("single", singleCoercionState(op.id), emptyList())
                         }
                     }
