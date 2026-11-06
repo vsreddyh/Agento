@@ -13,7 +13,9 @@ see GitHub Releases for older notes.
   result now toasts "Didn't catch that — tap the mic to try again." (Error);
   an incomplete one toasts "Voice input didn't complete — tap the mic to
   try again." (Info — the recognizer reports its own errors as cancelled,
-  and a genuine Back-button cancel is a benign no-op). Live mode: when
+  so even a genuine Back-button cancel toasts: a silent CANCELED could be
+  a recognizer error, unlike the camera/gallery pickers which stay
+  silent). Live mode: when
   barge-in detection fails its bounded retry — or dies mid-session, which a
   watchdog promotes to the same flag — a persistent "Barge-in unavailable —
   end the live session and start a new one." line shows until detection
