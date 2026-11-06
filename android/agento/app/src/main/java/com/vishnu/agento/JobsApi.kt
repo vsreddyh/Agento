@@ -49,34 +49,35 @@ data class JobList(
 internal fun hasValue(o: JSONObject, key: String): Boolean =
     o.has(key) && !o.isNull(key)
 
+/** Field names only an older gateway sends (#433). A row carrying one is
+ * unparseable rather than a blank-but-healthy canonical row. */
+private val RETIRED_JOB_FIELDS =
+    listOf("job_id", "cron", "enabled", "state", "status", "deliver", "lastRun", "nextRun")
+
 /** One job row: null when the row carries no usable id.
  * Every string reads through [optJsonStr]: a bare `optString` would
  * coerce JSON null to the literal string "null", surfacing phantom
  * rows and "null" text (#430). */
 internal fun parseJob(o: JSONObject): CronJob? {
     val id = optJsonStr(o, "id")
-        .ifEmpty { optJsonStr(o, "job_id") }
     if (id.isEmpty()) return null
-    val paused = when {
-        hasValue(o, "paused") -> o.optBoolean("paused")
-        hasValue(o, "enabled") -> !o.optBoolean("enabled", true)
-        hasValue(o, "state") -> optJsonStr(o, "state").lowercase() == "paused"
-        hasValue(o, "status") -> optJsonStr(o, "status").lowercase() == "paused"
-        else -> null
-    }
+    // Canonical gateway shape only (#433): a row carrying a retired alias is
+    // returned as unparseable so the list's dropped count names it, instead
+    // of rendering a blank schedule / unknown pause beside a stale alias that
+    // the reader silently ignored. Retired: job_id (handled above by the
+    // missing canonical id), cron, enabled/state/status, deliver, and the
+    // camelCase lastRun/nextRun.
+    if (RETIRED_JOB_FIELDS.any { hasValue(o, it) }) return null
+    val paused = if (hasValue(o, "paused")) o.optBoolean("paused") else null
     return CronJob(
         id = id,
         name = optJsonStr(o, "name"),
         prompt = optJsonStr(o, "prompt"),
-        schedule = optJsonStr(o, "schedule")
-            .ifEmpty { optJsonStr(o, "cron") },
+        schedule = optJsonStr(o, "schedule"),
         paused = paused,
-        lastRun = optJsonStr(o, "last_run")
-            .ifEmpty { optJsonStr(o, "lastRun") },
-        nextRun = optJsonStr(o, "next_run")
-            .ifEmpty { optJsonStr(o, "nextRun") },
-        delivery = optJsonStr(o, "delivery")
-            .ifEmpty { optJsonStr(o, "deliver") },
+        lastRun = optJsonStr(o, "last_run"),
+        nextRun = optJsonStr(o, "next_run"),
+        delivery = optJsonStr(o, "delivery"),
         runs = o.optJSONArray("runs")?.let { arr ->
             buildList {
                 for (i in 0 until arr.length()) {
@@ -94,21 +95,24 @@ internal fun parseJob(o: JSONObject): CronJob? {
     )
 }
 
-/** Parses one job-list page (#430): the `jobs`/`data`/`items` envelope,
- * the rows, and how many rows arrived unparseable.
+/** One message for a gateway that does not speak the canonical job list
+ * (#433): names the missing shape and the fix, never a clean empty page. */
+internal const val JOBS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no jobs list. Update the server."
+
+/** Parses one job-list page (#430): the canonical `jobs` envelope, the
+ * rows, and how many rows arrived unparseable.
  *
- * A body with none of the known envelopes — or no JSON body at all —
- * is a parse failure, never a clean empty: it throws
- * "Unexpected response shape" so the scheduler shows an error instead
- * of reading "no scheduled jobs". */
+ * The `data`/`items` fallbacks are gone (#433): a gateway that speaks one
+ * of those is too old for this app, so a body without a `jobs` array — or
+ * no JSON body at all — is a loud parse failure with an actionable
+ * message, never a clean empty that reads as "no scheduled jobs". */
 internal fun parseJobList(body: String): JobList {
     val out = mutableListOf<CronJob>()
     val root = runCatching { JSONObject(body) }.getOrNull()
-        ?: throw RuntimeException("Unexpected response shape")
+        ?: throw RuntimeException(JOBS_SHAPE_ERROR)
     val arr = root.optJSONArray("jobs")
-        ?: root.optJSONArray("data")
-        ?: root.optJSONArray("items")
-        ?: throw RuntimeException("Unexpected response shape")
+        ?: throw RuntimeException(JOBS_SHAPE_ERROR)
     var dropped = 0
     for (i in 0 until arr.length()) {
         val job = arr.optJSONObject(i)?.let { parseJob(it) }
@@ -127,9 +131,10 @@ internal fun parseJobList(body: String): JobList {
 /**
  * Scheduler client over the gateway's native Jobs API (same bearer auth as
  * chat, served through the proxy's /p/ route — no server changes needed).
- * Per-row parsing stays lenient across gateway versions (missing fields
- * show as blank rather than failing the whole list), but an
- * unrecognised list envelope is a failure, never an empty list (#430).
+ * Row fields are lenient (missing reads blank), but rows speak the canonical
+ * `schedule`/`delivery`/`paused` shape only — a row carrying a retired alias
+ * is counted unparseable, not rendered blank — and an unrecognised list
+ * envelope is a failure, never an empty list (#430, #433).
  */
 class JobsApi(context: Context) {
 
@@ -145,24 +150,16 @@ class JobsApi(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         return runCatching {
             val builder = Request.Builder()
@@ -204,7 +201,7 @@ class JobsApi(context: Context) {
         val body = JSONObject()
             .put("prompt", prompt)
             .put("schedule", schedule)
-            .put("deliver", delivery.ifEmpty { "local" })
+            .put("delivery", delivery.ifEmpty { "local" })
         if (name.isNotBlank()) body.put("name", name)
         call("POST", "$path/api/jobs", body).map { }
     }
@@ -222,23 +219,24 @@ class JobsApi(context: Context) {
         if (name.isNotBlank()) body.put("name", name)
         if (prompt.isNotBlank()) body.put("prompt", prompt)
         if (schedule.isNotBlank()) body.put("schedule", schedule)
-        if (delivery.isNotBlank()) body.put("deliver", delivery)
+        if (delivery.isNotBlank()) body.put("delivery", delivery)
         call("PATCH", "$path/api/jobs/$id", body).map { }
     }
 
+    /** Pauses via the canonical action endpoint only (#433). The old
+     * `PATCH {paused:true}` downgrade is gone: an older gateway answers 404
+     * on the unknown action route and that HTTP failure surfaces, instead of
+     * being silently driven through a different contract the app does not
+     * mean to support. */
     suspend fun pause(path: String, id: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            // Native pause endpoint, with PATCH fallback for older gateways.
-            val direct = call("POST", "$path/api/jobs/$id/pause")
-            if (direct.isSuccess) return@withContext direct.map { }
-            call("PATCH", "$path/api/jobs/$id", JSONObject().put("paused", true)).map { }
+            call("POST", "$path/api/jobs/$id/pause").map { }
         }
 
+    /** Resumes via the canonical action endpoint only (#433), like [pause]. */
     suspend fun resume(path: String, id: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            val direct = call("POST", "$path/api/jobs/$id/resume")
-            if (direct.isSuccess) return@withContext direct.map { }
-            call("PATCH", "$path/api/jobs/$id", JSONObject().put("paused", false)).map { }
+            call("POST", "$path/api/jobs/$id/resume").map { }
         }
 
     suspend fun runNow(path: String, id: String): Result<Unit> =

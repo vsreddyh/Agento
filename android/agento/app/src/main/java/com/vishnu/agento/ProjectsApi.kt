@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -13,6 +14,11 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 private val PROJECT_JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+
+/** One message for a server that does not speak the canonical project list
+ * (#433): names the missing shape and the fix, never a clean empty list. */
+internal const val PROJECTS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no projects list. Update the server."
 
 /** One project row from the shared `projects` collection, served by
  * health-api (`/api/projects`) and managed by the agent over the
@@ -39,9 +45,74 @@ fun projectTimeMs(iso: String): Long {
  * Client for the project board (same bearer auth as chat/sync, served
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
- * validation the agent uses over MCP. Parsing is lenient across shapes;
- * rows without an id or name are skipped, missing fields blank.
+ * validation the agent uses over MCP. Row fields are lenient (missing reads
+ * blank, corrupt rows without any id are skipped and counted), but the list
+ * envelope is the canonical `projects` array only and a row carrying the
+ * retired `_id` without a canonical `id` is an old-server shape that throws
+ * [PROJECTS_SHAPE_ERROR] instead of rendering as an empty board (#433).
  */
+/** One project row: null when the row carries no usable id or name.
+ * Canonical `id` only (#433): the health-api maps Mongo `_id` to `id`
+ * (projects.toDoc), so the old `_id` fallback only ever bridged a shape
+ * this app does not speak. */
+internal fun parseProject(o: JSONObject): ServerProject? {
+    // Every string through optJsonStr (#130): a bare optString would coerce
+    // JSON null to the literal string "null" — a phantom id that passes the
+    // isEmpty gate and renders as a row.
+    val id = optJsonStr(o, "id")
+    if (id.isEmpty()) return null
+    val name = optJsonStr(o, "name")
+    if (name.isEmpty()) return null
+    return ServerProject(
+        id = id,
+        name = name,
+        status = optJsonStr(o, "status").ifEmpty { "Todo" },
+        note = optJsonStr(o, "note"),
+        createdAt = optJsonStr(o, "createdAt"),
+        updatedAt = optJsonStr(o, "updatedAt"),
+    )
+}
+
+/** Parses one project-list body (#433): the canonical `projects`
+ * envelope only. A missing envelope or an unreadable body throws
+ * [PROJECTS_SHAPE_ERROR], never a clean empty that reads as "no
+ * projects". A row that carries the retired `_id` without a canonical
+ * `id` is an old-server shape and throws; rows missing every id or name
+ * are corrupt, not version skew, so they are skipped and counted in
+ * logcat. Pure for testability. */
+internal fun parseProjectList(body: String): List<ServerProject> {
+    val out = mutableListOf<ServerProject>()
+    val root = runCatching { JSONObject(body) }.getOrNull()
+        ?: throw RuntimeException(PROJECTS_SHAPE_ERROR)
+    // Canonical `projects` envelope only (#433): the old
+    // data/items fallbacks and the silent empty on an unknown
+    // shape are gone, so a shape mismatch is a visible error.
+    val arr = root.optJSONArray("projects")
+        ?: throw RuntimeException(PROJECTS_SHAPE_ERROR)
+    var dropped = 0
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i)
+        if (o == null) { dropped++; continue }
+        // Retired `_id`-only row: the old health-api shape — fail loudly
+        // so version skew never reads as an empty board. optJsonStr, not
+        // optString: a JSON null id must read as missing (#130), not as the
+        // literal "null" that would slip past this guard.
+        if (optJsonStr(o, "id").isEmpty() && hasValue(o, "_id")) {
+            throw RuntimeException(PROJECTS_SHAPE_ERROR)
+        }
+        val p = parseProject(o)
+        if (p != null) out.add(p) else dropped++
+    }
+    if (dropped > 0) {
+        // Same diagnostics deal as the task page: background readers
+        // take the list and never see the count (see TasksApi).
+        runCatching {
+            Log.w("ProjectsApi", "dropped $dropped unparseable project row(s) in list response")
+        }
+    }
+    return out
+}
+
 class ProjectsApi(context: Context) {
 
     companion object {
@@ -60,35 +131,11 @@ class ProjectsApi(context: Context) {
     private val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
     private val http: OkHttpClient get() = sharedHttp
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
-
-    private fun parseProject(o: JSONObject): ServerProject? {
-        val id = o.optString("id", "")
-            .ifEmpty { o.optString("_id", "") }.trim()
-        if (id.isEmpty()) return null
-        val name = o.optString("name", "").trim()
-        if (name.isEmpty()) return null
-        return ServerProject(
-            id = id,
-            name = name,
-            status = o.optString("status", "Todo").trim().ifEmpty { "Todo" },
-            note = o.optString("note", "").trim(),
-            createdAt = o.optString("createdAt", "").trim(),
-            updatedAt = o.optString("updatedAt", "").trim(),
-        )
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     /** Lists projects by status (`Todo|Ongoing|Testing|Blocked|Paused|Done|all`, default
      * all); unknown statuses fail fast. `search` matches name/note. `limit`
@@ -97,25 +144,13 @@ class ProjectsApi(context: Context) {
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
             }
             val s = status.trim().ifEmpty { "all" }
             val q = "?status=" + URLEncoder.encode(s, Charsets.UTF_8.name()).replace("+", "%20") +
                 (if (search.isNotBlank()) "&search=" + URLEncoder.encode(search.trim(), Charsets.UTF_8.name()).replace("+", "%20") else "") +
                 "&limit=$limit"
-            call("GET", "/api/projects$q").map { body ->
-                val out = mutableListOf<ServerProject>()
-                val root = JSONObject(body)
-                val arr = root.optJSONArray("projects")
-                    ?: root.optJSONArray("data")
-                    ?: root.optJSONArray("items")
-                    ?: return@map out
-                for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    parseProject(o)?.let { out.add(it) }
-                }
-                out
-            }
+            call("GET", "/api/projects$q").mapCatching { body -> parseProjectList(body) }
         }
 
     /** Creates a project; name required, blank status defaults to Todo. */
@@ -163,7 +198,7 @@ class ProjectsApi(context: Context) {
 
     private fun parseOne(body: String): ServerProject =
         parseProject(JSONObject(body))
-            ?: throw RuntimeException("Unexpected response shape")
+            ?: throw RuntimeException(PROJECTS_SHAPE_ERROR)
 
     /** Ids are hex today, but encoded defensively so a malformed id can
      * never break the request path (the `+` fix-up mirrors TasksApi:
@@ -174,7 +209,7 @@ class ProjectsApi(context: Context) {
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         return runCatching {
             val builder = Request.Builder()
@@ -191,14 +226,14 @@ class ProjectsApi(context: Context) {
                 val text = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
                     // A 404 on an /api/* route almost always means the app's
-                    // Server URL points at the gateway (:8642) instead of the
+                    // Server URL points at the gateway (:8643) instead of the
                     // proxy (:8080) — the gateway serves chat only, while
                     // /api/* lives on health-api behind the proxy. Say so
                     // instead of surfacing a bare "Not Found".
                     if (response.code == 404 && url.startsWith("/api/")) {
                         throw RuntimeException(
                             "HTTP 404: ${text.take(200)} (is the Server URL " +
-                                "the :8080 proxy? Direct :8642 serves chat only)"
+                                "the :8080 proxy? Direct :8643 serves chat only)"
                         )
                     }
                     throw RuntimeException("HTTP ${response.code}: ${text.take(200)}")

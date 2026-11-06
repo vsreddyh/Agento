@@ -134,9 +134,9 @@ class ParseLastAssistantTextTest {
     }
 
     @Test
-    fun `envelope variants and content blocks parse`() {
-        val wrapped = """{"data":[{"role":"assistant","content":"deep"}]}"""
-        assertEquals("deep", parseLastAssistantText(wrapped))
+    fun `canonical envelopes and content blocks parse`() {
+        // #433: sessions answer with `messages` (or a bare array); the retired
+        // `data`/`items` wrappers are no longer read.
         val bare = """[${row("assistant", "bare")}]"""
         assertEquals("bare", parseLastAssistantText(bare))
         val blocks = """{"messages":[
@@ -144,6 +144,11 @@ class ParseLastAssistantTextTest {
             {"role":"assistant","content":[{"type":"text","text":"blocked"}]}
         ]}"""
         assertEquals("blocked", parseLastAssistantText(blocks))
+    }
+
+    @Test(expected = RuntimeException::class)
+    fun `retired data envelope is not read`() {
+        parseLastAssistantText("""{"data":[{"role":"assistant","content":"deep"}]}""")
     }
 
     @Test(expected = RuntimeException::class)

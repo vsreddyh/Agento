@@ -11,6 +11,26 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.Locale
 
+/** One message for a server that does not speak the canonical toolsets list
+ * (#433): names the missing shape and the fix, never a clean empty page. */
+internal const val TOOLSETS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no toolsets list. Update the server."
+
+/** One message for a server that does not speak the canonical skills list
+ * (#433): names the missing shape and the fix, never a clean empty page. */
+internal const val SKILLS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no skills list. Update the server."
+
+/** One message for a server that does not speak the canonical session
+ * transcript shape (#433): names the missing shape and the fix. */
+internal const val SESSION_MESSAGES_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no session messages. Update the server."
+
+/** One message for a server that does not speak the canonical session
+ * totals shape (#433): names the missing shape and the fix. */
+internal const val SESSION_TOTALS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no session totals. Update the server."
+
 /** One skill from `GET {profile}/v1/skills` (read-only mirror of the dashboard). */
 data class SkillInfo(
     val name: String,
@@ -34,18 +54,14 @@ data class ToolsetInfo(
     val tools: List<String> = emptyList(),
 )
 
-/** MCP server derived from `mcp__<server>__<tool>` tool names. */
-data class McpServer(
-    val name: String,
-    val tools: List<String>,
-)
-
 /**
  * Read-only view of the gateway's skills + toolsets (dashboard Skills/MCP
  * pages, slimmed for mobile). Same bearer auth as chat; per-profile paths
- * so each assistant shows its own inventory. Parsing is lenient — shapes
- * differ across gateway versions, so unknown fields are ignored; valid
- * empty results are success and only transport/parse failures are errors.
+ * so each assistant shows its own inventory. Row fields are lenient
+ * (unknown fields ignored), but each list has one canonical shape — a bare
+ * top-level array or its named wrapper (`toolsets`, `skills`, `messages`) —
+ * and anything else fails with the fix in the message (#433), never a clean
+ * empty. Valid empty results are success and only transport/parse failures are errors.
  */
 class ServerApi(context: Context) {
 
@@ -57,24 +73,16 @@ class ServerApi(context: Context) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     private fun get(path: String, endpoint: String): Result<String> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         return runCatching {
             http.newCall(Request.Builder()
@@ -92,7 +100,8 @@ class ServerApi(context: Context) {
     }
 
     /** Lists skills for one profile path (e.g. `/p/chat`). The server
-     * returns a bare JSON array; object-wrapped shapes fall back gracefully.
+     * answers `{skills:[...]}` (a bare top-level array reads too); any other
+     * shape throws [SKILLS_SHAPE_ERROR] (#433).
      * A valid-but-empty response is success (the UI shows "Nothing listed");
      * only transport/parse failures are errors. */
     suspend fun listSkills(path: String): Result<List<SkillInfo>> =
@@ -102,14 +111,15 @@ class ServerApi(context: Context) {
             }
         }
 
-    /** Lists toolsets for one profile path; MCP servers derive from tool names.
-     * The server returns a bare JSON array; object-wrapped shapes fall back. */
+    /** Lists toolsets for one profile path. The server answers a bare JSON
+     * array (the `{toolsets:[...]}` wrapper reads too); any other shape
+     * throws [TOOLSETS_SHAPE_ERROR] (#433). */
     suspend fun listToolsets(path: String): Result<List<ToolsetInfo>> =
         withContext(Dispatchers.IO) {
             get(path, "v1/toolsets").map { body ->
                 val out = mutableListOf<ToolsetInfo>()
-                val arr = rootArray(body, "toolsets", "data", "items")
-                    ?: throw RuntimeException("Unexpected response shape")
+                val arr = rootArray(body, "toolsets")
+                    ?: throw RuntimeException(TOOLSETS_SHAPE_ERROR)
                 for (i in 0 until arr.length()) {
                     val item = arr.opt(i)
                     if (item is String) {
@@ -119,9 +129,12 @@ class ServerApi(context: Context) {
                         continue
                     }
                     val o = item as? JSONObject ?: continue
-                    val name = o.optString("name", "")
-                        .ifEmpty { o.optString("id", "") }
-                        .trim()
+                    // optJsonStr throughout (#130): a bare optString would
+                    // coerce JSON null to the literal string "null", which
+                    // passes the isEmpty gate as a phantom name and defeats
+                    // the id fallback below.
+                    val name = optJsonStr(o, "name")
+                        .ifEmpty { optJsonStr(o, "id") }
                     if (name.isEmpty()) continue
                     val tools = mutableListOf<String>()
                     val tarr = o.optJSONArray("tools")
@@ -130,7 +143,7 @@ class ServerApi(context: Context) {
                             when (val t = tarr.opt(j)) {
                                 is String -> if (t.isNotBlank()) tools.add(t.trim())
                                 is JSONObject -> {
-                                    val tn = t.optString("name", "").trim()
+                                    val tn = optJsonStr(t, "name")
                                     if (tn.isNotEmpty()) tools.add(tn)
                                 }
                             }
@@ -138,8 +151,8 @@ class ServerApi(context: Context) {
                     }
                     out.add(ToolsetInfo(
                         name = name,
-                        label = o.optString("label", "").trim(),
-                        description = o.optString("description", "").trim(),
+                        label = optJsonStr(o, "label"),
+                        description = optJsonStr(o, "description"),
                         enabled = optFlag(o, "enabled", "active"),
                         configured = optFlag(o, "configured"),
                         tools = tools,
@@ -167,8 +180,8 @@ class ServerApi(context: Context) {
             get(path, "api/sessions/${urlEncode(sessionId)}/messages").map { body ->
                 val roles = mutableListOf<String>()
                 val indexed = mutableListOf<IndexedCall>()
-                val arr = rootArray(body, "messages", "data", "items")
-                    ?: throw RuntimeException("Unexpected response shape")
+                val arr = rootArray(body, "messages")
+                    ?: throw RuntimeException(SESSION_MESSAGES_SHAPE_ERROR)
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     val role = o.optString("role", "")
@@ -217,12 +230,11 @@ class ServerApi(context: Context) {
         }
 
     /** Server-side totals for one conversation (#121 reconciliation).
-     * Lenient: the wrapped `{"session":{...}}` shape is the Hermes one, verified
-     * live at the time, with
-     * bare-object fallback; alternate token key names accepted; unknown or
-     * missing sessions are success-with-null (pre-#120 thread ids, deleted
-     * sessions) so the UI falls back to device sums. Only transport/parse
-     * failures are errors. */
+     * The server answers `{"session":{...}}`; any other shape throws
+     * [SESSION_TOTALS_SHAPE_ERROR] (#433). Unknown sessions surface as an
+     * explicit `{"error":...}` object and read as success-with-null
+     * (pre-#120 thread ids, deleted sessions) so the UI falls back to
+     * device sums. Only transport/parse failures are errors. */
     suspend fun fetchSessionTotals(path: String, sessionId: String): Result<SessionTotals?> =
         withContext(Dispatchers.IO) {
             if (sessionId.isBlank()) {
@@ -230,26 +242,28 @@ class ServerApi(context: Context) {
             }
             get(path, "api/sessions/${urlEncode(sessionId)}").map { body ->
                 val root = runCatching { JSONObject(body) }.getOrNull()
-                    ?: throw RuntimeException("Unexpected response shape")
+                    ?: throw RuntimeException(SESSION_TOTALS_SHAPE_ERROR)
                 // 404-style unknown sessions surface as failures upstream;
                 // an explicit error object reads as absent, not fatal.
                 if (root.optString("error", "").trim().isNotEmpty()) return@map null
-                val s = root.optJSONObject("session") ?: root
+                val s = root.optJSONObject("session")
+                    ?: throw RuntimeException(SESSION_TOTALS_SHAPE_ERROR)
                 parseSessionTotals(s)
             }
         }
 }
 
 /**
- * Pure parse of a skills payload (#372): the same bare-array / wrapped
- * shapes [ServerApi.listSkills] accepts. JVM-pinned — the wire gains
+ * Pure parse of a skills payload (#372): the same bare-array / `skills`
+ * wrapper shapes [ServerApi.listSkills] accepts (#433 throws
+ * [SKILLS_SHAPE_ERROR] on anything else). JVM-pinned — the wire gains
  * fields (notably `scope`/`status` on taught rows), and a parse that
  * silently drops them would let the picker offer skills Pi never loaded.
  */
 fun parseServerSkillList(body: String): List<SkillInfo> {
     val out = mutableListOf<SkillInfo>()
-    val arr = rootArray(body, "skills", "data", "items")
-        ?: throw RuntimeException("Unexpected response shape")
+    val arr = rootArray(body, "skills")
+        ?: throw RuntimeException(SKILLS_SHAPE_ERROR)
     for (i in 0 until arr.length()) {
         val item = arr.opt(i)
         if (item is String) {
@@ -259,17 +273,19 @@ fun parseServerSkillList(body: String): List<SkillInfo> {
             continue
         }
         val o = item as? JSONObject ?: continue
-        val name = o.optString("name", "")
-            .ifEmpty { o.optString("id", "") }
-            .ifEmpty { o.optString("slug", "") }
-            .trim()
+        // optJsonStr throughout (#130): a bare optString would coerce JSON
+        // null to the literal string "null", defeating the id/slug fallback
+        // and rendering phantom names.
+        val name = optJsonStr(o, "name")
+            .ifEmpty { optJsonStr(o, "id") }
+            .ifEmpty { optJsonStr(o, "slug") }
         if (name.isEmpty()) continue
         out.add(SkillInfo(
             name = name,
-            description = o.optString("description", "").trim(),
+            description = optJsonStr(o, "description"),
             enabled = optFlag(o, "enabled", "active"),
-            scope = o.optString("scope", "").trim(),
-            status = o.optString("status", "").trim(),
+            scope = optJsonStr(o, "scope"),
+            status = optJsonStr(o, "status"),
         ))
     }
     return out.distinctBy { it.name.lowercase(Locale.ROOT) }.sortedBy { it.name.lowercase(Locale.ROOT) }
@@ -293,9 +309,12 @@ internal fun optFlag(o: JSONObject, vararg keys: String): Boolean? {
 }
 
 /**
- * Response root as an array: the documented shape is a bare top-level
- * array, with object-wrapped variants (`{skills:[...]}` etc.) as fallback.
- * Null when the body is neither.
+ * Response root as an array: each list accepts a bare top-level array or
+ * its named wrapper (`{skills:[...]}`, `{toolsets:[...]}`,
+ * `{messages:[...]}`); [keys] names the wrapper. The retired
+ * `data`/`items` wrappers are not accepted (#433) — an unknown shape
+ * returns null, never a clean empty list. Null when the body is neither
+ * shape.
  *
  * Top-level (not a member) so the pure transcript parsers below — and
  * their unit tests — can use it without a Context-bound ServerApi.
@@ -328,8 +347,8 @@ internal fun rootArray(body: String, vararg keys: String): JSONArray? {
  * same contract as the other transcript readers.
  */
 internal fun parseLastAssistantText(body: String): String? {
-    val arr = rootArray(body, "messages", "data", "items")
-        ?: throw RuntimeException("Unexpected response shape")
+    val arr = rootArray(body, "messages")
+        ?: throw RuntimeException(SESSION_MESSAGES_SHAPE_ERROR)
     var text: String? = null
     for (i in 0 until arr.length()) {
         val o = arr.optJSONObject(i) ?: continue
@@ -391,16 +410,13 @@ fun lastTurnStartIndex(roles: List<String>): Int {
 }
 
 /**
- * Server-side token totals for one conversation.
+ * Server-side token totals for one conversation (#121 reconciliation).
  *
- * Hermes answered this from `GET api/sessions/{id}` with
- * `{"object":"hermes.session","session":{...}}`, verified live at the time. pi-gateway
- * serves no such route: usage reaches the app on the chat response's own `usage`
- * object, which is what [parseTokenUsage] reads. So this shape is what #121's
- * multi-device reconciliation *expects*, not what it currently gets, and the totals it
- * would need are a pi-gateway endpoint that does not exist yet. Tracked as an issue
- * rather than quietly deleted, because the reconciliation is a real feature and the
- * missing server side is the whole of it.
+ * pi-gateway serves these from `GET api/sessions/{id}` as
+ * `{"session":{...}}` (unknown ids answer `{"error":...}` and read as
+ * absent); [ServerApi.fetchSessionTotals] requires the wrapped shape and
+ * throws [SESSION_TOTALS_SHAPE_ERROR] on anything else. The chat response's
+ * own `usage` object, read by [parseTokenUsage], is the other source.
  */
 data class SessionTotals(
     val prompt: Long = 0L,
@@ -500,50 +516,6 @@ fun parseSessionTotals(s: JSONObject): SessionTotals {
 private fun urlEncode(segment: String): String =
     java.net.URLEncoder.encode(segment, Charsets.UTF_8.name()).replace("+", "%20")
 
-/** Groups `mcp__<server>__<tool>` tools into per-server rows. */
-fun mcpServersFrom(toolsets: List<ToolsetInfo>): List<McpServer> {
-    val byServer = linkedMapOf<String, MutableList<String>>()
-    for (ts in toolsets) {
-        for (t in ts.tools) {
-            val parts = t.split("__")
-            if (parts.size >= 3 && parts[0] == "mcp" && parts[1].isNotBlank()) {
-                byServer.getOrPut(parts[1]) { mutableListOf() }
-                    .add(parts.drop(2).joinToString("__"))
-            }
-        }
-    }
-    return byServer.map { (name, tools) ->
-        McpServer(name, tools.distinct().sorted())
-    }.sortedBy { it.name.lowercase(Locale.ROOT) }
-}
-
-/**
- * Normalizes a toolset or derived-server name to one MCP server key:
- * lowercase, `mcp-`/`mcp_` prefix stripped, `_` treated as `-`. Pure. */
-fun normalizeMcpServerKey(name: String): String {
-    var n = name.trim().lowercase(Locale.ROOT).replace('_', '-')
-    if (n.startsWith("mcp-")) n = n.removePrefix("mcp-")
-    return n
-}
-
-/**
- * Drops derived [McpServer] rows already covered by an explicit
- * toolset row (e.g. `mcp-miser-money` toolset + derived `miser-money`
- * parsed from its `mcp__miser-money__*` tools would otherwise render the
- * same server twice). Derived rows remain as fallback for servers with no
- * explicit row (older gateways, MCP tools bundled inside another toolset).
- * Pure for testability.
- */
-fun dedupMcpServers(
-    toolsets: List<ToolsetInfo>,
-    servers: List<McpServer>,
-): List<McpServer> {
-    val covered = toolsets
-        .map { normalizeMcpServerKey(it.name) }
-        .toSet()
-    return servers.filter { normalizeMcpServerKey(it.name) !in covered }
-}
-
 /** Case-insensitive search across name + description. */
 fun SkillInfo.matches(query: String): Boolean {
     val q = query.trim().lowercase(Locale.ROOT)
@@ -558,12 +530,5 @@ fun ToolsetInfo.matches(query: String): Boolean {
     return name.lowercase(Locale.ROOT).contains(q)
         || label.lowercase(Locale.ROOT).contains(q)
         || description.lowercase(Locale.ROOT).contains(q)
-        || tools.any { it.lowercase(Locale.ROOT).contains(q) }
-}
-
-fun McpServer.matches(query: String): Boolean {
-    val q = query.trim().lowercase(Locale.ROOT)
-    if (q.isEmpty()) return true
-    return name.lowercase(Locale.ROOT).contains(q)
         || tools.any { it.lowercase(Locale.ROOT).contains(q) }
 }

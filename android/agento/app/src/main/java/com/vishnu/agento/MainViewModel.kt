@@ -56,16 +56,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Reloads prefs plus Health Connect availability; permission check runs async. */
-    fun refresh() {        val prefs = getApplication<Application>().getSharedPreferences(AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
-        // Unified server URL first; legacy per-feature keys as fallback so
-        // pre-unification configs and backups migrate silently on next save.
-        fun url(key: String): String =
-            (prefs.getString(key, "") ?: "").trim().trimEnd('/').takeIf { it.isNotEmpty() } ?: ""
+    fun refresh() {
+        val prefs = getApplication<Application>().getSharedPreferences(
+            AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE,
+        )
+        // Canonical keys only (#433): a config that still holds the retired
+        // per-feature keys reads as unconfigured, so Settings shows empty
+        // fields and the user re-enters them once instead of the app quietly
+        // bridging to whichever stale value happened to win.
         _state.value = _state.value.copy(
-            serverUrl = url("server_base_url").ifEmpty { url("server_url").ifEmpty { url("api_base_url") } },
-            password = (prefs.getString("app_password", "") ?: "").trim().ifEmpty {
-            (prefs.getString("auth_token", "") ?: "").trim()
-        },
+            serverUrl = ServerEndpoint.base(prefs),
+            password = ServerEndpoint.password(prefs),
             lastSyncAt = prefs.getString("last_sync_at", "") ?: "",
         )
         val availability = HealthConnectManager.availabilityStatus(getApplication())

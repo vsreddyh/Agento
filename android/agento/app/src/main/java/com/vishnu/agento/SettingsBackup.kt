@@ -59,12 +59,13 @@ object SettingsBackup {
 
     /** Every string pref the app reads; import ignores anything else. */
     val STRING_KEYS: List<String> = buildList {
-        // Unified server URL (proxy: chat + sync) + single app password;
-        // legacy keys stay listed so old backups still restore and fall back
-        // (retired api_key dropped; path_* dropped with the path field).
-        add("server_base_url")
-        add("app_password")
-        add("api_base_url")
+        // Canonical server URL (proxy: chat + sync) + single app password.
+        // Retired server_url/api_base_url/auth_token keys are deliberately
+        // absent (#433): nothing reads them, so an old backup that still
+        // carries them imports them nowhere and the user re-enters config
+        // once — a visible setup screen, never a silent stale bridge.
+        add(ServerEndpoint.BASE_KEY)
+        add(ServerEndpoint.PASSWORD_KEY)
         for (t in TABS) {
             add("provider_$t")
             add("model_$t")
@@ -72,8 +73,6 @@ object SettingsBackup {
             // (`effort_<tab>_<model>`) is dynamic — see effortKeys() below.
             add("effort_$t")
         }
-        add("server_url")
-        add("auth_token")
         add("theme_mode")
         add("last_sync_at")
         // Behaviour (#355): stored TTS voice name, "" for engine default.

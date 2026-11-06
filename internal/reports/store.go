@@ -266,6 +266,9 @@ func docOut(d bson.M) bson.M {
 		out[k] = v
 	}
 	out["_id"] = mongo.IDString(d["_id"])
+	// Canonical wire id for the app (#433). `_id` stays for the MCP tools and
+	// older readers; the phone reads `id` only, like every other list.
+	out["id"] = out["_id"]
 	if v, ok := out["createdAt"]; ok && v != nil {
 		out["createdAt"] = fmt.Sprint(v)
 	}

@@ -8,6 +8,47 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.0]
+- **Every legacy fallback is gone (#433).** One canonical key per setting,
+  one endpoint per action, one envelope shape — and anything still on a
+  retired contract fails loudly with the fix in the message instead of
+  being silently bridged:
+  - **Server config:** only `server_base_url` + `app_password` are read, by
+    one resolver shared by every client (chat, tasks, runs, jobs, memory,
+    projects, reports, storage, teach, approvals, inventory, sync). The
+    retired `server_url`/`api_base_url`/`auth_token` keys are no longer read
+    or backed up, and the app says "Server URL not configured — re-enter it
+    in Settings → Connection" instead of quietly talking to a stale server
+    with the wrong credential. A config that only ever held those keys
+    re-enters once.
+  - **Chat settings:** the retired `provider_god`/`model_god`/`effort_god*`
+    fallbacks are no longer read; a pre-#289 install re-picks its
+    provider/model/effort once.
+  - **Gateway shapes:** task and job lists accept only the canonical
+    `tasks`/`jobs` arrays (no `data`/`items`), task rows accept only `id`
+    (no `_id`), and the Scheduler pauses/resumes through the canonical POST
+    actions only (no `PATCH {paused}` downgrade). An older gateway fails
+    loudly instead of reading as an empty list or being driven through a
+    different contract: lists and details throw "Update the server", while
+    pause/resume surfaces its HTTP 404 (unknown action route on the old
+    gateway — and unknown job id on any gateway — so the status, not the
+    shape string, is the signal there). Job rows that still carry a
+    retired alias (`job_id`, `cron`, `enabled`/`state`/`status`, `deliver`,
+    `lastRun`/`nextRun`) are counted as unparseable rather than rendered as
+    a blank-but-healthy row.
+  - **Projects and reports:** project lists accept only the `projects`
+    envelope and rows only `id`; the report list accepts only `reports`
+    and details only `id` (reports get a canonical `id` from health-api —
+    the `_id` read fallback is gone). A retired `_id`-only row throws
+    with "Update the server" instead of rendering as an empty board or
+    inbox; corrupt rows are skipped and counted. Toolsets/skills/session
+    lists accept only their canonical shape (bare array or the named
+    wrapper, no `data`/`items`) and likewise fail with "Update the
+    server". Session totals require the wrapped `{"session":{...}}`
+    shape.
+  - **Tools inventory:** MCP servers come only from the gateway's explicit
+    toolset rows; the derived `mcp__<server>__*` fallback is removed.
+
 ## [5.18.3]
 - **Failed reminder fetches never look healthy (#431).** When the task
   lookup behind an alarm fails, the notification still fires on cadence

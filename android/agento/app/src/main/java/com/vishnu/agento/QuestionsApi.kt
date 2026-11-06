@@ -71,7 +71,7 @@ class QuestionsApi(context: Context) {
         withContext(Dispatchers.IO) {
             runCatching {
                 val base = base()
-                if (base.isEmpty()) throw IllegalStateException("Server URL not configured")
+                if (base.isEmpty()) throw IllegalStateException(ServerEndpoint.UNCONFIGURED)
                 if (id.isBlank()) throw IllegalArgumentException("question id is blank")
                 val request = Request.Builder()
                     .url("$base$path/api/questions/${encode(id)}")

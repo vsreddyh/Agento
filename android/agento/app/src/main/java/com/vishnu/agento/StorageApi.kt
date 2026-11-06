@@ -46,26 +46,18 @@ class StorageApi(context: Context) {
         .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     /** Lists one exports dir; empty path = root. */
     suspend fun list(path: String): Result<Triple<String, List<RemoteEntry>, List<RemoteEntry>>> =
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
             }
             val url = "$base/api/files?path=" +
                 java.net.URLEncoder.encode(path, "UTF-8")
@@ -129,7 +121,7 @@ class StorageApi(context: Context) {
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
             }
             val url = "$base/api/files/upload?path=" +
                 java.net.URLEncoder.encode(dir, "UTF-8") +

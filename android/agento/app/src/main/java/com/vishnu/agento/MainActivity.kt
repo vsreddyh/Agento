@@ -268,7 +268,7 @@ class MainActivity : ComponentActivity() {
                     // Per-assistant model subtitles for the drawer: refreshed
                     // on every navigation so model picks show up immediately.
                     // One reader for the drawer, so the subtitle honours the
-                    // same retired-key fallbacks and clamping as the request.
+                    // same canonical keys and clamping as the request.
                     val chatApi = remember { ChatApi(context) }
                     // ∃-Mail drawer badge (unread count, #365): fetched once
                     // at startup and refreshed by the inbox screen itself on
@@ -307,7 +307,7 @@ class MainActivity : ComponentActivity() {
                             val m = chatApi.modelFor(tab)
                             if (m.isEmpty()) return ""
                             // effortFor reads the same per-model/tab memory as
-                            // the request, retired god keys included; one
+                            // the request (#433: canonical keys only); one
                             // resolver turns an unset/stale pick into the level
                             // that will actually run.
                             val e = EffortCatalog.effectiveFor(

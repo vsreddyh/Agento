@@ -451,13 +451,11 @@ class ChatApi(context: Context) {
     }
 
     /** Single server URL (proxy: chat + sync on one port). The resolution
-     * chain (`server_base_url` → `server_url` → `api_base_url`) lives in
-     * [ServerEndpoint] so every client agrees (#398); [save] writes the
-     * unified key and drops the legacy two this reads. */
+     * lives in [ServerEndpoint] so every client agrees (#398, #433), and
+     * there are no retired fallbacks left to read. */
     fun baseUrl(): String = ServerEndpoint.base(prefs)
 
-    /** Single app password (the sync token doubles as chat credential). See
-     * [ServerEndpoint.password] for the preference order. */
+    /** Single app password (the sync token doubles as chat credential). */
     fun password(): String = ServerEndpoint.password(prefs)
 
     /** Profile path prefix for the Chat tab: `/p/chat`. */
@@ -465,19 +463,17 @@ class ChatApi(context: Context) {
         "/p/" + defaultProfileFor(tab)
 
     /**
-     * Provider slug for a tab; blank means not configured. Reads the `chat`
-     * keys, falling back to the retired `god` keys so installs configured
-     * before #289 keep working without re-entry (#289: old keys orphaned,
-     * never written again).
+     * Provider slug for a tab; blank means not configured. Reads only the
+     * tab's own key — the retired `provider_god` fallback is gone (#433), so
+     * a pre-#289 install re-picks instead of silently running a key nothing
+     * else writes any more.
      */
     fun providerFor(tab: String): String =
         (prefs.getString("provider_$tab", "") ?: "").trim()
-            .ifEmpty { (prefs.getString("provider_god", "") ?: "").trim() }
 
-    /** Model for a tab; blank means not configured (`god` fallback as above). */
+    /** Model for a tab; blank means not configured (`god` fallback gone, as above). */
     fun modelFor(tab: String): String =
         (prefs.getString("model_$tab", "") ?: "").trim()
-            .ifEmpty { (prefs.getString("model_god", "") ?: "").trim() }
 
     /**
      * Reasoning effort for a tab+model pair; blank means unset — the user
@@ -486,9 +482,10 @@ class ChatApi(context: Context) {
      * default a missing `reasoning_effort`; it refuses the turn (#361), so
      * blank must stay a UI-only value. Per-model memory first
      * (`effort_<tab>_<model>`), falling back to the tab's last pick
-     * (`effort_<tab>`). Retired `god` keys are read as fallback, like
-     * provider/model above. The stored value is clamped to the model's own
-     * vocabulary — a pick saved for a graded model (e.g. `max`) is invalid
+     * (`effort_<tab>`). Retired `god` keys are not read (#433): blank means
+     * the user re-picks, never a silent stale level. The stored value is
+     * clamped to the model's own vocabulary — a pick saved for a graded
+     * model (e.g. `max`) is invalid
      * on a toggle model (`none`/`high`) and reads back as blank so callers
      * fall through to the model's default instead of showing/sending a
      * level the model can't speak.
@@ -498,11 +495,9 @@ class ChatApi(context: Context) {
         var stored = ""
         if (m.isNotEmpty()) {
             stored = (prefs.getString("effort_${tab}_$m", "") ?: "").trim().lowercase(Locale.ROOT)
-                .ifEmpty { (prefs.getString("effort_god_$m", "") ?: "").trim().lowercase(Locale.ROOT) }
         }
         if (stored.isEmpty()) {
             stored = (prefs.getString("effort_$tab", "") ?: "").trim().lowercase(Locale.ROOT)
-                .ifEmpty { (prefs.getString("effort_god", "") ?: "").trim().lowercase(Locale.ROOT) }
         }
         if (stored.isEmpty() || m.isEmpty()) return stored
         return stored.takeIf { it in EffortCatalog.optionsFor(m) } ?: ""
@@ -529,19 +524,15 @@ class ChatApi(context: Context) {
             e.takeIf { it in EffortCatalog.optionsFor(model.trim()) }
         }
         prefs.edit {
-            putString("server_base_url", baseUrl.trim().trimEnd('/'))
-            putString("app_password", password.trim())
-            remove("api_base_url") // legacy: unified key is written above
-            remove("server_url") // legacy: unified key is written above
-            // Legacy password fallback: every writer (this setter, the
-            // Settings save button, SyncClient.setConfig) resolves through
-            // password() first — which already includes this fallback — so
-            // after any save app_password holds the effective secret and a
-            // stale auth_token at rest would only be a second copy of it.
-            // Removed like the legacy URL keys above. The read fallback in
-            // ServerEndpoint stays for configs that never re-save.
+            putString(ServerEndpoint.BASE_KEY, baseUrl.trim().trimEnd('/'))
+            putString(ServerEndpoint.PASSWORD_KEY, password.trim())
+            // Retired keys are deleted wherever the canonical ones are
+            // written (#433). Nothing reads them any more, so leaving a
+            // stale copy behind would only mislead the next migration.
+            remove("api_base_url")
+            remove("server_url")
             remove("auth_token")
-            remove("path_$tab") // legacy: path field removed, defaults apply
+            remove("path_$tab") // retired: the profile path is derived, not stored
             putString("provider_$tab", provider.trim())
             putString("model_$tab", model.trim())
             if (valid != null) {
@@ -564,7 +555,7 @@ class ChatApi(context: Context) {
         withContext(Dispatchers.IO) {
             val base = baseUrl()
             if (base.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
             }
             val url = "$base$path/api/model/options" + if (refresh) "?refresh=1" else ""
             val request = Request.Builder()
@@ -611,7 +602,7 @@ class ChatApi(context: Context) {
      * Tests the server URL against both backends: the gateway picker
      * (authenticated, proves chat works) and /health (proves sync works —
      * served by health-api through the proxy, or the gateway itself on a
-     * direct :8642 URL). Used by Settings → Test connection and the
+     * direct :8643 URL). Used by Settings → Test connection and the
      * offline banner. Never throws — failures land in the report.
      */
     suspend fun testConnection(path: String): Result<ConnectionReport> =
@@ -619,7 +610,7 @@ class ChatApi(context: Context) {
             val base = baseUrl()
             if (base.isEmpty()) {
                 return@withContext Result.failure(
-                    IllegalStateException("Server URL not configured"))
+                    IllegalStateException(ServerEndpoint.UNCONFIGURED))
             }
             val client = probeClient()
             var gatewayOk = false
@@ -735,7 +726,7 @@ class ChatApi(context: Context) {
     ): Flow<ChatEvent> = callbackFlow {
         val base = baseUrl()
         if (base.isEmpty()) {
-            trySend(ChatEvent.Error("Server URL not configured — see Settings"))
+            trySend(ChatEvent.Error(ServerEndpoint.UNCONFIGURED))
             close()
             return@callbackFlow
         }

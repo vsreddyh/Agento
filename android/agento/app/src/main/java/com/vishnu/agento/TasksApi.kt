@@ -401,8 +401,10 @@ internal fun optTaskDays(o: JSONObject, key: String): List<String> {
  * counts those drops in [TaskList.dropped] instead of shrinking the
  * list silently). */
 internal fun parseTask(o: JSONObject): ServerTask? {
+    // Canonical `id` only (#433): the retired Mongo `_id` fallback is gone,
+    // so a row that only carries `_id` is counted as unparseable instead of
+    // being silently reinterpreted under a different wire contract.
     val id = optJsonStr(o, "id")
-        .ifEmpty { optJsonStr(o, "_id") }
     if (id.isEmpty()) return null
     val name = optJsonStr(o, "name")
     if (name.isEmpty()) return null
@@ -438,21 +440,23 @@ internal fun parseTask(o: JSONObject): ServerTask? {
     )
 }
 
-/** Parses one task-list page (#430): the `tasks`/`data`/`items`
- * envelope, the rows, and how many rows arrived unparseable.
+/** One message for a server that does not speak the canonical task list
+ * (#433): names the missing shape and the fix, never a clean empty page. */
+internal const val TASKS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no tasks list. Update the server."
+
+/** Parses one task-list page (#430): the canonical `tasks` envelope, the
+ * rows, and how many rows arrived unparseable.
  *
- * A body with none of the known envelopes is a parse failure, never a
- * clean empty — like the single-task paths, it throws
- * "Unexpected response shape" so the list shows an error instead of
- * reading "no tasks". */
+ * The `data`/`items` fallbacks are gone (#433): a body without a `tasks`
+ * array is a loud parse failure with an actionable message, never a clean
+ * empty that reads as "no tasks". */
 internal fun parseTaskListPage(body: String): TaskList {
     val out = mutableListOf<ServerTask>()
     val root = runCatching { JSONObject(body) }.getOrNull()
-        ?: throw RuntimeException("Unexpected response shape")
+        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
     val arr = root.optJSONArray("tasks")
-        ?: root.optJSONArray("data")
-        ?: root.optJSONArray("items")
-        ?: throw RuntimeException("Unexpected response shape")
+        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
     var dropped = 0
     for (i in 0 until arr.length()) {
         val task = arr.optJSONObject(i)?.let { parseTask(it) }
@@ -475,10 +479,11 @@ internal fun parseTaskListPage(body: String): TaskList {
  * Client for the user's tasks (same bearer auth as chat/sync, served
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
- * validation the agent uses over MCP. Parsing is lenient across shapes;
- * rows without an id or name are skipped and counted
- * ([TaskList.dropped]), missing fields blank. A body with none of the
- * known list envelopes is a parse failure, never a clean empty (#430).
+ * validation the agent uses over MCP. Row fields are lenient (missing reads
+ * blank, rows without an id or name are skipped and counted
+ * ([TaskList.dropped])), but the list envelope is the canonical `tasks`
+ * array only — any other shape is a parse failure, never a clean empty
+ * (#430, #433).
  */
 class TasksApi(context: Context) {
 
@@ -562,19 +567,11 @@ class TasksApi(context: Context) {
     private val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
     private val http: OkHttpClient get() = sharedHttp
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     /**
      * Records a task contract version: the running max of what this install
@@ -616,7 +613,7 @@ class TasksApi(context: Context) {
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
             }
             val s = state.trim().lowercase(Locale.ROOT)
             if (s != "open" && s != "done" && s != "all") {
@@ -938,7 +935,7 @@ class TasksApi(context: Context) {
             call("POST", "/api/tasks/$clean/$verb", JSONObject()).map { body ->
                 val root = JSONObject(body)
                 val task = parseTask(root.optJSONObject("task") ?: root)
-                    ?: throw RuntimeException("Unexpected response shape")
+                    ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                 val next = root.optJSONObject("next")
                 // Each half versioned on its own (#185 review): maxOf would
                 // collapse task=1 + pre-version next=0 to 1 and hide the
@@ -977,21 +974,21 @@ class TasksApi(context: Context) {
             }
             call("POST", "/api/tasks/batch", bulkOpsBody(ops)).map { text ->
                 val arr = JSONObject(text).optJSONArray("results")
-                    ?: throw RuntimeException("Unexpected response shape")
+                    ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                 val out = mutableListOf<BulkItemResult>()
                 for (i in 0 until arr.length()) {
                     val item = arr.optJSONObject(i)
-                        ?: throw RuntimeException("Unexpected response shape")
+                        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                     val root = item.optJSONObject("task")
-                        ?: throw RuntimeException("Unexpected response shape")
+                        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                     var task = parseTask(root)
-                        ?: throw RuntimeException("Unexpected response shape")
+                        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                     // No lenient fallback to task.id: the server guarantees
                     // ID (source id, or the new copy's id for duplicate), so
                     // a missing one is a contract violation, not a gap to
                     // paper over.
                     val id = optJsonStr(item, "id")
-                    if (id.isEmpty()) throw RuntimeException("Unexpected response shape")
+                    if (id.isEmpty()) throw RuntimeException(TASKS_SHAPE_ERROR)
                     // Version handling mirrors resolve(): each half versioned
                     // on its own, warn-not-throw on disagreement.
                     val next = item.optJSONObject("next")
@@ -1111,7 +1108,7 @@ class TasksApi(context: Context) {
 
     private fun parseOne(body: String): ServerTask =
         parseTask(JSONObject(body))
-            ?: throw RuntimeException("Unexpected response shape")
+            ?: throw RuntimeException(TASKS_SHAPE_ERROR)
 
     /** Ids are hex today, but encoded defensively so a malformed id can
      * never break the request path (the `+` fix-up mirrors ServerApi:
@@ -1122,7 +1119,7 @@ class TasksApi(context: Context) {
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         return runCatching {
             val builder = Request.Builder()
@@ -1139,14 +1136,14 @@ class TasksApi(context: Context) {
                 val text = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
                     // A 404 on an /api/* route almost always means the app's
-                    // Server URL points at the gateway (:8642) instead of the
+                    // Server URL points at the gateway (:8643) instead of the
                     // proxy (:8080) — the gateway serves chat only, while
                     // /api/* lives on health-api behind the proxy. Say so
                     // instead of surfacing a bare "Not Found".
                     if (response.code == 404 && url.startsWith("/api/")) {
                         throw RuntimeException(
                             "HTTP 404: ${text.take(200)} (is the Server URL " +
-                                "the :8080 proxy? Direct :8642 serves chat only)"
+                                "the :8080 proxy? Direct :8643 serves chat only)"
                         )
                     }
                     throw RuntimeException("HTTP ${response.code}: ${text.take(200)}")
