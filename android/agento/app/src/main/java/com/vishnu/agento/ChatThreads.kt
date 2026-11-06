@@ -99,9 +99,11 @@ object ChatThreads {
     /** Prefs marker behind a recorded write failure (#435 review): the
      * in-memory map dies with the process, and OOM — the likeliest
      * save-killer — kills the process right after recording. The marker
-     * survives the restart the flag is about, and a landed save clears it.
-     * A stale marker (e.g. a backup import replaced the file meanwhile)
-     * still clears on the next successful save. */
+     * (synchronously committed) survives the restart the flag is about,
+     * and a landed save clears it. Two honest limits: a stale marker (e.g.
+     * a backup import replaced the file meanwhile) still clears on the next
+     * successful save, and a disk-full marker targets the same full disk —
+     * best-effort, with the next failed save re-reporting loudly. */
     internal fun saveErrorMarkerKey(tab: String): String = "threads_save_failed_$tab"
 
     /** Whether a recorded write failure for [tab] survived a restart. */
@@ -112,11 +114,19 @@ object ChatThreads {
         }.getOrDefault(false)
 
     private fun setPersistedSaveError(context: Context, tab: String, failed: Boolean) {
+        // Blocking commit, not apply (#435 review): apply flushes to disk
+        // asynchronously, and an OOM-kill before the flush loses the very
+        // marker the restart needs. Both directions commit — sets are rare
+        // (a failure, or a success that clears one) and save() is IO-gated.
+        // Disk-full callers stay best-effort: the marker targets the same
+        // full disk and may never land (runCatching swallows it). The next
+        // failed save then re-reports loudly, so the gap is one silent
+        // restart, not silent loss.
         runCatching {
             context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean(saveErrorMarkerKey(tab), failed)
-                .apply()
+                .commit()
         }
     }
 

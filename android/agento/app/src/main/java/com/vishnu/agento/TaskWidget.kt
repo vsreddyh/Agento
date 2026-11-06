@@ -144,6 +144,17 @@ internal fun List<ServerTask>.sortedForWidget(sort: TaskWidgetSort): List<Server
         TaskWidgetSort.Estimate -> sortedByMode(ServerTaskSort.Estimate)
     }
 
+/** Whether two millis fall on the same device-local calendar day (#435
+ * review): a yesterday 09:14 stamp badged as "updated 09:14" reads as
+ * today, understating the cache age by a day. Pure java.util for JVM
+ * pinning; the widget renders device-local, so the comparison is too. */
+internal fun isSameDay(aMillis: Long, bMillis: Long): Boolean {
+    val a = java.util.Calendar.getInstance().apply { timeInMillis = aMillis }
+    val b = java.util.Calendar.getInstance().apply { timeInMillis = bMillis }
+    return a.get(java.util.Calendar.YEAR) == b.get(java.util.Calendar.YEAR) &&
+        a.get(java.util.Calendar.DAY_OF_YEAR) == b.get(java.util.Calendar.DAY_OF_YEAR)
+}
+
 /** Stale-widget badge (#435): rows rendered from cache after a failed
  * fetch. [fetchedAt] is null when the fetch time is unknown — the badge
  * then reads "refresh failed" with no time, never a clean count. */
@@ -991,15 +1002,23 @@ class TaskWidget : AppWidgetProvider() {
             // without this read as live data, which is fabricated freshness.
             // A missing stamp still badges, timelessly — the two cache maps
             // are separate Volatile writes, so a torn read must never render
-            // a clean count.
+            // a clean count. A non-today stamp names the date too (#435
+            // review): "updated 09:14" for yesterday's fetch reads as today.
             if (staleBadge == null) return base
             val staleAt = staleBadge.fetchedAt
             if (staleAt == null) {
                 return base + " · " + context.getString(R.string.task_widget_stale_unknown)
             }
-            val when0 = android.text.format.DateFormat.getTimeFormat(context)
+            val timePart = android.text.format.DateFormat.getTimeFormat(context)
                 .format(java.util.Date(staleAt))
-            return base + " · " + context.getString(R.string.task_widget_stale, when0)
+            val when0 = if (isSameDay(staleAt, System.currentTimeMillis())) {
+                context.getString(R.string.task_widget_stale, timePart)
+            } else {
+                val datePart = android.text.format.DateFormat.getDateFormat(context)
+                    .format(java.util.Date(staleAt))
+                context.getString(R.string.task_widget_stale, "$datePart $timePart")
+            }
+            return "$base · $when0"
         }
     }
 }

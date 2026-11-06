@@ -372,6 +372,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 // Persist the fresh empty thread on IO (save is IO-gated).
                 ChatThreads.save(appCtx, tab, threadsFinal)
             }
+            // Prefs-backed marker read stays on IO (#435 review): the first
+            // getSharedPreferences call in the process hits disk.
+            val persistedSaveFailed = ChatThreads.hasPersistedSaveError(appCtx, tab)
             withContext(Dispatchers.Main) {
                 if (initGen.get() == 0) {
                     threads = threadsFinal
@@ -379,16 +382,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // A failed write may predate this VM (#435): the task
                     // receiver saves outside it, and a restart (OOM kills the
                     // process right after recording) wipes the in-memory map
-                    // but not the prefs marker. Either way the file is older
-                    // than memory claims, so say so — banner and toast — from
-                    // the start.
+                    // but not the committed prefs marker. Either way the file
+                    // is older than memory claims, so say so — banner and
+                    // toast — from the start.
                     val seededSaveError = ChatThreads.saveError(tab)
                         .ifEmpty {
-                            if (ChatThreads.hasPersistedSaveError(appCtx, tab)) {
-                                ChatThreads.SAVE_FAILED_MESSAGE
-                            } else {
-                                ""
-                            }
+                            if (persistedSaveFailed) ChatThreads.SAVE_FAILED_MESSAGE else ""
                         }
                     _state.value = _state.value.copy(
                         messages = ChatThreads.toUi(activeFinal.messages),
