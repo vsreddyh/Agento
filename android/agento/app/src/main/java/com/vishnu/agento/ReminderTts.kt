@@ -423,6 +423,7 @@ object ReminderTts {
      */
     private fun reportFailure(taskId: String, kindKey: String, taskName: String, failure: TtsFailure) {
         val appCtx = appCtxRef ?: return
+        val line = speechFailureLine(failure)
         runCatching {
             Log.w("ReminderTts", "$line task=$taskId kind=$kindKey")
         }
@@ -430,7 +431,6 @@ object ReminderTts {
         // however the failure raced the toggle (#470 review). The log line
         // above still fires — it is diagnostics, not user-visible.
         if (!TaskReminders.isEnabled(appCtx)) return
-        val line = speechFailureLine(failure)
         runCatching {
             mainHandler.post {
                 runCatching {
