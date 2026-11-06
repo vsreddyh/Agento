@@ -241,3 +241,52 @@ class GoneTaskIdsTest {
         )
     }
 }
+
+/**
+ * Schedule snapshots for background reschedules (#470 review): refresh
+ * diffs the last-seen due/estimate per task because agent-side edits
+ * never touch the UI mutation paths that purge stale speech and failure
+ * notices.
+ */
+class ScheduleSnapshotTest {
+
+    private fun task(id: String, due: String = "2026-08-09", time: String = "09:00", est: Int = 60) =
+        ServerTask(id = id, name = "N", dueDate = due, dueTime = time, estimatedMinutes = est)
+
+    @Test
+    fun `an unchanged schedule reschedules nothing`() {
+        val tasks = listOf(task("a"), task("b"))
+        val snap = scheduleSnapshot(tasks)
+        assertEquals(emptySet<String>(), rescheduledIds(snap, scheduleSnapshot(tasks)))
+    }
+
+    @Test
+    fun `a moved due date reschedules only that task`() {
+        val prev = scheduleSnapshot(listOf(task("a"), task("b")))
+        val next = scheduleSnapshot(listOf(task("a", due = "2026-08-10"), task("b")))
+        assertEquals(setOf("a"), rescheduledIds(prev, next))
+    }
+
+    @Test
+    fun `an estimate change reschedules — it drops Start points`() {
+        val prev = scheduleSnapshot(listOf(task("a")))
+        val next = scheduleSnapshot(listOf(task("a", est = 0)))
+        assertEquals(setOf("a"), rescheduledIds(prev, next))
+    }
+
+    @Test
+    fun `arrivals and departures are not reschedules`() {
+        // Gone tasks are purged by the zero-bid path, new tasks have
+        // nothing stale — the diff only matches ids in both.
+        val prev = scheduleSnapshot(listOf(task("a"), task("gone")))
+        val next = scheduleSnapshot(listOf(task("a"), task("new")))
+        assertEquals(emptySet<String>(), rescheduledIds(prev, next))
+    }
+
+    @Test
+    fun `the prefs round trip keeps every entry and drops garbage`() {
+        val snap = scheduleSnapshot(listOf(task("a"), task("b", est = 0)))
+        assertEquals(snap, decodeSchedule(encodeSchedule(snap)))
+        assertEquals(snap, decodeSchedule(encodeSchedule(snap) + "garbage-without-separator"))
+    }
+}

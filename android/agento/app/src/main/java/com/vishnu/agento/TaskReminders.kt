@@ -292,6 +292,40 @@ private fun addIfFuture(
     if (at > nowMillis) out[kind] = at
 }
 
+/** Schedule identity for one task: what a reschedule changes. */
+internal fun scheduleFingerprint(t: ServerTask): String =
+    "${t.dueDate}|${t.dueTime}|${t.estimatedMinutes}"
+
+/** The last-seen schedule per open task id. */
+internal fun scheduleSnapshot(tasks: List<ServerTask>): Map<String, String> =
+    tasks.associate { it.id to scheduleFingerprint(it) }
+
+/**
+ * Ids present in both snapshots whose schedule moved (#470 review): a
+ * background or agent-side edit that drops a point (estimate/lead
+ * change) cancels its future alarm in the key loop below, but its queued
+ * speech and failure notices would otherwise orphan — no future fire
+ * heals them, and the task stays live so [goneTaskIds] skips it.
+ */
+internal fun rescheduledIds(
+    prev: Map<String, String>,
+    next: Map<String, String>,
+): Set<String> =
+    next.keys.intersect(prev.keys).filter { prev[it] != next[it] }.toSet()
+
+/** Encodes a schedule snapshot for prefs (one entry per task). Task ids
+ * are hex ObjectIds today, so `|` never appears in one — the same
+ * belt-and-braces assumption the `#` split in `operation()` makes. */
+internal fun encodeSchedule(snapshot: Map<String, String>): Set<String> =
+    snapshot.map { (id, fp) -> "$id|$fp" }.toSet()
+
+/** Decodes [encodeSchedule]; malformed entries are skipped, never kept. */
+internal fun decodeSchedule(raw: Set<String>): Map<String, String> =
+    raw.mapNotNull { e ->
+        val cut = e.indexOf('|')
+        if (cut < 0) null else e.substring(0, cut) to e.substring(cut + 1)
+    }.toMap()
+
 /**
  * Tasks whose armed keys all dropped AND that hold no live bid (#470
  * review): completed, deleted, or rescheduled clean past every armed
@@ -347,6 +381,14 @@ object TaskReminders {
 
     private const val PREF_ARMED = "task_reminder_armed"
     private const val PREF_BUDGET = "task_reminder_budget"
+    /**
+     * Last-seen schedule per open task (`taskId|dueDate|dueTime|estimate`),
+     * plus the lead it was read under. A background or agent-side edit
+     * moves these without touching the UI paths, so refresh diffs them to
+     * find reschedules (see [rescheduledIds]).
+     */
+    private const val PREF_SCHEDULE = "task_reminder_schedule"
+    private const val PREF_SCHEDULE_LEAD = "task_reminder_schedule_lead"
     /** Backed up (see SettingsBackup.BOOLEAN_KEYS): internal so the backup
      * test pins the key by reference, not by a string literal that could
      * drift silently on rename. */
@@ -434,6 +476,41 @@ object TaskReminders {
         // so "now" and the arming horizon must read the same zone.
         val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
         val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
+        // Background/agent-side reschedules never touch the UI mutation
+        // paths, so nothing there purges their stale speech and failure
+        // notices — but the stored schedule moved under them (#470
+        // review). Diff the last-seen schedule BEFORE the key loop below
+        // (which needs the same fetch): purging first fails safe — a crash
+        // between purge and store re-purges next time, while the reverse
+        // order could store first and never purge. Purge first, store
+        // after. Posted visuals stay, exactly like an in-app edit: the
+        // task itself is live, only its pre-edit evidence goes.
+        // Skipped on a truncated page (an unseen task is not a reschedule)
+        // and on first run (nothing to diff against).
+        if (!page.truncated) {
+            val next = scheduleSnapshot(tasks)
+            val prev = decodeSchedule(prefs(appCtx).getStringSet(PREF_SCHEDULE, emptySet()).orEmpty())
+            val prevLead = prefs(appCtx).getLong(PREF_SCHEDULE_LEAD, -1L)
+            val leadNow = BehaviourSettings.reminderLeadMinutes(appCtx)
+            if (prevLead != -1L) {
+                // A lead change moves every BeforeStart point at once: the
+                // queued text names the old lead, so every open task purges
+                // like a reschedule.
+                val changed = if (prevLead != leadNow) {
+                    next.keys
+                } else {
+                    rescheduledIds(prev, next)
+                }
+                for (id in changed) {
+                    ReminderTts.dropTask(id)
+                    ReminderTts.cancelFailures(appCtx, id)
+                }
+            }
+            prefs(appCtx).edit {
+                putStringSet(PREF_SCHEDULE, encodeSchedule(next))
+                putLong(PREF_SCHEDULE_LEAD, leadNow)
+            }
+        }
         // One critical section from here to the final write. Everything
         // below is CPU-only plus the arm/cancel calls, and the point is
         // that an alarm firing on another thread cannot edit PREF_ARMED

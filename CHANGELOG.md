@@ -40,7 +40,9 @@ see GitHub Releases for older notes.
   last triggers purges its posted visuals, failure notices and queued
   speech too — but only for tasks with no live bid left (a lingering
   fired key or a budget cut keeps its task live), and only on a complete
-  page, so background completions and deletes cannot orphan. When the device language isn't available in the engine,
+  page, so background completions and deletes cannot orphan. A background
+  reschedule diffs the last-seen schedule and purges speech and failure
+  notices like an in-app edit (posted visuals stay — the task is live). When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is
