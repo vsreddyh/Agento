@@ -316,6 +316,23 @@ class TaskNumericCoercionTest {
     }
 
     @Test
+    fun `a sourceless page parse writes nothing and evicts nothing`() {
+        // The blank-source default is write-free by KDoc: no fetch happened,
+        // so neither the per-fetch record nor the per-row eviction may fire
+        // — otherwise a diagnostic parse deletes the About detail it
+        // promised to leave alone (#480 review).
+        val key = "single:" + singleCoercionState("a")
+        try {
+            parseTask(JSONObject("""{"id":"a","name":"A","estimated_minutes":"abc"}"""))
+            assertEquals(1, TasksApi.lastCoercedNotes[key]?.size)
+            parseTaskListPage("""{"tasks":[{"id":"a","name":"A","estimated_minutes":5}]}""")
+            assertEquals(1, TasksApi.lastCoercedNotes[key]?.size)
+            assertTrue(TasksApi.lastCoercedNotes.keys.none { it.startsWith(":") })
+        } finally {
+            TasksApi.noteCoercedNotes("single", singleCoercionState("a"), emptyList())
+        }
+
+    @Test
     fun `coercion notes name the key raw and reset values`() {
         val notes = mutableListOf<String>()
         parseTask(

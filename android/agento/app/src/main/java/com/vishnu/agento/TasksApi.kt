@@ -450,8 +450,13 @@ internal fun optTaskDays(o: JSONObject, key: String): List<String> {
 
 /** Lenient int read that names its coercions (#437): int, long and
  * double arrive as [Number], and a numeric string (including a
- * double-encoded `"1.0"`) reads as its number — the same leniency
- * [parseContractVersion] allows. The gate is finite, in-range AND
+ * double-encoded `"1.0"`) reads as its number. Deliberately stricter than
+ * [parseContractVersion]: the version read stays silent-lenient on
+ * fractions/`NaN`/overflow (unknown reads 0 = pre-version, reported via the
+ * write-path version warnings), while a task numeric resets AND reports on
+ * anything it cannot hold — a silent rewrite of a visible row is worse than
+ * a silent rewrite of a handshake marker (#480 review). The gate is finite,
+ * in-range AND
  * integral: non-numeric strings, booleans/objects/arrays, non-finite
  * doubles (`"NaN"`/`"Infinity"`), out-of-range ints/longs/doubles, and
  * fractions (`5.9`/`"5.9"`) all reset to [default] AND report the raw
@@ -613,14 +618,12 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
         // grow the map unboundedly nor alias another row's slot (#480
         // review). The human-readable `task <id.take(24)>:` prefix stays in
         // the note text, where a collision is display-only. List callers
-        // pass an accumulator and skip the record — but they DO evict the
-        // row's single entry: the page (or its clean absence) is the newer
-        // vintage for every row it contains, so a stale single entry must
-        // not survive a list that just re-read the same row (#480 review).
+        // pass an accumulator and skip the record — the page records once
+        // for the whole batch, and owns evicting the single entries of the
+        // rows it contains (see parseTaskListPage) — so a sourceless parse
+        // never mutates diagnostics it promised not to touch (#480 review).
         if (coerced == null) {
             TasksApi.noteCoercedNotes("single", singleCoercionState(id), singleNotes.take(3))
-        } else {
-            TasksApi.noteCoercedNotes("single", singleCoercionState(id), emptyList())
         }
     }
 }
@@ -657,6 +660,13 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
         val task = arr.optJSONObject(i)?.let { parseTask(it, coercedNotes) }
         if (task != null) {
             out.add(task)
+            // The page is the newer vintage for every row it contains: evict
+            // the row's single entry so two vintages never disagree — but only
+            // for a real fetch. A sourceless parse writes no record at all
+            // (see the KDoc), and must not delete either (#480 review).
+            if (source.isNotEmpty()) {
+                TasksApi.noteCoercedNotes("single", singleCoercionState(task.id), emptyList())
+            }
             if (coercedNotes.size > before) coerced++
         } else {
             dropped++
