@@ -72,11 +72,17 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // Freshness clock for list applies (#484 review): refresh, poll
     // rounds and disconnect re-lists overlap (poll never takes the
     // single-writer CAS), so last-writer-wins would plant stale rows and
-    // banners. Each fetch stamps its monotonic start time; an apply lands
-    // only when no fresher fetch has applied since. A counter would order
-    // by application, not by fetch — a later fetch applying first must
-    // not veto fresher data.
+    // banners. Each fetch stamps its monotonic START time; an outcome
+    // applies only when no newer fetch has started since — ordering by
+    // fetch, not by return. A counter bumped at completion would order by
+    // application: a later fetch applying first would veto fresher data.
     val freshClock = remember { AtomicLong(0L) }
+    /** Stamps a fetch start; returns the stamp to gate its outcome on. */
+    fun stampFetch(): Long {
+        val at = SystemClock.uptimeMillis()
+        freshClock.getAndUpdate { cur -> if (at >= cur) at else cur }
+        return at
+    }
 
     // Single-writer/read gates, computed once per composition (#484
     // review): concurrent refresh/disconnect writers race (last writer
@@ -104,20 +110,16 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
             try {
                 loading = true
                 error = ""
-                // Freshness anchor: monotonic fetch-start time. Overlapping
-                // writers resolve by fetch order, not by who returns last —
-                // a counter would order by application and let an older
-                // fetch applying last veto fresher data (#484 review).
-                val myStart = SystemClock.uptimeMillis()
+                // Freshness anchor: monotonic fetch-start time stamped up
+                // front, so overlapping writers resolve by fetch order, not
+                // by who returns last.
+                val myStart = stampFetch()
                 ConnectorsApi(context).list(path()).fold(
                     onSuccess = { list ->
                         // Stale successes must not overwrite fresher rows.
                         // Resolution below stays unconditional — see the
                         // poll branch for why.
-                        if (myStart >= freshClock.getAndUpdate { cur ->
-                                if (myStart >= cur) myStart else cur
-                            }
-                        ) {
+                        if (myStart >= freshClock.get()) {
                             connectors = list
                             // Cleared on success, not just at start (#484 review):
                             // a failed refresh followed by a good one (manual retry
@@ -178,7 +180,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
             if (pendingConnect != pending) return@LaunchedEffect
             // Freshness anchor, like refresh: overlapping writers resolve
             // by fetch order (#484 review).
-            val roundStart = SystemClock.uptimeMillis()
+            val roundStart = stampFetch()
             ConnectorsApi(context).list(path()).fold(
                 onSuccess = { list ->
                     // Wait key re-checked BEFORE applying (#484 review): a
@@ -193,10 +195,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     // flip predates any newer fetch, so newer data either
                     // shows it too (already resolved, resolver no-ops) or
                     // the wait is gone (disconnect cleared it).
-                    if (roundStart >= freshClock.getAndUpdate { cur ->
-                            if (roundStart >= cur) roundStart else cur
-                        }
-                    ) {
+                    if (roundStart >= freshClock.get()) {
                         connectors = list
                         // Same stale-banner rule as refresh() above: a good
                         // poll round heals a failed manual refresh (#484
@@ -354,13 +353,10 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                         // cannot disagree about staleness.
                                         // Freshness-guarded like every other
                                         // apply.
-                                        val regen = SystemClock.uptimeMillis()
+                                        val regen = stampFetch()
                                         ConnectorsApi(context).list(path()).fold(
                                             onSuccess = { list ->
-                                                if (regen >= freshClock.getAndUpdate { cur ->
-                                                        if (regen >= cur) regen else cur
-                                                    }
-                                                ) {
+                                                if (regen >= freshClock.get()) {
                                                     connectors = list
                                                     error = ""
                                                 }

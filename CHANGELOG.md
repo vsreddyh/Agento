@@ -26,7 +26,9 @@ see GitHub Releases for older notes.
   instead of patching one row it cannot prove fresh — toasting success
   only when the re-list lands, and an honest error when it does not.
   Overlapping writers resolve by fetch-start time, so neither stale
-  successes nor late failures can plant over fresher rows. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
+  successes nor late failures can plant over fresher rows — a counter
+  would order by application and let an older fetch applying last veto
+  fresher data. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
   unconfigured servers read as "not set up". Expired rows offer Disconnect
   next to Reconnect, so revoking never requires re-consenting first. The app never sees
   code/verifier/token (server-only exchange), and disconnect stops future
