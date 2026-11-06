@@ -64,6 +64,11 @@ data class ChatUiState(
      * persistently — the next cold start would otherwise quietly show the
      * older conversation. */
     val threadsSaveError: String = "",
+    /** The failure above predates this process (#435 review): seeded from
+     * the restart-surviving marker at cold start, so the sheet hint must
+     * not claim anything is "only in memory" — the unsaved turn died with
+     * the process. Reset by the first live save outcome. */
+    val threadsSaveErrorSeeded: Boolean = false,
     val threadId: String = "",
     /** Reachability of the server; null = not checked yet. */
     val online: Boolean? = null,
@@ -394,6 +399,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         threads = summaries(),
                         threadId = threadId,
                         threadsSaveError = seededSaveError,
+                        threadsSaveErrorSeeded = seededSaveError.isNotEmpty(),
                         ready = true,
                     )
                     if (seededSaveError.isNotEmpty()) {
@@ -931,10 +937,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             ChatThreads.save(appCtx, tab, snapshot)
             val err = ChatThreads.saveError(tab)
             withContext(Dispatchers.Main) {
-                if (_state.value.threadsSaveError == err) return@withContext
+                if (_state.value.threadsSaveError == err &&
+                    !_state.value.threadsSaveErrorSeeded
+                ) {
+                    return@withContext
+                }
                 val firstFailure =
                     err.isNotEmpty() && _state.value.threadsSaveError.isEmpty()
-                _state.value = _state.value.copy(threadsSaveError = err)
+                // A live save outcome supersedes the cold-start seeding.
+                _state.value = _state.value.copy(
+                    threadsSaveError = err,
+                    threadsSaveErrorSeeded = false,
+                )
                 // Loud at the moment it happens (#435): the banner is
                 // persistent, but a user in the middle of a conversation
                 // should not have to open the sheet to learn the turn was

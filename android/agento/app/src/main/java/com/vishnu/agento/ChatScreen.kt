@@ -1300,6 +1300,7 @@ internal fun ChatTab(
             threads = state.threads,
             activeId = state.threadId,
             saveError = state.threadsSaveError,
+            saveErrorSeeded = state.threadsSaveErrorSeeded,
             onSearch = vm::searchThreads,
             onSwitch = { tts.stop(); vm.switchThread(it); showThreads = false },
             onNew = { tts.stop(); vm.newConversation() },
@@ -1426,6 +1427,10 @@ internal fun ThreadSheet(
     activeId: String,
     /** Failed-write banner (#435): "" when the last save landed. */
     saveError: String = "",
+    /** The failure predates this process (#435 review): seeded from the
+     * restart-surviving marker, so the hint below must not claim anything
+     * is "only in memory". */
+    saveErrorSeeded: Boolean = false,
     onSearch: (String) -> List<ThreadSummary>,
     onSwitch: (String) -> Unit,
     onNew: () -> Unit,
@@ -1453,10 +1458,19 @@ internal fun ThreadSheet(
                 // Loud and persistent, no retry button (#435): memory is
                 // ahead of disk until a later save lands, so the list below
                 // is NOT what the next launch shows. Freeing storage is the
-                // fix, and that is outside this sheet.
+                // fix, and that is outside this sheet. After a restart the
+                // unsaved turn is gone with the process (#435 review), so
+                // the hint names the loss instead of memory-only messages.
                 ErrorCard(raw = saveError)
                 Spacer(modifier = Modifier.height(4.dp))
-                HintLine("Newest messages are only in memory — free up storage, then send again.")
+                HintLine(
+                    if (saveErrorSeeded) {
+                        "The last change wasn't saved — it was lost on restart. " +
+                            "Free up storage so new turns save."
+                    } else {
+                        "Newest messages are only in memory — free up storage, then send again."
+                    }
+                )
                 Spacer(modifier = Modifier.height(8.dp))
             }
             OutlinedTextField(
