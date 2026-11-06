@@ -496,6 +496,23 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
     return CoercedInt(default, v.toString().take(40))
 }
 
+/**
+ * Bounded diagnostics slot for one task row's single-read resets (#480):
+ * the SHA-256 of the trimmed id, 12 hex chars. Raw ids would let a
+ * pathological server grow the map without bound; a raw prefix would alias
+ * two long ids into one slot (one row's clean read clearing another's
+ * dirty entry). The hash is collision-free for this purpose and fixed-size
+ * for any input. Record and clear sites must both go through here: deriving
+ * one side from the URL-encoded id broke the eviction for exactly the
+ * pathological ids the bound exists for (#480 review).
+ */
+internal fun singleCoercionState(id: String): String =
+    runCatching {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val digest = md.digest(id.trim().toByteArray(Charsets.UTF_8))
+        digest.take(6).joinToString("") { "%02x".format(it) }
+    }.getOrDefault(id.trim().take(24))
+
 /** One task row: null when the row carries no usable id or name (#430
  * counts those drops in [TaskList.dropped] instead of shrinking the
  * list silently).
@@ -505,10 +522,12 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
  * (`estimated_minutes "abc"->0`), so the caller can log it once instead
  * of the reset passing silently. Null [coerced] means a single-row read
  * (`get`/`create`/`update`/`resolve`/`batch`): it logs the row's own line
- * directly (notifying once by construction) AND records under its row id
- * for diagnostics — otherwise single-row resets would ride the log only,
- * invisible after rotation (#480 review). A clean single read clears its
- * row's entry. A list caller passes its accumulator and logs one page
+ * directly (notifying once by construction) AND records under a bounded
+ * hash of the row id ([singleCoercionState]) for diagnostics — otherwise
+ * single-row resets would ride the log only, invisible after rotation
+ * (#480 review). A clean single read clears its row's entry, and a list
+ * page evicts the single entry of every row it contains (the page is the
+ * newer vintage). A list caller passes its accumulator and logs one page
  * summary itself. */
 internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): ServerTask? {
     // Canonical `id` only (#433): the retired Mongo `_id` fallback is gone,
@@ -587,15 +606,21 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
         contractVersion = version,
         skipped = o.optBoolean("skipped", false),
     ).also {
-        // Single-row reads join both channels too: record under the row
-        // id (or clear it on a clean read, so a fixed row stops
-        // advertising). Keyed by the first 24 chars — ids are hex ObjectIds
-        // today, so that is the whole id, and a pathological server id
-        // cannot grow the map unboundedly (#480 review). List callers pass
-        // an accumulator and skip this — the page records once for the
-        // whole batch.
+        // Single-row reads join both channels too: record under a bounded
+        // hash of the row id (or clear it on a clean read, so a fixed row
+        // stops advertising). The hash — not a raw prefix — is the key:
+        // hex ObjectIds hash 1:1, and a pathological server id can neither
+        // grow the map unboundedly nor alias another row's slot (#480
+        // review). The human-readable `task <id.take(24)>:` prefix stays in
+        // the note text, where a collision is display-only. List callers
+        // pass an accumulator and skip the record — but they DO evict the
+        // row's single entry: the page (or its clean absence) is the newer
+        // vintage for every row it contains, so a stale single entry must
+        // not survive a list that just re-read the same row (#480 review).
         if (coerced == null) {
-            TasksApi.noteCoercedNotes("single", id.take(24), singleNotes.take(3))
+            TasksApi.noteCoercedNotes("single", singleCoercionState(id), singleNotes.take(3))
+        } else {
+            TasksApi.noteCoercedNotes("single", singleCoercionState(id), emptyList())
         }
     }
 }
@@ -926,7 +951,7 @@ class TasksApi(context: Context) {
                         // Gone server-side: drop any diagnostics entry for
                         // it, or About names a reset for a task that no
                         // longer exists (#480 review).
-                        noteCoercedNotes("single", clean.take(24), emptyList())
+                        noteCoercedNotes("single", singleCoercionState(id), emptyList())
                         Result.success(null)
                     } else {
                         Result.failure(e)
@@ -1309,7 +1334,7 @@ class TasksApi(context: Context) {
             }
             call("DELETE", "/api/tasks/$clean").map { }.also {
                 // Gone: drop its diagnostics entry with it (#480 review).
-                if (it.isSuccess) noteCoercedNotes("single", clean.take(24), emptyList())
+                if (it.isSuccess) noteCoercedNotes("single", singleCoercionState(id), emptyList())
             }
         }
 

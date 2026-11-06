@@ -244,33 +244,74 @@ class TaskNumericCoercionTest {
     }
 
     @Test
-    fun `a single-row reset enters diagnostics under its row id`() {
+    fun `a single-row reset enters diagnostics under its hashed row id`() {
         // List pages are not the only readers: a get() of one corrupted
         // row must survive log rotation too — and a later clean read must
         // clear it (#480 review).
+        val key = "single:" + singleCoercionState("solo")
         try {
             parseTask(JSONObject("""{"id":"solo","name":"S","estimated_minutes":"abc"}"""))
-            val notes = TasksApi.lastCoercedNotes["single:solo"].orEmpty()
+            val notes = TasksApi.lastCoercedNotes[key].orEmpty()
             assertEquals(1, notes.size)
             assertTrue(notes.single().contains("estimated_minutes"))
             parseTask(JSONObject("""{"id":"solo","name":"S","estimated_minutes":5}"""))
-            assertTrue("single:solo" !in TasksApi.lastCoercedNotes)
+            assertTrue(key !in TasksApi.lastCoercedNotes)
         } finally {
-            TasksApi.noteCoercedNotes("single", "solo", emptyList())
+            TasksApi.noteCoercedNotes("single", singleCoercionState("solo"), emptyList())
         }
     }
 
     @Test
-    fun `a pathological id cannot grow the diagnostics key`() {
-        // Keys ride take(24) like the note text: hex ObjectIds pass
-        // through whole, anything longer is bounded (#480 review).
-        val longId = "x".repeat(40)
+    fun `a pathological id gets a bounded collision-free slot`() {
+        // The key is a 12-hex-char hash, never the raw id: a 10k-char id
+        // cannot grow the map, and two ids sharing a 24-char prefix land
+        // in different slots — so one row's clean read can never clear
+        // another row's dirty entry (#480 review).
+        val longId = "x".repeat(10000)
+        val idA = "x".repeat(24) + "A"
+        val idB = "x".repeat(24) + "B"
+        val keyA = "single:" + singleCoercionState(idA)
+        val keyB = "single:" + singleCoercionState(idB)
+        assertEquals(19, keyA.length)
+        assertTrue(keyA != keyB)
         try {
-            parseTask(JSONObject("""{"id":"$longId","name":"S","estimated_minutes":"abc"}"""))
-            assertTrue("single:$longId" !in TasksApi.lastCoercedNotes)
-            assertEquals(1, TasksApi.lastCoercedNotes["single:${"x".repeat(24)}"]?.size)
+            parseTask(JSONObject("{\"id\":\"" + longId + "\",\"name\":\"S\",\"estimated_minutes\":\"abc\"}"))
+            assertTrue(TasksApi.lastCoercedNotes.keys.all { it.length <= 32 })
+            parseTask(JSONObject("""{"id":"$idA","name":"S","estimated_minutes":"abc"}"""))
+            parseTask(JSONObject("""{"id":"$idB","name":"S","estimated_minutes":5}"""))
+            assertEquals(1, TasksApi.lastCoercedNotes[keyA]?.size)
+            assertTrue(keyB !in TasksApi.lastCoercedNotes)
         } finally {
-            TasksApi.noteCoercedNotes("single", "x".repeat(24), emptyList())
+            TasksApi.noteCoercedNotes("single", singleCoercionState(longId), emptyList())
+            TasksApi.noteCoercedNotes("single", singleCoercionState(idA), emptyList())
+            TasksApi.noteCoercedNotes("single", singleCoercionState(idB), emptyList())
+        }
+    }
+
+    @Test
+    fun `a list page evicts the single entries of the rows it contains`() {
+        // Two vintages for one row must not coexist: the page (or its
+        // clean absence) is newer than any single read it supersedes, so a
+        // stale single entry must not survive a list that just re-read the
+        // same row (#480 review).
+        val key = "single:" + singleCoercionState("a")
+        try {
+            parseTask(JSONObject("""{"id":"a","name":"A","estimated_minutes":"abc"}"""))
+            assertEquals(1, TasksApi.lastCoercedNotes[key]?.size)
+            parseTaskListPage("""{"tasks":[{"id":"a","name":"A","estimated_minutes":5}]}""", "open", "manager")
+            assertTrue(key !in TasksApi.lastCoercedNotes)
+            // Dirty in the list too: the page holds the vintage now, not single.
+            parseTask(JSONObject("""{"id":"a","name":"A","estimated_minutes":"abc"}"""))
+            parseTaskListPage(
+                """{"tasks":[{"id":"a","name":"A","estimated_minutes":"abc"}]}""",
+                "open",
+                "manager",
+            )
+            assertTrue(key !in TasksApi.lastCoercedNotes)
+            assertEquals(1, TasksApi.lastCoercedNotes["manager:open"]?.size)
+        } finally {
+            TasksApi.noteCoercedNotes("single", singleCoercionState("a"), emptyList())
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
         }
     }
 
