@@ -112,7 +112,8 @@ if [ -f "$PI_CODING_AGENT_DIR/mcp.json" ]; then
   # Retry with backoff (#423): one transient Mongo/Atlas TLS blip must not
   # fail the boot. The single `pi mcp list` probe plus `restart:
   # unless-stopped` with no delay restarted the stack 774 times in ~50 min
-  # during a handshake outage — each boot opens 8 concurrent handshakes, so
+  # during a handshake outage — each boot opens 9 concurrent handshakes
+  # (7 fatal + 2 fallback attempts), so
   # the loop also amplified load on Atlas. Config failures (missing secrets,
   # missing settings.json) still die fast above; only this connectivity
   # probe retries. A permanently broken MCP server (bad mcp.json, missing
