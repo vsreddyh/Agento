@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -29,6 +30,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** Poll rounds per consent wait (3s apart ≈ 2 minutes total). */
+private const val POLL_ROUNDS = 40
+/** Delay between consent-wait poll rounds. */
+private const val POLL_ROUND_MS = 3_000L
+/** Total poll budget per wait, across rotations (#484 review). */
+private const val POLL_BUDGET_MS = POLL_ROUNDS * POLL_ROUND_MS
 
 /**
  * Connectors section (#440): per-connector connect/disconnect against the
@@ -61,6 +69,10 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // stays plain remember — its coroutine dies with the scope on
     // rotation, so restoring it would wedge buttons on Working… forever.
     var pendingConnect by rememberSaveable { mutableStateOf<String?>(null) }
+    // Wait start (uptime ms) for the poll budget below: rotation restarts
+    // the effect, so without this every rotate would grant a fresh 40
+    // rounds and repeated rotates could poll past the attempt TTL.
+    var pendingSince by rememberSaveable { mutableLongStateOf(0L) }
     var busyId by remember { mutableStateOf<String?>(null) }
     // Synchronous tap guard (#484 review): the composition-state locks
     // below apply on the NEXT frame, so two taps in the same frame both
@@ -69,20 +81,27 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // across rows and actions; reset in finally (no suspension inside,
     // so cancellation still re-arms).
     val mutationArmed = remember { AtomicBoolean(true) }
-    // Freshness clock for list applies (#484 review): refresh, poll
+    // Fetch sequence for list applies (#484 review): refresh, poll
     // rounds and disconnect re-lists overlap (poll never takes the
     // single-writer CAS), so last-writer-wins would plant stale rows and
-    // banners. Each fetch stamps its monotonic START time; an outcome
-    // applies only when no newer fetch has started since — ordering by
-    // fetch, not by return. A counter bumped at completion would order by
-    // application: a later fetch applying first would veto fresher data.
-    val freshClock = remember { AtomicLong(0L) }
+    // banners. Strictly increasing — ms timestamps collided on fast paths
+    // — ordering by fetch START, not by return. Server-side reordering
+    // past that (a later-started fetch observing older server state) is
+    // unknowable client-side: the poll keeps looping while its wait is
+    // open, so a vetoed resolution heals within one round, and one-shot
+    // refreshes converge on the next trigger.
+    val fetchSeq = remember { AtomicLong(0L) }
+    // Highest started sequence whose outcome applied.
+    val appliedSeq = remember { AtomicLong(0L) }
     /** Stamps a fetch start; returns the stamp to gate its outcome on. */
-    fun stampFetch(): Long {
-        val at = SystemClock.uptimeMillis()
-        freshClock.getAndUpdate { cur -> if (at >= cur) at else cur }
-        return at
-    }
+    fun stampFetch(): Long = fetchSeq.incrementAndGet()
+    /**
+     * Claims this fetch's outcome: true when no newer fetch has applied
+     * since it started (and records it because it just did). Rows,
+     * banners and view-tied toasts apply only on true.
+     */
+    fun claimFresh(start: Long): Boolean =
+        start >= appliedSeq.getAndUpdate { cur -> if (start > cur) start else cur }
 
     // Single-writer/read gates, computed once per composition (#484
     // review): concurrent refresh/disconnect writers race (last writer
@@ -116,39 +135,43 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 val myStart = stampFetch()
                 ConnectorsApi(context).list(path()).fold(
                     onSuccess = { list ->
-                        // Stale successes must not overwrite fresher rows.
-                        // Resolution below stays unconditional — see the
-                        // poll branch for why.
-                        if (myStart >= freshClock.get()) {
+                        // Rows, banner and wait resolution share one
+                        // freshness gate (#484 review): a vetoed payload
+                        // proves nothing — resolving the wait off it would
+                        // toast over contradictory rows with no later round
+                        // to heal (unlike the poll, a refresh is one-shot).
+                        // A vetoed flip heals via the still-open wait's
+                        // next poll round instead.
+                        if (claimFresh(myStart)) {
                             connectors = list
                             // Cleared on success, not just at start (#484 review):
                             // a failed refresh followed by a good one (manual retry
                             // landing just as the poll round succeeds, or vice
                             // versa) must not leave its banner over fresh rows.
                             error = ""
-                        }
-                        // A wait resolves on connected ONLY (#484 review):
-                        // POST /connect never changes status, so the row a
-                        // Reconnect tap starts from is already expired — an
-                        // expired check would resolve on round 1 with no
-                        // toast and never auto-resolve. An expiry appearing
-                        // mid-wait from a disconnected start is impossible
-                        // (no tokens to age out), so connected-only loses
-                        // nothing. The expired row keeps rendering its
-                        // reconnect hint meanwhile.
-                        val pending = pendingConnect
-                        if (pending != null &&
-                            list.any { it.id == pending && it.isConnected() }
-                        ) {
-                            pendingConnect = null
-                            toasts.toast("Connected.", kind = ToastKind.Success)
+                            // A wait resolves on connected ONLY (#484 review):
+                            // POST /connect never changes status, so the row a
+                            // Reconnect tap starts from is already expired — an
+                            // expired check would resolve on round 1 with no
+                            // toast and never auto-resolve. An expiry appearing
+                            // mid-wait from a disconnected start is impossible
+                            // (no tokens to age out), so connected-only loses
+                            // nothing. The expired row keeps rendering its
+                            // reconnect hint meanwhile.
+                            val pending = pendingConnect
+                            if (pending != null &&
+                                list.any { it.id == pending && it.isConnected() }
+                            ) {
+                                pendingConnect = null
+                                toasts.toast("Connected.", kind = ToastKind.Success)
+                            }
                         }
                     },
                     onFailure = { e ->
                         // Only when nothing fresher applied meanwhile: a
                         // success after this fetch started already proved
                         // the rows (#484 review).
-                        if (myStart >= freshClock.get()) {
+                        if (claimFresh(myStart)) {
                             error = e.message ?: e.javaClass.simpleName
                         }
                     },
@@ -164,19 +187,29 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
 
     // Bounded poll while a consent page is outstanding: the callback lands
     // server-side, so the app learns about it by re-listing. Forty rounds
-    // at 3s ≈ 2 minutes, past the point anyone still stares at this
-    // screen — the "Check again" button below covers slower consents.
+    // at 3s ≈ 2 minutes total across rotations (see pendingSince), past
+    // which nobody still stares at this screen — the "Check again" button
+    // below covers slower consents.
     val pending = pendingConnect
     LaunchedEffect(pending) {
         if (pending == null) return@LaunchedEffect
+        // Remaining budget, not a fresh 40: the effect restarts on
+        // rotation, and a fresh budget per restart would poll past the
+        // attempt TTL on repeated rotates (#484 review).
+        val elapsed = if (pendingSince == 0L) {
+            0L
+        } else {
+            (SystemClock.uptimeMillis() - pendingSince).coerceAtLeast(0L)
+        }
+        val rounds = ((POLL_BUDGET_MS - elapsed) / POLL_ROUND_MS).toInt().coerceIn(0, POLL_ROUNDS)
         // Wait-scoped, not remembered: each consent wait gets a fresh
         // verdict. Error only when NO round succeeded — one transient
         // blip in 39 good rounds is not a dead server, and one good round
         // in 39 failures is not a healthy one (#484 review).
         var anyOk = false
         var lastError = ""
-        repeat(40) {
-            delay(3_000L)
+        repeat(rounds) {
+            delay(POLL_ROUND_MS)
             if (pendingConnect != pending) return@LaunchedEffect
             // Freshness anchor, like refresh: overlapping writers resolve
             // by fetch order (#484 review).
@@ -189,28 +222,26 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     // cancelled there is no later round to heal it. Refresh
                     // resolutions and newer waits own their own applies.
                     if (pendingConnect != pending) return@LaunchedEffect
-                    // Data apply is freshness-guarded, resolution is not:
-                    // a skipped round must not overwrite fresher rows, but
-                    // a flip this list proves still resolves the wait — a
-                    // flip predates any newer fetch, so newer data either
-                    // shows it too (already resolved, resolver no-ops) or
-                    // the wait is gone (disconnect cleared it).
-                    if (roundStart >= freshClock.get()) {
+                    // Data apply is freshness-guarded AND resolution rides
+                    // with it: resolving off a vetoed payload would toast
+                    // over contradictory rows with no later round to heal
+                    // (#484 review). A vetoed flip heals via the still-open
+                    // wait's next round instead.
+                    if (claimFresh(roundStart)) {
                         connectors = list
                         // Same stale-banner rule as refresh() above: a good
                         // poll round heals a failed manual refresh (#484
                         // review).
                         error = ""
+                        // Connected-only: a pre-existing expired row must
+                        // not end the wait on round 1 (#484 review).
+                        if (list.any { it.id == pending && it.isConnected() }) {
+                            pendingConnect = null
+                            toasts.toast("Connected.", kind = ToastKind.Success)
+                        }
                     }
                     anyOk = true
                     lastError = ""
-                    // Connected-only resolution, like refresh() above (#484
-                    // review): a pre-existing expired row must not end the
-                    // wait on round 1.
-                    if (list.any { it.id == pending && it.isConnected() }) {
-                        pendingConnect = null
-                        toasts.toast("Connected.", kind = ToastKind.Success)
-                    }
                 },
                 onFailure = { e ->
                     lastError = e.message ?: e.javaClass.simpleName
@@ -301,6 +332,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                             return@launch
                                         }
                                         pendingConnect = c.id
+                                        pendingSince = SystemClock.uptimeMillis()
                                     },
                                     onFailure = { e ->
                                         val msg = e.message.orEmpty()
@@ -341,39 +373,52 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                         // waiting" toast for the impossible (#484
                                         // review).
                                         if (pendingConnect == c.id) pendingConnect = null
-                                        // Full re-list inline, not the row
-                                        // shortcut and not a tick bump (#484
-                                        // review): the shortcut cannot prove
-                                        // the OTHER rows fresh after an
-                                        // outage (banner cleared over stale
-                                        // rows), and a tick bump could
-                                        // CAS-fail on our own held guard and
-                                        // heal nothing. Same error slot as
-                                        // refresh, so success and failure
-                                        // cannot disagree about staleness.
-                                        // Freshness-guarded like every other
-                                        // apply.
+                                        // Optimistic row map: the POST confirmed
+                                        // this row's state, so it never reads
+                                        // stale whatever the re-list below does
+                                        // (#484 review). Mirrors the server's
+                                        // disconnected shape (tokens gone,
+                                        // lastError cleared, no reconnect
+                                        // hint — that rides expired rows
+                                        // only).
+                                        connectors = connectors.map {
+                                            if (it.id == c.id) {
+                                                it.copy(
+                                                    status = "disconnected",
+                                                    lastError = "",
+                                                    reconnect = "",
+                                                )
+                                            } else {
+                                                it
+                                            }
+                                        }
+                                        // Full re-list inline for the REST, not
+                                        // a tick bump (#484 review): a tick
+                                        // could CAS-fail on our own held guard
+                                        // and heal nothing. Rows and banner
+                                        // follow the same freshness gate as
+                                        // every other apply; the success toast
+                                        // below names the confirmed POST, not
+                                        // the re-list, so a vetoed re-list
+                                        // stays silent while fresher data
+                                        // already shows the row.
                                         val regen = stampFetch()
                                         ConnectorsApi(context).list(path()).fold(
                                             onSuccess = { list ->
-                                                if (regen >= freshClock.get()) {
+                                                if (claimFresh(regen)) {
                                                     connectors = list
                                                     error = ""
                                                 }
-                                                toasts.toast(
-                                                    "Disconnected — future access stopped.",
-                                                    kind = ToastKind.Success,
-                                                )
                                             },
                                             onFailure = { e ->
-                                                if (regen >= freshClock.get()) {
+                                                if (claimFresh(regen)) {
                                                     error = e.message ?: e.javaClass.simpleName
                                                 }
-                                                toasts.toast(
-                                                    "Disconnected — but the list couldn't refresh. Tap Check again.",
-                                                    kind = ToastKind.Error,
-                                                )
                                             },
+                                        )
+                                        toasts.toast(
+                                            "Disconnected — future access stopped.",
+                                            kind = ToastKind.Success,
                                         )
                                     },
                                     onFailure = { e ->

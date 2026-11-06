@@ -25,10 +25,15 @@ see GitHub Releases for older notes.
   mint two consent attempts. Disconnect re-lists the whole section
   instead of patching one row it cannot prove fresh — toasting success
   only when the re-list lands, and an honest error when it does not.
-  Overlapping writers resolve by fetch-start time, so neither stale
+  Overlapping writers resolve by fetch sequence, so neither stale
   successes nor late failures can plant over fresher rows — a counter
   would order by application and let an older fetch applying last veto
-  fresher data. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
+  fresher data. Wait resolution rides the freshness gate too (a vetoed
+  flip heals on the next round, never toasts over contradictory rows),
+  and the ~2-minute poll budget survives rotation instead of restarting,
+  so repeated rotates cannot poll past the attempt TTL. Disconnect maps
+  its row optimistically from the confirmed POST and toasts the action
+  itself; the re-list heals the rest. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
   unconfigured servers read as "not set up". Expired rows offer Disconnect
   next to Reconnect, so revoking never requires re-consenting first. The app never sees
   code/verifier/token (server-only exchange), and disconnect stops future
