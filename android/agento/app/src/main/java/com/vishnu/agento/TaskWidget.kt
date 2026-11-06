@@ -144,16 +144,24 @@ internal fun List<ServerTask>.sortedForWidget(sort: TaskWidgetSort): List<Server
         TaskWidgetSort.Estimate -> sortedByMode(ServerTaskSort.Estimate)
     }
 
-/** Fetch time behind a stale widget render: the fetch time for [state]
- * when the live fetch failed and cached rows stand in, null when the
- * rows on screen are live (#435). Top-level and pure so a JVM test can
- * pin the rule without Android — the "updated …" suffix itself needs a
- * Context and stays in [TaskWidget]'s count line. */
-internal fun staleAtFor(
+/** Stale-widget badge (#435): rows rendered from cache after a failed
+ * fetch. [fetchedAt] is null when the fetch time is unknown — the badge
+ * then reads "refresh failed" with no time, never a clean count. */
+internal data class StaleBadge(val fetchedAt: Long?)
+
+/** Badge behind a widget render: non-null when the live fetch failed and
+ * cached rows stand in, null when the rows on screen are live (#435).
+ * Top-level and pure so a JVM test can pin the rule without Android —
+ * the "updated …" suffix itself needs a Context and stays in
+ * [TaskWidget]'s count line. A null stamp still badges (#435 review):
+ * [cachedViews] and [cachedAt] are separate Volatile writes, so a reader
+ * can observe a cached entry with a missing stamp, and that must never
+ * render as live data. */
+internal fun staleBadgeFor(
     fresh: List<ServerTask>?,
     cached: List<ServerTask>?,
     fetchedAt: Long?,
-): Long? = if (fresh == null && cached != null) fetchedAt else null
+): StaleBadge? = if (fresh == null && cached != null) StaleBadge(fetchedAt) else null
 
 /**
  * Ids of *this* provider's placements.
@@ -745,7 +753,7 @@ class TaskWidget : AppWidgetProvider() {
                 // Cache used because THIS state's fetch failed (#435): a
                 // failed fetch must never render as live data. Render the
                 // cached rows but badge them with when they were fetched.
-                val staleAt = staleAtFor(fresh, cachedViews[view.state], cachedAt[view.state])
+                val staleBadge = staleBadgeFor(fresh, cachedViews[view.state], cachedAt[view.state])
                 val tasks = fresh?.sortedForWidget(sort)
                     ?: cachedViews[view.state]?.sortedForWidget(sort)
                 if (scrollableFor(appCtx, id) && tasks != null &&
@@ -770,7 +778,7 @@ class TaskWidget : AppWidgetProvider() {
                 // One wedged placement must not abort the rest (#130).
                 runCatching {
                     mgr.updateAppWidget(
-                        id, render(appCtx, id, view, tasks, tasks == null, detail, staleAt))
+                        id, render(appCtx, id, view, tasks, tasks == null, detail, staleBadge))
                 }.onFailure {
                     Log.w("TaskWidget", "updateAppWidget failed for id=$id", it)
                 }
@@ -801,8 +809,8 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             errorDetail: String? = null,
-            /** Fetch time of the cached rows on screen, null when live (#435). */
-            staleAt: Long? = null,
+            /** Stale-cache badge, null when the rows are live (#435). */
+            staleBadge: StaleBadge? = null,
         ): RemoteViews {
             val open = Intent(context, MainActivity::class.java).setAction(ACTION_TASKS)
             val openPending = PendingIntent.getActivity(
@@ -876,7 +884,7 @@ class TaskWidget : AppWidgetProvider() {
                     setTextViewText(R.id.task_widget_view, view.title)
                     setTextViewText(R.id.task_widget_title, view.title)
                     setTextViewText(R.id.task_widget_count,
-                        countText(context, view, tasks, error, capped = true, staleAt = staleAt))
+                        countText(context, view, tasks, error, capped = true, staleBadge = staleBadge))
                 }
             }
             // E: the collection widget, on the same proven chrome.
@@ -926,7 +934,7 @@ class TaskWidget : AppWidgetProvider() {
                 // toggle button is gone (it never rendered on this host).
                 setTextViewText(R.id.task_widget_title, view.title)
                 setTextViewText(R.id.task_widget_count,
-                    countText(context, view, tasks, error, staleAt = staleAt))
+                    countText(context, view, tasks, error, staleBadge = staleBadge))
                 val empty = emptyText(context, tasks, error, errorDetail)
                 setTextViewText(R.id.task_widget_empty, empty)
                 // Hide the empty line when rows are showing: an empty
@@ -962,8 +970,8 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             capped: Boolean = false,
-            /** When the rows on screen were fetched, null for live data (#435). */
-            staleAt: Long? = null,
+            /** Stale-cache badge, null when the rows are live (#435). */
+            staleBadge: StaleBadge? = null,
         ): String {
             val plural = when (view) {
                 TaskWidgetView.Open -> R.plurals.task_widget_open
@@ -981,7 +989,14 @@ class TaskWidget : AppWidgetProvider() {
             }
             // Cache used after a failed fetch (#435): say so. Rows rendered
             // without this read as live data, which is fabricated freshness.
-            if (staleAt == null) return base
+            // A missing stamp still badges, timelessly — the two cache maps
+            // are separate Volatile writes, so a torn read must never render
+            // a clean count.
+            if (staleBadge == null) return base
+            val staleAt = staleBadge.fetchedAt
+            if (staleAt == null) {
+                return base + " · " + context.getString(R.string.task_widget_stale_unknown)
+            }
             val when0 = android.text.format.DateFormat.getTimeFormat(context)
                 .format(java.util.Date(staleAt))
             return base + " · " + context.getString(R.string.task_widget_stale, when0)

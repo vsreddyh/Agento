@@ -80,6 +80,14 @@ class TaskInstructReceiver : BroadcastReceiver() {
         val threads = listOf(thread) + ChatThreads.load(appCtx, "chat")
             .filter { it.id.isNotEmpty() && it.id != thread.id }
         ChatThreads.save(appCtx, "chat", threads)
+        // The save can fail under this receiver too (disk full, OOM) —
+        // and the "saved — tap to start" card would then deep-link a thread
+        // id the next load cannot contain (#435). Check the recorded error
+        // and post the failure card instead of lying.
+        if (ChatThreads.saveError("chat").isNotEmpty()) {
+            ChatNotifications.notifyInstructSaveFailed(appCtx, name)
+            return
+        }
         // The tap-to-open card carries the thread id + autosend intent
         // (InstructIntents extras), so no persisted flag is needed: the
         // receiver-to-chat path is the notification tap itself.

@@ -13,7 +13,7 @@ import org.junit.Test
  * the stale-render rule, the save-error record/clear transitions, and the
  * unavailable-platform wording. The rendering itself (RemoteViews text,
  * the sheet banner, the sync call) needs Android and is reviewed by eye:
- * [staleAtFor] names the fetch time, it does not format it.
+ * [staleBadgeFor] decides the badge, it does not format it.
  */
 class StaleDataTest {
 
@@ -22,31 +22,33 @@ class StaleDataTest {
     // ── Widget stale rule ─────────────────────────────────────────────
 
     @Test
-    fun `failed fetch over cache names the fetch time`() {
+    fun `failed fetch over cache badges with the fetch time`() {
         val cached = listOf(task("a"))
-        assertEquals(1234L, staleAtFor(null, cached, 1234L))
+        assertEquals(StaleBadge(1234L), staleBadgeFor(null, cached, 1234L))
     }
 
     @Test
     fun `live rows never badge`() {
         val fresh = listOf(task("a"))
         val cached = listOf(task("a"))
-        assertNull(staleAtFor(fresh, cached, 1234L))
+        assertNull(staleBadgeFor(fresh, cached, 1234L))
     }
 
     @Test
     fun `no cache means error rendering not a stale badge`() {
         // tasks == null with no cache renders the error line (#435 keeps
         // that path); a badge there would claim rows that are not shown.
-        assertNull(staleAtFor(null, null, 1234L))
+        assertNull(staleBadgeFor(null, null, 1234L))
     }
 
     @Test
-    fun `badge needs a known fetch time`() {
-        // cachedAt is written with every successful fetch, so an unknown
-        // stamp cannot happen in practice; when it does, the row renders
-        // unbadged rather than with a blank time.
-        assertNull(staleAtFor(null, listOf(task("a")), null))
+    fun `unknown fetch time still badges timelessly`() {
+        // cachedAt is written with every successful fetch, but the two
+        // cache maps are separate Volatile writes — a torn read can observe
+        // a cached entry with a missing stamp, and that must never render
+        // as live data. The badge then carries no time (see
+        // task_widget_stale_unknown); it does not vanish.
+        assertEquals(StaleBadge(null), staleBadgeFor(null, listOf(task("a")), null))
     }
 
     // ── Thread save-error state ───────────────────────────────────────
@@ -68,6 +70,30 @@ class StaleDataTest {
     }
 
     @Test
+    fun `save error is per tab`() {
+        val a = "stale-data-tab-a"
+        val b = "stale-data-tab-b"
+        ChatThreads.clearSaveError(a)
+        ChatThreads.clearSaveError(b)
+        ChatThreads.recordSaveError(a)
+        assertEquals(ChatThreads.SAVE_FAILED_MESSAGE, ChatThreads.saveError(a))
+        assertEquals("", ChatThreads.saveError(b))
+        ChatThreads.clearSaveError(a)
+    }
+
+    @Test
+    fun `save-error marker key is per tab`() {
+        // The prefs marker survives the restart the flag is about; a shared
+        // key would banner every tab for one tab's failure, or clear another
+        // tab's marker on an unrelated success.
+        assertNotEquals(
+            ChatThreads.saveErrorMarkerKey("chat"),
+            ChatThreads.saveErrorMarkerKey("code"),
+        )
+        assertTrue(ChatThreads.saveErrorMarkerKey("chat").isNotBlank())
+    }
+
+    @Test
     fun `save failure names storage`() {
         // The banner's whole point: memory is ahead of disk, and the next
         // cold start shows the older conversation. "Storage" tells the user
@@ -85,5 +111,21 @@ class StaleDataTest {
             HEALTH_CONNECT_UNAVAILABLE_MESSAGE,
         )
         assertTrue(HEALTH_CONNECT_UNAVAILABLE_MESSAGE.contains("unavailable", ignoreCase = true))
+    }
+
+    @Test
+    fun `update required names its own fix`() {
+        // An outdated provider is not a missing platform: sharing the
+        // unavailable line would disagree with the settings card, which
+        // gates on the SDK status. The sync card names the update instead.
+        assertTrue(HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE.isNotBlank())
+        assertNotEquals(
+            HEALTH_CONNECT_UNAVAILABLE_MESSAGE,
+            HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE,
+        )
+        assertNotEquals(
+            "Health Connect permissions not granted",
+            HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE,
+        )
     }
 }

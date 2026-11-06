@@ -13,6 +13,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal const val HEALTH_CONNECT_UNAVAILABLE_MESSAGE =
     "Health Connect unavailable on this device"
 
+/** Update-required wording (#435 review): the platform exists but the
+ * provider needs an update — a different fix from "not installed", so it
+ * gets its own line instead of sharing the unavailable one. */
+internal const val HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE =
+    "Health Connect needs an update before syncing"
+
 /** Single-flight orchestrator: backfills history once, then sends today-only payloads. */
 object SyncRunner {
     private const val TAG = "SyncRunner"
@@ -29,9 +35,19 @@ object SyncRunner {
             // answers an empty permission set, and the sync reports "not
             // granted" — a permissions story for a device that has no
             // Health Connect at all. Never post an empty payload either:
-            // that would look like a day with no data.
+            // that would look like a day with no data. An outdated provider
+            // names its own fix instead of sharing the unavailable line, so
+            // the sync card and the settings card never disagree.
             if (!manager.available) {
-                SyncResult(false, null, HEALTH_CONNECT_UNAVAILABLE_MESSAGE)
+                val message =
+                    if (HealthConnectManager.availabilityStatus(context) ==
+                        HealthConnectAvailability.UPDATE_REQUIRED
+                    ) {
+                        HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE
+                    } else {
+                        HEALTH_CONNECT_UNAVAILABLE_MESSAGE
+                    }
+                SyncResult(false, null, message)
             } else {
                 val granted = manager.grantedPermissions()
                 if (granted.intersect(HealthConnectManager.PERMISSIONS).isEmpty()) {

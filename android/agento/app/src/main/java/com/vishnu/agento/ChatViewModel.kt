@@ -376,16 +376,30 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 if (initGen.get() == 0) {
                     threads = threadsFinal
                     threadId = activeFinal.id
+                    // A failed write may predate this VM (#435): the task
+                    // receiver saves outside it, and a restart (OOM kills the
+                    // process right after recording) wipes the in-memory map
+                    // but not the prefs marker. Either way the file is older
+                    // than memory claims, so say so — banner and toast — from
+                    // the start.
+                    val seededSaveError = ChatThreads.saveError(tab)
+                        .ifEmpty {
+                            if (ChatThreads.hasPersistedSaveError(appCtx, tab)) {
+                                ChatThreads.SAVE_FAILED_MESSAGE
+                            } else {
+                                ""
+                            }
+                        }
                     _state.value = _state.value.copy(
                         messages = ChatThreads.toUi(activeFinal.messages),
                         threads = summaries(),
                         threadId = threadId,
-                        // A writer outside this VM (the task receiver) may
-                        // have failed while it was dead (#435): the file is
-                        // older than memory claims, so say so from the start.
-                        threadsSaveError = ChatThreads.saveError(tab),
+                        threadsSaveError = seededSaveError,
                         ready = true,
                     )
+                    if (seededSaveError.isNotEmpty()) {
+                        notify(seededSaveError, ToastKind.Error)
+                    }
                 } else {
                     // A user op already published newer state — just mark ready so the UI unblocks.
                     _state.value = _state.value.copy(ready = true)
