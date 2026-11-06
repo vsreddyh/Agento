@@ -26,8 +26,10 @@ import java.time.format.DateTimeFormatter
  * Reads health data from Health Connect and shapes it into [HealthSyncPayload]
  * for upload. All reads run on Dispatchers.IO. A missing/unusable client
  * degrades to empty results (never throws), but those are a transport floor,
- * not data: callers MUST check [available] first and report an absent
- * platform as unavailable (#435), never as an empty day or a denial.
+ * not data: callers MUST check [available] first and report a missing
+ * client as unavailable (#435) — disambiguating transient (SDK AVAILABLE,
+ * retry) from absent (install/update) via [availabilityStatus] — never as
+ * an empty day or a denial.
  */
 class HealthConnectManager(context: Context) {
 
@@ -38,9 +40,13 @@ class HealthConnectManager(context: Context) {
         HealthConnectClient.getOrCreate(context)
     }.getOrNull()
 
-    /** True when the Health Connect client exists on this device. False is
-     * a device/install state, never a statement about the user's data
-     * (#435) — an empty day and an absent platform are different facts. */
+    /** True when the Health Connect client exists on this device. False
+     * means no usable client — either an absent platform OR a transient
+     * build failure (provider IPC crash: SDK AVAILABLE, `getOrCreate`
+     * threw) — never a statement about the user's data (#435): an empty
+     * day, an absent platform and a dead client are three different facts.
+     * Disambiguate with [availabilityStatus]: AVAILABLE + !available is a
+     * transient retry, anything else is install/update (#471 review). */
     val available: Boolean get() = client != null
 
     /** Static helpers: permission set, install diagnostics, timestamp format. */

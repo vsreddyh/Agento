@@ -24,7 +24,8 @@ see GitHub Releases for older notes.
   task instruction whose save fails posts an "Instruction not saved" card
   (gated on the failure kind, never the muted success kind; branched on
   that save's own result, not the tab-global flag a concurrent persist can
-  flip) instead of a "saved" card that deep-links a thread that was never
+  flip; keyed per thread, so two failed forwards never collapse into one
+  card) instead of a "saved" card that deep-links a thread that was never
   persisted. A successful backup import clears the failure state, so a
   restore never launches into a stale banner. The restart-seeded banner
   names the loss ("was lost on restart") instead of claiming memory-only
