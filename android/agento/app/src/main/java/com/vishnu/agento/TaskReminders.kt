@@ -985,7 +985,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         if (kind == ReminderKind.Overdue) {
             val due = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
             if (task != null && due != null && due <= System.currentTimeMillis()) {
-                TaskReminders.rearmOverdue(appCtx, taskId)
+                // Re-checked: a disable between the fetch gate and here
+                // must not resurrect the nag over the wiped set (#470
+                // review). The check-then-arm sliver past here is inherent.
+                if (TaskReminders.isEnabled(appCtx)) TaskReminders.rearmOverdue(appCtx, taskId)
             } else if (outcome?.isSuccess == true) {
                 // The fetch worked and the task is no longer past due: it
                 // was rescheduled, so stop the nag and say nothing. Past
@@ -1003,7 +1006,8 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 // staying quiet here would end the nag until some unrelated
                 // edit happened to re-derive it. The next successful fetch
                 // drops it the moment the task is gone or rescheduled.
-                TaskReminders.rearmOverdue(appCtx, taskId)
+                // Same toggle re-check as above: no resurrection while off.
+                if (TaskReminders.isEnabled(appCtx)) TaskReminders.rearmOverdue(appCtx, taskId)
             }
         }
         val name = task?.name.orEmpty().ifEmpty {
@@ -1156,6 +1160,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 NotificationCompat.BigTextStyle().bigText(big),
             )
         }
+        // Final toggle gate (#470 review): a disable anywhere between
+        // the fetch gate and here drops silently instead of posting a
+        // visual while off. Speech gates itself on the same flag.
+        if (!TaskReminders.isEnabled(appCtx)) return
         mgr.notify(
             // Tag-based identity ([postedTag]): unique per task *and*
             // reminder point, so a task's start nudge, heads-up and each
