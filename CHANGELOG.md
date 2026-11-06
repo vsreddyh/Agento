@@ -19,7 +19,8 @@ see GitHub Releases for older notes.
   badge records what was actually armed (including the
   SecurityException-fallback arm), not a re-read at fire time — except
   alarms armed before the flag existed, which fall back to the live grant
-  until the next refresh re-arms them.
+  until re-armed (one-shots on the next refresh; an already-armed overdue
+  nag when it fires and re-arms its own cadence).
 
 ## [6.2.0]
 - **Stale and failed data says so (#435).** The task widget badges cached
