@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -49,6 +50,49 @@ class StaleDataTest {
         // as live data. The badge then carries no time (see
         // task_widget_stale_unknown); it does not vanish.
         assertEquals(StaleBadge(null), staleBadgeFor(null, listOf(task("a")), null))
+    }
+
+    private fun millis(year: Int, month: Int, day: Int, hour: Int, minute: Int): Long =
+        java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.YEAR, year)
+            set(java.util.Calendar.MONTH, month)
+            set(java.util.Calendar.DAY_OF_MONTH, day)
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, minute)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+    @Test
+    fun `same calendar day matches across hours`() {
+        assertTrue(
+            isSameDay(
+                millis(2026, java.util.Calendar.OCTOBER, 5, 9, 14),
+                millis(2026, java.util.Calendar.OCTOBER, 5, 23, 59),
+            ),
+        )
+    }
+
+    @Test
+    fun `adjacent days do not match`() {
+        assertFalse(
+            isSameDay(
+                millis(2026, java.util.Calendar.OCTOBER, 5, 23, 59),
+                millis(2026, java.util.Calendar.OCTOBER, 6, 0, 1),
+            ),
+        )
+    }
+
+    @Test
+    fun `same day-of-year in different years does not match`() {
+        // DAY_OF_YEAR alone aliases across years; the badge must not call
+        // last year's fetch "today".
+        assertFalse(
+            isSameDay(
+                millis(2025, java.util.Calendar.OCTOBER, 5, 9, 14),
+                millis(2026, java.util.Calendar.OCTOBER, 5, 9, 14),
+            ),
+        )
     }
 
     // ── Thread save-error state ───────────────────────────────────────
@@ -127,6 +171,19 @@ class StaleDataTest {
             "Health Connect permissions not granted",
             HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE,
         )
+    }
+
+    @Test
+    fun `transient client failure reads as retry not a device state`() {
+        // SDK AVAILABLE but the client failed to build: the settings card
+        // reads "ready" for the same state, so the sync card must not claim
+        // "unavailable on this device".
+        assertTrue(HEALTH_CONNECT_TRANSIENT_MESSAGE.isNotBlank())
+        assertNotEquals(
+            HEALTH_CONNECT_UNAVAILABLE_MESSAGE,
+            HEALTH_CONNECT_TRANSIENT_MESSAGE,
+        )
+        assertTrue(HEALTH_CONNECT_TRANSIENT_MESSAGE.contains("try again", ignoreCase = true))
     }
 
     // ── Settings update-required ordering ─────────────────────────────
