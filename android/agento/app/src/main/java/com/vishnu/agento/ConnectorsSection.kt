@@ -175,7 +175,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 // taps would launch concurrent refreshes whose last writer
                 // wins — a slow failure landing after a fresh success
                 // banners over good rows. No retry slot while busy either.
-                onRetry = ({ refreshTick++ }).takeIf { !loading && busyId == null },
+                onRetry = if (!mutateLocked) {
+                    { refreshTick++ }
+                } else {
+                    null
+                },
             )
         }
         connectors.forEach { c ->
@@ -192,9 +196,14 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 // Disconnects serialize the same way: a second tap while
                 // one is in flight would overwrite busyId, and the first
                 // completion would re-enable the second button mid-request
-                // (#484 review). Pending consent does not lock this —
-                // rows are independent, only in-flight mutations serialize.
-                mutateLocked = busyId != null,
+                // (#484 review). Loading joins this lock: a refresh in
+                // flight when a disconnect lands would return its
+                // pre-disconnect list over the new mapping — and a
+                // Check-again tap during either would queue a second
+                // writer behind it. Pending consent does not lock
+                // Disconnect — rows are independent, only in-flight work
+                // serializes.
+                mutateLocked = busyId != null || loading,
                 onConnect = {
                     // Synchronous tap guard (see mutationArmed above):
                     // same-frame double taps both see enabled buttons.
@@ -297,7 +306,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
         OutlinedButton(
             onClick = { refreshTick++ },
             // Same gate as the retry above: one refresh writer at a time.
-            enabled = !loading && busyId == null,
+            enabled = !mutateLocked,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Check again")
@@ -389,7 +398,7 @@ private fun ConnectorRow(
                     OutlinedButton(
                         onClick = onCheckAgain,
                         // Same single-writer gate as the retry above.
-                        enabled = !loading && busyId == null,
+                        enabled = !mutateLocked,
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("Check again")
