@@ -251,6 +251,47 @@ internal fun overdueText(elapsedMillis: Long): String {
 internal fun postedTag(taskId: String, kind: ReminderKind) = "$taskId#${kind.key}"
 
 /**
+ * Due-time toggle sub that names its true mode (#436).
+ *
+ * The toggle enables away on the inexact path when the exact-alarm grant
+ * is missing ("never strand the toggle off"), so the ON row must not read
+ * exact when the alarms behind it are not: the sub carries the persistent
+ * "Inexact — reminders may be late" badge whenever the grant is missing.
+ */
+internal const val REMINDER_TOGGLE_SUB =
+    "Moved here from the Task Manager bell — one switch, same alarms."
+
+/** [REMINDER_TOGGLE_SUB], plus the inexact badge when the grant is missing. */
+internal fun reminderToggleSub(exactGranted: Boolean): String =
+    if (exactGranted) REMINDER_TOGGLE_SUB
+    else "$REMINDER_TOGGLE_SUB Inexact — reminders may be late."
+
+/**
+ * Expanded-view badge for one posted reminder (#436): the per-alarm half
+ * of the same downgrade. Null when exact, so call sites add it blindly.
+ */
+internal const val INEXACT_ALARM_NOTICE =
+    "Inexact alarm — may arrive late. Allow exact alarms in system settings for on-time reminders."
+
+/** [INEXACT_ALARM_NOTICE] when the exact grant is missing, else null. */
+internal fun inexactAlarmNotice(exactGranted: Boolean): String? =
+    if (exactGranted) null else INEXACT_ALARM_NOTICE
+
+/**
+ * Live exact-alarm grant (single inventory for every reader).
+ *
+ * Pre-S always true (no grant exists there); S+ reads the manager, and a
+ * throwing manager answers granted rather than stranding the toggle on a
+ * query failure.
+ */
+internal fun canScheduleExactAlarms(appCtx: Context): Boolean =
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) true
+    else runCatching {
+        (appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
+            .canScheduleExactAlarms()
+    }.getOrDefault(true)
+
+/**
  * The window line for the expanded view (#287): bare start-to-due times,
  * "8:30 to 9:00". Parsed from instants and zero-padded, never echoed from
  * storage (the stored due time is unpadded and [friendlyDue] carries a day
@@ -619,8 +660,7 @@ object TaskReminders {
      */
     private fun armAlarm(appCtx: Context, key: String, at: Long) {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            mgr.canScheduleExactAlarms()
+        val exact = canScheduleExactAlarms(appCtx)
         val op = operation(appCtx, key)
         val armedOk = runCatching {
             if (exact) {
@@ -892,6 +932,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // not to read on a lock screen (issue #160).
         val window = task?.let { reminderWindowLine(it) }.orEmpty()
         val fetchFailed = outcome?.isSuccess != true
+        // Inexact badge (#436): read at fire time, not arm time, so a grant
+        // revoked between arming and firing still shows its true mode. Last
+        // line on purpose — the moment first, the caveat after it.
+        val inexactNotice = inexactAlarmNotice(canScheduleExactAlarms(appCtx))
         val big = buildList {
             add(message)
             // The alert still fires (a missed alarm is worse than an ugly
@@ -899,6 +943,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             if (fetchFailed) add("Task details couldn't be loaded — check the server connection.")
             if (taskDesc.isNotEmpty()) add(taskDesc)
             if (window.isNotEmpty()) add(window)
+            if (inexactNotice != null) add(inexactNotice)
         }.joinToString("\n")
         // Inline complete runs in the background receiver (no visible UI:
         // completes, refreshes widget/alarms). Data URI + own request
