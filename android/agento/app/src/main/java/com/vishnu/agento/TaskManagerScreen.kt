@@ -1515,15 +1515,24 @@ internal fun TaskManagerScreen(
                                 expectedRevision = next.revision,
                             ).fold(
                                 onSuccess = { saved ->
-                                    // The stored text may have changed under a
-                                    // queued utterance: drop this task's speech
-                                    // so the next fire speaks the saved words,
-                                    // not the stale ones — and its failure
-                                    // notices go too, since they describe the
-                                    // pre-edit schedule (#470 review). Posted
-                                    // visuals stay — the task itself is live.
-                                    ReminderTts.dropTask(context, next.id)
-                                    ReminderTts.cancelFailures(context, next.id)
+                                    // Purge only when speech/schedule-relevant
+                                    // fields moved — or the pre-edit row is
+                                    // unknown: exactly the background
+                                    // schedule-diff's rule, so a
+                                    // description/repeat-only edit keeps live
+                                    // speech and notices on both paths (#470
+                                    // review). Posted visuals stay either
+                                    // way — the task itself is live.
+                                    val moved = prevRow == null ||
+                                        prevRow.name != next.name ||
+                                        prevRow.speakName != next.speakName ||
+                                        prevRow.dueDate != next.dueDate ||
+                                        prevRow.dueTime != next.dueTime ||
+                                        prevRow.estimatedMinutes != mins
+                                    if (moved) {
+                                        ReminderTts.dropTask(context, next.id)
+                                        ReminderTts.cancelFailures(context, next.id)
+                                    }
                                     if (prevRow == null) {
                                         // The row was not in the fetched page at
                                         // all: backgrounded (#308) so pulling the

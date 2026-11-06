@@ -642,17 +642,19 @@ object TaskReminders {
         val prevLead = prefs(appCtx).getLong(PREF_SCHEDULE_LEAD, -1L)
         val leadNow = BehaviourSettings.reminderLeadMinutes(appCtx)
         if (prevLead != -1L) {
-            // A lead change moves every BeforeStart point at once: the
-            // queued text names the old lead, so every open task purges
-            // like a reschedule.
-            val changed = if (prevLead != leadNow) {
-                next.keys
+            // A lead change moves every BeforeStart point at once — but
+            // only BeforeStart text names the lead, so only that point
+            // purges per task: dropping start/due/overdue speech would
+            // lose live reminders silently, and their notices stay valid
+            // (#470 review).
+            val beforeKey = ReminderKind.BeforeStart.key
+            if (prevLead != leadNow) {
+                for (id in next.keys) ReminderTts.dropTask(appCtx, id, beforeKey)
             } else {
-                rescheduledIds(prev, next)
-            }
-            for (id in changed) {
-                ReminderTts.dropTask(appCtx, id)
-                ReminderTts.cancelFailures(appCtx, id)
+                for (id in rescheduledIds(prev, next)) {
+                    ReminderTts.dropTask(appCtx, id)
+                    ReminderTts.cancelFailures(appCtx, id)
+                }
             }
         }
         if (!page.truncated) {

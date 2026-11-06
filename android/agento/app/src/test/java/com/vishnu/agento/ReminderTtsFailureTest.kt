@@ -169,8 +169,7 @@ class TtsQueuePurgeTest {
     }
 
     @Test
-    fun `a null task purges everything for the disable path`() {
-        // dropAll's core: every task's queue goes, every owner entry goes,
+    fun `a null task purges everything for the disable path`() {        // dropAll's core: every task's queue goes, every owner entry goes,
         // and a speaking item of any task suppresses.
         val queue = ArrayDeque(listOf(item("a1", "A"), item("b1", "B", "start")))
         val owners = mutableMapOf(
@@ -185,5 +184,47 @@ class TtsQueuePurgeTest {
         assertTrue(queue.isEmpty())
         assertTrue(owners.isEmpty())
         assertTrue(reported.isEmpty())
+    }
+}
+
+/**
+ * Kind-scoped purges (#470 review): a lead change moves only BeforeStart
+ * points, so other kinds' queued speech and owner entries must survive.
+ */
+class TtsPointPurgeTest {
+
+    private fun item(id: String, task: String, kind: String) =
+        ReminderTts.QueuedSpeech(id, "say $id", task, kind, "Task $task")
+
+    @Test
+    fun `a kind filter keeps other kinds`() {
+        val queue = ArrayDeque(
+            listOf(item("a1", "A", "before"), item("a2", "A", "due"), item("b1", "B", "before")),
+        )
+        val owners = mutableMapOf(
+            "a1" to item("a1", "A", "before"),
+            "a2" to item("a2", "A", "due"),
+            "b1" to item("b1", "B", "before"),
+        )
+        val reported = mutableSetOf("a1", "a2")
+        val purged = purgeTaskSpeech(queue, owners, reported, null, "A", "before")
+        assertEquals(1, purged.dropped)
+        assertEquals(false, purged.inFlight)
+        assertEquals(listOf("a2", "b1"), queue.map { it.id })
+        assertEquals(setOf("a2", "b1"), owners.keys)
+        assertEquals(setOf("a2"), reported)
+    }
+
+    @Test
+    fun `an in-flight utterance of another kind is not suppressed`() {
+        val queue = ArrayDeque(listOf(item("b1", "B", "due")))
+        val owners = mutableMapOf(
+            "a1" to item("a1", "A", "due"),
+            "b1" to item("b1", "B", "due"),
+        )
+        val purged = purgeTaskSpeech(queue, owners, mutableSetOf(), "a1", "A", "before")
+        assertEquals(0, purged.dropped)
+        assertEquals(false, purged.inFlight)
+        assertEquals(setOf("a1", "b1"), owners.keys)
     }
 }

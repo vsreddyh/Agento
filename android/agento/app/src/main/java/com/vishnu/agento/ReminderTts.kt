@@ -96,26 +96,29 @@ internal fun purgeTaskSpeech(
     reported: MutableSet<String>,
     speakingId: String?,
     taskId: String?,
+    kindKey: String? = null,
 ): SpeechPurge {
+    fun matches(q: ReminderTts.QueuedSpeech) =
+        (taskId == null || q.taskId == taskId) && (kindKey == null || q.kindKey == kindKey)
     var dropped = 0
     val it = queue.iterator()
     while (it.hasNext()) {
         val q = it.next()
-        if (taskId == null || q.taskId == taskId) {
+        if (matches(q)) {
             it.remove()
             reported.remove(q.id)
             dropped++
         }
     }
     val speakingOwner = speakingId?.let { owners[it] }
-    val inFlight = speakingOwner != null && (taskId == null || speakingOwner.taskId == taskId)
+    val inFlight = speakingOwner != null && matches(speakingOwner)
     if (inFlight) {
         reported.remove(speakingOwner!!.id)
     }
     // Owner entries for the purge go regardless: the queued ones above,
     // the suppressed in-flight one here, and any drift leftover (the map
     // only ever holds queued-or-speaking items).
-    owners.entries.removeIf { e -> taskId == null || e.value.taskId == taskId }
+    owners.entries.removeIf { e -> matches(e.value) }
     return SpeechPurge(dropped, inFlight)
 }
 
@@ -672,7 +675,7 @@ object ReminderTts {
      * and its notice is cancelled here since the success path can no
      * longer retract it.
      */
-    internal fun dropTask(appCtx: Context, taskId: String) {
+    internal fun dropTask(appCtx: Context, taskId: String, kindKey: String? = null) {
         var eng: TextToSpeech? = null
         val purged = synchronized(lock) {
             // Bump first: any failure captured before this — however far
@@ -681,7 +684,7 @@ object ReminderTts {
             // cancelled below (#470 review). Unconditional: a racing
             // capture belongs to a pre-bump item by construction.
             dropEpoch[taskId] = (dropEpoch[taskId] ?: 0L) + 1
-            purgeTaskSpeech(queue, owners, initReported, speakingId, taskId).also {
+            purgeTaskSpeech(queue, owners, initReported, speakingId, taskId, kindKey).also {
                 // Capture under the lock, stop outside it: binder IPC must
                 // never run while holding the queue lock. Only when
                 // suppressing — stopping audio for any other reason would
@@ -702,8 +705,13 @@ object ReminderTts {
         // failures post when the queue no longer holds the item, and tags
         // persist across process death — enumerated here, so a
         // restart-then-complete still retracts pre-death notices (#470
-        // review).
-        cancelLiveFailureNotices(appCtx, taskId)
+        // review). Kind-scoped when only one point moved (lead change):
+        // other points' notices stay valid.
+        if (kindKey == null) {
+            cancelLiveFailureNotices(appCtx, taskId)
+        } else {
+            cancelFailureFor(appCtx, taskId, kindKey)
+        }
         // Advance whatever is still queued: the stopped utterance's
         // callback may never arrive to pump (#470 review).
         pump()

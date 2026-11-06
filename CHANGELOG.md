@@ -60,7 +60,10 @@ see GitHub Releases for older notes.
   spoken name) and purges speech and failure notices like an in-app edit
   (posted visuals stay — the task is live); the diff only ever matches
   ids on the page, so truncated pages purge reschedules too and only skip
-  storing the partial snapshot. When the device language isn't available in the engine,
+  storing the partial snapshot. In-app edits purge only when
+  speech/schedule fields moved (description/repeat-only saves keep live
+  speech, like the background diff), and lead changes purge only
+  BeforeStart points (only that text names the lead). When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is
