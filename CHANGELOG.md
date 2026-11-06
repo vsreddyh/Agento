@@ -46,7 +46,9 @@ see GitHub Releases for older notes.
   bind in its own per-placement namespace — prunes its own stale ones;
   failed/empty binds and preview binds prune nothing; deleting a widget
   drops that placement's factory entries, deleting the last one drops
-  the push entries too, and turning reminders off drops theirs) — the
+  the push entries too (counted through the provider-filtered list, so
+  a foreign id on the affected launcher cannot pin them), and turning
+  reminders off drops theirs) — the
   log and the page carry the same capped sample while the diagnostics
   record keeps every row (the About line shows the first 500 chars, so
   very large pages reconcile by count, not by full text), so the hint

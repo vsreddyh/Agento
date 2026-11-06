@@ -327,15 +327,15 @@ class TaskWidget : AppWidgetProvider() {
         // placement's detail, even when the lookup below fails. The push
         // path refetches all three states every cycle while any placement
         // lives, so `widget:*` stays fresh on its own and is dropped only
-        // with the last placement; a failed lookup keeps it, so a
+        // with the last placement — counted through the provider-filtered
+        // [taskWidgetIds], since the raw lookup can hand back another
+        // provider's id on the affected launcher and a foreign id must not
+        // pin this source's entries; a failed lookup keeps it, so a
         // transient failure cannot delete live detail.
         for (id in appWidgetIds) {
             TasksApi.clearCoercedNotesSource("widget-factory-$id")
         }
-        val remaining = runCatching {
-            AppWidgetManager.getInstance(context)
-                .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
-        }.getOrNull()
+        val remaining = runCatching { taskWidgetIds(context) }.getOrNull()
         if (remaining != null && remaining.isEmpty()) {
             TasksApi.clearCoercedNotesSource("widget")
         }

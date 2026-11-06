@@ -309,6 +309,29 @@ class TaskNumericCoercionTest {
     }
 
     @Test
+    fun `a hostile row id rides the note escaped, not verbatim`() {
+        // #480 review: the note-text id prefix goes through the same
+        // escaper as the raw — a newline, quote or list delimiter in the
+        // id must not break the one-line/quoted note format.
+        val page = parseTaskListPage(
+            """{"tasks":[{"id":"a\nb\"c;d|e","name":"A","estimated_minutes":"abc"}]}""",
+            "open",
+            "manager",
+        )
+        try {
+            assertEquals(1, page.coerced)
+            val note = page.coercedNotes.single()
+            assertEquals(
+                "task a\\nb\\\"c;d|e: estimated_minutes \"abc\"->0",
+                note,
+            )
+            assertTrue(!note.contains("\n"))
+        } finally {
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
+        }
+    }
+
+    @Test
     fun `negative repeat and revision clamp to zero and notify`() {
         // Only the estimate used to clamp: a negative repeat_every
         // rendered exactly like a one-shot, and a negative revision passed

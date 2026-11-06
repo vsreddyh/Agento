@@ -657,7 +657,10 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
     fun num(key: String, default: Int = 0): CoercedInt {
         val r = optTaskInt(o, key, default)
         if (r.raw != null) {
-            note("task ${id.take(24)}: $key ${r.raw}->${r.value}")
+            // The id rides escaped like the raw: a pathological server id
+            // with a newline, quote or list delimiter must not break the
+            // one-line/quoted note format the escaper keeps (#480 review).
+            note("task ${escapeTaskRawText(id.take(24))}: $key ${r.raw}->${r.value}")
         }
         return r
     }
@@ -671,7 +674,7 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
         val r = num(key, default)
         val v = r.value.coerceAtLeast(0)
         if (v != r.value) {
-            note("task ${id.take(24)}: $key ${r.value}->$v")
+            note("task ${escapeTaskRawText(id.take(24))}: $key ${r.value}->$v")
         }
         return v
     }
@@ -711,7 +714,8 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
         // hex ObjectIds hash 1:1, and a pathological server id can neither
         // grow the map unboundedly nor alias another row's slot (#480
         // review). The human-readable `task <id.take(24)>:` prefix stays in
-        // the note text, where a collision is display-only. List callers
+        // the note text escaped like the raw — where a hash collision is
+        // display-only, a raw id would still be log injection. List callers
         // pass an accumulator and skip the record — the page records once
         // for the whole batch, and owns evicting the single entries of the
         // rows it contains (see parseTaskListPage) — so a sourceless parse
