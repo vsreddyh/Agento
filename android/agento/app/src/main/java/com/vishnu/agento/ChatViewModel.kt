@@ -67,8 +67,8 @@ data class ChatUiState(
     /** Label of the latest live tool frame, e.g. what the tool is doing. */
     val activeToolLabel: String = "",
     /** Server-side totals for the active thread's conversation (#121);
-     * null = unknown — which is also the steady state today, since pi-gateway
-     * serves no `api/sessions/{id}`; see [SessionTotals]. */
+     * null = unknown (unknown session or a shape mismatch — see
+     * [SessionTotals], fetched over pi-gateway `api/sessions/{id}`). */
     val serverTokens: SessionTotals? = null,
     /** Text queued while streaming (#122): auto-sends when the reply
      * finishes cleanly, restored to the composer on failure/stop. */

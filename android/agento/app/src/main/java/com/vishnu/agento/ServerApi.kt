@@ -410,16 +410,13 @@ fun lastTurnStartIndex(roles: List<String>): Int {
 }
 
 /**
- * Server-side token totals for one conversation.
+ * Server-side token totals for one conversation (#121 reconciliation).
  *
- * Hermes answered this from `GET api/sessions/{id}` with
- * `{"object":"hermes.session","session":{...}}`, verified live at the time. pi-gateway
- * serves no such route: usage reaches the app on the chat response's own `usage`
- * object, which is what [parseTokenUsage] reads. So this shape is what #121's
- * multi-device reconciliation *expects*, not what it currently gets, and the totals it
- * would need are a pi-gateway endpoint that does not exist yet. Tracked as an issue
- * rather than quietly deleted, because the reconciliation is a real feature and the
- * missing server side is the whole of it.
+ * pi-gateway serves these from `GET api/sessions/{id}` as
+ * `{"session":{...}}` (unknown ids answer `{"error":...}` and read as
+ * absent); [ServerApi.fetchSessionTotals] requires the wrapped shape and
+ * throws [SESSION_TOTALS_SHAPE_ERROR] on anything else. The chat response's
+ * own `usage` object, read by [parseTokenUsage], is the other source.
  */
 data class SessionTotals(
     val prompt: Long = 0L,

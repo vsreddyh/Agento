@@ -935,7 +935,7 @@ class TasksApi(context: Context) {
             call("POST", "/api/tasks/$clean/$verb", JSONObject()).map { body ->
                 val root = JSONObject(body)
                 val task = parseTask(root.optJSONObject("task") ?: root)
-                    ?: throw RuntimeException("Unexpected response shape")
+                    ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                 val next = root.optJSONObject("next")
                 // Each half versioned on its own (#185 review): maxOf would
                 // collapse task=1 + pre-version next=0 to 1 and hide the
@@ -974,21 +974,21 @@ class TasksApi(context: Context) {
             }
             call("POST", "/api/tasks/batch", bulkOpsBody(ops)).map { text ->
                 val arr = JSONObject(text).optJSONArray("results")
-                    ?: throw RuntimeException("Unexpected response shape")
+                    ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                 val out = mutableListOf<BulkItemResult>()
                 for (i in 0 until arr.length()) {
                     val item = arr.optJSONObject(i)
-                        ?: throw RuntimeException("Unexpected response shape")
+                        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                     val root = item.optJSONObject("task")
-                        ?: throw RuntimeException("Unexpected response shape")
+                        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                     var task = parseTask(root)
-                        ?: throw RuntimeException("Unexpected response shape")
+                        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
                     // No lenient fallback to task.id: the server guarantees
                     // ID (source id, or the new copy's id for duplicate), so
                     // a missing one is a contract violation, not a gap to
                     // paper over.
                     val id = optJsonStr(item, "id")
-                    if (id.isEmpty()) throw RuntimeException("Unexpected response shape")
+                    if (id.isEmpty()) throw RuntimeException(TASKS_SHAPE_ERROR)
                     // Version handling mirrors resolve(): each half versioned
                     // on its own, warn-not-throw on disagreement.
                     val next = item.optJSONObject("next")
@@ -1108,7 +1108,7 @@ class TasksApi(context: Context) {
 
     private fun parseOne(body: String): ServerTask =
         parseTask(JSONObject(body))
-            ?: throw RuntimeException("Unexpected response shape")
+            ?: throw RuntimeException(TASKS_SHAPE_ERROR)
 
     /** Ids are hex today, but encoded defensively so a malformed id can
      * never break the request path (the `+` fix-up mirrors ServerApi:
