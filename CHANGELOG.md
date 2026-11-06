@@ -17,7 +17,9 @@ see GitHub Releases for older notes.
   the same badge collapsed and as the last expanded-view line, so a late
   fire traces to its cause in-app instead of reading as an app bug. The
   badge records what was actually armed (including the
-  SecurityException-fallback arm), not a re-read at fire time.
+  SecurityException-fallback arm), not a re-read at fire time — except
+  alarms armed before the flag existed, which fall back to the live grant
+  until the next refresh re-arms them.
 
 ## [6.2.0]
 - **Stale and failed data says so (#435).** The task widget badges cached

@@ -1,7 +1,6 @@
 package com.vishnu.agento
 
 import android.Manifest
-import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -142,8 +141,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            if (!mgr.canScheduleExactAlarms()) {
+            // Same reader as the toggle and the arming path
+            // ([canScheduleExactAlarms]): a throwing manager reads as
+            // granted, and the arm-time fallback keeps that safe.
+            if (!canScheduleExactAlarms(appCtx)) {
                 // Best-effort, like the old bell: the first pass fires the
                 // redirect and returns so the notification step below never
                 // launches underneath system settings; the resume re-drive
@@ -225,9 +226,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     // Exact-alarm grant, re-read on the same resume tick as the switches
     // above: enabling without it falls back to inexact alarms, and the
-    // copy must not promise otherwise. Same reader as the arming path
-    // ([canScheduleExactAlarms]) — one source, though a grant flip between
-    // this read and the arm still lands inexact.
+    // copy must not promise otherwise. Same reader as the enable and
+    // arming paths ([canScheduleExactAlarms]) — one source, though a grant
+    // flip between this read and the arm still lands inexact.
     val exactAlarms = remember(resumeTick) { canScheduleExactAlarms(appCtx) }
 
     SectionCard(
