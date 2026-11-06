@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -55,7 +56,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // Connector id with a consent page open in the browser: poll until it
     // flips or the wait runs out. Returning from the browser fires
     // ON_RESUME, which re-lists immediately (same tick below).
-    var pendingConnect by remember { mutableStateOf<String?>(null) }
+    // Saveable across rotation (#484 review): a rotate during the ~2min
+    // poll must resume the wait, not silently drop it. busyId deliberately
+    // stays plain remember — its coroutine dies with the scope on
+    // rotation, so restoring it would wedge buttons on Working… forever.
+    var pendingConnect by rememberSaveable { mutableStateOf<String?>(null) }
     var busyId by remember { mutableStateOf<String?>(null) }
     // Synchronous tap guard (#484 review): the composition-state locks
     // below apply on the NEXT frame, so two taps in the same frame both
