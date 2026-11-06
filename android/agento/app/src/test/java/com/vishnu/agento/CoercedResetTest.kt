@@ -522,6 +522,22 @@ class FilterSortCoercionTest {
     }
 
     @Test
+    fun `other controls and unicode separators stay escaped and one-line`() {
+        // #480 review: escapeTaskRawText covers more than newline-class
+        // controls - C0/C1, NEL and U+2028/U+2029 all break lines without
+        // hitting the old three-char rules.
+        val v = widgetViewCoercion("A\u2028B\u0085C\u0001D")!!
+        assertTrue(!v.contains("\u2028"))
+        assertTrue(!v.contains("\u0085"))
+        assertTrue(!v.contains("\u0001"))
+        assertTrue(v.contains("\\u2028"))
+        assertTrue(v.contains("\\u0085"))
+        assertTrue(v.contains("\\u0001"))
+        // Named escapes stay named.
+        assertEquals("\"A\\bC\\fD\"->Open", widgetViewCoercion("A\bC\fD"))
+    }
+
+    @Test
     fun `quotes and newlines in corrupt values stay escaped and one-line`() {
         // Same log-injection class the numeric path got visibleTaskRaw
         // for: the toast/log/diagnostics line must survive hostile stored
@@ -645,11 +661,11 @@ class TaskCoercedMessageTest {
         // One row with three bad fields counts once; the diagnostics
         // detail names each field as a sample (#480 review).
         assertEquals(
-            "1 task showed reset values — see Settings → About diagnostics for what changed.",
+            "1 task showed reset values — see Settings → About diagnostics for a sample of what changed.",
             taskCoercedMessage(1),
         )
         assertEquals(
-            "3 tasks showed reset values — see Settings → About diagnostics for what changed.",
+            "3 tasks showed reset values — see Settings → About diagnostics for a sample of what changed.",
             taskCoercedMessage(3),
         )
     }

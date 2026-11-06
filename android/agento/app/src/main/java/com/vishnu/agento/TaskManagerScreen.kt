@@ -2799,12 +2799,13 @@ internal fun taskDropMessage(dropped: Int): String =
  * diagnostics detail names each field — the capped note slice reads as a
  * sample of the rows, not the total (#480 review). The count sits in the
  * list; the key, raw value and reset value ride the log line, which
- * surfaces in Settings → About diagnostics. */
+ * surfaces in Settings → About diagnostics (first 500 chars, so the hint
+ * promises a sample, not the full text). */
 internal fun taskCoercedMessage(coerced: Int): String =
     if (coerced == 1) {
-        "1 task showed reset values — see Settings → About diagnostics for what changed."
+        "1 task showed reset values — see Settings → About diagnostics for a sample of what changed."
     } else {
-        "$coerced tasks showed reset values — see Settings → About diagnostics for what changed."
+        "$coerced tasks showed reset values — see Settings → About diagnostics for a sample of what changed."
     }
 
 /**

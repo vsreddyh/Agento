@@ -29,13 +29,19 @@ see GitHub Releases for older notes.
   single-row reads (`get`/`create`/`update`/`reopen`/`complete`/`skip`/
   `batch`) join both channels under a bounded hash of their row id
   instead of riding the log only; a list page evicts the single entries
-  of the rows it contains, so the two never disagree; and a 404 naming
+  of the rows it contains, so the two never disagree (the single
+  namespace is global — any containing page subsumes the entry, so a
+  clean page from one screen clears a single entry another surface
+  wrote); and a 404 naming
   the row evicts it on every verb (already-gone included), not just
   `get` — batch matches the quoted, server-truncated id, and only on a
-  uniquely-echoed row, so one gone row can never evict a live sibling.
+  uniquely-echoed row, so one gone row can never evict a live sibling
+  (a gone row sharing its echo with a live sibling instead keeps its
+  entry — no list page will ever contain a deleted row — until a
+  single-verb 404, a delete, or process restart clears it).
   the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
-  fetch can neither clobber nor clear another's (each surface that
+  fetch can neither clobber nor clear another's per-fetch entry (each surface that
   switches states — manager per landed load, widget factory per settled
   bind in its own per-placement namespace — prunes its own stale ones;
   failed/empty binds and preview binds prune nothing; deleting a widget
@@ -44,7 +50,7 @@ see GitHub Releases for older notes.
   log and the page carry the same capped sample while the diagnostics
   record keeps every row (the About line shows the first 500 chars, so
   very large pages reconcile by count, not by full text), so the hint
-  points at on-screen detail.
+  points at a sample of the on-screen detail.
   Defaults themselves are unchanged — only the
   rewriting is now visible.
 

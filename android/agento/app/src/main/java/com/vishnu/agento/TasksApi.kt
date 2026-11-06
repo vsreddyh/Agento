@@ -522,16 +522,38 @@ internal fun visibleTaskRaw(v: String): String =
 /**
  * The escaping half of [visibleTaskRaw], shared by the non-string
  * fallbacks in [optTaskInt] (a `JSONArray` raw carries quotes too) and the
- * batch 404 matcher: backslash first, then quote and control chars, so a
- * hostile stored value cannot break the quoted note format or span lines.
+ * batch 404 matcher: backslash, quote and control chars, so a hostile
+ * stored value cannot break the quoted note format or span lines.
+ * Beyond `\n`/`\r`/`\t` this covers the rest of C0/C1 (`\b`/`\f` as
+ * named escapes, the remainder as `\uXXXX` — including NEL, which
+ * `isISOControl` catches) plus U+2028/U+2029, which JSON can carry and
+ * which break lines without being ISO controls (#480 review).
  * List delimiters (`;`, `|`) are deliberately NOT escaped: the About line
  * is human-readable, not machine-parseable — a raw containing them reads
  * ambiguously, and mangling common values for a parser that does not exist
  * would trade a rare ambiguity for a certain one (#480 review).
  */
-internal fun escapeTaskRawText(v: String): String =
-    v.replace("\\", "\\\\").replace("\"", "\\\"")
-        .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+internal fun escapeTaskRawText(v: String): String {
+    val sb = StringBuilder(v.length)
+    for (c in v) {
+        when (c) {
+            '\\' -> sb.append("\\\\")
+            '"' -> sb.append("\\\"")
+            '\n' -> sb.append("\\n")
+            '\r' -> sb.append("\\r")
+            '\t' -> sb.append("\\t")
+            '\b' -> sb.append("\\b")
+            '\u000C' -> sb.append("\\f")
+            else ->
+                if (c.isISOControl() || c == '\u2028' || c == '\u2029') {
+                    sb.append("\\u" + c.code.toString(16).padStart(4, '0'))
+                } else {
+                    sb.append(c)
+                }
+        }
+    }
+    return sb.toString()
+}
 
 /**
  * Bounded diagnostics slot for one task row's single-read resets (#480):
@@ -562,9 +584,15 @@ internal fun singleCoercionState(id: String): String =
  * a full-length match would miss exactly the long ids the bounded-key
  * work exists for, while a bare substring would let id "a" match a
  * message naming only "ab". Both quote forms bound the token on both
- * sides, each raw and JSON-escaped (backslash/quote/newline-class only —
- * Go's wider `\uXXXX`/HTML escapes are not mirrored, so an id needing
- * those still misses). Pure for tests.
+ * sides, each raw and JSON-escaped ([escapeTaskRawText] — backslash,
+ * quote and control-class; Go's wider `\uXXXX`/HTML escapes are not
+ * mirrored, so an id needing those still misses). Only a uniquely-echoed
+ * row auto-clears, so one
+ * gone long id can never evict a live sibling sharing its 40-byte prefix;
+ * the tradeoff is the colliding gone row keeps its single entry — no
+ * list page will ever contain a deleted row to subsume it, so it clears
+ * on a later single-verb 404 naming the row, a delete(), or process
+ * restart (#480 review). Pure for tests.
  */
 internal fun batchUnknownTaskIds(ids: List<String>, msg: String): List<String> {
     if ("HTTP 404:" !in msg || "unknown task" !in msg) return emptyList()
@@ -884,7 +912,12 @@ class TasksApi(context: Context) {
          * switches states (manager, widget factory) prunes its stale
          * siblings explicitly ([clearCoercedNotesExcept]); when a source's
          * last writer goes away its entries go with it
-         * ([clearCoercedNotesSource]).
+         * ([clearCoercedNotesSource]). That isolation is between
+         * per-fetch entries only: the `single:*` namespace below is
+         * global by design, and any list page containing the row subsumes
+         * its single entry as the newer vintage — a clean page from one
+         * screen clears a single entry another surface wrote (#480
+         * review).
          */
         @Volatile
         internal var lastCoercedNotes: Map<String, List<String>> = emptyMap()
