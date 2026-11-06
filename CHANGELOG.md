@@ -8,7 +8,7 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
-## [6.1.1]
+## [6.2.0]
 - **Stale and failed data says so (#435).** The task widget badges cached
   rows after a failed fetch ("12 open · updated 09:14 — refresh failed",
   timeless "refresh failed — showing saved tasks" when the stamp itself is

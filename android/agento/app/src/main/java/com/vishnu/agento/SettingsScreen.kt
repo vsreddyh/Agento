@@ -228,13 +228,13 @@ internal fun SettingsScreen(
                             } else {
                                 state.serverUrl
                             },
-                            healthStatus = when {
-                                !state.healthAvailable -> "Not installed"
-                                !state.permissionsGranted -> "Setup needed"
-                                state.syncing -> "Syncing…"
-                                state.lastSyncAt.isNotEmpty() -> "Synced"
-                                else -> "Ready"
-                            },
+                            healthStatus = hubHealthStatus(
+                                healthAvailable = state.healthAvailable,
+                                healthUpdateRequired = state.healthUpdateRequired,
+                                permissionsGranted = state.permissionsGranted,
+                                syncing = state.syncing,
+                                lastSyncAt = state.lastSyncAt,
+                            ),
                             themeStatus = when (themeMode) {
                                 ThemeStore.LIGHT -> "Light"
                                 ThemeStore.DARK -> "Dark"
@@ -478,8 +478,20 @@ internal fun SettingsScreen(
                         when {
                             !state.healthAvailable -> {
                                 SectionCard(
-                                    title = "Install Health Connect",
-                                    subtitle = "Health sync needs the Health Connect app before anything else.",
+                                    // An outdated provider is not a missing one
+                                    // (#435 review): the install branch used to
+                                    // claim "not installed" for both, so the
+                                    // update fix hid behind the wrong title.
+                                    title = if (state.healthUpdateRequired) {
+                                        "Update Health Connect"
+                                    } else {
+                                        "Install Health Connect"
+                                    },
+                                    subtitle = if (state.healthUpdateRequired) {
+                                        "Health sync needs a newer Health Connect provider before anything else."
+                                    } else {
+                                        "Health sync needs the Health Connect app before anything else."
+                                    },
                                 ) {
                                     Button(
                                         onClick = {
@@ -1680,6 +1692,35 @@ internal fun saveDiagnosticsFile(context: Context, text: String): java.io.File {
     return file
 }
 
+/** Settings Health card headline (#435 review): update-required outranks
+ * not-installed. The old order checked availability first, which made the
+ * update branch dead code — update-required devices read "not installed"
+ * while the sync card said "needs an update". Pure so a JVM test pins the
+ * order; the strings stay here, next to their renderer. */
+internal fun healthStatusLine(healthAvailable: Boolean, healthUpdateRequired: Boolean): String =
+    when {
+        healthUpdateRequired -> "Health Connect needs an update"
+        !healthAvailable -> "Health Connect not installed"
+        else -> "Health Connect ready"
+    }
+
+/** Hub Health row (#435 review): same order as [healthStatusLine], short
+ * strings for the hub. Pure for the same reason. */
+internal fun hubHealthStatus(
+    healthAvailable: Boolean,
+    healthUpdateRequired: Boolean,
+    permissionsGranted: Boolean,
+    syncing: Boolean,
+    lastSyncAt: String,
+): String = when {
+    healthUpdateRequired -> "Update needed"
+    !healthAvailable -> "Not installed"
+    !permissionsGranted -> "Setup needed"
+    syncing -> "Syncing…"
+    lastSyncAt.isNotEmpty() -> "Synced"
+    else -> "Ready"
+}
+
 /** Summarizes Health Connect install vs. permission state for Settings. */
 @Composable
 internal fun HealthStatusCard(state: UiState) {
@@ -1690,11 +1731,7 @@ internal fun HealthStatusCard(state: UiState) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            val healthText = when {
-                !state.healthAvailable -> "Health Connect not installed"
-                state.healthUpdateRequired -> "Health Connect needs an update"
-                else -> "Health Connect ready"
-            }
+            val healthText = healthStatusLine(state.healthAvailable, state.healthUpdateRequired)
             val permText = if (state.permissionsGranted) {
                 "Permissions granted"
             } else {
