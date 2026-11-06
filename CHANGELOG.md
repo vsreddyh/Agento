@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.2.3]
+- **Settings sidebar loses its duplicate subsections (#418).** The drawer
+  and rail show one Settings entry that opens the hub; subsection rows are
+  gone (the hub rows already navigate there). Subsection screens gain a
+  back arrow returning to the hub.
+
 ## [6.2.2]
 - **Reset values say so (#437).** A stored value that falls back to its
   default no longer does it silently: a corrupt or version-skewed Task
