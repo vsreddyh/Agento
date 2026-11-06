@@ -67,10 +67,15 @@ class ReminderTtsFailureTest {
     fun `voice hint distinguishes dead engine from no voices`() {
         // Loading: the button already reads "Loading…", no hint line.
         assertNull(voiceListHint(listing = true, voices = null, savedVoice = "v"))
-        // Dead engine: failure state with a retry, even with no saved pick.
+        // Dead engine: failure state with a retry. With Engine default there
+        // is no pick to keep, so the line says so instead.
+        assertEquals(
+            "The speech engine isn't answering — voice choices are unavailable until it responds.",
+            voiceListHint(listing = false, voices = null, savedVoice = ""),
+        )
         assertEquals(
             "The speech engine isn't answering — the pick is kept, and Reload voices retries it.",
-            voiceListHint(listing = false, voices = null, savedVoice = ""),
+            voiceListHint(listing = false, voices = null, savedVoice = "v"),
         )
         // Genuinely empty: a different state, not an engine failure.
         assertEquals(

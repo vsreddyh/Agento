@@ -535,6 +535,9 @@ internal fun voiceListHint(
 ): String? {
     if (listing) return null
     if (voices == null) {
+        if (savedVoice.isEmpty()) {
+            return "The speech engine isn't answering — voice choices are unavailable until it responds."
+        }
         return "The speech engine isn't answering — the pick is kept, and Reload voices retries it."
     }
     if (voices.isEmpty()) {

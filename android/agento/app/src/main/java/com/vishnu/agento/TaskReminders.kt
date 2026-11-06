@@ -542,6 +542,9 @@ object TaskReminders {
         for (kind in ReminderKind.entries) {
             runCatching { mgr.cancel(postedTag(taskId, kind), ALARM_NOTIF_ID) }
         }
+        // Companion speech-failure notices are per-point too: completing,
+        // skipping or dismissing the task must leave none orphaned (#434).
+        ReminderTts.cancelFailures(context.applicationContext, taskId)
     }
 
     /**
@@ -780,6 +783,10 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     }
 
     private suspend fun post(appCtx: Context, taskId: String, kind: ReminderKind) {
+        // A stale speech-failure notice for this task must not outlive a
+        // fresh alert: a retried alarm that now plays would otherwise sit
+        // next to its own earlier failure (#434).
+        ReminderTts.cancelFailures(appCtx, taskId)
         // One indexed lookup, not the whole open list: the receiver knows
         // the id, and `GET /api/tasks/{id}` answers in one query where the
         // list made every nag quadratic (#168). Null means gone

@@ -73,9 +73,9 @@ internal fun isStoredVoiceMissing(availableNames: Collection<String>, want: Stri
  * (visual notification only).
  *
  * Every failure that drops an utterance reports loudly (#434): a toast plus
- * a persistent "spoken alert couldn't play" notification on the same
- * channel, never Log-only. The visual reminder notification always posts
- * first (see [TaskAlarmReceiver]), so silence is never mistaken for success.
+ * a companion "spoken alert couldn't play" notice on the same channel,
+ * never Log-only. The visual reminder notification always posts first
+ * (see [TaskAlarmReceiver]), so silence is never mistaken for success.
  */
 object ReminderTts {
     private const val MAX_QUEUED = 10
@@ -94,6 +94,15 @@ object ReminderTts {
     private val queue = ArrayDeque<QueuedSpeech>()
     /** Utterance id → queued speech, for async callbacks that only know the id. */
     private val owners = HashMap<String, QueuedSpeech>()
+    /**
+     * Utterance ids already reported as ENGINE_INIT while kept for retry.
+     * A dead engine fires one init callback per ensureEngine, but the queue
+     * survives across them — without this, every re-init would re-toast the
+     * same unsaid utterances. Removed when the utterance completes (its
+     * failure notice is then cancelled as retracted) or drops terminally
+     * (its tag is overwritten with the terminal reason).
+     */
+    private val initReported = HashSet<String>()
     @Volatile private var engine: TextToSpeech? = null
     private var ready = false
     private var inited = false
@@ -115,6 +124,7 @@ object ReminderTts {
         override fun onStart(utteranceId: String) = Unit
         private fun finished(utteranceId: String, failed: Boolean) {
             var owner: QueuedSpeech? = null
+            var retractInit = false
             // Only the current generation owns `speaking`: a stale onDone from
             // the shut-down engine clears nothing, and pump() always runs so a
             // stale completion still advances whatever is queued.
@@ -124,9 +134,17 @@ object ReminderTts {
                     speakingId = null
                 }
                 owner = owners.remove(utteranceId)
+                // A kept-for-retry utterance that now played: retract the
+                // earlier ENGINE_INIT notice instead of orphaning it. A
+                // terminal error overwrites the same tag below, so the set
+                // entry just goes away.
+                retractInit = !failed && initReported.remove(utteranceId)
+                if (failed) initReported.remove(utteranceId)
             }
             if (failed && owner != null) {
                 reportFailure(owner!!.taskId, owner!!.kindKey, owner!!.taskName, TtsFailure.UTTERANCE_ERROR)
+            } else if (retractInit && owner != null) {
+                cancelFailure(owner!!.taskId, owner!!.kindKey)
             }
             pump()
         }
@@ -146,19 +164,28 @@ object ReminderTts {
             .replace("\"", "").replace(QUOTE_CHARS, "")
         val id = "${kind.key}-${UUID.randomUUID()}"
         val item = QueuedSpeech(id, text, task.id, kind.key, task.name)
-        synchronized(lock) {
+        // Snapshot the evicted under lock, report outside it: reportFailure
+        // does binder IPC (NotificationManager), which must never run while
+        // holding `lock` that pump()/onDone/onError need.
+        val dropped: List<QueuedSpeech> = synchronized(lock) {
             // Bounded, drop-oldest: for a stuck engine nothing speaks anyway,
             // and for a transient burst the freshest alarm is the most relevant
             // one to keep — the visual notification still posts for every alarm.
-            // The dropped one reports loudly instead of vanishing (#434).
+            // The dropped ones report loudly instead of vanishing (#434).
+            val out = mutableListOf<QueuedSpeech>()
             while (queue.size >= MAX_QUEUED) {
-                val dropped = queue.removeFirst()
-                owners.remove(dropped.id)
-                Log.w("ReminderTts", "queue full, dropping oldest speech ${dropped.id}")
-                reportFailure(dropped.taskId, dropped.kindKey, dropped.taskName, TtsFailure.QUEUE_DROPPED)
+                val d = queue.removeFirst()
+                owners.remove(d.id)
+                initReported.remove(d.id)
+                out.add(d)
             }
             queue.addLast(item)
             owners[item.id] = item
+            out
+        }
+        dropped.forEach {
+            Log.w("ReminderTts", "queue full, dropping oldest speech ${it.id}")
+            reportFailure(it.taskId, it.kindKey, it.taskName, TtsFailure.QUEUE_DROPPED)
         }
         ensureEngine(appCtx.applicationContext)
         pump()
@@ -206,9 +233,12 @@ object ReminderTts {
             }
         }.getOrNull()
         if (tts == null) {
+            // Newly-queued only: utterances already reported stay reported —
+            // re-toasting the whole old queue on every re-init is spam, and
+            // their notices are retracted individually if they later play.
             val queued: List<QueuedSpeech> = synchronized(lock) {
                 inited = false
-                queue.toList()
+                queue.filter { initReported.add(it.id) }
             }
             Log.w("ReminderTts", "engine constructor failed, keeping queued speech for retry")
             queued.forEach {
@@ -250,7 +280,10 @@ object ReminderTts {
                     val dropped: List<QueuedSpeech> = synchronized(lock) {
                         val all = queue.toList()
                         queue.clear()
-                        all.forEach { owners.remove(it.id) }
+                        all.forEach {
+                            owners.remove(it.id)
+                            initReported.remove(it.id)
+                        }
                         speaking = false
                         speakingId = null
                         inited = false
@@ -272,9 +305,13 @@ object ReminderTts {
             pump()
         } else {
             // Report loudly AND keep the queue for retry: the toast +
-            // notification say this alarm didn't speak, while the next
+            // notice say this alarm hasn't spoken yet, while the next
             // speak() re-inits the engine and replays what stayed queued.
-            val queued: List<QueuedSpeech> = synchronized(lock) { queue.toList() }
+            // Already-reported utterances stay silent here (their notices
+            // persist until the utterance plays or drops terminally).
+            val queued: List<QueuedSpeech> = synchronized(lock) {
+                queue.filter { initReported.add(it.id) }
+            }
             val dead = engine
             synchronized(lock) {
                 // Kept, not cleared: an alarm enqueued while this init was in
@@ -301,7 +338,10 @@ object ReminderTts {
             if (wgen != watchdogGen || !speaking) return
             Log.w("ReminderTts", "speech timed out with no callback, advancing queue")
             speaking = false
-            owner = speakingId?.let { owners.remove(it) }
+            owner = speakingId?.let {
+                initReported.remove(it)
+                owners.remove(it)
+            }
             speakingId = null
         }
         if (owner != null) {
@@ -312,10 +352,11 @@ object ReminderTts {
 
     /**
      * Loud failure: a toast for whoever is looking at the phone plus a
-     * persistent notification on the reminders channel, so a missed spoken
-     * alert is never indistinguishable from a played one (#434). Never
-     * throws: binder/main-looper failures in a BroadcastReceiver path must
-     * not take down the queue.
+     * companion failure notice on the reminders channel (auto-cancel, like
+     * the reminder alert itself), so a missed spoken alert is never
+     * indistinguishable from a played one (#434). Never throws:
+     * binder/main-looper failures in a BroadcastReceiver path must not
+     * take down the queue.
      */
     private fun reportFailure(taskId: String, kindKey: String, taskName: String, failure: TtsFailure) {
         val appCtx = appCtxRef ?: return
@@ -360,7 +401,36 @@ object ReminderTts {
                 .build()
             // Distinct tag per reminder point: the failure note sits next to
             // the original alert instead of overwriting it.
-            mgr.notify("tts-failed:$taskId#$kindKey", ALARM_NOTIF_ID, notif)
+            mgr.notify(failureTag(taskId, kindKey), ALARM_NOTIF_ID, notif)
+        }
+    }
+
+    /** Notification tag for one reminder point's speech-failure notice. */
+    private fun failureTag(taskId: String, kindKey: String) = "tts-failed:$taskId#$kindKey"
+
+    /** Retracts one point's failure notice (its utterance later played). */
+    private fun cancelFailure(taskId: String, kindKey: String) {
+        val appCtx = appCtxRef ?: return
+        runCatching {
+            val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
+            mgr.cancel(failureTag(taskId, kindKey), ALARM_NOTIF_ID)
+        }
+    }
+
+    /**
+     * Drops every failure notice for one task (all kinds). Called when a new
+     * reminder posts (stale notices must not outlive a fresh alert) and when
+     * posted alerts are dismissed ([TaskReminders.cancelPosted]), so a
+     * completed/skipped/dismissed task leaves no orphaned failure notice.
+     */
+    internal fun cancelFailures(appCtx: Context, taskId: String) {
+        runCatching {
+            val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
+            for (kind in ReminderKind.entries) {
+                runCatching { mgr.cancel(failureTag(taskId, kind.key), ALARM_NOTIF_ID) }
+            }
         }
     }
 
@@ -377,7 +447,10 @@ object ReminderTts {
                 if (speaking && SystemClock.uptimeMillis() - speakStartedAt > SPEAK_TIMEOUT_MS) {
                     Log.w("ReminderTts", "speech timed out, advancing queue")
                     speaking = false
-                    timedOut = speakingId?.let { owners.remove(it) }
+                    timedOut = speakingId?.let {
+                        initReported.remove(it)
+                        owners.remove(it)
+                    }
                     speakingId = null
                 }
                 if (!ready || speaking) {
@@ -437,6 +510,7 @@ object ReminderTts {
                 synchronized(lock) {
                     speaking = false
                     speakingId = null
+                    initReported.remove(next.id)
                     owners.remove(next.id)
                 }
                 reportFailure(next.taskId, next.kindKey, next.taskName, TtsFailure.SPEAK_THREW)
@@ -450,6 +524,7 @@ object ReminderTts {
             synchronized(lock) {
                 speaking = false
                 speakingId = null
+                initReported.remove(next.id)
                 owners.remove(next.id)
             }
             reportFailure(next.taskId, next.kindKey, next.taskName, TtsFailure.SPEAK_REJECTED)
