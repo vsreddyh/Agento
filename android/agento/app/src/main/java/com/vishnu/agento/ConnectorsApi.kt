@@ -59,6 +59,23 @@ internal fun parseConnector(o: JSONObject): ConnectorInfo? {
 internal const val CONNECTORS_SHAPE_ERROR =
     "Unexpected response shape — the server sent no connectors list. Update the server."
 
+/** The consent URL is missing or the body is not the connector shape
+ * (#484 review): the server fail-closes a missing grant with 502, so a
+ * 200 without a non-blank `auth_url` is a wrong shape (proxy HTML,
+ * non-connector JSON) — never an empty grant. Loud, like
+ * [CONNECTORS_SHAPE_ERROR]. */
+internal const val CONNECT_AUTH_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no consent URL. Update the server."
+
+/** Reads the one-time consent URL out of a connect response (#484
+ * review): anything without a non-blank `auth_url` is the wrong shape,
+ * not an empty grant. Pure and JVM-pinned. */
+internal fun parseAuthUrl(body: String): String {
+    val url = runCatching { JSONObject(body).optString("auth_url", "") }.getOrDefault("")
+    if (url.isBlank()) throw RuntimeException(CONNECT_AUTH_SHAPE_ERROR)
+    return url
+}
+
 internal fun parseConnectorList(body: String): List<ConnectorInfo> {
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(CONNECTORS_SHAPE_ERROR)
@@ -156,9 +173,7 @@ class ConnectorsApi(context: Context) {
     suspend fun connect(path: String, id: String): Result<String> = withContext(Dispatchers.IO) {
         call("POST", "$path/api/connectors/${encode(id)}/connect").mapCatching {
             if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
-            val url = runCatching { JSONObject(it.body).optString("auth_url", "") }.getOrDefault("")
-            if (url.isBlank()) throw RuntimeException("empty auth_url")
-            url
+            parseAuthUrl(it.body)
         }
     }
 

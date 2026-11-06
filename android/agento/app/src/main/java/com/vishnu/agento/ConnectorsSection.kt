@@ -120,17 +120,21 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                             // versa) must not leave its banner over fresh rows.
                             error = ""
                         }
-                        // A polled row that flipped resolves the wait (#440):
-                        // the pending id is connected (or failed visibly via
-                        // an expired row carrying the reconnect hint).
+                        // A wait resolves on connected ONLY (#484 review):
+                        // POST /connect never changes status, so the row a
+                        // Reconnect tap starts from is already expired — an
+                        // expired check would resolve on round 1 with no
+                        // toast and never auto-resolve. An expiry appearing
+                        // mid-wait from a disconnected start is impossible
+                        // (no tokens to age out), so connected-only loses
+                        // nothing. The expired row keeps rendering its
+                        // reconnect hint meanwhile.
                         val pending = pendingConnect
                         if (pending != null &&
-                            list.any { it.id == pending && (it.isConnected() || it.isExpired()) }
+                            list.any { it.id == pending && it.isConnected() }
                         ) {
                             pendingConnect = null
-                            if (list.any { it.id == pending && it.isConnected() }) {
-                                toasts.toast("Connected.", kind = ToastKind.Success)
-                            }
+                            toasts.toast("Connected.", kind = ToastKind.Success)
                         }
                     },
                     onFailure = { e ->
@@ -196,11 +200,12 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     }
                     anyOk = true
                     lastError = ""
-                    if (list.any { it.id == pending && (it.isConnected() || it.isExpired()) }) {
+                    // Connected-only resolution, like refresh() above (#484
+                    // review): a pre-existing expired row must not end the
+                    // wait on round 1.
+                    if (list.any { it.id == pending && it.isConnected() }) {
                         pendingConnect = null
-                        if (list.any { it.id == pending && it.isConnected() }) {
-                            toasts.toast("Connected.", kind = ToastKind.Success)
-                        }
+                        toasts.toast("Connected.", kind = ToastKind.Success)
                     }
                 },
                 onFailure = { e ->

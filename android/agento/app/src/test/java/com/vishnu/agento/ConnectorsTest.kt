@@ -79,6 +79,44 @@ class ConnectorListParseTest {
 }
 
 /**
+ * Consent-URL parsing (#484 review): the server fail-closes with 502,
+ * so a 200 without a usable `auth_url` is a wrong shape, not an empty
+ * grant — it must read as a shape error, never "empty auth_url".
+ */
+class ConnectAuthUrlTest {
+
+    @Test
+    fun `a consent url parses`() {
+        assertEquals(
+            "https://accounts.google.com/o/oauth2/auth?x=1",
+            parseAuthUrl("""{"auth_url":"https://accounts.google.com/o/oauth2/auth?x=1"}"""),
+        )
+    }
+
+    @Test
+    fun `proxy html fails loudly`() {
+        try {
+            parseAuthUrl("<html>proxy</html>")
+            throw AssertionError("must throw, not read as empty url")
+        } catch (e: RuntimeException) {
+            assertEquals(CONNECT_AUTH_SHAPE_ERROR, e.message)
+        }
+    }
+
+    @Test
+    fun `missing or blank auth url fails loudly`() {
+        for (body in listOf("""{"other":1}""", """{"auth_url":""}""", """{"auth_url":"   "}""")) {
+            try {
+                parseAuthUrl(body)
+                throw AssertionError("must throw for $body")
+            } catch (e: RuntimeException) {
+                assertEquals(CONNECT_AUTH_SHAPE_ERROR, e.message)
+            }
+        }
+    }
+}
+
+/**
  * Unconfigured-server detection (#484 review): matched on the status
  * code this client built, never on a "501" substring that could sit
  * anywhere in a truncated body.
