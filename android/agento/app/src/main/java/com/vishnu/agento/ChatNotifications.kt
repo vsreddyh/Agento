@@ -156,6 +156,38 @@ object ChatNotifications {
     }
 
     /**
+     * Posts the task-instruction save-FAILED card (#435): the receiver's
+     * save landed nowhere (disk full, OOM), so the "saved — tap to start"
+     * card would open a thread the next load cannot contain. Same slot
+     * shape as [notifyInstructSaved], but it opens the app with no autosend
+     * target instead of deep-linking a thread id that was never persisted.
+     *
+     * Gated by the same instruction-saved kind (#355): a user who silenced
+     * instruction cards silenced this one too. */
+    fun notifyInstructSaveFailed(context: Context, taskName: String) {
+        if (!BehaviourSettings.notifyInstruct(context) || !canPost(context)) return
+        ensureChannel(context)
+        val open = PendingIntent.getActivity(
+            context, ("instruct-failed:$taskName").hashCode(),
+            Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val text = "Instruction for \"$taskName\" couldn't be saved — storage may be full. " +
+            "Free up space, then forward the task again."
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle("Instruction not saved")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(INSTRUCT_NOTIFICATION_ID + ("instruct-failed:$taskName").hashCode(), notification)
+    }
+
+    /**
      * Posts a cron-response notification on the same replies channel; tap
      * opens the stored cron chat. Returns whether anything posted. The
      * caller advances past posted runs, plus kind-off and empty-text

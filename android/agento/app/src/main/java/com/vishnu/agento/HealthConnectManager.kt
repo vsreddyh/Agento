@@ -24,8 +24,10 @@ import java.time.format.DateTimeFormatter
 
 /**
  * Reads health data from Health Connect and shapes it into [HealthSyncPayload]
- * for upload. All reads run on Dispatchers.IO; every method degrades to an
- * empty payload (never throws) when the client is unavailable.
+ * for upload. All reads run on Dispatchers.IO. A missing/unusable client
+ * degrades to empty results (never throws), but those are a transport floor,
+ * not data: callers MUST check [available] first and report an absent
+ * platform as unavailable (#435), never as an empty day or a denial.
  */
 class HealthConnectManager(context: Context) {
 
@@ -83,7 +85,9 @@ class HealthConnectManager(context: Context) {
             "https://play.google.com/store/apps/details?id=$HEALTH_CONNECT_PACKAGE"
     }
 
-    /** Currently granted permissions (subset of [PERMISSIONS]). */
+    /** Currently granted permissions (subset of [PERMISSIONS]). Empty when
+     * the client is missing — check [available] first (#435), or an absent
+     * platform reads as "permissions not granted". */
     suspend fun grantedPermissions(): Set<String> {
         val c = client ?: return emptySet()
         return withContext(Dispatchers.IO) {
@@ -111,6 +115,8 @@ class HealthConnectManager(context: Context) {
     /**
      * Today's payload: steps + active calories since UTC midnight, sleep and
      * workouts from the last 24h (covers last night's sleep spilling past midnight).
+     * A missing client yields an empty-shaped payload — a transport floor, not
+     * a day with no data. Check [available] first (#435).
      */
     suspend fun collectToday(): HealthSyncPayload {
         val c = client ?: return HealthSyncPayload(
