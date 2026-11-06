@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -54,6 +55,13 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // ON_RESUME, which re-lists immediately (same tick below).
     var pendingConnect by remember { mutableStateOf<String?>(null) }
     var busyId by remember { mutableStateOf<String?>(null) }
+    // Synchronous tap guard (#484 review): the composition-state locks
+    // below apply on the NEXT frame, so two taps in the same frame both
+    // see enabled buttons — double-tap Connect would mint two OAuth
+    // attempts and abandon the first wait. CAS serializes mutation taps
+    // across rows and actions; reset in finally (no suspension inside,
+    // so cancellation still re-arms).
+    val mutationArmed = remember { AtomicBoolean(true) }
 
     fun path(): String = catalogPath(ChatApi(context))
 
@@ -161,7 +169,14 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
         // A failed refresh says so even over stale rows (#484 review): a
         // dead server must never read as a confirmed list.
         if (error.isNotEmpty()) {
-            ErrorCard(raw = error, onRetry = { refreshTick++ })
+            ErrorCard(
+                raw = error,
+                // Gated while loading or mutating (#484 review): two rapid
+                // taps would launch concurrent refreshes whose last writer
+                // wins — a slow failure landing after a fresh success
+                // banners over good rows. No retry slot while busy either.
+                onRetry = ({ refreshTick++ }).takeIf { !loading && busyId == null },
+            )
         }
         connectors.forEach { c ->
             ConnectorRow(
@@ -181,85 +196,96 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 // rows are independent, only in-flight mutations serialize.
                 mutateLocked = busyId != null,
                 onConnect = {
-                    busyId = c.id
-                    scope.launch {
-                        ConnectorsApi(context).connect(path(), c.id).fold(
-                            onSuccess = { url ->
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, url.toUri())
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                    )
-                                }.onFailure {
-                                    toasts.toast(
-                                        "Couldn't open the browser.",
-                                        kind = ToastKind.Error,
-                                    )
-                                    busyId = null
-                                    return@launch
-                                }
-                                busyId = null
-                                pendingConnect = c.id
-                            },
-                            onFailure = { e ->
-                                busyId = null
-                                val msg = e.message.orEmpty()
-                                // Unconfigured server (501) must read as
-                                // "not available", never as an invitation
-                                // to paste a secret somewhere else. Matched
-                                // on the built status code, not a substring
-                                // that could sit anywhere in the body (#484
-                                // review).
-                                toasts.toast(
-                                    if (isConnectNotConfigured(msg)) {
-                                        "Connect isn't set up on this server yet."
-                                    } else {
-                                        msg.ifEmpty { e.javaClass.simpleName }
+                    // Synchronous tap guard (see mutationArmed above):
+                    // same-frame double taps both see enabled buttons.
+                    if (mutationArmed.compareAndSet(true, false)) {
+                        busyId = c.id
+                        scope.launch {
+                            try {
+                                ConnectorsApi(context).connect(path(), c.id).fold(
+                                    onSuccess = { url ->
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, url.toUri())
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        }.onFailure {
+                                            toasts.toast(
+                                                "Couldn't open the browser.",
+                                                kind = ToastKind.Error,
+                                            )
+                                            return@launch
+                                        }
+                                        pendingConnect = c.id
                                     },
-                                    kind = ToastKind.Error,
+                                    onFailure = { e ->
+                                        val msg = e.message.orEmpty()
+                                        // Unconfigured server (501) must read as
+                                        // "not available", never as an invitation
+                                        // to paste a secret somewhere else.
+                                        // Matched on the built status code, not
+                                        // a substring that could sit anywhere
+                                        // in the body (#484 review).
+                                        toasts.toast(
+                                            if (isConnectNotConfigured(msg)) {
+                                                "Connect isn't set up on this server yet."
+                                            } else {
+                                                msg.ifEmpty { e.javaClass.simpleName }
+                                            },
+                                            kind = ToastKind.Error,
+                                        )
+                                    },
                                 )
-                            },
-                        )
+                            } finally {
+                                busyId = null
+                                mutationArmed.set(true)
+                            }
+                        }
                     }
                 },
                 onDisconnect = {
-                    busyId = c.id
-                    scope.launch {
-                        ConnectorsApi(context).disconnect(path(), c.id).fold(
-                            onSuccess = { row ->
-                                busyId = null
-                                // A disconnect scrubs the server-side pending
-                                // states for this id: a consent wait on it
-                                // can never resolve, so stop polling now
-                                // instead of running 40 rounds into a "Still
-                                // waiting" toast for the impossible (#484
-                                // review).
-                                if (pendingConnect == c.id) pendingConnect = null
-                                // Same stale-banner rule as refresh/poll: a
-                                // failed Check again must not banner over
-                                // rows a later disconnect just fixed (#484
-                                // review).
-                                error = ""
-                                if (row != null) {
-                                    connectors = connectors.map {
-                                        if (it.id == row.id) row else it
-                                    }
-                                } else {
-                                    refreshTick++
-                                }
-                                toasts.toast(
-                                    "Disconnected — future access stopped.",
-                                    kind = ToastKind.Success,
+                    if (mutationArmed.compareAndSet(true, false)) {
+                        busyId = c.id
+                        scope.launch {
+                            try {
+                                ConnectorsApi(context).disconnect(path(), c.id).fold(
+                                    onSuccess = { row ->
+                                        // A disconnect scrubs the server-side pending
+                                        // states for this id: a consent wait on it
+                                        // can never resolve, so stop polling now
+                                        // instead of running 40 rounds into a "Still
+                                        // waiting" toast for the impossible (#484
+                                        // review).
+                                        if (pendingConnect == c.id) pendingConnect = null
+                                        // Same stale-banner rule as refresh/poll: a
+                                        // failed Check again must not banner over
+                                        // rows a later disconnect just fixed (#484
+                                        // review).
+                                        error = ""
+                                        if (row != null) {
+                                            connectors = connectors.map {
+                                                if (it.id == row.id) row else it
+                                            }
+                                        } else {
+                                            refreshTick++
+                                        }
+                                        toasts.toast(
+                                            "Disconnected — future access stopped.",
+                                            kind = ToastKind.Success,
+                                        )
+                                    },
+                                    onFailure = { e ->
+                                        toasts.toast(
+                                            e.message ?: e.javaClass.simpleName,
+                                            kind = ToastKind.Error,
+                                        )
+                                    },
                                 )
-                            },
-                            onFailure = { e ->
+                            } finally {
                                 busyId = null
-                                toasts.toast(
-                                    e.message ?: e.javaClass.simpleName,
-                                    kind = ToastKind.Error,
-                                )
-                            },
-                        )
+                                mutationArmed.set(true)
+                            }
+                        }
                     }
                 },
                 onCheckAgain = { refreshTick++ },
@@ -270,6 +296,8 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
         }
         OutlinedButton(
             onClick = { refreshTick++ },
+            // Same gate as the retry above: one refresh writer at a time.
+            enabled = !loading && busyId == null,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Check again")
@@ -358,7 +386,12 @@ private fun ConnectorRow(
                     }
                 }
                 if (pending) {
-                    OutlinedButton(onClick = onCheckAgain, modifier = Modifier.weight(1f)) {
+                    OutlinedButton(
+                        onClick = onCheckAgain,
+                        // Same single-writer gate as the retry above.
+                        enabled = !loading && busyId == null,
+                        modifier = Modifier.weight(1f),
+                    ) {
                         Text("Check again")
                     }
                 }
