@@ -472,6 +472,12 @@ object SettingsBackup {
                             // pre-import threads, and its next persist would
                             // write them back over this file.
                             ChatThreads.notifyRewritten(tab)
+                            // The restored file replaces whatever a recorded
+                            // write failure described (#435 review): clear
+                            // the banner state, or every launch cries
+                            // failure over a successful restore. A failed
+                            // import skips this, correctly.
+                            ChatThreads.clearSaveErrorState(context, tab)
                             applied++
                         }.onFailure { skipped += name }
                         continue

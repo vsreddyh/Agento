@@ -1008,6 +1008,9 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 messages = ChatThreads.toUi(active.messages),
                 threads = summaries(),
+                // A backup import clears recorded write failures (#435
+                // review); the restored file replaces what they described.
+                threadsSaveError = ChatThreads.saveError(tab),
                 pendingAttachments = emptyList(),
                 notices = retainedNotices(),
             )
@@ -1019,6 +1022,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                 messages = emptyList(),
                 threads = summaries(),
                 threadId = threadId,
+                threadsSaveError = ChatThreads.saveError(tab),
                 pendingAttachments = emptyList(),
                 notices = retainedNotices(),
             )
