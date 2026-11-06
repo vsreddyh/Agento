@@ -125,7 +125,8 @@ class TtsQueuePurgeTest {
     @Test
     fun `an in-flight utterance is suppressed, not stopped`() {
         // Production shape: pump() dequeues before speaking, so the
-        // speaking item is in owners but no longer in the queue.
+        // speaking item is in owners but no longer in the queue. Purge
+        // drops its bookkeeping; dropTask stops the audio on top.
         val queue = ArrayDeque(listOf(item("b1", "B")))
         val owners = mutableMapOf("a1" to item("a1", "A"), "b1" to item("b1", "B"))
         val reported = mutableSetOf("a1")

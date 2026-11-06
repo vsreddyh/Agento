@@ -22,8 +22,8 @@ see GitHub Releases for older notes.
   away or reschedules, or on successful Complete/Skip (a failed tap keeps
   both, like the reminder itself); otherwise swipe them away like the
   reminder itself. Queued speech purges with the task too: completing it
-  drops its unplayed utterances (an in-flight one finishes silently)
-  instead of speaking a done task or resurrecting its failure notice —
+  drops its unplayed utterances (stopping a playing one) instead of
+  speaking a done task or resurrecting its failure notice —
   and that covers the in-app Complete/Skip/Delete/Edit paths, not just
   notification taps (an edit/move also clears failure notices, which
   describe the pre-edit schedule). Turning reminders off purges the whole

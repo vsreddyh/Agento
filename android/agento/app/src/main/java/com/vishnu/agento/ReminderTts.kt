@@ -77,12 +77,14 @@ internal data class SpeechPurge(
  * utterance when [taskId] is null — and every owner entry for it, plus
  * the reported flags of exactly the removed items.
  *
- * The speaking item is suppressed, not stopped: its owner entry goes (so
- * the completion callback can neither report nor retract), but
- * [speakingId] itself is untouched — the audio finishes, silently. Its
- * notice is cancelled by the caller instead, so suppressing it here
- * cannot orphan an ENGINE_INIT tag. Pure and JVM-pinned: the engine
- * needs Android, but this decision does not.
+ * The speaking item is suppressed, not stopped, at this layer: its owner
+ * entry goes (so the completion callback can neither report nor retract),
+ * but [speakingId] itself — and the audio — is the caller's to handle:
+ * [ReminderTts.dropTask] stops it, [ReminderTts.dropAll] stops it, and in
+ * both cases the silenced callback finds nothing to report. Its notice is
+ * cancelled by the caller instead, so suppressing it here cannot orphan
+ * an ENGINE_INIT tag. Pure and JVM-pinned: the engine needs Android, but
+ * this decision does not.
  */
 internal fun purgeTaskSpeech(
     queue: ArrayDeque<ReminderTts.QueuedSpeech>,
@@ -523,11 +525,32 @@ object ReminderTts {
      * rescheduled early-exits in `post`): cancelling the visual + failure
      * notices is not enough — a surviving queue entry would later speak a
      * completed task, or fail and re-post the tag just cancelled (#470
-     * review). An in-flight utterance finishes (it cannot be unspoken)
-     * but its failure report is suppressed and its notice cancelled here,
-     * since the success path in `finished()` can no longer retract it
-     * once the owner entry is gone.
+     * review). An in-flight utterance is stopped too, like the disable
+     * path: completing a task mid-utterance must not keep speaking a done
+     * task audibly. Its callback finds no owner entry and stays silent,
+     * and its notice is cancelled here since the success path can no
+     * longer retract it.
      */
+    internal fun dropTask(taskId: String) {
+        var eng: TextToSpeech? = null
+        val purged = synchronized(lock) {
+            purgeTaskSpeech(queue, owners, initReported, speakingId, taskId).also {
+                // Capture under the lock, stop outside it: binder IPC must
+                // never run while holding the queue lock. Only when
+                // suppressing — stopping audio for any other reason would
+                // be vandalism.
+                if (it.inFlight) eng = engine
+            }
+        }
+        runCatching { eng?.stop() }
+        for ((t, kindKey) in purged.points) cancelFailure(t, kindKey)
+        if (purged.dropped > 0 || purged.inFlight) {
+            runCatching {
+                Log.w("ReminderTts", "dropped ${purged.dropped} queued speech for task=$taskId" +
+                    if (purged.inFlight) " (in-flight stopped)" else "")
+            }
+        }
+    }
     internal fun dropTask(taskId: String) {
         val purged = synchronized(lock) {
             purgeTaskSpeech(queue, owners, initReported, speakingId, taskId)
