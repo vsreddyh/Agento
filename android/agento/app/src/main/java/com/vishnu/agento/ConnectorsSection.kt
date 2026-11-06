@@ -33,7 +33,8 @@ import kotlinx.coroutines.launch
  * Flow: Connect opens the one-time Google consent URL in a browser (the
  * app never sees code/verifier/token — server-only exchange, sealed
  * tokens in Mongo). The section then polls the list until the row flips
- * to connected. Disconnect clears tokens server-side; already-fetched
+ * to connected — bounded (~2 min, then "Check again" covers slower
+ * consents). Disconnect clears tokens server-side; already-fetched
  * chat history is NOT wiped (stops the tap, not history — ADR-0009).
  * Expired rows surface the wire `reconnect` hint as a reconnect prompt.
  * Consent happens in the browser: never paste a password or token in chat.
@@ -133,6 +134,12 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 info = c,
                 busy = busyId == c.id,
                 pending = pendingConnect == c.id,
+                // One wait at a time (#484 review): a second Connect
+                // while any consent is pending would overwrite
+                // pendingConnect and abandon the first wait with no
+                // toast and no cleanup. busyId joins the lock so a
+                // second tap during the first fetch cannot do it either.
+                connectLocked = pendingConnect != null || busyId != null,
                 onConnect = {
                     busyId = c.id
                     scope.launch {
@@ -159,9 +166,12 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                 val msg = e.message.orEmpty()
                                 // Unconfigured server (501) must read as
                                 // "not available", never as an invitation
-                                // to paste a secret somewhere else.
+                                // to paste a secret somewhere else. Matched
+                                // on the built status code, not a substring
+                                // that could sit anywhere in the body (#484
+                                // review).
                                 toasts.toast(
-                                    if (msg.contains("501")) {
+                                    if (isConnectNotConfigured(msg)) {
                                         "Connect isn't set up on this server yet."
                                     } else {
                                         msg.ifEmpty { e.javaClass.simpleName }
@@ -223,6 +233,7 @@ private fun ConnectorRow(
     info: ConnectorInfo,
     busy: Boolean,
     pending: Boolean,
+    connectLocked: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onCheckAgain: () -> Unit,
@@ -268,7 +279,7 @@ private fun ConnectorRow(
             } else {
                 Button(
                     onClick = onConnect,
-                    enabled = !busy && !pending,
+                    enabled = !busy && !connectLocked,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(

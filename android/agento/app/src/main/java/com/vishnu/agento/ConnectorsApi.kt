@@ -51,15 +51,34 @@ internal fun parseConnector(o: JSONObject): ConnectorInfo? {
     )
 }
 
+/** One message for a server that does not speak the canonical connector
+ * list (#484 review): the server always returns its rows (disconnected
+ * synthesised), so a 200 without a `connectors` array is a wrong shape —
+ * wrong path/prefix, proxy HTML, health-api answer — never "zero
+ * connectors exist". Loud, like TASKS_SHAPE_ERROR. */
+internal const val CONNECTORS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no connectors list. Update the server."
+
 internal fun parseConnectorList(body: String): List<ConnectorInfo> {
-    val root = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
-    val arr = root.optJSONArray("connectors") ?: return emptyList()
+    val root = runCatching { JSONObject(body) }.getOrNull()
+        ?: throw RuntimeException(CONNECTORS_SHAPE_ERROR)
+    val arr = root.optJSONArray("connectors")
+        ?: throw RuntimeException(CONNECTORS_SHAPE_ERROR)
     val out = mutableListOf<ConnectorInfo>()
     for (i in 0 until arr.length()) {
         parseConnector(arr.optJSONObject(i) ?: continue)?.let { out.add(it) }
     }
     return out
 }
+
+/**
+ * Whether a connect failure means "server has no OAuth config" (#484
+ * review): matched on the status code this client built (`HTTP <code>:`),
+ * never on a `"501"` substring that could sit anywhere in a truncated
+ * body. Pure so the rule is pinnable.
+ */
+internal fun isConnectNotConfigured(message: String): Boolean =
+    message.startsWith("HTTP 501:")
 
 /**
  * Connector verbs (#440): list, connect (returns the one-time Google
