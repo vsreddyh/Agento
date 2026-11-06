@@ -264,7 +264,10 @@ internal const val REMINDER_TOGGLE_SUB =
 /** [REMINDER_TOGGLE_SUB], plus the inexact badge when the grant is missing. */
 internal fun reminderToggleSub(exactGranted: Boolean): String =
     if (exactGranted) REMINDER_TOGGLE_SUB
-    else "$REMINDER_TOGGLE_SUB Inexact — reminders may be late."
+    else "$REMINDER_TOGGLE_SUB $INEXACT_BADGE_SHORT."
+
+/** Short badge shared by the toggle sub and the collapsed notification line. */
+internal const val INEXACT_BADGE_SHORT = "Inexact — reminders may be late"
 
 /**
  * Expanded-view badge for one posted reminder (#436): the per-alarm half
@@ -809,20 +812,34 @@ object TaskReminders {
      * A revoked grant between the check and the call throws
      * SecurityException; falling back per alarm keeps one revocation from
      * aborting the loop.
+     *
+     * The inexactness rides along as an intent extra ([EXTRA_REMINDER_INEXACT]),
+     * so the receiver badges what was actually armed (#436): a live re-read
+     * at fire time could disagree either way (grant allowed after an
+     * inexact arm, or revoked after an exact one). The SecurityException
+     * retry re-flags too — that alarm went out inexact despite the grant
+     * read saying exact.
      */
     private fun armAlarm(appCtx: Context, key: String, at: Long) {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val exact = canScheduleExactAlarms(appCtx)
-        val op = operation(appCtx, key)
         val armedOk = runCatching {
             if (exact) {
-                mgr.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+                mgr.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP, at, operation(appCtx, key, inexact = false),
+                )
             } else {
-                mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+                mgr.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP, at, operation(appCtx, key, inexact = true),
+                )
             }
         }.isSuccess
         if (!armedOk && exact) {
-            runCatching { mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op) }
+            runCatching {
+                mgr.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP, at, operation(appCtx, key, inexact = true),
+                )
+            }
         }
     }
 
@@ -925,7 +942,7 @@ object TaskReminders {
         ReminderTts.dropAll(appCtx)
     }
 
-    private fun operation(appCtx: Context, key: String): PendingIntent {
+    private fun operation(appCtx: Context, key: String, inexact: Boolean = false): PendingIntent {
         // Split on the LAST '#': the kind is a fixed suffix, so an id that
         // itself contained one would otherwise truncate the task id. Ids are
         // hex ObjectIds today, so this is belt-and-braces.
@@ -937,6 +954,10 @@ object TaskReminders {
         val fire = Intent(appCtx, TaskAlarmReceiver::class.java)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
             .putExtra(EXTRA_REMINDER_KIND, kind)
+            // Arm-time inexactness (#436): extras don't count for
+            // PendingIntent identity, so cancelling with the default still
+            // matches an alarm armed with the flag set.
+            .putExtra(EXTRA_REMINDER_INEXACT, inexact)
             // The path segment is encoded: a '/' in an id would otherwise
             // change the URI's structure and break PendingIntent identity.
             .setData("agento://reminder/${Uri.encode(taskId)}/$kind".toUri())
@@ -949,6 +970,13 @@ object TaskReminders {
 
 /** Which reminder point fired; mirrors [ReminderKind.key]. */
 internal const val EXTRA_REMINDER_KIND = "agento.reminder.kind"
+
+/**
+ * Whether this alarm went out inexact (#436). Written by [TaskReminders]
+ * at arm time; absent on alarms armed before the flag existed, where the
+ * receiver falls back to the live grant.
+ */
+internal const val EXTRA_REMINDER_INEXACT = "agento.reminder.inexact"
 
 private fun reminderKindOrNull(raw: String?): ReminderKind? =
     ReminderKind.entries.firstOrNull { it.key == raw }
@@ -968,17 +996,27 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // at the deadline, never a nag loop.
         val kind = reminderKindOrNull(intent.getStringExtra(EXTRA_REMINDER_KIND))
             ?: ReminderKind.Due
+        // Arm-time inexactness (#436) travels to [post]: the grant may
+        // have flipped either way since this alarm went out.
+        val armedInexact = intent.getBooleanExtra(EXTRA_REMINDER_INEXACT, false)
+        val armedInexactKnown = intent.hasExtra(EXTRA_REMINDER_INEXACT)
         val pending = goAsync()
         alarmScope.launch {
             try {
-                post(context.applicationContext, taskId, kind)
+                post(context.applicationContext, taskId, kind, armedInexact, armedInexactKnown)
             } finally {
                 pending.finish()
             }
         }
     }
 
-    private suspend fun post(appCtx: Context, taskId: String, kind: ReminderKind) {
+    private suspend fun post(
+        appCtx: Context,
+        taskId: String,
+        kind: ReminderKind,
+        armedInexact: Boolean,
+        armedInexactKnown: Boolean,
+    ) {
         // Off means off at both ends of the fetch: a disable landing
         // before it skips the network entirely, and one landing inside
         // the fetch window still drops silently — no visual, no rearm, no
@@ -1101,17 +1139,24 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         }
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()
-        // Expanded view, at most three lines (#287): the message, the task's
-        // own description, and the bare start-to-due window ("8:30 to 9:00").
+        // Expanded view: the message, the task's own description, the bare
+        // start-to-due window ("8:30 to 9:00"), and the inexact badge when
+        // the alarm went out inexact (#436).
         // Deliberately not a dump of every field — the repeat rule, the
         // parallel flag and the estimate are things to look up in the app,
         // not to read on a lock screen (issue #160).
         val window = task?.let { reminderWindowLine(it) }.orEmpty()
         val fetchFailed = outcome?.isSuccess != true
-        // Inexact badge (#436): read at fire time, not arm time, so a grant
-        // revoked between arming and firing still shows its true mode. Last
-        // line on purpose — the moment first, the caveat after it.
-        val inexactNotice = inexactAlarmNotice(canScheduleExactAlarms(appCtx))
+        // Inexact badge (#436): what was actually armed, not a live
+        // re-read — the grant may have flipped either way between arming
+        // and firing. Pre-flag alarms (armed before the extra existed)
+        // fall back to the live grant, the best signal available.
+        val inexact = if (armedInexactKnown) {
+            armedInexact
+        } else {
+            !canScheduleExactAlarms(appCtx)
+        }
+        val inexactNotice = inexactAlarmNotice(!inexact)
         val big = buildList {
             add(message)
             // The alert still fires (a missed alarm is worse than an ugly
@@ -1196,6 +1241,9 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(tap)
+            // Collapsed badge (#436): the shade row names the inexact mode
+            // without expanding; the expanded view repeats it last (above).
+            .apply { if (inexactNotice != null) setSubText(INEXACT_BADGE_SHORT) }
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.
             .addAction(0, "Completed", done)
