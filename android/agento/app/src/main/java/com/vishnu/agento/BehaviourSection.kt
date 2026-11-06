@@ -193,14 +193,17 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // Engine voices for the picker: a short-lived engine lists, then dies.
     // Matched by name at speak time (Voice objects are engine-specific).
     // Bounded: a broken engine answers null, never hangs the section.
-    // Null means the engine failed (distinct from an engine that genuinely
-    // offers no voices, #434); empty means no voices installed.
-    var voices by remember { mutableStateOf<List<Pair<String, String>>?>(emptyList()) }
+    // Null = unknown until the first listing answers: initializing to
+    // emptyList() would flash "no voices installed" on the first frame
+    // before the engine is ever queried (#434 review). listingVoices starts
+    // true for the same reason — the button reads "Loading…" until the
+    // effect below settles, instead of offering a reload of nothing.
+    var voices by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
     // Unkeyed on purpose: keying on refreshTick would clear the list on
     // every import before the effect below runs, so the settled-skip could
     // never hit and every import would pay the binder spin unconditionally.
     // `listedGen`/`voiceGen` drive freshness instead.
-    var listingVoices by remember { mutableStateOf(false) }
+    var listingVoices by remember { mutableStateOf(true) }
     var voiceGen by remember { mutableIntStateOf(0) }
     var listedGen by remember { mutableStateOf(-1) }
     LaunchedEffect(refreshTick, voiceGen) {

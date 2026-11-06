@@ -18,9 +18,10 @@ see GitHub Releases for older notes.
   longer offers still speaks, but says it fell back to the default voice.
   (DND/silent stays visual-only by design, and a notice for an engine
   failure that later recovers is retracted when the queued speech plays.)
-  Notices clear when that reminder point fires again or with the task's
-  Complete/Skip actions; otherwise swipe them away like the reminder
-  itself. When the device language isn't available in the engine,
+  Notices clear when that reminder point fires again, when the task goes
+  away or reschedules, or on successful Complete/Skip (a failed tap keeps
+  both, like the reminder itself); otherwise swipe them away like the
+  reminder itself. When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is
