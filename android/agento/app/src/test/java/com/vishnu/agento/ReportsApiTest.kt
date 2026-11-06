@@ -7,11 +7,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * ∃-Mail inbox parsing (#365).
+ * ∃-Mail inbox parsing (#365, #433).
  *
- * Lenient by contract — missing keys read blank, id-less rows are dropped
- * by the caller — so these tests pin the shapes the screen renders rather
- * than the network layer.
+ * Row fields are lenient by contract — missing keys read blank, corrupt
+ * id-less rows are skipped — so the row tests pin the shapes the screen
+ * renders. The list envelope is strict: only `reports` parses, and a
+ * retired `_id`-only row throws instead of reading as an empty inbox.
  */
 class ReportsApiTest {
 
@@ -104,5 +105,58 @@ class ReportsApiTest {
         assertEquals("4 Nov 15:30", formatReportTime("2026-11-04T10:00:00Z"))
         assertEquals("", formatReportTime("  "))
         assertEquals("not-a-date", formatReportTime("not-a-date"))
+    }
+
+    @Test
+    fun `parseReportSummaries reads the canonical envelope`() {
+        val out = parseReportSummaries(
+            """{"reports":[{"id":"r1","title":"T"},{"id":"r2"}]}""",
+        )
+        assertEquals(listOf("r1", "r2"), out.map { it.id })
+    }
+
+    @Test
+    fun `parseReportSummaries rejects retired envelopes loudly`() {
+        // #433: one canonical envelope. The old shapes must not read as a
+        // clean empty inbox.
+        for (body in listOf(
+            """{"data":[{"id":"r1","title":"T"}]}""",
+            """{"items":[{"id":"r1","title":"T"}]}""",
+            """{"other":[]}""",
+            """{}""",
+            "not json at all",
+        )) {
+            try {
+                parseReportSummaries(body)
+                throw AssertionError("must throw, not read as no reports")
+            } catch (e: RuntimeException) {
+                assertEquals(REPORTS_SHAPE_ERROR, e.message)
+            }
+        }
+    }
+
+    @Test
+    fun `parseReportSummaries rejects retired _id rows loudly`() {
+        // #433: the canonical row carries `id`; an `_id`-only row is the old
+        // health-api shape, not a corrupt row — it throws instead of reading
+        // as an empty inbox.
+        try {
+            parseReportSummaries("""{"reports":[{"_id":"z","title":"Zed"}]}""")
+            throw AssertionError("must throw, not read as no reports")
+        } catch (e: RuntimeException) {
+            assertEquals(REPORTS_SHAPE_ERROR, e.message)
+        }
+    }
+
+    @Test
+    fun `parseReportSummaries skips corrupt rows`() {
+        val out = parseReportSummaries(
+            """{"reports":[
+                {"id":"ok","title":"Fine"},
+                {"title":"no id"},
+                42
+            ]}""",
+        )
+        assertEquals(listOf("ok"), out.map { it.id })
     }
 }

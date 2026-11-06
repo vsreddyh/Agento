@@ -34,10 +34,15 @@ see GitHub Releases for older notes.
     `lastRun`/`nextRun`) are counted as unparseable rather than rendered as
     a blank-but-healthy row.
   - **Projects and reports:** project lists accept only the `projects`
-    envelope and rows only `id`; reports get a canonical `id` from
-    health-api and read only that (the `_id` read fallback is gone).
-    Toolsets/skills/session lists no longer accept the `data`/`items`
-    envelopes either.
+    envelope and rows only `id`; the report list accepts only `reports`
+    and details only `id` (reports get a canonical `id` from health-api —
+    the `_id` read fallback is gone). A retired `_id`-only row throws
+    with "Update the server" instead of rendering as an empty board or
+    inbox; corrupt rows are skipped and counted. Toolsets/skills/session
+    lists accept only their canonical shape (bare array or the named
+    wrapper, no `data`/`items`) and likewise fail with "Update the
+    server". Session totals require the wrapped `{"session":{...}}`
+    shape.
   - **Tools inventory:** MCP servers come only from the gateway's explicit
     toolset rows; the derived `mcp__<server>__*` fallback is removed.
 

@@ -273,12 +273,8 @@ private fun ReportDetailView(
         error = ""
         ReportsApi(context).get(reportId).fold(
             onSuccess = { d ->
-                if (d == null) {
-                    error = "Report not found — it may have been deleted."
-                } else {
-                    detail = d
-                    markReadIfNeeded(d)
-                }
+                detail = d
+                markReadIfNeeded(d)
             },
             onFailure = { e -> error = e.message ?: e.javaClass.simpleName },
         )

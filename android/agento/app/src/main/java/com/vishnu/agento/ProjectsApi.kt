@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -45,9 +46,68 @@ fun projectTimeMs(iso: String): Long {
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
  * validation the agent uses over MCP. Row fields are lenient (missing reads
- * blank, rows without an id or name are skipped), but the list envelope is
- * the canonical `projects` array only (#433).
+ * blank, corrupt rows without any id are skipped and counted), but the list
+ * envelope is the canonical `projects` array only and a row carrying the
+ * retired `_id` without a canonical `id` is an old-server shape that throws
+ * [PROJECTS_SHAPE_ERROR] instead of rendering as an empty board (#433).
  */
+/** One project row: null when the row carries no usable id or name.
+ * Canonical `id` only (#433): the health-api maps Mongo `_id` to `id`
+ * (projects.toDoc), so the old `_id` fallback only ever bridged a shape
+ * this app does not speak. */
+internal fun parseProject(o: JSONObject): ServerProject? {
+    val id = o.optString("id", "").trim()
+    if (id.isEmpty()) return null
+    val name = o.optString("name", "").trim()
+    if (name.isEmpty()) return null
+    return ServerProject(
+        id = id,
+        name = name,
+        status = o.optString("status", "Todo").trim().ifEmpty { "Todo" },
+        note = o.optString("note", "").trim(),
+        createdAt = o.optString("createdAt", "").trim(),
+        updatedAt = o.optString("updatedAt", "").trim(),
+    )
+}
+
+/** Parses one project-list body (#433): the canonical `projects`
+ * envelope only. A missing envelope or an unreadable body throws
+ * [PROJECTS_SHAPE_ERROR], never a clean empty that reads as "no
+ * projects". A row that carries the retired `_id` without a canonical
+ * `id` is an old-server shape and throws; rows missing every id or name
+ * are corrupt, not version skew, so they are skipped and counted in
+ * logcat. Pure for testability. */
+internal fun parseProjectList(body: String): List<ServerProject> {
+    val out = mutableListOf<ServerProject>()
+    val root = runCatching { JSONObject(body) }.getOrNull()
+        ?: throw RuntimeException(PROJECTS_SHAPE_ERROR)
+    // Canonical `projects` envelope only (#433): the old
+    // data/items fallbacks and the silent empty on an unknown
+    // shape are gone, so a shape mismatch is a visible error.
+    val arr = root.optJSONArray("projects")
+        ?: throw RuntimeException(PROJECTS_SHAPE_ERROR)
+    var dropped = 0
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i)
+        if (o == null) { dropped++; continue }
+        // Retired `_id`-only row: the old health-api shape — fail loudly
+        // so version skew never reads as an empty board.
+        if (o.optString("id", "").trim().isEmpty() && hasValue(o, "_id")) {
+            throw RuntimeException(PROJECTS_SHAPE_ERROR)
+        }
+        val p = parseProject(o)
+        if (p != null) out.add(p) else dropped++
+    }
+    if (dropped > 0) {
+        // Same diagnostics deal as the task page: background readers
+        // take the list and never see the count (see TasksApi).
+        runCatching {
+            Log.w("ProjectsApi", "dropped $dropped unparseable project row(s) in list response")
+        }
+    }
+    return out
+}
+
 class ProjectsApi(context: Context) {
 
     companion object {
@@ -72,24 +132,6 @@ class ProjectsApi(context: Context) {
 
     private fun password(): String = ServerEndpoint.password(prefs)
 
-    private fun parseProject(o: JSONObject): ServerProject? {
-        // Canonical `id` only (#433): the health-api maps Mongo `_id` to `id`
-        // (projects.toDoc), so the old `_id` fallback only ever bridged a
-        // shape this app does not speak.
-        val id = o.optString("id", "").trim()
-        if (id.isEmpty()) return null
-        val name = o.optString("name", "").trim()
-        if (name.isEmpty()) return null
-        return ServerProject(
-            id = id,
-            name = name,
-            status = o.optString("status", "Todo").trim().ifEmpty { "Todo" },
-            note = o.optString("note", "").trim(),
-            createdAt = o.optString("createdAt", "").trim(),
-            updatedAt = o.optString("updatedAt", "").trim(),
-        )
-    }
-
     /** Lists projects by status (`Todo|Ongoing|Testing|Blocked|Paused|Done|all`, default
      * all); unknown statuses fail fast. `search` matches name/note. `limit`
      * caps rows (server default 200, max 500). */
@@ -103,20 +145,7 @@ class ProjectsApi(context: Context) {
             val q = "?status=" + URLEncoder.encode(s, Charsets.UTF_8.name()).replace("+", "%20") +
                 (if (search.isNotBlank()) "&search=" + URLEncoder.encode(search.trim(), Charsets.UTF_8.name()).replace("+", "%20") else "") +
                 "&limit=$limit"
-            call("GET", "/api/projects$q").mapCatching { body ->
-                val out = mutableListOf<ServerProject>()
-                val root = JSONObject(body)
-                // Canonical `projects` envelope only (#433): the old
-                // data/items fallbacks and the silent empty on an unknown
-                // shape are gone, so a shape mismatch is a visible error.
-                val arr = root.optJSONArray("projects")
-                    ?: throw RuntimeException(PROJECTS_SHAPE_ERROR)
-                for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    parseProject(o)?.let { out.add(it) }
-                }
-                out
-            }
+            call("GET", "/api/projects$q").mapCatching { body -> parseProjectList(body) }
         }
 
     /** Creates a project; name required, blank status defaults to Todo. */

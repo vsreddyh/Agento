@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -10,6 +11,16 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+/** One message for a server that does not speak the canonical report list
+ * (#433): names the missing shape and the fix, never a clean empty inbox. */
+internal const val REPORTS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no reports list. Update the server."
+
+/** One message for a server that does not speak the canonical report detail
+ * (#433): never a null success that reads as "deleted". */
+internal const val REPORT_DETAIL_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no report. Update the server."
 
 /** One ∃-Mail report summary (list rows carry no body — `get` fetches it). */
 data class ReportSummary(
@@ -97,6 +108,40 @@ internal fun parseReportDetail(o: JSONObject): ReportDetail? {
     )
 }
 
+/** Parses one report-list body (#433): the canonical `reports` envelope only.
+ * A missing envelope or an unreadable body throws [REPORTS_SHAPE_ERROR],
+ * never a clean empty that reads as "no reports". A row that carries the
+ * retired `_id` without a canonical `id` is an old-server shape and throws;
+ * rows missing every id are corrupt, not version skew, so they are skipped
+ * and counted in logcat. */
+internal fun parseReportSummaries(body: String): List<ReportSummary> {
+    val out = mutableListOf<ReportSummary>()
+    val root = runCatching { JSONObject(body) }.getOrNull()
+        ?: throw RuntimeException(REPORTS_SHAPE_ERROR)
+    val arr = root.optJSONArray("reports")
+        ?: throw RuntimeException(REPORTS_SHAPE_ERROR)
+    var dropped = 0
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i)
+        if (o == null) { dropped++; continue }
+        // Retired `_id`-only row: the old health-api shape, not a corrupt
+        // row — fail loudly so version skew never reads as an empty inbox.
+        if (o.optString("id", "").trim().isEmpty() && hasValue(o, "_id")) {
+            throw RuntimeException(REPORTS_SHAPE_ERROR)
+        }
+        val s = parseReportSummary(o)
+        if (s != null) out.add(s) else dropped++
+    }
+    if (dropped > 0) {
+        // Same diagnostics deal as the task page: background readers take
+        // the list and never see the count (see TasksApi).
+        runCatching {
+            Log.w("ReportsApi", "dropped $dropped unparseable report row(s) in list response")
+        }
+    }
+    return out
+}
+
 /**
  * Formats a report `createdAt` for display. The server emits BSON DateTime as
  * millis (same convention as the other stores), so millis parse first; ISO
@@ -117,7 +162,9 @@ internal fun formatReportTime(raw: String): String {
  * ∃-Mail client over health-api (`/api/reports`, same bearer auth as the
  * other health-api clients). Unprefixed: unlike the gateway APIs, health-api
  * routes live outside `/p/profile`, so a profile prefix here would route to
- * pi-gateway and 404. Parsing is lenient across server versions; missing fields show as blank rather than failing the whole list.
+ * pi-gateway and 404. Row fields are lenient (missing reads blank), but the
+ * list envelope is the canonical `reports` array only and a detail body
+ * without a canonical `id` is a failure, never a null success (#433).
  * No compose/reply/send paths exist — the inbox is read-only.
  */
 class ReportsApi(context: Context) {
@@ -170,28 +217,22 @@ class ReportsApi(context: Context) {
         }
     }
 
-    private fun parseSummaries(body: String): List<ReportSummary> {
-        val out = mutableListOf<ReportSummary>()
-        val root = runCatching { JSONObject(body) }.getOrNull() ?: return out
-        val arr = root.optJSONArray("reports") ?: return out
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            parseReportSummary(o)?.let { out.add(it) }
-        }
-        return out
-    }
-
     /** Lists reports, newest first. Summaries carry no bodies. */
     suspend fun list(): Result<List<ReportSummary>> =
         withContext(Dispatchers.IO) {
-            call("GET", "/api/reports?sort=newest").map { parseSummaries(it) }
+            call("GET", "/api/reports?sort=newest").mapCatching { parseReportSummaries(it) }
         }
 
-    /** Gets one report with server-rendered math segments. */
-    suspend fun get(id: String): Result<ReportDetail?> =
+    /** Gets one report with server-rendered math segments. An unreadable
+     * body is a failure ([REPORT_DETAIL_SHAPE_ERROR]), never a null success
+     * that the screen would read as "deleted" (#433). */
+    suspend fun get(id: String): Result<ReportDetail> =
         withContext(Dispatchers.IO) {
-            call("GET", "/api/reports/${encode(id.trim())}").map { body ->
-                runCatching { parseReportDetail(JSONObject(body)) }.getOrNull()
+            call("GET", "/api/reports/${encode(id.trim())}").mapCatching { body ->
+                val root = runCatching { JSONObject(body) }.getOrNull()
+                    ?: throw RuntimeException(REPORT_DETAIL_SHAPE_ERROR)
+                parseReportDetail(root)
+                    ?: throw RuntimeException(REPORT_DETAIL_SHAPE_ERROR)
             }
         }
 

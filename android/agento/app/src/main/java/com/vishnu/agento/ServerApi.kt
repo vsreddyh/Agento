@@ -11,6 +11,26 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.Locale
 
+/** One message for a server that does not speak the canonical toolsets list
+ * (#433): names the missing shape and the fix, never a clean empty page. */
+internal const val TOOLSETS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no toolsets list. Update the server."
+
+/** One message for a server that does not speak the canonical skills list
+ * (#433): names the missing shape and the fix, never a clean empty page. */
+internal const val SKILLS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no skills list. Update the server."
+
+/** One message for a server that does not speak the canonical session
+ * transcript shape (#433): names the missing shape and the fix. */
+internal const val SESSION_MESSAGES_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no session messages. Update the server."
+
+/** One message for a server that does not speak the canonical session
+ * totals shape (#433): names the missing shape and the fix. */
+internal const val SESSION_TOTALS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no session totals. Update the server."
+
 /** One skill from `GET {profile}/v1/skills` (read-only mirror of the dashboard). */
 data class SkillInfo(
     val name: String,
@@ -37,9 +57,11 @@ data class ToolsetInfo(
 /**
  * Read-only view of the gateway's skills + toolsets (dashboard Skills/MCP
  * pages, slimmed for mobile). Same bearer auth as chat; per-profile paths
- * so each assistant shows its own inventory. Parsing is lenient — shapes
- * differ across gateway versions, so unknown fields are ignored; valid
- * empty results are success and only transport/parse failures are errors.
+ * so each assistant shows its own inventory. Row fields are lenient
+ * (unknown fields ignored), but each list has one canonical shape — a bare
+ * top-level array or its named wrapper (`toolsets`, `skills`, `messages`) —
+ * and anything else fails with the fix in the message (#433), never a clean
+ * empty. Valid empty results are success and only transport/parse failures are errors.
  */
 class ServerApi(context: Context) {
 
@@ -78,7 +100,8 @@ class ServerApi(context: Context) {
     }
 
     /** Lists skills for one profile path (e.g. `/p/chat`). The server
-     * returns a bare JSON array; object-wrapped shapes fall back gracefully.
+     * answers `{skills:[...]}` (a bare top-level array reads too); any other
+     * shape throws [SKILLS_SHAPE_ERROR] (#433).
      * A valid-but-empty response is success (the UI shows "Nothing listed");
      * only transport/parse failures are errors. */
     suspend fun listSkills(path: String): Result<List<SkillInfo>> =
@@ -88,14 +111,15 @@ class ServerApi(context: Context) {
             }
         }
 
-    /** Lists toolsets for one profile path. The server returns a bare JSON
-     * array; object-wrapped shapes fall back. */
+    /** Lists toolsets for one profile path. The server answers a bare JSON
+     * array (the `{toolsets:[...]}` wrapper reads too); any other shape
+     * throws [TOOLSETS_SHAPE_ERROR] (#433). */
     suspend fun listToolsets(path: String): Result<List<ToolsetInfo>> =
         withContext(Dispatchers.IO) {
             get(path, "v1/toolsets").map { body ->
                 val out = mutableListOf<ToolsetInfo>()
                 val arr = rootArray(body, "toolsets")
-                    ?: throw RuntimeException("Unexpected response shape")
+                    ?: throw RuntimeException(TOOLSETS_SHAPE_ERROR)
                 for (i in 0 until arr.length()) {
                     val item = arr.opt(i)
                     if (item is String) {
@@ -154,7 +178,7 @@ class ServerApi(context: Context) {
                 val roles = mutableListOf<String>()
                 val indexed = mutableListOf<IndexedCall>()
                 val arr = rootArray(body, "messages")
-                    ?: throw RuntimeException("Unexpected response shape")
+                    ?: throw RuntimeException(SESSION_MESSAGES_SHAPE_ERROR)
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     val role = o.optString("role", "")
@@ -203,12 +227,11 @@ class ServerApi(context: Context) {
         }
 
     /** Server-side totals for one conversation (#121 reconciliation).
-     * Lenient: the wrapped `{"session":{...}}` shape is the Hermes one, verified
-     * live at the time, with
-     * bare-object fallback; alternate token key names accepted; unknown or
-     * missing sessions are success-with-null (pre-#120 thread ids, deleted
-     * sessions) so the UI falls back to device sums. Only transport/parse
-     * failures are errors. */
+     * The server answers `{"session":{...}}`; any other shape throws
+     * [SESSION_TOTALS_SHAPE_ERROR] (#433). Unknown sessions surface as an
+     * explicit `{"error":...}` object and read as success-with-null
+     * (pre-#120 thread ids, deleted sessions) so the UI falls back to
+     * device sums. Only transport/parse failures are errors. */
     suspend fun fetchSessionTotals(path: String, sessionId: String): Result<SessionTotals?> =
         withContext(Dispatchers.IO) {
             if (sessionId.isBlank()) {
@@ -216,26 +239,28 @@ class ServerApi(context: Context) {
             }
             get(path, "api/sessions/${urlEncode(sessionId)}").map { body ->
                 val root = runCatching { JSONObject(body) }.getOrNull()
-                    ?: throw RuntimeException("Unexpected response shape")
+                    ?: throw RuntimeException(SESSION_TOTALS_SHAPE_ERROR)
                 // 404-style unknown sessions surface as failures upstream;
                 // an explicit error object reads as absent, not fatal.
                 if (root.optString("error", "").trim().isNotEmpty()) return@map null
-                val s = root.optJSONObject("session") ?: root
+                val s = root.optJSONObject("session")
+                    ?: throw RuntimeException(SESSION_TOTALS_SHAPE_ERROR)
                 parseSessionTotals(s)
             }
         }
 }
 
 /**
- * Pure parse of a skills payload (#372): the same bare-array / wrapped
- * shapes [ServerApi.listSkills] accepts. JVM-pinned — the wire gains
+ * Pure parse of a skills payload (#372): the same bare-array / `skills`
+ * wrapper shapes [ServerApi.listSkills] accepts (#433 throws
+ * [SKILLS_SHAPE_ERROR] on anything else). JVM-pinned — the wire gains
  * fields (notably `scope`/`status` on taught rows), and a parse that
  * silently drops them would let the picker offer skills Pi never loaded.
  */
 fun parseServerSkillList(body: String): List<SkillInfo> {
     val out = mutableListOf<SkillInfo>()
     val arr = rootArray(body, "skills")
-        ?: throw RuntimeException("Unexpected response shape")
+        ?: throw RuntimeException(SKILLS_SHAPE_ERROR)
     for (i in 0 until arr.length()) {
         val item = arr.opt(i)
         if (item is String) {
@@ -317,7 +342,7 @@ internal fun rootArray(body: String, vararg keys: String): JSONArray? {
  */
 internal fun parseLastAssistantText(body: String): String? {
     val arr = rootArray(body, "messages")
-        ?: throw RuntimeException("Unexpected response shape")
+        ?: throw RuntimeException(SESSION_MESSAGES_SHAPE_ERROR)
     var text: String? = null
     for (i in 0 until arr.length()) {
         val o = arr.optJSONObject(i) ?: continue
