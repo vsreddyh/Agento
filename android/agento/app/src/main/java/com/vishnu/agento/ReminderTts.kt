@@ -232,7 +232,7 @@ object ReminderTts {
         }
         runCatching {
             val filter = IntentFilter().apply {
-                addAction(AudioManager.ACTION_RINGER_MODE_CHANGED)
+                addAction(AudioManager.RINGER_MODE_CHANGED_ACTION)
                 addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
             }
             // API 33+ requires an explicit export flag on dynamic
