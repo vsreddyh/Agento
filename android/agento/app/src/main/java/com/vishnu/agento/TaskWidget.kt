@@ -298,9 +298,10 @@ class TaskWidget : AppWidgetProvider() {
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         // Drop this placement's per-widget prefs so removed widgets don't
         // leak keys forever. Every key the widget writes is removed below —
-        // a new display key needs THREE matching edits, not a list trusted
+        // a new display key needs FOUR matching edits, not a list trusted
         // to stay current (#388): the write in TaskWidgetConfigActivity,
-        // the read in render(), and this removal loop.
+        // the read in render(), this removal loop, and the diagnostics
+        // prune below it.
         prefs(context).edit {
             for (id in appWidgetIds) {
                 remove("task_widget_view_$id")
@@ -311,6 +312,13 @@ class TaskWidget : AppWidgetProvider() {
                 // Retired diagnostic ladder: drop its key on delete too.
                 remove("task_widget_style_$id")
             }
+        }
+        // Diagnostics must not outlive the placement (#480 review): the
+        // clean-read clear never fires for a deleted id, so prune its
+        // entries (and its log-dedupe entries, so a reused id re-logs a
+        // real corruption) here.
+        for (id in appWidgetIds) {
+            pruneCoercionsFor(id)
         }
     }
 
@@ -660,6 +668,26 @@ class TaskWidget : AppWidgetProvider() {
                 coercionSeen.add("$key|$short")
             }
             if (fresh) runCatching { Log.w("TaskWidget", "coerced $key $short") }
+        }
+
+        /**
+         * Drops every diagnostics + log-dedupe entry for one placement's
+         * display keys (#480 review): deletion is the ultimate fix, and
+         * the clean-read clear never fires for a gone id — without this
+         * the About screen would name resets for widgets that no longer
+         * exist. Clearing the seen-set too, so a later placement reusing
+         * the id re-logs a real corruption.
+         */
+        internal fun pruneCoercionsFor(appWidgetId: Int) {
+            synchronized(coercionLock) {
+                val keys = setOf(
+                    "task_widget_view_$appWidgetId",
+                    "task_widget_density_$appWidgetId",
+                    "task_widget_sort_$appWidgetId",
+                )
+                lastCoercions = lastCoercions.filterKeys { it !in keys }
+                coercionSeen.removeIf { seen -> keys.any { seen.startsWith("$it|") } }
+            }
         }
 
         /** Whether this placement's rows show the due line. */

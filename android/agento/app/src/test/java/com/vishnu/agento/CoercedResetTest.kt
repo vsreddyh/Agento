@@ -28,7 +28,21 @@ class OptTaskIntTest {
     fun `numbers read as their int value with no coercion`() {
         assertEquals(CoercedInt(5, null), optTaskInt(obj(5), "k"))
         assertEquals(CoercedInt(5, null), optTaskInt(obj(5L), "k"))
-        assertEquals(CoercedInt(5, null), optTaskInt(obj(5.9), "k"))
+        assertEquals(CoercedInt(5, null), optTaskInt(obj(5.0), "k"))
+    }
+
+    @Test
+    fun `fractions truncate lossily, so they reset and report`() {
+        // Same silent rewrite as NaN/overflow: 5.9 is not exactly
+        // representable as an int without loss (#480 review).
+        val r = optTaskInt(obj(5.9), "k")
+        assertEquals(0, r.value)
+        assertTrue(r.raw!!.isNotEmpty())
+        val rs = optTaskInt(obj("5.9"), "k")
+        assertEquals(0, rs.value)
+        assertEquals("\"5.9\"", rs.raw)
+        // Integral doubles still read clean.
+        assertEquals(CoercedInt(1, null), optTaskInt(obj("1.0"), "k"))
     }
 
     @Test
@@ -334,18 +348,40 @@ class WidgetCoercionTest {
             }
         }
     }
+
+    @Test
+    fun `a deleted placement prunes diagnostics and log dedupe`() {
+        // #480 review: deletion is the ultimate fix — the About screen
+        // must not name resets for widgets that no longer exist, and a
+        // later placement reusing the id must re-log a real corruption.
+        val key = "task_widget_sort_9902"
+        val seen = "$key|\"Priority\"->Server"
+        try {
+            TaskWidget.noteCoercion(key, "\"Priority\"->Server")
+            assertEquals("\"Priority\"->Server", TaskWidget.lastCoercions[key])
+            TaskWidget.pruneCoercionsFor(9902)
+            assertTrue(key !in TaskWidget.lastCoercions)
+            synchronized(TaskWidget.coercionLock) {
+                assertTrue(seen !in TaskWidget.coercionSeen)
+            }
+        } finally {
+            TaskWidget.pruneCoercionsFor(9902)
+        }
+    }
 }
 
 class TaskCoercedMessageTest {
 
     @Test
-    fun `singular and plural read as sentences`() {
+    fun `singular and plural count rows, not values`() {
+        // One row with three bad fields counts once; the diagnostics
+        // detail names each field as a sample (#480 review).
         assertEquals(
-            "1 task value was reset to its default — see Settings → About diagnostics for what changed.",
+            "1 task showed reset values — see Settings → About diagnostics for what changed.",
             taskCoercedMessage(1),
         )
         assertEquals(
-            "3 task values were reset to their defaults — see Settings → About diagnostics for what changed.",
+            "3 tasks showed reset values — see Settings → About diagnostics for what changed.",
             taskCoercedMessage(3),
         )
     }

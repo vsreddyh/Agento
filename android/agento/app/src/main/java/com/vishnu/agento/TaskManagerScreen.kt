@@ -2780,14 +2780,17 @@ internal fun taskDropMessage(dropped: Int): String =
     }
 
 /** Shared copy for reset task values (#437): rows that parsed only by
- * resetting a mistyped value to its default. The count sits in the list;
- * the key, raw value and reset value ride the log line, which surfaces in
- * Settings → About diagnostics. */
+ * resetting a mistyped value to its default. Counts ROWS with resets,
+ * not reset values: one row with three bad fields counts once, while the
+ * diagnostics detail names each field — the capped note slice reads as a
+ * sample of the rows, not the total (#480 review). The count sits in the
+ * list; the key, raw value and reset value ride the log line, which
+ * surfaces in Settings → About diagnostics. */
 internal fun taskCoercedMessage(coerced: Int): String =
     if (coerced == 1) {
-        "1 task value was reset to its default — see Settings → About diagnostics for what changed."
+        "1 task showed reset values — see Settings → About diagnostics for what changed."
     } else {
-        "$coerced task values were reset to their defaults — see Settings → About diagnostics for what changed."
+        "$coerced tasks showed reset values — see Settings → About diagnostics for what changed."
     }
 
 /**

@@ -73,7 +73,8 @@ data class ServerTask(
  * numeric field to its default (#437), and which resets those were
  * (#480 review): the notes ride the page (not a global slot shared with
  * other screens' fetches), capped like the log line so both channels
- * name the same rows. A nonzero [dropped] means the server spoke rows this app
+ * name the same rows — a per-field sample of the counted rows, not a
+ * second total. A nonzero [dropped] means the server spoke rows this app
  * cannot read — the list surfaces the count instead of shrinking
  * silently. A nonzero [coerced] means some rows ARE shown but with a
  * reset value (e.g. `estimated_minutes: "abc"` read as 0) — the list
@@ -464,10 +465,14 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
     val v = o.opt(key)
     // Range-checked through Double: a bare toInt() wraps out-of-range
     // Longs negative and saturates huge Doubles, both silently (#480
-    // review). Anything unrepresentable resets AND reports.
+    // review). Anything unrepresentable resets AND reports. Integral-only
+    // past that: a surviving fraction would truncate lossily, which is
+    // the same silent rewrite unrepresentability is (#480 review).
     if (v is Number) {
         val d = v.toDouble()
-        if (!d.isFinite() || d < Int.MIN_VALUE || d > Int.MAX_VALUE) {
+        if (!d.isFinite() || d < Int.MIN_VALUE || d > Int.MAX_VALUE ||
+            d.toInt().toDouble() != d
+        ) {
             return CoercedInt(default, v.toString().take(40))
         }
         return CoercedInt(v.toInt(), null)
@@ -475,10 +480,11 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
     if (v is String) {
         val t = v.trim()
         t.toIntOrNull()?.let { return CoercedInt(it, null) }
-        // Finite only: "NaN"/"Infinity" parse as Double but are not
-        // numbers the task can hold (#480 review).
+        // Finite, in-range AND integral: "NaN"/"Infinity" parse as Double
+        // but are not numbers the task can hold, and "5.9" would truncate
+        // (#480 review).
         t.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { d ->
-            if (d < Int.MIN_VALUE || d > Int.MAX_VALUE) {
+            if (d < Int.MIN_VALUE || d > Int.MAX_VALUE || d.toInt().toDouble() != d) {
                 return CoercedInt(default, "\"$t\"".take(44))
             }
             return CoercedInt(d.toInt(), null)
