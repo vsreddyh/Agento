@@ -68,6 +68,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
             ConnectorsApi(context).list(path()).fold(
                 onSuccess = { list ->
                     connectors = list
+                    // Cleared on success, not just at start (#484 review):
+                    // a failed refresh followed by a good one (manual retry
+                    // landing just as the poll round succeeds, or vice
+                    // versa) must not leave its banner over fresh rows.
+                    error = ""
                     // A polled row that flipped resolves the wait (#440):
                     // the pending id is connected (or failed visibly via
                     // an expired row carrying the reconnect hint).
@@ -106,6 +111,10 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 onSuccess = { list ->
                     connectors = list
                     pollError = ""
+                    // Same stale-banner rule as refresh() above: a good
+                    // poll round heals a failed manual refresh (#484
+                    // review).
+                    error = ""
                     if (list.any { it.id == pending && (it.isConnected() || it.isExpired()) }) {
                         pendingConnect = null
                         if (list.any { it.id == pending && it.isConnected() }) {

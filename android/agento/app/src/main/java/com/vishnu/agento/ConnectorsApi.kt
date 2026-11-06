@@ -119,7 +119,9 @@ class ConnectorsApi(context: Context) {
     private fun call(method: String, url: String, body: JSONObject? = null): Result<CallResult> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            // Canonical unconfigured text, like every other client (#484
+            // review): names the fix, not just the state.
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         return runCatching {
             val builder = Request.Builder()
