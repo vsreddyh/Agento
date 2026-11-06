@@ -24,6 +24,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -62,6 +63,12 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // across rows and actions; reset in finally (no suspension inside,
     // so cancellation still re-arms).
     val mutationArmed = remember { AtomicBoolean(true) }
+    // Freshness generation for list applies (#484 review): refresh and
+    // poll rounds overlap (poll never takes the single-writer CAS), so a
+    // failure landing after a fresher success must not banner over proven
+    // rows. Every successful apply bumps; a failure banners only when
+    // nothing fresher landed during its fetch.
+    val dataGen = remember { AtomicLong(0L) }
 
     // Single-writer/read gates, computed once per composition (#484
     // review): concurrent refresh/disconnect writers race (last writer
@@ -89,6 +96,9 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
             try {
                 loading = true
                 error = ""
+                // Freshness anchor for the failure branch below: anything
+                // succeeding after this point proves fresher rows.
+                val gen = dataGen.get()
                 ConnectorsApi(context).list(path()).fold(
                     onSuccess = { list ->
                         connectors = list
@@ -97,6 +107,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                         // landing just as the poll round succeeds, or vice
                         // versa) must not leave its banner over fresh rows.
                         error = ""
+                        dataGen.incrementAndGet()
                         // A polled row that flipped resolves the wait (#440):
                         // the pending id is connected (or failed visibly via
                         // an expired row carrying the reconnect hint).
@@ -111,7 +122,12 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                         }
                     },
                     onFailure = { e ->
-                        error = e.message ?: e.javaClass.simpleName
+                        // Only when nothing fresher landed meanwhile: a poll
+                        // success after this fetch started already proved
+                        // the rows (#484 review).
+                        if (dataGen.get() == gen) {
+                            error = e.message ?: e.javaClass.simpleName
+                        }
                     },
                 )
                 loading = false
@@ -152,8 +168,9 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     lastError = ""
                     // Same stale-banner rule as refresh() above: a good
                     // poll round heals a failed manual refresh (#484
-                    // review).
+                    // review). Bumps freshness like any successful apply.
                     error = ""
+                    dataGen.incrementAndGet()
                     if (list.any { it.id == pending && (it.isConnected() || it.isExpired()) }) {
                         pendingConnect = null
                         if (list.any { it.id == pending && it.isConnected() }) {
@@ -300,18 +317,29 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                         // heal nothing. Same error slot as
                                         // refresh, so success and failure
                                         // cannot disagree about staleness.
+                                        // Freshness-guarded like refresh: a
+                                        // poll success landing mid-fetch
+                                        // already proved the rows.
+                                        val regen = dataGen.get()
                                         ConnectorsApi(context).list(path()).fold(
                                             onSuccess = { list ->
                                                 connectors = list
                                                 error = ""
+                                                dataGen.incrementAndGet()
+                                                toasts.toast(
+                                                    "Disconnected — future access stopped.",
+                                                    kind = ToastKind.Success,
+                                                )
                                             },
                                             onFailure = { e ->
-                                                error = e.message ?: e.javaClass.simpleName
+                                                if (dataGen.get() == regen) {
+                                                    error = e.message ?: e.javaClass.simpleName
+                                                }
+                                                toasts.toast(
+                                                    "Disconnected — but the list couldn't refresh. Tap Check again.",
+                                                    kind = ToastKind.Error,
+                                                )
                                             },
-                                        )
-                                        toasts.toast(
-                                            "Disconnected — future access stopped.",
-                                            kind = ToastKind.Success,
                                         )
                                     },
                                     onFailure = { e ->
