@@ -59,6 +59,20 @@ internal fun parseConnector(o: JSONObject): ConnectorInfo? {
 internal const val CONNECTORS_SHAPE_ERROR =
     "Unexpected response shape — the server sent no connectors list. Update the server."
 
+/** The disconnect answer carries no usable row (#484 review): like the
+ * consent URL, the server always answers the row it acted on — a missing
+ * or id-less `connector` is a wrong shape (proxy HTML, non-connector
+ * JSON), never a silent success. Loud, like [CONNECTORS_SHAPE_ERROR]. */
+internal const val CONNECT_ROW_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no connector row. Update the server."
+
+/** Reads the acted-on row out of a disconnect response. Pure and
+ * JVM-pinned. */
+internal fun parseDisconnectRow(body: String): ConnectorInfo {
+    val row = runCatching { JSONObject(body).optJSONObject("connector") }.getOrNull()
+    return row?.let { parseConnector(it) } ?: throw RuntimeException(CONNECT_ROW_SHAPE_ERROR)
+}
+
 /** The consent URL is missing or the body is not the connector shape
  * (#484 review): the server fail-closes a missing grant with 502, so a
  * 200 without a non-blank `auth_url` is a wrong shape (proxy HTML,
@@ -177,15 +191,14 @@ class ConnectorsApi(context: Context) {
         }
     }
 
-    /** Stops future access (tokens cleared server-side). History stays. */
-    suspend fun disconnect(path: String, id: String): Result<ConnectorInfo?> =
+    /** Stops future access (tokens cleared server-side). History stays. The
+     * answer carries the acted-on row: a missing one is a wrong shape,
+     * never a silent success (see [parseDisconnectRow]). */
+    suspend fun disconnect(path: String, id: String): Result<ConnectorInfo> =
         withContext(Dispatchers.IO) {
             call("POST", "$path/api/connectors/${encode(id)}/disconnect").mapCatching {
                 if (it.code != 200) throw RuntimeException("HTTP ${it.code}: ${it.body.take(200)}")
-                val row = runCatching {
-                    JSONObject(it.body).optJSONObject("connector")
-                }.getOrNull()
-                row?.let { parseConnector(it) }
+                parseDisconnectRow(it.body)
             }
         }
 }

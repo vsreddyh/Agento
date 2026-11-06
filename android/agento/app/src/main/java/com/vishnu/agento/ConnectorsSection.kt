@@ -211,7 +211,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
             (SystemClock.uptimeMillis() - pendingSince).coerceAtLeast(0L)
         }
         val rounds = ((POLL_BUDGET_MS - elapsed) / POLL_ROUND_MS).toInt().coerceIn(0, POLL_ROUNDS)
-        repeat(rounds) {
+        // `break`/`continue` are loop-only in Kotlin (repeat is a
+        // function, not a loop), so the budget loop is an explicit
+        // counter — the epilogue below must still run on exhaustion.
+        var round = 0
+        while (round < rounds) {
             delay(POLL_ROUND_MS)
             if (pendingConnect != pending) return@LaunchedEffect
             // Wall-clock budget, re-checked every round (#484 review):
@@ -267,6 +271,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     pollLastError = e.message ?: e.javaClass.simpleName
                 },
             )
+            round++
         }
         // Wait ran out with the row still unchanged: stop polling, keep
         // the manual check. A wait that never reached the server is a

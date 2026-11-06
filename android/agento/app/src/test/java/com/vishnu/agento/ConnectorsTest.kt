@@ -117,6 +117,38 @@ class ConnectAuthUrlTest {
 }
 
 /**
+ * Disconnect-row parsing (#484 review): the answer always carries the
+ * acted-on row — a missing or id-less `connector` is a wrong shape,
+ * never a silent success.
+ */
+class DisconnectRowTest {
+
+    @Test
+    fun `a row parses`() {
+        val row = parseDisconnectRow("""{"connector":{"id":"gmail","status":"disconnected"}}""")
+        assertEquals("gmail", row.id)
+        assertEquals("disconnected", row.status)
+    }
+
+    @Test
+    fun `missing unparseable or id-less rows fail loudly`() {
+        for (body in listOf(
+            """{"other":1}""",
+            "not json at all",
+            """{"connector":null}""",
+            """{"connector":{"name":"x"}}""",
+        )) {
+            try {
+                parseDisconnectRow(body)
+                throw AssertionError("must throw for $body")
+            } catch (e: RuntimeException) {
+                assertEquals(CONNECT_ROW_SHAPE_ERROR, e.message)
+            }
+        }
+    }
+}
+
+/**
  * Unconfigured-server detection (#484 review): matched on the status
  * code this client built, never on a "501" substring that could sit
  * anywhere in a truncated body.
