@@ -8,6 +8,25 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.1.0]
+- **Reminder speech failures are loud now (#434).** Every spoken alert the
+  engine drops says so: a toast plus a companion "Spoken alert couldn't
+  play" notice next to the reminder (auto-cancel, like the reminder
+  itself), instead of Log-only silence that was indistinguishable from
+  success. That covers a dead engine, a rejected or interrupted utterance,
+  a timeout, and a queue overflow — and a stored voice the engine no
+  longer offers still speaks, but says it fell back to the default voice.
+  (DND/silent stays visual-only by design, and a notice for an engine
+  failure that later recovers is retracted when the queued speech plays.)
+  Notices clear when that reminder point fires again, when the task goes
+  away or reschedules, or on successful Complete/Skip (a failed tap keeps
+  both, like the reminder itself); otherwise swipe them away like the
+  reminder itself. When the device language isn't available in the engine,
+  the alert is skipped with an error rather than spoken in US English. The
+  voice picker tells a dead engine ("isn't answering — Reload retries it")
+  apart from one that genuinely offers no voices. Chat read-aloud is
+  unchanged (it leaves with Chat to T3).
+
 ## [6.0.0]
 - **Every legacy fallback is gone (#433).** One canonical key per setting,
   one endpoint per action, one envelope shape — and anything still on a

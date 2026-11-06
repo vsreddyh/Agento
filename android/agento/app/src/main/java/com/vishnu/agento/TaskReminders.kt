@@ -542,6 +542,9 @@ object TaskReminders {
         for (kind in ReminderKind.entries) {
             runCatching { mgr.cancel(postedTag(taskId, kind), ALARM_NOTIF_ID) }
         }
+        // Companion speech-failure notices are per-point too: completing,
+        // skipping or dismissing the task must leave none orphaned (#434).
+        ReminderTts.cancelFailures(context.applicationContext, taskId)
     }
 
     /**
@@ -780,6 +783,15 @@ class TaskAlarmReceiver : BroadcastReceiver() {
     }
 
     private suspend fun post(appCtx: Context, taskId: String, kind: ReminderKind) {
+        // A stale speech-failure notice for THIS point must not outlive a
+        // fresh alert: a retried alarm that now plays would otherwise sit
+        // next to its own earlier failure. Other points' notices stay — one
+        // point firing says nothing about another's speech (#434). Guarded
+        // on audible: a DND/silent fire attempts no speech, so clearing here
+        // would delete evidence with no retry to supersede it.
+        if (!ReminderTts.isSilent(appCtx)) {
+            ReminderTts.cancelFailureFor(appCtx, taskId, kind.key)
+        }
         // One indexed lookup, not the whole open list: the receiver knows
         // the id, and `GET /api/tasks/{id}` answers in one query where the
         // list made every nag quadratic (#168). Null means gone
@@ -795,6 +807,9 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val task = outcome?.getOrNull()
         if (outcome?.isSuccess == true && (task == null || !task.isOpen())) {
             TaskReminders.cancelOne(appCtx, taskId)
+            // Done/deleted: no future speech for this task, so no point's
+            // failure notice may outlive it (#434 review).
+            ReminderTts.cancelFailures(appCtx, taskId)
             return
         }
         // The overdue nag is the one self-repeating point: keep it going
@@ -808,8 +823,11 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 TaskReminders.rearmOverdue(appCtx, taskId)
             } else if (outcome?.isSuccess == true) {
                 // The fetch worked and the task is no longer past due: it
-                // was rescheduled, so stop the nag and say nothing.
+                // was rescheduled, so stop the nag and say nothing. Past
+                // points' failure notices go too — they describe a schedule
+                // that no longer exists (#434 review).
                 TaskReminders.cancelOne(appCtx, taskId)
+                ReminderTts.cancelFailures(appCtx, taskId)
                 return
             } else {
                 // Fetch failed: unknowable, so keep the cadence rather than
