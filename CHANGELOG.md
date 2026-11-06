@@ -28,8 +28,11 @@ see GitHub Releases for older notes.
     `tasks`/`jobs` arrays (no `data`/`items`), task rows accept only `id`
     (no `_id`), and the Scheduler pauses/resumes through the canonical POST
     actions only (no `PATCH {paused}` downgrade). An older gateway fails
-    with "Update the server" instead of reading as an empty list or being
-    driven through a different contract. Job rows that still carry a
+    loudly instead of reading as an empty list or being driven through a
+    different contract: lists and details throw "Update the server", while
+    pause/resume surfaces its HTTP 404 (unknown action route on the old
+    gateway — and unknown job id on any gateway — so the status, not the
+    shape string, is the signal there). Job rows that still carry a
     retired alias (`job_id`, `cron`, `enabled`/`state`/`status`, `deliver`,
     `lastRun`/`nextRun`) are counted as unparseable rather than rendered as
     a blank-but-healthy row.

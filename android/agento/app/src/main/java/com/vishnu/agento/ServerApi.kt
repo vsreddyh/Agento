@@ -309,11 +309,12 @@ internal fun optFlag(o: JSONObject, vararg keys: String): Boolean? {
 }
 
 /**
- * Response root as an array: each endpoint answers either with a bare
- * top-level array (toolsets, messages) or a named array (`{skills:[...]}`);
- * [keys] names the latter. The retired `data`/`items` wrappers are not
- * accepted (#433) — an unknown shape returns null, never a clean empty
- * list. Null when the body is neither shape.
+ * Response root as an array: each list accepts a bare top-level array or
+ * its named wrapper (`{skills:[...]}`, `{toolsets:[...]}`,
+ * `{messages:[...]}`); [keys] names the wrapper. The retired
+ * `data`/`items` wrappers are not accepted (#433) — an unknown shape
+ * returns null, never a clean empty list. Null when the body is neither
+ * shape.
  *
  * Top-level (not a member) so the pure transcript parsers below — and
  * their unit tests — can use it without a Context-bound ServerApi.

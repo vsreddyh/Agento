@@ -224,9 +224,10 @@ class JobsApi(context: Context) {
     }
 
     /** Pauses via the canonical action endpoint only (#433). The old
-     * `PATCH {paused:true}` downgrade is gone: an older gateway now fails
-     * loudly here instead of being silently driven through a different
-     * contract the app does not mean to support. */
+     * `PATCH {paused:true}` downgrade is gone: an older gateway answers 404
+     * on the unknown action route and that HTTP failure surfaces, instead of
+     * being silently driven through a different contract the app does not
+     * mean to support. */
     suspend fun pause(path: String, id: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             call("POST", "$path/api/jobs/$id/pause").map { }
