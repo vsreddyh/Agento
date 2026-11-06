@@ -34,12 +34,6 @@ data class ToolsetInfo(
     val tools: List<String> = emptyList(),
 )
 
-/** MCP server derived from `mcp__<server>__<tool>` tool names. */
-data class McpServer(
-    val name: String,
-    val tools: List<String>,
-)
-
 /**
  * Read-only view of the gateway's skills + toolsets (dashboard Skills/MCP
  * pages, slimmed for mobile). Same bearer auth as chat; per-profile paths
@@ -57,24 +51,16 @@ class ServerApi(context: Context) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     private fun get(path: String, endpoint: String): Result<String> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         return runCatching {
             http.newCall(Request.Builder()
@@ -102,8 +88,8 @@ class ServerApi(context: Context) {
             }
         }
 
-    /** Lists toolsets for one profile path; MCP servers derive from tool names.
-     * The server returns a bare JSON array; object-wrapped shapes fall back. */
+    /** Lists toolsets for one profile path. The server returns a bare JSON
+     * array; object-wrapped shapes fall back. */
     suspend fun listToolsets(path: String): Result<List<ToolsetInfo>> =
         withContext(Dispatchers.IO) {
             get(path, "v1/toolsets").map { body ->
@@ -500,50 +486,6 @@ fun parseSessionTotals(s: JSONObject): SessionTotals {
 private fun urlEncode(segment: String): String =
     java.net.URLEncoder.encode(segment, Charsets.UTF_8.name()).replace("+", "%20")
 
-/** Groups `mcp__<server>__<tool>` tools into per-server rows. */
-fun mcpServersFrom(toolsets: List<ToolsetInfo>): List<McpServer> {
-    val byServer = linkedMapOf<String, MutableList<String>>()
-    for (ts in toolsets) {
-        for (t in ts.tools) {
-            val parts = t.split("__")
-            if (parts.size >= 3 && parts[0] == "mcp" && parts[1].isNotBlank()) {
-                byServer.getOrPut(parts[1]) { mutableListOf() }
-                    .add(parts.drop(2).joinToString("__"))
-            }
-        }
-    }
-    return byServer.map { (name, tools) ->
-        McpServer(name, tools.distinct().sorted())
-    }.sortedBy { it.name.lowercase(Locale.ROOT) }
-}
-
-/**
- * Normalizes a toolset or derived-server name to one MCP server key:
- * lowercase, `mcp-`/`mcp_` prefix stripped, `_` treated as `-`. Pure. */
-fun normalizeMcpServerKey(name: String): String {
-    var n = name.trim().lowercase(Locale.ROOT).replace('_', '-')
-    if (n.startsWith("mcp-")) n = n.removePrefix("mcp-")
-    return n
-}
-
-/**
- * Drops derived [McpServer] rows already covered by an explicit
- * toolset row (e.g. `mcp-miser-money` toolset + derived `miser-money`
- * parsed from its `mcp__miser-money__*` tools would otherwise render the
- * same server twice). Derived rows remain as fallback for servers with no
- * explicit row (older gateways, MCP tools bundled inside another toolset).
- * Pure for testability.
- */
-fun dedupMcpServers(
-    toolsets: List<ToolsetInfo>,
-    servers: List<McpServer>,
-): List<McpServer> {
-    val covered = toolsets
-        .map { normalizeMcpServerKey(it.name) }
-        .toSet()
-    return servers.filter { normalizeMcpServerKey(it.name) !in covered }
-}
-
 /** Case-insensitive search across name + description. */
 fun SkillInfo.matches(query: String): Boolean {
     val q = query.trim().lowercase(Locale.ROOT)
@@ -558,12 +500,5 @@ fun ToolsetInfo.matches(query: String): Boolean {
     return name.lowercase(Locale.ROOT).contains(q)
         || label.lowercase(Locale.ROOT).contains(q)
         || description.lowercase(Locale.ROOT).contains(q)
-        || tools.any { it.lowercase(Locale.ROOT).contains(q) }
-}
-
-fun McpServer.matches(query: String): Boolean {
-    val q = query.trim().lowercase(Locale.ROOT)
-    if (q.isEmpty()) return true
-    return name.lowercase(Locale.ROOT).contains(q)
         || tools.any { it.lowercase(Locale.ROOT).contains(q) }
 }

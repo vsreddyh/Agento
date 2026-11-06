@@ -60,19 +60,11 @@ class ProjectsApi(context: Context) {
     private val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
     private val http: OkHttpClient get() = sharedHttp
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     private fun parseProject(o: JSONObject): ServerProject? {
         val id = o.optString("id", "")
@@ -97,7 +89,7 @@ class ProjectsApi(context: Context) {
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
             }
             val s = status.trim().ifEmpty { "all" }
             val q = "?status=" + URLEncoder.encode(s, Charsets.UTF_8.name()).replace("+", "%20") +
@@ -174,7 +166,7 @@ class ProjectsApi(context: Context) {
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         return runCatching {
             val builder = Request.Builder()

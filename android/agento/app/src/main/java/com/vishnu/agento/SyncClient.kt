@@ -28,24 +28,13 @@ class SyncClient(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    /** Single server URL (proxy: chat + sync on one port). Same chain as
-     * chat (`server_base_url` → `server_url` → `api_base_url`) so both sides
-     * agree pre-save (incl. background sync); legacy keys are removed on save. */
-    fun serverUrl(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
-    /** Single app password (the sync token doubles as chat credential).
-     * Prefers `app_password`; falls back to the legacy `auth_token` so users
-     * who configured a sync token keep working without re-entry. */
-    fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    /** Single server URL (proxy: chat + sync on one port). Resolved through
+     * [ServerEndpoint] like every other client, pre-save included, so
+     * background sync can never read a retired key chat would ignore. */
+    fun serverUrl(): String = ServerEndpoint.base(prefs)
+
+    /** Single app password (the sync token doubles as chat credential). */
+    fun password(): String = ServerEndpoint.password(prefs)
     /** Marks the one-time historical backfill done so later runs send today-only payloads. */
     fun markFirstSyncDone() {
         prefs.edit {
@@ -53,24 +42,26 @@ class SyncClient(context: Context) {
         }
     }
 
-    /** Persists the unified server URL + password; normalizes trailing slash/whitespace so post() can build the endpoint directly. */
+    /** Persists the canonical server URL + password; normalizes trailing
+     * slash/whitespace so post() can build the endpoint directly. Retired
+     * keys are deleted on write — nothing reads them any more (#433), so
+     * they must not survive as a second, misleading copy. */
     fun setConfig(serverUrl: String, password: String) {
         prefs.edit {
-            putString("server_base_url", serverUrl.trim().trimEnd('/'))
-            putString("app_password", password.trim())
-            remove("server_url") // legacy: unified key is written above
-            remove("auth_token") // legacy: unified key is written above
-            // Same migration set as the other writers (ChatApi.setChatConfig
-            // and the Settings save button): every legacy key the readers
-            // fall back to is dropped wherever the unified keys are written.
-            remove("api_base_url") // legacy: unified key is written above
+            putString(ServerEndpoint.BASE_KEY, serverUrl.trim().trimEnd('/'))
+            putString(ServerEndpoint.PASSWORD_KEY, password.trim())
+            remove("server_url")
+            remove("auth_token")
+            remove("api_base_url")
         }
     }
 
     /** POSTs the payload to /api/health/sync with Bearer auth; never throws — failures become SyncResult. */
     suspend fun post(payload: HealthSyncPayload): SyncResult = withContext(Dispatchers.IO) {
         val url = serverUrl()
-        if (url.isEmpty()) return@withContext SyncResult(false, null, "server URL not configured")
+        if (url.isEmpty()) {
+            return@withContext SyncResult(false, null, ServerEndpoint.UNCONFIGURED)
+        }
 
         val json = Json { ignoreUnknownKeys = true }.encodeToString(payload)
         val request = Request.Builder()

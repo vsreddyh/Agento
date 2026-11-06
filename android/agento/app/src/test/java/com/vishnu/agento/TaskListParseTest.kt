@@ -22,18 +22,27 @@ class TaskListParseTest {
     }
 
     @Test
-    fun `data and items envelopes parse too`() {
-        val data = parseTaskListPage("""{"data":[{"id":"a","name":"A"}]}""")
-        assertEquals(1, data.tasks.size)
-        val items = parseTaskListPage("""{"items":[{"id":"a","name":"A"}]}""")
-        assertEquals(1, items.tasks.size)
+    fun `retired data and items envelopes fail loudly`() {
+        // #433: one canonical envelope. The old shapes must not read as a
+        // clean empty task list.
+        for (body in listOf("""{"data":[{"id":"a","name":"A"}]}""", """{"items":[{"id":"a","name":"A"}]}""")) {
+            try {
+                parseTaskListPage(body)
+                throw AssertionError("must throw, not read as no tasks")
+            } catch (e: RuntimeException) {
+                assertEquals(TASKS_SHAPE_ERROR, e.message)
+            }
+        }
     }
 
     @Test
-    fun `id fallback to _id works`() {
+    fun `retired _id fallback is not read`() {
+        // #433: the canonical row carries `id`; `_id` is the Mongo storage
+        // key, not the wire id. A row that only has `_id` is counted as a
+        // drop instead of being silently reinterpreted.
         val page = parseTaskListPage("""{"tasks":[{"_id":"z","name":"Zed"}]}""")
-        assertEquals("z", page.tasks.single().id)
-        assertEquals(0, page.dropped)
+        assertTrue(page.tasks.isEmpty())
+        assertEquals(1, page.dropped)
     }
 
     @Test
@@ -81,7 +90,7 @@ class TaskListParseTest {
             parseTaskListPage("""{"other":[]}""")
             throw AssertionError("must throw, not read as no tasks")
         } catch (e: RuntimeException) {
-            assertEquals("Unexpected response shape", e.message)
+            assertEquals(TASKS_SHAPE_ERROR, e.message)
         }
     }
 

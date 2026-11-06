@@ -22,18 +22,37 @@ class JobListParseTest {
     }
 
     @Test
-    fun `data and items envelopes parse too`() {
-        assertEquals(1, parseJobList("""{"data":[{"id":"a"}]}""").jobs.size)
-        assertEquals(1, parseJobList("""{"items":[{"id":"a"}]}""").jobs.size)
+    fun `retired data and items envelopes fail loudly`() {
+        // #433: one canonical envelope. An older shape must not read as a
+        // clean empty job list.
+        for (body in listOf("""{"data":[{"id":"a"}]}""", """{"items":[{"id":"a"}]}""")) {
+            try {
+                parseJobList(body)
+                throw AssertionError("must throw, not read as no scheduled jobs")
+            } catch (e: RuntimeException) {
+                assertEquals(JOBS_SHAPE_ERROR, e.message)
+            }
+        }
     }
 
     @Test
-    fun `job_id fallback works and unparseable rows are counted`() {
+    fun `retired job_id and row aliases are not read`() {
+        // #433: the canonical row carries `id`, `schedule`, `paused`,
+        // `delivery` and snake_case run timestamps. A row that only speaks
+        // the retired aliases is unparseable, not silently bridged.
         val page = parseJobList(
-            """{"jobs":[{"job_id":"k","name":"K"},{"name":"no id"},42]}""",
+            """{"jobs":[
+                {"job_id":"k","name":"K"},
+                {"id":"a","cron":"* * * * *","enabled":false,"deliver":"local"},
+                {"name":"no id"},
+                42
+            ]}""",
         )
-        assertEquals(listOf("k"), page.jobs.map { it.id })
-        assertEquals(2, page.dropped)
+        assertEquals(listOf("a"), page.jobs.map { it.id })
+        assertEquals("", page.jobs.single().schedule)
+        assertEquals(null, page.jobs.single().paused)
+        assertEquals("", page.jobs.single().delivery)
+        assertEquals(3, page.dropped)
     }
 
     @Test
@@ -42,8 +61,8 @@ class JobListParseTest {
         // null to false — a positive Active signal instead of unknown.
         val page = parseJobList(
             """{"jobs":[
-                {"id":"a","paused":null,"state":null,"status":null},
-                {"id":"b","enabled":null,"paused":true}
+                {"id":"a","paused":null},
+                {"id":"b","paused":true}
             ]}""",
         )
         assertNull(page.jobs[0].paused)
@@ -86,7 +105,7 @@ class JobListParseTest {
             parseJobList("""{"runs":[]}""")
             throw AssertionError("must throw, not read as no scheduled jobs")
         } catch (e: RuntimeException) {
-            assertEquals("Unexpected response shape", e.message)
+            assertEquals(JOBS_SHAPE_ERROR, e.message)
         }
     }
 

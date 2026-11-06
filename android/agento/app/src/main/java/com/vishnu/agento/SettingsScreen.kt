@@ -300,19 +300,14 @@ internal fun SettingsScreen(
                                 val prefs = context.getSharedPreferences(
                                     AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
                                 prefs.edit {
-                                    putString("server_base_url", state.serverUrl.trim().trimEnd('/'))
-                                    putString("app_password", state.password.trim())
+                                    putString(ServerEndpoint.BASE_KEY, state.serverUrl.trim().trimEnd('/'))
+                                    putString(ServerEndpoint.PASSWORD_KEY, state.password.trim())
+                                    // Retired keys are deleted wherever the
+                                    // canonical ones are written (#433):
+                                    // nothing reads them any more, so a
+                                    // stale copy must not survive a save.
                                     remove("api_base_url")
                                     remove("server_url")
-                                    // Same migration set as every other
-                                    // writer (ChatApi.setChatConfig,
-                                    // SyncClient.setConfig): state.password
-                                    // is prefilled with the resolved
-                                    // password (MainViewModel.refresh falls
-                                    // back to auth_token), so the effective
-                                    // secret is already in app_password and
-                                    // a stale auth_token at rest would only
-                                    // be a second copy of it.
                                     remove("auth_token")
                                 }
                                 error = ""
@@ -345,7 +340,7 @@ internal fun SettingsScreen(
                                         val r = api.testConnection(catalogPath(api)).getOrNull()
                                         report = r
                                         if (r == null) {
-                                            error = "Server URL not configured"
+                                            error = ServerEndpoint.UNCONFIGURED
                                         } else if (!r.gatewayOk) {
                                             // No heal refetch runs on a failed
                                             // probe, so drop the previous good

@@ -78,26 +78,18 @@ class TeachApi(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     private data class CallResult(val code: Int, val body: String)
 
     private fun call(method: String, url: String, body: JSONObject? = null): Result<CallResult> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         // Cancellation is not failure: an interrupt during execute()
         // must propagate, not become an error row. runCatching would

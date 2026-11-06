@@ -13,7 +13,6 @@ import android.os.Build
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
@@ -127,46 +126,6 @@ internal fun ToolsetCard(profile: String, ts: ToolsetInfo) {
     }
 }
 
-/** One derived MCP server row: name + tool list. Tap expands the full
- * tool list (#123); collapsed caps at the 8-tool summary. Expansion is
- * keyed by profile+name so switching assistants never leaks open rows. */
-@Composable
-internal fun McpCard(profile: String, server: McpServer) {
-    var open by remember(profile, server.name) { mutableStateOf(false) }
-    Card(
-        onClick = { open = !open },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    server.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                Icon(
-                    if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (open) "Collapse" else "Expand",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Text(
-                if (server.tools.isEmpty()) "No tools listed"
-                else if (open) "${server.tools.size} tool(s): ${server.tools.joinToString(", ")}"
-                else "${server.tools.size} tool(s): ${server.tools.take(8).joinToString(", ")}" +
-                    if (server.tools.size > 8) "…" else "",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (open) Int.MAX_VALUE else 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
 /** Read-only tools inventory for the chat profile — with
  * Tasks-style search filtering and a sort dropdown.
  * Split out of SkillsScreen into its own sidebar section (#106).
@@ -218,12 +177,6 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // toggle state (null) shows no badge — so flag-less server shapes never
     // blank the section.
     val listedToolsets = toolsets
-    // Dedupe: explicit mcp-* toolset rows already render the server, so
-    // derived rows parsed from their mcp__<server>__* tools are fallback
-    // only (otherwise each server shows twice: 4 servers -> 8 rows).
-    val mcp = remember(listedToolsets) {
-        dedupMcpServers(listedToolsets, mcpServersFrom(listedToolsets))
-    }
 
     // Search + sort (Tasks-style).
     var query by remember { mutableStateOf("") }
@@ -240,17 +193,6 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     }
     val shownToolsets = remember(listedToolsets, query, toolsSort) {
         sortToolsets(listedToolsets.filter { it.matches(query) })
-    }
-    val shownMcpServers = remember(mcp, query, toolsSort) {
-        val filtered = mcp.filter { it.matches(query) }
-        if (toolsSort == ToolsSort.NameZa) {
-            filtered.sortedByDescending { it.name.lowercase(Locale.ROOT) }
-        } else {
-            filtered.sortedWith(
-                compareBy({ if (toolsSort == ToolsSort.MostTools) -it.tools.size else 0 },
-                    { it.name.lowercase(Locale.ROOT) })
-            )
-        }
     }
     Scaffold(
         topBar = {
@@ -327,8 +269,7 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         item {
                             HintLine(
                                 "${listedToolsets.size} toolsets · " +
-                                    "${listedToolsets.sumOf { it.tools.size }} tools · " +
-                                    "${mcp.size} MCP servers"
+                                    "${listedToolsets.sumOf { it.tools.size }} tools"
                             )
                         }
                     }
@@ -362,21 +303,8 @@ internal fun ToolsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             ToolsetCard(profile, ts)
                         }
                     }
-                    if (shownMcpServers.isNotEmpty()) {
-                        item {
-                            Text(
-                                "Read-only — servers are configured on the gateway.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        items(shownMcpServers, key = { "ms:" + it.name }) { server ->
-                            McpCard(profile, server)
-                        }
-                    }
                     if (loaded && listedToolsets.isNotEmpty()
                         && shownToolsets.isEmpty()
-                        && shownMcpServers.isEmpty()
                         && toolsError.isEmpty()
                     ) {
                         item {

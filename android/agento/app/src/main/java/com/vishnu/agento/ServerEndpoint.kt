@@ -3,39 +3,37 @@ package com.vishnu.agento
 import android.content.SharedPreferences
 
 /**
- * One resolution rule for the gateway endpoint (#398).
+ * The one endpoint rule for every gateway client (#398, #433).
  *
- * The chat and question clients read the same two prefs in the same order;
- * keeping the chain in one place means a new fallback key — or the removal
- * of a retired one — cannot land in one client and be missed by the other,
- * which is how `QuestionsApi` drifted from `ChatApi`. Other typed clients
- * (tasks, runs, memory, …) still carry their own copies; migrating them is
- * a separate change, not a claim made here.
+ * Chat, questions, tasks, runs, jobs, memory, projects, reports, storage,
+ * teach, approvals, server inventory and sync all resolve the server URL and
+ * password through here. One canonical key each, and no retired fallbacks:
+ * a config that still holds only `server_url`/`api_base_url`/`auth_token`
+ * reads as unconfigured, so the caller can say so loudly instead of silently
+ * talking to a stale server with the wrong credential.
+ *
+ * Keeping the rule in one place is the point — a retired key cannot land in
+ * one client and be missed by another (the `QuestionsApi` drift that #398
+ * fixed), and a future key has exactly one reader to update.
  */
 internal object ServerEndpoint {
 
-    /** Unification chain, in priority order: the single server URL the app
-     * saves first, then the legacy keys a pre-unification config may still
-     * hold. Removed on save, so a normal install only ever has the first. */
-    private val BASE_KEYS = listOf("server_base_url", "server_url", "api_base_url")
+    /** Canonical server URL pref: the proxy root that fronts chat + sync. */
+    const val BASE_KEY = "server_base_url"
+
+    /** Canonical credential pref: the sync token doubles as the chat password. */
+    const val PASSWORD_KEY = "app_password"
+
+    /** The one loud, actionable "not configured" message (#433): a config
+     * that only ever held a retired key must point the user at the fix
+     * instead of failing with a bare exception or reading as healthy. */
+    const val UNCONFIGURED = "Server URL not configured — re-enter it in Settings → Connection."
 
     /** Trimmed, trailing-slash-free base URL, or "" when unconfigured. */
-    fun base(prefs: SharedPreferences): String {
-        for (k in BASE_KEYS) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    fun base(prefs: SharedPreferences): String =
+        (prefs.getString(BASE_KEY, "") ?: "").trim().trimEnd('/')
 
-    /** The single app password (the sync token doubles as the chat
-     * credential). Prefers `app_password`; falls back to the legacy
-     * `auth_token` so users who configured a sync token keep working without
-     * re-entry. The retired `api_key` is deliberately NOT read (the server no
-     * longer accepts it). */
-    fun password(prefs: SharedPreferences): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    /** The single app password, or "" when unconfigured. */
+    fun password(prefs: SharedPreferences): String =
+        (prefs.getString(PASSWORD_KEY, "") ?: "").trim()
 }

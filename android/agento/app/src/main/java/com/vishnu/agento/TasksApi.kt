@@ -401,8 +401,10 @@ internal fun optTaskDays(o: JSONObject, key: String): List<String> {
  * counts those drops in [TaskList.dropped] instead of shrinking the
  * list silently). */
 internal fun parseTask(o: JSONObject): ServerTask? {
+    // Canonical `id` only (#433): the retired Mongo `_id` fallback is gone,
+    // so a row that only carries `_id` is counted as unparseable instead of
+    // being silently reinterpreted under a different wire contract.
     val id = optJsonStr(o, "id")
-        .ifEmpty { optJsonStr(o, "_id") }
     if (id.isEmpty()) return null
     val name = optJsonStr(o, "name")
     if (name.isEmpty()) return null
@@ -438,21 +440,23 @@ internal fun parseTask(o: JSONObject): ServerTask? {
     )
 }
 
-/** Parses one task-list page (#430): the `tasks`/`data`/`items`
- * envelope, the rows, and how many rows arrived unparseable.
+/** One message for a server that does not speak the canonical task list
+ * (#433): names the missing shape and the fix, never a clean empty page. */
+internal const val TASKS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no tasks list. Update the server."
+
+/** Parses one task-list page (#430): the canonical `tasks` envelope, the
+ * rows, and how many rows arrived unparseable.
  *
- * A body with none of the known envelopes is a parse failure, never a
- * clean empty — like the single-task paths, it throws
- * "Unexpected response shape" so the list shows an error instead of
- * reading "no tasks". */
+ * The `data`/`items` fallbacks are gone (#433): a body without a `tasks`
+ * array is a loud parse failure with an actionable message, never a clean
+ * empty that reads as "no tasks". */
 internal fun parseTaskListPage(body: String): TaskList {
     val out = mutableListOf<ServerTask>()
     val root = runCatching { JSONObject(body) }.getOrNull()
-        ?: throw RuntimeException("Unexpected response shape")
+        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
     val arr = root.optJSONArray("tasks")
-        ?: root.optJSONArray("data")
-        ?: root.optJSONArray("items")
-        ?: throw RuntimeException("Unexpected response shape")
+        ?: throw RuntimeException(TASKS_SHAPE_ERROR)
     var dropped = 0
     for (i in 0 until arr.length()) {
         val task = arr.optJSONObject(i)?.let { parseTask(it) }
@@ -562,19 +566,11 @@ class TasksApi(context: Context) {
     private val prefs = appCtx.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
     private val http: OkHttpClient get() = sharedHttp
 
-    private fun base(): String {
-        for (k in listOf("server_base_url", "server_url", "api_base_url")) {
-            val v = (prefs.getString(k, "") ?: "").trim().trimEnd('/')
-            if (v.isNotEmpty()) return v
-        }
-        return ""
-    }
+    /** The one canonical endpoint (#433): [ServerEndpoint] owns the key and
+     * the shape, so this client cannot drift onto a retired one. */
+    private fun base(): String = ServerEndpoint.base(prefs)
 
-    private fun password(): String {
-        val v = (prefs.getString("app_password", "") ?: "").trim()
-        if (v.isNotEmpty()) return v
-        return (prefs.getString("auth_token", "") ?: "").trim()
-    }
+    private fun password(): String = ServerEndpoint.password(prefs)
 
     /**
      * Records a task contract version: the running max of what this install
@@ -616,7 +612,7 @@ class TasksApi(context: Context) {
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("Server URL not configured"))
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
             }
             val s = state.trim().lowercase(Locale.ROOT)
             if (s != "open" && s != "done" && s != "all") {
@@ -1122,7 +1118,7 @@ class TasksApi(context: Context) {
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()
         if (base.isEmpty()) {
-            return Result.failure(IllegalStateException("Server URL not configured"))
+            return Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
         }
         return runCatching {
             val builder = Request.Builder()

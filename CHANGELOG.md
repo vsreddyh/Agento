@@ -8,6 +8,31 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.0.0]
+- **Every legacy fallback is gone (#433).** One canonical key per setting,
+  one endpoint per action, one envelope shape — and anything still on a
+  retired contract fails loudly with the fix in the message instead of
+  being silently bridged:
+  - **Server config:** only `server_base_url` + `app_password` are read, by
+    one resolver shared by every client (chat, tasks, runs, jobs, memory,
+    projects, reports, storage, teach, approvals, inventory, sync). The
+    retired `server_url`/`api_base_url`/`auth_token` keys are no longer read
+    or backed up, and the app says "Server URL not configured — re-enter it
+    in Settings → Connection" instead of quietly talking to a stale server
+    with the wrong credential. A config that only ever held those keys
+    re-enters once.
+  - **Chat settings:** the retired `provider_god`/`model_god`/`effort_god*`
+    fallbacks are no longer read; a pre-#289 install re-picks its
+    provider/model/effort once.
+  - **Gateway shapes:** task and job lists accept only the canonical
+    `tasks`/`jobs` arrays (no `data`/`items`), task rows accept only `id`
+    (no `_id`), and the Scheduler pauses/resumes through the canonical POST
+    actions only (no `PATCH {paused}` downgrade). An older gateway fails
+    with "Update the gateway" instead of reading as an empty list or being
+    driven through a different contract.
+  - **Tools inventory:** MCP servers come only from the gateway's explicit
+    toolset rows; the derived `mcp__<server>__*` fallback is removed.
+
 ## [5.18.3]
 - **Failed reminder fetches never look healthy (#431).** When the task
   lookup behind an alarm fails, the notification still fires on cadence
