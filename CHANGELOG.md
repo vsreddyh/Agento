@@ -20,8 +20,10 @@ see GitHub Releases for older notes.
   instead of reading as an empty list, and a failed refresh banners even
   over stale rows (healed by the next good list). Check-again buttons
   stay dead while loading or mutating so concurrent refreshes cannot
-  plant stale banners, and mutation taps guard synchronously so a
-  same-frame double-tap cannot mint two consent attempts. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
+  plant stale banners — refresh entry itself refuses a second writer —
+  and mutation taps guard synchronously so a same-frame double-tap cannot
+  mint two consent attempts. Disconnect re-lists the whole section
+  instead of patching one row it cannot prove fresh. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
   unconfigured servers read as "not set up". Expired rows offer Disconnect
   next to Reconnect, so revoking never requires re-consenting first. The app never sees
   code/verifier/token (server-only exchange), and disconnect stops future

@@ -68,42 +68,56 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // wins — a slow failure over fresh rows, or a stale list over a just
     // disconnected row), and same-frame double taps bypass composition
     // locks. Passed to the rows; reused below for the retry and the
-    // bottom Check again so every gate reads the same values.
-    val connectLocked = pendingConnect != null || busyId != null
+    // bottom Check again so every gate reads the same values. Connect
+    // joins the loading gate too: consent-starting into a list fetch
+    // races it the same way a mutation does.
+    val connectLocked = pendingConnect != null || busyId != null || loading
     val mutateLocked = busyId != null || loading
 
     fun path(): String = catalogPath(ChatApi(context))
 
     fun refresh() {
+        // Single-writer entry guard (#484 review): same-frame double taps,
+        // resume-vs-tap races and the startup double-fetch must not queue
+        // overlapping fetches whose last writer wins with stale data. The
+        // CAS runs on the caller thread (tap composition, resume effect),
+        // not inside the coroutine — checking inside would serialize
+        // nothing. Reset in finally so a finished fetch re-arms
+        // (cancellation-safe: no suspension inside).
+        if (!mutationArmed.compareAndSet(true, false)) return
         scope.launch {
-            loading = true
-            error = ""
-            ConnectorsApi(context).list(path()).fold(
-                onSuccess = { list ->
-                    connectors = list
-                    // Cleared on success, not just at start (#484 review):
-                    // a failed refresh followed by a good one (manual retry
-                    // landing just as the poll round succeeds, or vice
-                    // versa) must not leave its banner over fresh rows.
-                    error = ""
-                    // A polled row that flipped resolves the wait (#440):
-                    // the pending id is connected (or failed visibly via
-                    // an expired row carrying the reconnect hint).
-                    val pending = pendingConnect
-                    if (pending != null &&
-                        list.any { it.id == pending && (it.isConnected() || it.isExpired()) }
-                    ) {
-                        pendingConnect = null
-                        if (list.any { it.id == pending && it.isConnected() }) {
-                            toasts.toast("Connected.", kind = ToastKind.Success)
+            try {
+                loading = true
+                error = ""
+                ConnectorsApi(context).list(path()).fold(
+                    onSuccess = { list ->
+                        connectors = list
+                        // Cleared on success, not just at start (#484 review):
+                        // a failed refresh followed by a good one (manual retry
+                        // landing just as the poll round succeeds, or vice
+                        // versa) must not leave its banner over fresh rows.
+                        error = ""
+                        // A polled row that flipped resolves the wait (#440):
+                        // the pending id is connected (or failed visibly via
+                        // an expired row carrying the reconnect hint).
+                        val pending = pendingConnect
+                        if (pending != null &&
+                            list.any { it.id == pending && (it.isConnected() || it.isExpired()) }
+                        ) {
+                            pendingConnect = null
+                            if (list.any { it.id == pending && it.isConnected() }) {
+                                toasts.toast("Connected.", kind = ToastKind.Success)
+                            }
                         }
-                    }
-                },
-                onFailure = { e ->
-                    error = e.message ?: e.javaClass.simpleName
-                },
-            )
-            loading = false
+                    },
+                    onFailure = { e ->
+                        error = e.message ?: e.javaClass.simpleName
+                    },
+                )
+                loading = false
+            } finally {
+                mutationArmed.set(true)
+            }
         }
     }
 
@@ -268,7 +282,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                         scope.launch {
                             try {
                                 ConnectorsApi(context).disconnect(path(), c.id).fold(
-                                    onSuccess = { row ->
+                                    onSuccess = {
                                         // A disconnect scrubs the server-side pending
                                         // states for this id: a consent wait on it
                                         // can never resolve, so stop polling now
@@ -276,18 +290,25 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                         // waiting" toast for the impossible (#484
                                         // review).
                                         if (pendingConnect == c.id) pendingConnect = null
-                                        // Same stale-banner rule as refresh/poll: a
-                                        // failed Check again must not banner over
-                                        // rows a later disconnect just fixed (#484
-                                        // review).
-                                        error = ""
-                                        if (row != null) {
-                                            connectors = connectors.map {
-                                                if (it.id == row.id) row else it
-                                            }
-                                        } else {
-                                            refreshTick++
-                                        }
+                                        // Full re-list inline, not the row
+                                        // shortcut and not a tick bump (#484
+                                        // review): the shortcut cannot prove
+                                        // the OTHER rows fresh after an
+                                        // outage (banner cleared over stale
+                                        // rows), and a tick bump could
+                                        // CAS-fail on our own held guard and
+                                        // heal nothing. Same error slot as
+                                        // refresh, so success and failure
+                                        // cannot disagree about staleness.
+                                        ConnectorsApi(context).list(path()).fold(
+                                            onSuccess = { list ->
+                                                connectors = list
+                                                error = ""
+                                            },
+                                            onFailure = { e ->
+                                                error = e.message ?: e.javaClass.simpleName
+                                            },
+                                        )
                                         toasts.toast(
                                             "Disconnected — future access stopped.",
                                             kind = ToastKind.Success,
