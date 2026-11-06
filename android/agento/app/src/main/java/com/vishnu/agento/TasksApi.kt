@@ -71,10 +71,13 @@ data class ServerTask(
  * rows arrived unparseable (empty id/name) and were skipped rather than
  * shown (#430), how many rows parsed only by resetting a mistyped
  * numeric field to its default (#437), and which resets those were
- * (#480 review): the first-3 sample rides the page (not a global slot shared
- * with other screens' fetches) — a per-field sample of the counted rows,
- * not a second total — while the diagnostics record keeps every row's notes
- * (see [lastCoercedNotes]), so evicting single entries never drops detail. A nonzero [dropped] means the server spoke rows this app
+ * (#480 review): the first-3 sample rides the page for log parity —
+ * a per-field sample of the counted rows, not a second total — while the
+ * diagnostics record keeps every row's notes (see [lastCoercedNotes]), so
+ * evicting single entries never drops detail. No screen displays
+ * [coercedNotes] today: the hint's detail channel is the per-fetch record
+ * About reads, and this field exists so the page's own sample stays
+ * pinned by tests rather than implied by a global. A nonzero [dropped] means the server spoke rows this app
  * cannot read — the list surfaces the count instead of shrinking
  * silently. A nonzero [coerced] means some rows ARE shown but with a
  * reset value (e.g. `estimated_minutes: "abc"` read as 0) — the list
@@ -485,6 +488,10 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
         return CoercedInt(v.toInt(), null)
     }
     if (v is String) {
+        // Trimmed for parsing ("  7  " reads 7 clean), but reported
+        // verbatim: the note must name what was stored, so a blank write
+        // never reads as an empty one (#480 review). Control chars are
+        // escaped so the log line stays one line.
         val t = v.trim()
         t.toIntOrNull()?.let { return CoercedInt(it, null) }
         // Finite, in-range AND integral: "NaN"/"Infinity" parse as Double
@@ -492,14 +499,23 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
         // (#480 review).
         t.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { d ->
             if (d < Int.MIN_VALUE || d > Int.MAX_VALUE || d.toInt().toDouble() != d) {
-                return CoercedInt(default, "\"$t\"".take(44))
+                return CoercedInt(default, visibleTaskRaw(v))
             }
             return CoercedInt(d.toInt(), null)
         }
-        return CoercedInt(default, "\"$t\"".take(44))
+        return CoercedInt(default, visibleTaskRaw(v))
     }
     return CoercedInt(default, v.toString().take(40))
 }
+
+/**
+ * What the note names for an unreadable string (#480): the stored value
+ * verbatim in quotes — never the trimmed parse copy — with control chars
+ * escaped so one reset stays one log line. Capped like the other raws.
+ */
+internal fun visibleTaskRaw(v: String): String =
+    "\"" + v.take(40).replace("\\", "\\\\").replace("\n", "\\n")
+        .replace("\r", "\\r").replace("\t", "\\t") + "\""
 
 /**
  * Bounded diagnostics slot for one task row's single-read resets (#480):
@@ -988,7 +1004,7 @@ class TasksApi(context: Context) {
                         // Gone server-side: drop any diagnostics entry for
                         // it, or About names a reset for a task that no
                         // longer exists (#480 review).
-                        noteCoercedNotes("single", singleCoercionState(id), emptyList())
+                        clearSingleIfGone(id, msg)
                         Result.success(null)
                     } else {
                         Result.failure(e)
@@ -1196,6 +1212,7 @@ class TasksApi(context: Context) {
         sent.parallelable?.let { body.put("parallelable", it) }
         if (expectedRevision != null) body.put("expected_revision", expectedRevision)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
+            .also { r -> r.exceptionOrNull()?.let { clearSingleIfGone(id, it.message ?: "") } }
             .also { r ->
                 r.getOrNull()?.let { task ->
                     // Only the fields this call actually sent are asserted; the rest stay
@@ -1269,7 +1286,7 @@ class TasksApi(context: Context) {
                     // literal string "null" and reach the toast.
                     task.copy(nextDueDate = optJsonStr(next, "due_date"))
                 }
-            }
+            }.also { r -> r.exceptionOrNull()?.let { clearSingleIfGone(id, it.message ?: "") } }
         }
 
     /**
@@ -1343,6 +1360,19 @@ class TasksApi(context: Context) {
                     )
                 }
                 out.toList()
+            }.also { r ->
+                // A whole-call 404 names no row in its URL: drop only the
+                // entries the error itself names, so live rows keep theirs
+                // (#480 review). Success needs no clear — each item parse
+                // just re-recorded its row's current entry.
+                val msg = r.exceptionOrNull()?.message ?: ""
+                if ("HTTP 404:" in msg && "unknown task" in msg) {
+                    for (op in ops) {
+                        if (op.id.isNotEmpty() && op.id in msg) {
+                            noteCoercedNotes("single", singleCoercionState(op.id), emptyList())
+                        }
+                    }
+                }
             }
         }
 
@@ -1354,6 +1384,7 @@ class TasksApi(context: Context) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
             call("POST", "/api/tasks/$clean/reopen", JSONObject()).map { parseOne(it) }
+                .also { r -> r.exceptionOrNull()?.let { clearSingleIfGone(id, it.message ?: "") } }
                 .also { r ->
                     r.getOrNull()?.let {
                         noteContractVersion(listOf(it))
@@ -1370,8 +1401,14 @@ class TasksApi(context: Context) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
             call("DELETE", "/api/tasks/$clean").map { }.also {
-                // Gone: drop its diagnostics entry with it (#480 review).
-                if (it.isSuccess) noteCoercedNotes("single", singleCoercionState(id), emptyList())
+                // Gone, or already gone: a 404 naming the row means it is
+                // gone regardless of verb — either way no fetch will ever
+                // refresh this entry again (#480 review).
+                if (it.isSuccess) {
+                    noteCoercedNotes("single", singleCoercionState(id), emptyList())
+                } else {
+                    clearSingleIfGone(id, it.exceptionOrNull()?.message ?: "")
+                }
             }
         }
 
@@ -1430,6 +1467,20 @@ class TasksApi(context: Context) {
      * form-encoding emits `+` for space, valid only in query strings). */
     private fun encodeId(id: String): String =
         URLEncoder.encode(id.trim(), Charsets.UTF_8.name()).replace("+", "%20")
+
+    /**
+     * A 404 naming the row means the row is gone regardless of verb: a
+     * single-verb request URL already identifies which row (it carries
+     * exactly one id), so the body match alone is the eviction signal —
+     * or About names a reset for a task that no longer exists (#480
+     * review). Batch callers pass only ids the message itself names (a
+     * batch URL names no row).
+     */
+    private fun clearSingleIfGone(id: String, msg: String) {
+        if ("HTTP 404:" in msg && "unknown task" in msg) {
+            noteCoercedNotes("single", singleCoercionState(id), emptyList())
+        }
+    }
 
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()

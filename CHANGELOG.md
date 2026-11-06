@@ -19,14 +19,17 @@ see GitHub Releases for older notes.
   diagnostics reflects current state, not history), and task rows whose
   numbers arrive mistyped (e.g.
   `estimated_minutes: "abc"`, a negative estimate clamped to 0,
-  `"NaN"`/overflow/fractions no task can hold — negative repeat and
+  `"NaN"`/overflow/fractions no task can hold (blank strings report
+  verbatim, never as empty) — negative repeat and
   revision clamp likewise) keep
   showing with the reset value while the list carries a hint counting
   rows (the per-field detail reads as a sample, not a second total);
   single-row reads (`get`/`create`/`update`/`reopen`/`complete`/`skip`/
   `batch`) join both channels under a bounded hash of their row id
   instead of riding the log only; a list page evicts the single entries
-  of the rows it contains, so the two never disagree. the key, the raw value and what it became ride both the log and
+  of the rows it contains, so the two never disagree; and a 404 naming
+  the row evicts it on every verb (already-gone included), not just
+  `get`. the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (each surface that
   switches states — manager per landed load, widget factory per settled

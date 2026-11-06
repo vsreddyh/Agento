@@ -46,6 +46,18 @@ class OptTaskIntTest {
     }
 
     @Test
+    fun `blank strings report verbatim, never as empty`() {
+        // The note must name what was stored: trim is for parsing only.
+        // A blank write and an empty write reset identically but report
+        // differently, and padding around a number still reads clean
+        // (#480 review).
+        assertEquals("\"   \"", optTaskInt(obj("   "), "k").raw)
+        assertEquals("\"\"", optTaskInt(obj(""), "k").raw)
+        assertEquals(CoercedInt(7, null), optTaskInt(obj("  7  "), "k"))
+        assertEquals("\"a\\nb\"", optTaskInt(obj("a\nb"), "k").raw)
+    }
+
+    @Test
     fun `numeric strings read as their number with no coercion`() {
         assertEquals(CoercedInt(90, null), optTaskInt(obj("90"), "k"))
         assertEquals(CoercedInt(7, null), optTaskInt(obj("  7  "), "k"))
