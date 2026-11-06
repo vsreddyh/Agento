@@ -436,6 +436,13 @@ class TaskWidget : AppWidgetProvider() {
                     appendLine("coerced=" + coerced.toSortedMap()
                         .map { (k, v) -> "$k $v" }.joinToString("; ").take(500))
                 }
+                // Task rows that parsed only by resetting a mistyped number
+                // (#437): the latest page's key/raw->became notes, so the
+                // Task Manager's hint points at detail on this screen.
+                val taskCoerced = TasksApi.lastCoercedNotes
+                if (taskCoerced.isNotEmpty()) {
+                    appendLine("taskCoerced=" + taskCoerced.joinToString("; ").take(500))
+                }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
                 appendLine("factoryError=${lastFactoryError ?: "none"}")

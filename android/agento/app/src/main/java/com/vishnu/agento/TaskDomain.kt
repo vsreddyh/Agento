@@ -37,10 +37,11 @@ internal fun filterForName(raw: String): ServerTaskFilter =
 
 /** Names a filter reset (#437): null when [raw] is a known filter (or the
  * default itself), otherwise what key held what raw value and what it
- * became — the caller toasts/logs it once. */
+ * became — the caller toasts/logs it once. Truncated like the widget
+ * path: a corrupt value can be arbitrarily long. */
 internal fun filterCoercionMessage(raw: String): String? =
     if (runCatching { ServerTaskFilter.valueOf(raw) }.isSuccess) null
-    else "View filter \"$raw\" isn't known — showing Open instead."
+    else "View filter \"${raw.take(40)}\" isn't known — showing Open instead."
 
 /** Restores a persisted sort name, defaulting to Start (#437). */
 internal fun sortForName(raw: String): ServerTaskSort =
@@ -50,7 +51,7 @@ internal fun sortForName(raw: String): ServerTaskSort =
  * was stored and what it became. */
 internal fun sortCoercionMessage(raw: String): String? =
     if (runCatching { ServerTaskSort.valueOf(raw) }.isSuccess) null
-    else "Sort \"$raw\" isn't known — showing Start time instead."
+    else "Sort \"${raw.take(40)}\" isn't known — showing Start time instead."
 
 /**
  * Sort key for "when should this begin": the start moment, with the due
