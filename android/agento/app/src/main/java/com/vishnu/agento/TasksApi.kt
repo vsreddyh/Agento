@@ -71,10 +71,10 @@ data class ServerTask(
  * rows arrived unparseable (empty id/name) and were skipped rather than
  * shown (#430), how many rows parsed only by resetting a mistyped
  * numeric field to its default (#437), and which resets those were
- * (#480 review): the notes ride the page (not a global slot shared with
- * other screens' fetches), capped like the log line so both channels
- * name the same rows — a per-field sample of the counted rows, not a
- * second total. A nonzero [dropped] means the server spoke rows this app
+ * (#480 review): the first-3 sample rides the page (not a global slot shared
+ * with other screens' fetches) — a per-field sample of the counted rows,
+ * not a second total — while the diagnostics record keeps every row's notes
+ * (see [lastCoercedNotes]), so evicting single entries never drops detail. A nonzero [dropped] means the server spoke rows this app
  * cannot read — the list surfaces the count instead of shrinking
  * silently. A nonzero [coerced] means some rows ARE shown but with a
  * reset value (e.g. `estimated_minutes: "abc"` read as 0) — the list
@@ -686,9 +686,9 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
         // One line per page, not per row: the rows stay shown (with reset
         // values), and this names what was reset so a version-skewed
         // writer is visible. Capped detail — the count is the signal. The
-        // same first-3 slice rides the page ([TaskList.coercedNotes]) so
-        // the log and the diagnostics summary name the same rows (#480
-        // review).
+        // same first-3 slice rides the page ([TaskList.coercedNotes]) — the log
+        // and the page sample agree, while the diagnostics record keeps all rows'
+        // notes (see below) so nothing evicted is lost (#480 review).
         runCatching {
             Log.w("TasksApi", "coerced $coerced task row(s) to defaults in list response: " +
                 coercedNotes.take(3).joinToString("; ").take(400))
@@ -696,9 +696,15 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
     }
     // The diagnostics screen reads this per fetch, so one screen's
     // hint points at its own rows — and a clean page clears only its own
-    // fetch's entry, never another screen's (#480 review).
+    // fetch's entry, never another screen's (#480 review). The full
+    // note list lands here (page-bounded: at most one page of rows, replaced
+    // wholesale per fetch), while the log line above and [TaskList.coercedNotes]
+    // keep the first-3 sample — so evicting the single entries never deletes
+    // detail the fetch does not keep: every evicted row's notes survive here
+    // (#480 review).
     if (source.isNotEmpty()) {
-        TasksApi.noteCoercedNotes(source, state, coercedNotes.take(3))
+        TasksApi.noteCoercedNotes(source, state, coercedNotes.toList())
+    }
     }
     return TaskList(out, root.optBoolean("truncated", false), dropped, coerced, coercedNotes.take(3))
 }
@@ -792,8 +798,10 @@ class TasksApi(context: Context) {
 
         /**
          * The latest numeric-reset notes per fetch (#437, #480): each
-         * names the row, the key, the raw value and what it became,
-         * capped like the log line. Keyed by fetch (`source:state` — the
+         * names the row, the key, the raw value and what it became — every
+         * row of the page, not the first-3 sample the log and [TaskList] carry
+         * (page-bounded and replaced wholesale per fetch, so it cannot grow
+         * without bound). Keyed by fetch (`source:state` — the
          * Task Manager pulls one state, the widget three, reminders
          * another) because any single slot lets one screen's fetch
          * clobber or clear another's detail — including same-state

@@ -28,8 +28,9 @@ see GitHub Releases for older notes.
   of the rows it contains, so the two never disagree. the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (the one screen that
-  switches states prunes its own stale ones on each landed page) — and both channels name
-  the same capped rows, so the hint points at on-screen detail.
+  switches states prunes its own stale ones on each landed page) — the
+  log and the page carry the same capped sample while diagnostics keeps
+  every row, so the hint points at on-screen detail.
   Defaults themselves are unchanged — only the
   rewriting is now visible.
 

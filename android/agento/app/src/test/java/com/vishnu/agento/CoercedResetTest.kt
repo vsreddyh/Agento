@@ -198,7 +198,10 @@ class TaskNumericCoercionTest {
     }
 
     @Test
-    fun `page notes cap at the log slice`() {
+    fun `page notes cap at the log slice while diagnostics keeps every row`() {
+        // The page and the log carry the first-3 sample; the diagnostics
+        // record keeps all 8 — evicting a single entry never deletes detail
+        // the fetch does not keep (#480 review).
         val rows = (1..8).joinToString(",") {
             """{"id":"t$it","name":"N","estimated_minutes":"bogus$it"}"""
         }
@@ -206,7 +209,14 @@ class TaskNumericCoercionTest {
         try {
             assertEquals(8, page.coerced)
             assertEquals(3, page.coercedNotes.size)
-            assertEquals(page.coercedNotes, TasksApi.lastCoercedNotes["manager:open"])
+            val kept = TasksApi.lastCoercedNotes["manager:open"].orEmpty()
+            assertEquals(8, kept.size)
+            assertEquals(page.coercedNotes, kept.take(3))
+            assertTrue(kept.any { it.contains("bogus8") })
+        } finally {
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
+        }
+    }
         } finally {
             TasksApi.noteCoercedNotes("manager", "open", emptyList())
         }
@@ -331,6 +341,7 @@ class TaskNumericCoercionTest {
         } finally {
             TasksApi.noteCoercedNotes("single", singleCoercionState("a"), emptyList())
         }
+    }
 
     @Test
     fun `coercion notes name the key raw and reset values`() {
