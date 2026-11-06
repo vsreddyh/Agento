@@ -389,8 +389,12 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                     // process right after recording) wipes the in-memory map
                     // but not the committed prefs marker. Either way the file
                     // is older than memory claims, so say so — banner and
-                    // toast — from the start.
-                    val seededSaveError = ChatThreads.saveError(tab)
+                    // toast — from the start. But "seeded" (lost on restart)
+                    // is prefs-marker-only: an in-memory error in this same
+                    // process is NOT a restart loss, and its unsaved turn is
+                    // still in memory (#471 review).
+                    val memSaveError = ChatThreads.saveError(tab)
+                    val seededSaveError = memSaveError
                         .ifEmpty {
                             if (persistedSaveFailed) ChatThreads.SAVE_FAILED_MESSAGE else ""
                         }
@@ -399,7 +403,8 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         threads = summaries(),
                         threadId = threadId,
                         threadsSaveError = seededSaveError,
-                        threadsSaveErrorSeeded = seededSaveError.isNotEmpty(),
+                        threadsSaveErrorSeeded = memSaveError.isEmpty() &&
+                            persistedSaveFailed,
                         ready = true,
                     )
                     if (seededSaveError.isNotEmpty()) {

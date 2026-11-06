@@ -22,8 +22,8 @@ internal const val HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE =
 /** Transient-client wording (#435 review): the SDK reports AVAILABLE but
  * the client failed to build (provider IPC crash, transient bind failure).
  * That is a "try again", never a device state — and it keeps the sync card
- * consistent with the settings card, which reads "ready" for the same SDK
- * state. */
+ * consistent with the settings card, which reads "isn't responding" for
+ * the same SDK state. */
 internal const val HEALTH_CONNECT_TRANSIENT_MESSAGE =
     "Health Connect isn't responding — try again"
 

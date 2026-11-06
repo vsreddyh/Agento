@@ -208,6 +208,22 @@ class StaleDataTest {
     }
 
     @Test
+    fun `a transiently dead client never reads ready`() {
+        // #471 review: the card headline claimed "ready" while the hub
+        // row, the sync message and the retry section all said
+        // not-responding for the same SDK state.
+        assertEquals(
+            "Health Connect isn't responding",
+            healthStatusLine(healthAvailable = true, healthUpdateRequired = false, healthTransient = true),
+        )
+        // Same order as the hub row: update-required outranks transient.
+        assertEquals(
+            "Health Connect needs an update",
+            healthStatusLine(healthAvailable = true, healthUpdateRequired = true, healthTransient = true),
+        )
+    }
+
+    @Test
     fun `hub health row leads with update needed`() {
         assertEquals(
             "Update needed",
