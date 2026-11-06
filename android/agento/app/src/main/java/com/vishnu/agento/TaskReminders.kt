@@ -502,7 +502,7 @@ object TaskReminders {
                     rescheduledIds(prev, next)
                 }
                 for (id in changed) {
-                    ReminderTts.dropTask(id)
+                    ReminderTts.dropTask(appCtx, id)
                     ReminderTts.cancelFailures(appCtx, id)
                 }
             }
@@ -665,7 +665,7 @@ object TaskReminders {
         // And its queued speech goes too: a surviving entry would later
         // speak a completed task or fail and re-post a tag just cancelled
         // (#470 review).
-        ReminderTts.dropTask(taskId)
+        ReminderTts.dropTask(context.applicationContext, taskId)
     }
 
     /**
@@ -851,7 +851,7 @@ object TaskReminders {
         // And the speech queue goes too: utterances queued before the
         // toggle must not play audibly after it, nor fail back with
         // toasts + re-posted notices (#470 review).
-        ReminderTts.dropAll()
+        ReminderTts.dropAll(appCtx)
     }
 
     private fun operation(appCtx: Context, key: String): PendingIntent {
@@ -936,7 +936,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             // failure notice may outlive it (#434 review) — and no queued
             // utterance may outlive it either (#470 review).
             ReminderTts.cancelFailures(appCtx, taskId)
-            ReminderTts.dropTask(taskId)
+            ReminderTts.dropTask(appCtx, taskId)
             return
         }
         // The overdue nag is the one self-repeating point: keep it going
@@ -956,7 +956,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 // queued speech (#470 review).
                 TaskReminders.cancelOne(appCtx, taskId)
                 ReminderTts.cancelFailures(appCtx, taskId)
-                ReminderTts.dropTask(taskId)
+                ReminderTts.dropTask(appCtx, taskId)
                 return
             } else {
                 // Fetch failed: unknowable, so keep the cadence rather than

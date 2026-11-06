@@ -623,7 +623,7 @@ internal fun TaskManagerScreen(
                         // review). A surviving queue entry would later speak
                         // a done task or resurrect a cancelled tag.
                         TaskReminders.cancelPosted(context, t.id)
-                        ReminderTts.dropTask(t.id)
+                        ReminderTts.dropTask(context, t.id)
                         // A structured cadence rolled itself over server-side:
                         // the next occurrence is a NEW row this response does
                         // not carry, so only then fall back to a refetch — a
@@ -770,7 +770,7 @@ internal fun TaskManagerScreen(
                         // notices and queued speech, like a resolve (#470
                         // review).
                         TaskReminders.cancelPosted(context, t.id)
-                        ReminderTts.dropTask(t.id)
+                        ReminderTts.dropTask(context, t.id)
                         pokeWidget()
                         toasts.toast("Task deleted.", ToastKind.Success)
                     },
@@ -841,10 +841,10 @@ internal fun TaskManagerScreen(
                             when (verb) {
                                 "complete", "skip" -> verbed.forEach {
                                     TaskReminders.cancelPosted(context, it)
-                                    ReminderTts.dropTask(it)
+                                    ReminderTts.dropTask(context, it)
                                 }
                                 "update" -> verbed.forEach {
-                                    ReminderTts.dropTask(it)
+                                    ReminderTts.dropTask(context, it)
                                     ReminderTts.cancelFailures(context, it)
                                 }
                             }
@@ -1522,7 +1522,7 @@ internal fun TaskManagerScreen(
                                     // notices go too, since they describe the
                                     // pre-edit schedule (#470 review). Posted
                                     // visuals stay — the task itself is live.
-                                    ReminderTts.dropTask(next.id)
+                                    ReminderTts.dropTask(context, next.id)
                                     ReminderTts.cancelFailures(context, next.id)
                                     if (prevRow == null) {
                                         // The row was not in the fetched page at

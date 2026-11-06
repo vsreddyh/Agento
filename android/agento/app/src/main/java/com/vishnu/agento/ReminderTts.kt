@@ -65,10 +65,10 @@ internal fun isStoredVoiceMissing(availableNames: Collection<String>, want: Stri
 
 /**
  * What [purgeTaskSpeech] removed: queued items dropped and whether an
- * in-flight utterance was suppressed. Failure-notice retraction rides a
- * separate record ([ReminderTts.reportedPoints]): terminal failures post
- * when the queue no longer holds the item, so the purge contents alone
- * cannot enumerate them.
+ * in-flight utterance was suppressed. Failure-notice retraction is
+ * enumerated from live system tags, not from here: terminal failures post
+ * when the queue no longer holds the item, and tags persist across
+ * process death.
  */
 internal data class SpeechPurge(
     val dropped: Int,
@@ -156,18 +156,6 @@ object ReminderTts {
      * (its tag is overwritten with the terminal reason).
      */
     private val initReported = HashSet<String>()
-    /**
-     * Reminder points with a failure notice posted or attempted this
-     * process (#470 review). Terminal failures (rejected, thrown,
-     * timed-out, errored, locale-gone, queue-overflow) report when the
-     * queue no longer holds the item, so the queue alone cannot enumerate
-     * what a task-drop or disable must retract — this set can. Adds happen
-     * only in [reportFailure]; every cancel path removes what it cancels.
-     * A missed removal costs a no-op cancel, never a missed one.
-     * Memory-only like the queue: a reboot clears posted notifications
-     * system-side, so there is nothing to retract.
-     */
-    private val reportedPoints = HashSet<Pair<String, String>>()
     @Volatile private var engine: TextToSpeech? = null
     private var ready = false
     private var inited = false
@@ -557,12 +545,6 @@ object ReminderTts {
             // the original alert instead of overwriting it.
             mgr.notify(failureTag(taskId, kindKey), ALARM_NOTIF_ID, notif)
         }
-        // Recorded even if the post above threw: a later cancel of a tag
-        // never posted is a harmless no-op, while a missed record is an
-        // orphaned notice no disable or task-drop can retract (#470
-        // review). Only reached when audible (the disabled gate above
-        // returned first), so every entry here was truly shown-or-attempted.
-        synchronized(lock) { reportedPoints.add(taskId to kindKey) }
     }
 
     /** Notification tag for one reminder point's speech-failure notice. */
@@ -570,12 +552,32 @@ object ReminderTts {
 
     /** Retracts one point's failure notice (its utterance later played). */
     private fun cancelFailure(taskId: String, kindKey: String) {
-        synchronized(lock) { reportedPoints.remove(taskId to kindKey) }
         val appCtx = appCtxRef ?: return
         runCatching {
             val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 ?: return
             mgr.cancel(failureTag(taskId, kindKey), ALARM_NOTIF_ID)
+        }
+    }
+
+    /**
+     * Cancels every LIVE failure notice — enumerated from the shade, not
+     * from a memory record. Failure tags persist across process death
+     * while any record would not, so a restart-then-disable (or
+     * restart-then-complete) must still retract pre-death notices; a
+     * reboot clears them system-side, so there is nothing stale to find
+     * (#470 review). Exact tag prefix — task ids are hex ObjectIds, never
+     * `#`, so `taskId#` cannot prefix-match another id. Null [taskId]
+     * cancels all of them (disable path).
+     */
+    private fun cancelLiveFailureNotices(appCtx: Context, taskId: String? = null) {
+        runCatching {
+            val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
+            val prefix = if (taskId == null) "tts-failed:" else "tts-failed:$taskId#"
+            mgr.activeNotifications
+                .filter { it.tag?.startsWith(prefix) == true }
+                .forEach { n -> runCatching { mgr.cancel(n.tag, n.id) } }
         }
     }
 
@@ -586,7 +588,6 @@ object ReminderTts {
      * notice.
      */
     internal fun cancelFailures(appCtx: Context, taskId: String) {
-        synchronized(lock) { reportedPoints.removeIf { it.first == taskId } }
         runCatching {
             val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 ?: return
@@ -603,7 +604,6 @@ object ReminderTts {
      * point firing says nothing about another's speech (#434 review).
      */
     internal fun cancelFailureFor(appCtx: Context, taskId: String, kindKey: String) {
-        synchronized(lock) { reportedPoints.remove(taskId to kindKey) }
         runCatching {
             val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 ?: return
@@ -623,9 +623,8 @@ object ReminderTts {
      * and its notice is cancelled here since the success path can no
      * longer retract it.
      */
-    internal fun dropTask(taskId: String) {
+    internal fun dropTask(appCtx: Context, taskId: String) {
         var eng: TextToSpeech? = null
-        var doomed: Set<Pair<String, String>> = emptySet()
         val purged = synchronized(lock) {
             purgeTaskSpeech(queue, owners, initReported, speakingId, taskId).also {
                 // Capture under the lock, stop outside it: binder IPC must
@@ -641,17 +640,15 @@ object ReminderTts {
                     speaking = false
                     speakingId = null
                 }
-            }.also {
-                // Notices ride the posted record, not the purge contents:
-                // terminal failures post when the queue no longer holds the
-                // item, so purged points alone cannot enumerate them (#470
-                // review).
-                doomed = reportedPoints.filter { p -> p.first == taskId }.toSet()
-                reportedPoints.removeAll(doomed)
             }
         }
         runCatching { eng?.stop() }
-        for ((t, kindKey) in doomed) cancelFailure(t, kindKey)
+        // Notices ride live system state, not the purge contents: terminal
+        // failures post when the queue no longer holds the item, and tags
+        // persist across process death — enumerated here, so a
+        // restart-then-complete still retracts pre-death notices (#470
+        // review).
+        cancelLiveFailureNotices(appCtx, taskId)
         // Advance whatever is still queued: the stopped utterance's
         // callback may never arrive to pump (#470 review).
         pump()
@@ -671,9 +668,8 @@ object ReminderTts {
      * on the pump()/reportFailure() guards: an enqueue behind this purge
      * is silently dropped before speaking, never reported.
      */
-    internal fun dropAll() {
+    internal fun dropAll(appCtx: Context) {
         val eng: TextToSpeech?
-        var doomed: Set<Pair<String, String>> = emptySet()
         var hadSpeech = false
         synchronized(lock) {
             val purged = purgeTaskSpeech(queue, owners, initReported, speakingId, null)
@@ -683,13 +679,12 @@ object ReminderTts {
             speaking = false
             speakingId = null
             eng = engine
-            // Every posted notice, including terminal ones whose queue
-            // items are long gone (#470 review).
-            doomed = reportedPoints.toSet()
-            reportedPoints.clear()
         }
         runCatching { eng?.stop() }
-        for ((taskId, kindKey) in doomed) cancelFailure(taskId, kindKey)
+        // Every live failure tag, including terminal ones whose queue items
+        // are long gone and pre-death ones no record could name (#470
+        // review).
+        cancelLiveFailureNotices(appCtx)
         if (hadSpeech) {
             runCatching { Log.w("ReminderTts", "reminders disabled, dropped all queued speech") }
         }

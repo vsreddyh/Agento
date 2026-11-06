@@ -29,9 +29,10 @@ see GitHub Releases for older notes.
   describe the pre-edit schedule). Turning reminders off purges the whole
   speech queue (stopping playback too) so nothing queued can outlive the
   toggle; failures racing the toggle stay Log-only instead of toasting.
-  Failure notices retract from a posted-notice record, so terminal
+  Failure notices retract by enumerating live failure tags, so terminal
   failures (reported after their queue item is gone) also clear on
-  disable or task-drop. Speech queued before DND flipped drops silently
+  disable or task-drop — including pre-death ones, since tags outlive
+  the process that posted them. Speech queued before DND flipped drops silently
   at dequeue, audio playing when DND flips is stopped by a ringer-mode
   listener, and the stored-voice check runs after the toggle re-check —
   extending the visual-only rule past the enqueue gate on all three sides.
