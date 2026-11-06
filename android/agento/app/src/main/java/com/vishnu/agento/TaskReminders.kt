@@ -786,8 +786,12 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // A stale speech-failure notice for THIS point must not outlive a
         // fresh alert: a retried alarm that now plays would otherwise sit
         // next to its own earlier failure. Other points' notices stay — one
-        // point firing says nothing about another's speech (#434).
-        ReminderTts.cancelFailureFor(appCtx, taskId, kind.key)
+        // point firing says nothing about another's speech (#434). Guarded
+        // on audible: a DND/silent fire attempts no speech, so clearing here
+        // would delete evidence with no retry to supersede it.
+        if (!ReminderTts.isSilent(appCtx)) {
+            ReminderTts.cancelFailureFor(appCtx, taskId, kind.key)
+        }
         // One indexed lookup, not the whole open list: the receiver knows
         // the id, and `GET /api/tasks/{id}` answers in one query where the
         // list made every nag quadratic (#168). Null means gone

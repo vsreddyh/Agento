@@ -33,8 +33,7 @@ internal enum class TtsFailure {
 }
 
 /** User-visible line for a speech failure: distinct per reason, never blank. */
-internal fun speechFailureLine(failure: TtsFailure): String = when (failure) {
-    TtsFailure.ENGINE_INIT -> "Spoken alert couldn't play — speech engine failed to start."
+internal fun speechFailureLine(failure: TtsFailure): String = when (failure) {    TtsFailure.ENGINE_INIT -> "Spoken alert couldn't play — speech engine failed to start."
     TtsFailure.SPEAK_REJECTED -> "Spoken alert couldn't play — the engine rejected it."
     TtsFailure.SPEAK_THREW -> "Spoken alert couldn't play — the engine threw an error."
     TtsFailure.UTTERANCE_ERROR -> "Spoken alert stopped early — the engine reported an error."
@@ -43,11 +42,6 @@ internal fun speechFailureLine(failure: TtsFailure): String = when (failure) {
     TtsFailure.LOCALE_UNAVAILABLE -> "Spoken alert skipped — your language isn't available in the speech engine."
     TtsFailure.VOICE_MISSING -> "Spoken alert used the default voice — your saved voice is gone."
 }
-
-/** Appends a failure line to expanded notification text, once (retries re-report). */
-internal fun withSpeechFailure(big: String, line: String): String =
-    if (big.lines().any { it.trim() == line.trim() }) big
-    else if (big.isEmpty()) line else "$big\n$line"
 
 /**
  * Whether the reminder may speak: the device default — and only the device
@@ -135,11 +129,17 @@ object ReminderTts {
                 }
                 owner = owners.remove(utteranceId)
                 // A kept-for-retry utterance that now played: retract the
-                // earlier ENGINE_INIT notice instead of orphaning it. A
-                // terminal error overwrites the same tag below, so the set
-                // entry just goes away.
-                retractInit = !failed && initReported.remove(utteranceId)
-                if (failed) initReported.remove(utteranceId)
+                // earlier ENGINE_INIT notice instead of orphaning it — but
+                // only when no other reported utterance for the same point is
+                // still outstanding. Two queued items can share one point
+                // tag (stuck engine + nag re-fire); the first onDone must not
+                // delete the second's evidence. A terminal error overwrites
+                // the same tag below, so the set entry just goes away.
+                val wasReported = initReported.remove(utteranceId)
+                retractInit = !failed && wasReported && owners.values.none {
+                    it.taskId == owner?.taskId && it.kindKey == owner?.kindKey &&
+                        initReported.contains(it.id)
+                }
             }
             if (failed && owner != null) {
                 reportFailure(owner!!.taskId, owner!!.kindKey, owner!!.taskName, TtsFailure.UTTERANCE_ERROR)
@@ -394,7 +394,7 @@ object ReminderTts {
                 .setSmallIcon(android.R.drawable.ic_menu_agenda)
                 .setContentTitle(title)
                 .setContentText(line)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(withSpeechFailure("", line)))
+                .setStyle(NotificationCompat.BigTextStyle().bigText(line))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setContentIntent(tap)
