@@ -14,9 +14,9 @@ see GitHub Releases for older notes.
   sub-line carries a persistent "Inexact — reminders may be late" badge
   (on or off), with a hint explaining the inexact mode until the grant
   is allowed in system settings. Each inexactly-armed reminder carries
-  the same badge collapsed and as the last expanded-view line, so a late
-  fire traces to its cause in-app instead of reading as an app bug. The
-  badge records what was actually armed (including the
+  the short badge collapsed and the long inexact notice as the last
+  expanded-view line, so a late fire traces to its cause in-app instead
+  of reading as an app bug. The badge records what was actually armed (including the
   SecurityException-fallback arm), not a re-read at fire time — except
   alarms armed before the flag existed, which fall back to the live grant
   until re-armed (one-shots on the next refresh; an already-armed overdue
