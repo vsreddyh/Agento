@@ -55,6 +55,22 @@ class OptTaskIntTest {
         assertEquals("\"\"", optTaskInt(obj(""), "k").raw)
         assertEquals(CoercedInt(7, null), optTaskInt(obj("  7  "), "k"))
         assertEquals("\"a\\nb\"", optTaskInt(obj("a\nb"), "k").raw)
+        assertEquals("\"a\\\"b\"", optTaskInt(obj("a\"b"), "k").raw)
+    }
+
+    @Test
+    fun `batch 404 matching is quoted and truncation-aware`() {
+        // Bare substrings over-evict ("a" matches "ab"); full-length
+        // matching misses the server's 40-truncated echo. Both quote forms
+        // bound the token, and the echo form matches long ids (#480).
+        val longId = "X".repeat(50)
+        val echo = "X".repeat(40)
+        val msg = "HTTP 404: {\"id\":\"$echo\",\"detail\":\"unknown task '$echo'\"} (is the Server URL the :8080 proxy?)"
+        assertEquals(listOf(longId), batchUnknownTaskIds(listOf(longId, "other"), msg))
+        val sub = "HTTP 404: {\"id\":\"ab\",\"detail\":\"unknown task 'ab'\"}"
+        assertEquals(listOf("ab"), batchUnknownTaskIds(listOf("a", "ab"), sub))
+        assertTrue(batchUnknownTaskIds(listOf("a"), "HTTP 500: boom").isEmpty())
+        assertTrue(batchUnknownTaskIds(listOf("a"), "HTTP 404: not found").isEmpty())
     }
 
     @Test

@@ -137,12 +137,14 @@ internal fun TaskManagerScreen(
     LaunchedEffect(filterName) {
         val filterMsg = filterCoercionMessage(filterName)
         if (filterMsg == null) {
-            // Clean read ends the vintage: forget the raw so a later
+            // Clean read ends the vintage: this screen shows one filter,
+            // so forget the whole noted list (not the current clean name,
+            // which by construction is never in it) — a later
             // re-corruption notifies again, mirroring the widget path
-            // (#480 review). Guarded — no state write, no recomposition
-            // loop on ordinary clean names.
-            if (filterName in filterCoercionNoted) {
-                filterCoercionNoted = filterCoercionNoted - filterName
+            // (#480 review). Assigning unconditionally would loop
+            // recomposition; the emptiness guard writes only on change.
+            if (filterCoercionNoted.isNotEmpty()) {
+                filterCoercionNoted = emptyList()
             }
         } else if (filterName !in filterCoercionNoted) {
             filterCoercionNoted = filterCoercionNoted + filterName
@@ -153,8 +155,8 @@ internal fun TaskManagerScreen(
     LaunchedEffect(sortName) {
         val sortMsg = sortCoercionMessage(sortName)
         if (sortMsg == null) {
-            if (sortName in sortCoercionNoted) {
-                sortCoercionNoted = sortCoercionNoted - sortName
+            if (sortCoercionNoted.isNotEmpty()) {
+                sortCoercionNoted = emptyList()
             }
         } else if (sortName !in sortCoercionNoted) {
             sortCoercionNoted = sortCoercionNoted + sortName

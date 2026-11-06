@@ -514,8 +514,8 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
  * escaped so one reset stays one log line. Capped like the other raws.
  */
 internal fun visibleTaskRaw(v: String): String =
-    "\"" + v.take(40).replace("\\", "\\\\").replace("\n", "\\n")
-        .replace("\r", "\\r").replace("\t", "\\t") + "\""
+    "\"" + v.take(40).replace("\\", "\\\\").replace("\"", "\\\"")
+        .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\""
 
 /**
  * Bounded diagnostics slot for one task row's single-read resets (#480):
@@ -533,6 +533,23 @@ internal fun singleCoercionState(id: String): String =
         val digest = md.digest(id.trim().toByteArray(Charsets.UTF_8))
         digest.take(6).joinToString("") { "%02x".format(it) }
     }.getOrDefault(id.trim().take(24))
+
+/**
+ * Which op ids a batch 404 names (#480): the server truncates echoed ids
+ * to 40 (`TruncateBytes`, store.go) and quotes them — JSON double quotes
+ * in the echoed body, single quotes in the `unknown task '…'` detail — so
+ * a full-length match would miss exactly the long ids the bounded-key
+ * work exists for, while a bare substring would let id "a" match a
+ * message naming only "ab". Both quote forms bound the token on both
+ * sides. Pure for tests.
+ */
+internal fun batchUnknownTaskIds(ids: List<String>, msg: String): List<String> {
+    if ("HTTP 404:" !in msg || "unknown task" !in msg) return emptyList()
+    return ids.filter { id ->
+        id.isNotEmpty() &&
+            ("\"${id.take(40)}\"" in msg || "'${id.take(40)}'" in msg)
+    }
+}
 
 /** One task row: null when the row carries no usable id or name (#430
  * counts those drops in [TaskList.dropped] instead of shrinking the
@@ -1364,18 +1381,10 @@ class TasksApi(context: Context) {
             }.also { r ->
                 // A whole-call 404 names no row in its URL: drop only the
                 // entries the error itself names, so live rows keep theirs
-                // (#480 review). Quoted: the id rides the server's JSON
-                // body as a string, and a bare substring would let id "a"
-                // match a message naming only "ab". Success needs no
-                // clear — each item parse just re-recorded its row's
-                // current entry.
-                val msg = r.exceptionOrNull()?.message ?: ""
-                if ("HTTP 404:" in msg && "unknown task" in msg) {
-                    for (op in ops) {
-                        if (op.id.isNotEmpty() && "\"${op.id}\"" in msg) {
-                            noteCoercedNotes("single", singleCoercionState(op.id), emptyList())
-                        }
-                    }
+                // (#480 review). Success needs no clear — each item parse
+                // just re-recorded its row's current entry.
+                for (id in batchUnknownTaskIds(ops.map { it.id }, r.exceptionOrNull()?.message ?: "")) {
+                    noteCoercedNotes("single", singleCoercionState(id), emptyList())
                 }
             }
         }

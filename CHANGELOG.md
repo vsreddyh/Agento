@@ -30,7 +30,7 @@ see GitHub Releases for older notes.
   instead of riding the log only; a list page evicts the single entries
   of the rows it contains, so the two never disagree; and a 404 naming
   the row evicts it on every verb (already-gone included), not just
-  `get` — batch matches the quoted id, so one gone row cannot evict a
+  `get` — batch matches the quoted, server-truncated id, so one gone row cannot evict a
   live sibling. the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (each surface that
