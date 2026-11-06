@@ -419,10 +419,10 @@ object ReminderTts {
     }
 
     /**
-     * Drops every failure notice for one task (all kinds). Called when a new
-     * reminder posts (stale notices must not outlive a fresh alert) and when
-     * posted alerts are dismissed ([TaskReminders.cancelPosted]), so a
-     * completed/skipped/dismissed task leaves no orphaned failure notice.
+     * Drops every failure notice for one task (all kinds). Called when posted
+     * alerts are dismissed ([TaskReminders.cancelPosted]), so a
+     * completed/skipped/dismissed-via-action task leaves no orphaned failure
+     * notice.
      */
     internal fun cancelFailures(appCtx: Context, taskId: String) {
         runCatching {
@@ -431,6 +431,20 @@ object ReminderTts {
             for (kind in ReminderKind.entries) {
                 runCatching { mgr.cancel(failureTag(taskId, kind.key), ALARM_NOTIF_ID) }
             }
+        }
+    }
+
+    /**
+     * Drops one reminder point's failure notice. Called when that point
+     * posts again: a retried alarm that now plays must not sit next to its
+     * own earlier failure — but other points' notices stay, since one
+     * point firing says nothing about another's speech (#434 review).
+     */
+    internal fun cancelFailureFor(appCtx: Context, taskId: String, kindKey: String) {
+        runCatching {
+            val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
+            mgr.cancel(failureTag(taskId, kindKey), ALARM_NOTIF_ID)
         }
     }
 
@@ -494,7 +508,12 @@ object ReminderTts {
             appCtxRef?.let {
                 applyStoredTtsSettings(eng, it)
                 runCatching {
-                    val names = eng.voices?.map { v -> v.name }.orEmpty()
+                    // Unknown (null) is not empty: a binder hiccup answering
+                    // null must not report "your saved voice is gone" for a
+                    // stored pick — the same null-vs-empty distinction the
+                    // voice picker draws (#434). Only a known voice list
+                    // that lacks the pick reports.
+                    val names = eng.voices?.map { v -> v.name } ?: return@runCatching
                     if (isStoredVoiceMissing(names, BehaviourSettings.ttsVoice(it))) {
                         reportFailure(next.taskId, next.kindKey, next.taskName, TtsFailure.VOICE_MISSING)
                     }
