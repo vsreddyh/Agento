@@ -84,6 +84,15 @@ private class TaskFactory(
             today = LocalDate.now(IST)
             // Cached rows skip the network; a miss fetches synchronously
             // (blocking is explicitly allowed on this binder thread).
+            // A preview/system bind has no placement: sourceless, so it
+            // neither records nor prunes — its entries would have no owner
+            // to ever clear them (#480 review).
+            val factorySource =
+                if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                    "widget-factory-$appWidgetId"
+                } else {
+                    ""
+                }
             val cached = TaskWidget.cachedViews[state]
             val fetched = if (cached != null) {
                 null
@@ -91,18 +100,25 @@ private class TaskFactory(
                 runCatching {
                     runBlocking {
                         withTimeoutOrNull(10_000) {
-                            TasksApi(appCtx).list(state, limit = 50, source = "widget-factory").getOrNull()
+                            TasksApi(appCtx).list(state, limit = 50, source = factorySource).getOrNull()
                         }
                     }
                 }.getOrNull()
             }
             // Every bind settles on this placement's state — cached,
-            // fetched, or empty on failure — so the factory's other states
-            // are stale no matter which path served the rows. Pruned here,
-            // not only on a network fetch: cache hits serve almost every
-            // bind, and a reconfig would otherwise linger next to the new
-            // view (#480 review).
-            TasksApi.clearCoercedNotesExcept("widget-factory", state)
+            // fetched, or empty on failure. The factory namespace is per
+            // placement (`widget-factory-<id>`), so pruning to this bind's
+            // state can never touch another placement's detail, and a
+            // reconfig drops the old view's notes with the same call that
+            // records the new one (#480 review). Pruned only when the bind
+            // settled on rows (cache hit or landed fetch — never a failed
+            // fetch showing nothing, never a preview bind with no
+            // placement), mirroring the manager's success-only prune.
+            if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID &&
+                (cached != null || fetched != null)
+            ) {
+                TasksApi.clearCoercedNotesExcept(factorySource, state)
+            }
             items = (cached ?: fetched?.tasks.orEmpty()
                 // Same order as the pushed paths (#369): the factory is
                 // the only renderer on API <31, so it sorts its own copy.

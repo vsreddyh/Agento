@@ -320,40 +320,24 @@ class TaskWidget : AppWidgetProvider() {
         for (id in appWidgetIds) {
             pruneCoercionsFor(id)
         }
-        // Task-notes entries have no per-placement clear, so a delete can
-        // orphan the states only the gone placement showed (#480 review).
+        // Task-notes lifecycle mirrors the pref prune above (#480 review).
         // The push path refetches all three states every cycle while any
-        // placement lives, so `widget:*` stays fresh on its own — but the
-        // factory fetches one state per bind and must be pruned here.
-        // Unknown (lookup threw): keep, so a transient failure cannot
-        // delete live detail.
+        // placement lives, so `widget:*` stays fresh on its own and is
+        // dropped only with the last placement. Factory entries are keyed
+        // per placement (`widget-factory-<id>`), so each deleted
+        // placement's entries die with it — precisely, whether or not
+        // siblings remain. Unknown (lookup threw): keep, so a transient
+        // failure cannot delete live detail.
         val remaining = runCatching {
             AppWidgetManager.getInstance(context)
                 .getAppWidgetIds(ComponentName(context, TaskWidget::class.java))
         }.getOrNull()
-        if (remaining == null) {
-            // Keep everything.
-        } else if (remaining.isEmpty()) {
-            // Last writer gone: no fetch will ever refresh or clear these
-            // again — drop the whole source, or About names resets for
-            // widgets that no longer exist.
-            TasksApi.clearCoercedNotesSource("widget")
-            TasksApi.clearCoercedNotesSource("widget-factory")
-        } else {
-            // Partial delete: drop factory entries for states no remaining
-            // placement shows. A state whose viewer failed to read keeps
-            // its entry — over-kept detail converges on the next bind,
-            // over-pruned detail is gone until a re-corruption.
-            val gone = appWidgetIds.toSet()
-            val liveStates = remaining.filter { it !in gone }.map { id ->
-                runCatching { viewFor(context, id).state }.getOrNull()
+        if (remaining != null) {
+            if (remaining.isEmpty()) {
+                TasksApi.clearCoercedNotesSource("widget")
             }
-            if (liveStates.none { it == null }) {
-                for (s in TaskWidgetView.entries.map { it.state }) {
-                    if (s !in liveStates) {
-                        TasksApi.noteCoercedNotes("widget-factory", s, emptyList())
-                    }
-                }
+            for (id in appWidgetIds) {
+                TasksApi.clearCoercedNotesSource("widget-factory-$id")
             }
         }
     }
@@ -688,14 +672,14 @@ class TaskWidget : AppWidgetProvider() {
         @Volatile internal var lastCoercions: Map<String, String> = emptyMap()
 
         internal fun noteCoercion(key: String, short: String?) {
-            // A clean read clears the key: a fixed pref stops advertising
-            // its old reset, so diagnostics reflects the current reset
-            // state rather than history (#480 review). The seen-set keeps
-            // the entry, so a re-corruption updates diagnostics without
-            // re-logging a line the log already holds.
+            // A clean read clears the key AND re-arms the log dedupe: a
+            // fixed pref stops advertising its old reset, and a later
+            // re-corruption notifies again — a fix is a vintage boundary
+            // like a delete, not log spam protection (#480 review).
             if (short == null) {
                 synchronized(coercionLock) {
                     lastCoercions = lastCoercions - key
+                    coercionSeen.removeIf { seen -> seen.startsWith("$key|") }
                 }
                 return
             }

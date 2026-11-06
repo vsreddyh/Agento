@@ -13,7 +13,8 @@ see GitHub Releases for older notes.
   default no longer does it silently: a corrupt or version-skewed Task
   Manager filter/sort toasts once naming what was stored and what it
   became, each widget placement logs its view/density/sort reset (once per
-  value) into Settings → About diagnostics alongside a per-key summary
+  value per vintage — a fix re-arms the log, so a re-corruption notifies
+  again) into Settings → About diagnostics alongside a per-key summary
   (cleared when the pref is fixed or the placement deleted, so
   diagnostics reflects current state, not history), and task rows whose
   numbers arrive mistyped (e.g.
@@ -28,10 +29,11 @@ see GitHub Releases for older notes.
   of the rows it contains, so the two never disagree. the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (each surface that
-  switches states — manager per landed load, widget factory per bind —
-  prunes its own stale ones, deleting the last widget drops the widget
-  entries, a partial delete drops factory states no placement shows, and
-  turning reminders off drops theirs) — the
+  switches states — manager per landed load, widget factory per settled
+  bind in its own per-placement namespace — prunes its own stale ones;
+  failed/empty binds and preview binds prune nothing; deleting a widget
+  drops that placement's factory entries, deleting the last one drops
+  the push entries too, and turning reminders off drops theirs) — the
   log and the page carry the same capped sample while the diagnostics
   record keeps every row (the About line shows the first 500 chars, so
   very large pages reconcile by count, not by full text), so the hint

@@ -465,24 +465,28 @@ class WidgetCoercionTest {
     }
 
     @Test
-    fun `a fixed pref clears its diagnostics entry without re-logging`() {
-        // #480 review: diagnostics must reflect the current reset state,
-        // not history — while the log still fires once per distinct value.
+    fun `a fix clears diagnostics and re-arms logging`() {
+        // #480 review: a clean read ends the vintage — diagnostics drops
+        // the entry and the log dedupe forgets it, so a later
+        // re-corruption notifies again (like a delete re-arms a reused id).
         val key = "task_widget_view_9901"
+        val seen = "$key|\"Snoozed\"->Open"
         try {
             TaskWidget.noteCoercion(key, "\"Snoozed\"->Open")
             assertEquals("\"Snoozed\"->Open", TaskWidget.lastCoercions[key])
             TaskWidget.noteCoercion(key, null)
             assertTrue(key !in TaskWidget.lastCoercions)
-            // Re-corruption updates diagnostics again (log stays quiet —
-            // the line is already in the log from the first report).
+            synchronized(TaskWidget.coercionLock) {
+                assertTrue(seen !in TaskWidget.coercionSeen)
+            }
+            // Re-corruption re-registers (and would log again).
             TaskWidget.noteCoercion(key, "\"Snoozed\"->Open")
             assertEquals("\"Snoozed\"->Open", TaskWidget.lastCoercions[key])
+            synchronized(TaskWidget.coercionLock) {
+                assertTrue(seen in TaskWidget.coercionSeen)
+            }
         } finally {
             TaskWidget.noteCoercion(key, null)
-            synchronized(TaskWidget.coercionLock) {
-                TaskWidget.coercionSeen.remove("$key|\"Snoozed\"->Open")
-            }
         }
     }
 

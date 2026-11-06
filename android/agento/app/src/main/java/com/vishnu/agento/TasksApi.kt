@@ -800,10 +800,11 @@ class TasksApi(context: Context) {
          * names the row, the key, the raw value and what it became — every
          * row of the page, not the first-3 sample the log and [TaskList] carry
          * (page-bounded and replaced wholesale per fetch, so it cannot grow
-         * without bound). Keyed by fetch (`source:state` — the
-         * Task Manager pulls one state, the widget three, reminders
-         * another) because any single slot lets one screen's fetch
-         * clobber or clear another's detail — including same-state
+         * without bound). Keyed by fetch (`source:state` — the Task Manager
+         * pulls one state, the widget push three, each widget factory one
+         * in its own per-placement namespace, reminders one) because any
+         * single slot lets one fetch clobber or clear another's detail
+         * — including same-state
          * fetches at different limits. Read by [TaskWidget.diagnostics]
          * so each screen's hint points at detail that is actually on that
          * screen. A clean page clears only its own entry; sibling states
@@ -835,8 +836,9 @@ class TasksApi(context: Context) {
 
         /**
          * Drops one source's entries for every state but [keepState].
-         * The Task Manager (one state per filter) and the widget factory (one
-         * state per bound placement) both switch states: without this
+         * The Task Manager (one state per filter) and each widget factory
+         * (one state per bound placement, in its own per-placement
+         * namespace) prune to the settled state: without this
          * the old filter's/view's notes would linger next to the new page (#480
          * review). Called on a successful load only — on failure the rows
          * on screen are still the previous page; the factory calls it on
