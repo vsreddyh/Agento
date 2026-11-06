@@ -175,9 +175,10 @@ class StaleDataTest {
 
     @Test
     fun `transient client failure reads as retry not a device state`() {
-        // SDK AVAILABLE but the client failed to build: the settings card
-        // reads "ready" for the same state, so the sync card must not claim
-        // "unavailable on this device".
+        // SDK AVAILABLE but the client failed to build: the settings
+        // section offers a retry for the same state (never a permission
+        // grant), so the sync card must not claim "unavailable on this
+        // device".
         assertTrue(HEALTH_CONNECT_TRANSIENT_MESSAGE.isNotBlank())
         assertNotEquals(
             HEALTH_CONNECT_UNAVAILABLE_MESSAGE,
@@ -210,18 +211,22 @@ class StaleDataTest {
     fun `hub health row leads with update needed`() {
         assertEquals(
             "Update needed",
-            hubHealthStatus(false, true, false, false, ""),
+            hubHealthStatus(false, true, false, false, false, ""),
+        )
+        assertEquals(
+            "Not responding",
+            hubHealthStatus(true, false, true, false, false, ""),
         )
         assertEquals(
             "Not installed",
-            hubHealthStatus(false, false, false, false, ""),
+            hubHealthStatus(false, false, false, false, false, ""),
         )
         assertEquals(
             "Setup needed",
-            hubHealthStatus(true, false, false, false, ""),
+            hubHealthStatus(true, false, false, false, false, ""),
         )
-        assertEquals("Syncing…", hubHealthStatus(true, false, true, true, ""))
-        assertEquals("Synced", hubHealthStatus(true, false, true, false, "t"))
-        assertEquals("Ready", hubHealthStatus(true, false, true, false, ""))
+        assertEquals("Syncing…", hubHealthStatus(true, false, false, true, true, ""))
+        assertEquals("Synced", hubHealthStatus(true, false, false, true, false, "t"))
+        assertEquals("Ready", hubHealthStatus(true, false, false, true, false, ""))
     }
 }

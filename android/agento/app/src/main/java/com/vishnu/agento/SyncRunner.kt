@@ -47,7 +47,8 @@ object SyncRunner {
             // the SDK status the settings card gates on (#435 review): an
             // outdated provider names its fix, and an AVAILABLE platform
             // with a dead client reads as transient ("try again"), not as
-            // a device state — so the two cards describe the same state.
+            // a device state — the settings section offers the same retry
+            // for that state instead of a permission grant.
             if (!manager.available) {
                 val message = when (HealthConnectManager.availabilityStatus(context)) {
                     HealthConnectAvailability.UPDATE_REQUIRED ->
