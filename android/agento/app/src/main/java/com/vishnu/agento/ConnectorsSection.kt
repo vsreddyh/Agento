@@ -63,6 +63,15 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // so cancellation still re-arms).
     val mutationArmed = remember { AtomicBoolean(true) }
 
+    // Single-writer/read gates, computed once per composition (#484
+    // review): concurrent refresh/disconnect writers race (last writer
+    // wins — a slow failure over fresh rows, or a stale list over a just
+    // disconnected row), and same-frame double taps bypass composition
+    // locks. Passed to the rows; reused below for the retry and the
+    // bottom Check again so every gate reads the same values.
+    val connectLocked = pendingConnect != null || busyId != null
+    val mutateLocked = busyId != null || loading
+
     fun path(): String = catalogPath(ChatApi(context))
 
     fun refresh() {
@@ -118,6 +127,12 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
             if (pendingConnect != pending) return@LaunchedEffect
             ConnectorsApi(context).list(path()).fold(
                 onSuccess = { list ->
+                    // Wait key re-checked BEFORE applying (#484 review): a
+                    // disconnect landing mid-IO must not have its mapping
+                    // overwritten by this stale round — and with the wait
+                    // cancelled there is no later round to heal it. Refresh
+                    // resolutions and newer waits own their own applies.
+                    if (pendingConnect != pending) return@LaunchedEffect
                     connectors = list
                     anyOk = true
                     lastError = ""
@@ -125,11 +140,6 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     // poll round heals a failed manual refresh (#484
                     // review).
                     error = ""
-                    // Re-checked after IO (#484 review): a manual Check
-                    // again may have resolved (and toasted) while this
-                    // round was in flight — a second "Connected." would
-                    // read as a second event.
-                    if (pendingConnect != pending) return@LaunchedEffect
                     if (list.any { it.id == pending && (it.isConnected() || it.isExpired()) }) {
                         pendingConnect = null
                         if (list.any { it.id == pending && it.isConnected() }) {
@@ -192,7 +202,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 // pendingConnect and abandon the first wait with no
                 // toast and no cleanup. busyId joins the lock so a
                 // second tap during the first fetch cannot do it either.
-                connectLocked = pendingConnect != null || busyId != null,
+                connectLocked = connectLocked,
                 // Disconnects serialize the same way: a second tap while
                 // one is in flight would overwrite busyId, and the first
                 // completion would re-enable the second button mid-request
@@ -203,7 +213,7 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 // writer behind it. Pending consent does not lock
                 // Disconnect — rows are independent, only in-flight work
                 // serializes.
-                mutateLocked = busyId != null || loading,
+                mutateLocked = mutateLocked,
                 onConnect = {
                     // Synchronous tap guard (see mutationArmed above):
                     // same-frame double taps both see enabled buttons.
