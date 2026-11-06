@@ -759,6 +759,23 @@ object ReminderTts {
                 }
             }
             if (next == null) return
+            // Task-drop between dequeue and speak (#470 review): a
+            // Complete/Delete/Edit landing here restarts audio on the
+            // just-stopped engine for a dropped task. Every drop path
+            // removes the owners entry, so its absence means this
+            // utterance died while dequeued — drop silently and reset the
+            // flags it was dequeued under (same wedge as the DND drop).
+            // The check-then-speak sliver itself is inherent.
+            val live = synchronized(lock) {
+                if (!owners.containsKey(next.id)) {
+                    speaking = false
+                    speakingId = null
+                    false
+                } else {
+                    true
+                }
+            }
+            if (!live) continue
             // DND/ringer flipped quiet after enqueue (#470 review): the
             // enqueue gate's visual-only rule applies at dequeue too — drop
             // silently, not loudly. This is not a failure (the visual alert

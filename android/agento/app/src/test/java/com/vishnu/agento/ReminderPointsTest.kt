@@ -275,6 +275,14 @@ class ScheduleSnapshotTest {
     }
 
     @Test
+    fun `a rename reschedules — queued speech names the old words`() {
+        val prev = scheduleSnapshot(listOf(task("a")))
+        val renamed = task("a").copy(name = "New name")
+        val next = scheduleSnapshot(listOf(renamed))
+        assertEquals(setOf("a"), rescheduledIds(prev, next))
+    }
+
+    @Test
     fun `arrivals and departures are not reschedules`() {
         // Gone tasks are purged by the zero-bid path, new tasks have
         // nothing stale — the diff only matches ids in both.

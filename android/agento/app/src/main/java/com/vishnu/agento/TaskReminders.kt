@@ -292,9 +292,14 @@ private fun addIfFuture(
     if (at > nowMillis) out[kind] = at
 }
 
-/** Schedule identity for one task: what a reschedule changes. */
+/** Schedule identity for one task: what a reschedule changes. Due, time
+ * and estimate drive the alarm set; the name and voice phrase drive the
+ * spoken text — a rename must purge stale speech like a reschedule does
+ * (#470 review). Description and repeat ride no alert and no utterance,
+ * so they stay out: purging on them would silence live reminders for a
+ * no-op change. */
 internal fun scheduleFingerprint(t: ServerTask): String =
-    "${t.dueDate}|${t.dueTime}|${t.estimatedMinutes}"
+    "${t.dueDate}|${t.dueTime}|${t.estimatedMinutes}|${t.name}|${t.speakName}"
 
 /** The last-seen schedule per open task id. */
 internal fun scheduleSnapshot(tasks: List<ServerTask>): Map<String, String> =
@@ -382,10 +387,10 @@ object TaskReminders {
     private const val PREF_ARMED = "task_reminder_armed"
     private const val PREF_BUDGET = "task_reminder_budget"
     /**
-     * Last-seen schedule per open task (`taskId|dueDate|dueTime|estimate`),
-     * plus the lead it was read under. A background or agent-side edit
-     * moves these without touching the UI paths, so refresh diffs them to
-     * find reschedules (see [rescheduledIds]).
+     * Last-seen schedule per open task (`taskId|dueDate|dueTime|estimate|
+     * name|speakName`), plus the lead it was read under. A background or
+     * agent-side edit moves these without touching the UI paths, so
+     * refresh diffs them to find reschedules (see [rescheduledIds]).
      */
     private const val PREF_SCHEDULE = "task_reminder_schedule"
     private const val PREF_SCHEDULE_LEAD = "task_reminder_schedule_lead"
