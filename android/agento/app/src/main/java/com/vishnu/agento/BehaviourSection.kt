@@ -225,9 +225,9 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     // Exact-alarm grant, re-read on the same resume tick as the switches
     // above: enabling without it falls back to inexact alarms, and the
-    // copy must not promise otherwise. Single inventory with the arming
-    // path ([canScheduleExactAlarms]), so toggle and alarm can never
-    // disagree about the grant.
+    // copy must not promise otherwise. Same reader as the arming path
+    // ([canScheduleExactAlarms]) — one source, though a grant flip between
+    // this read and the arm still lands inexact.
     val exactAlarms = remember(resumeTick) { canScheduleExactAlarms(appCtx) }
 
     SectionCard(
@@ -317,7 +317,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 if (remindersOn) {
                     "Exact alarms aren't allowed — reminders still fire, but may be inexact until allowed in system settings."
                 } else {
-                    "Exact alarms aren't allowed — reminders will fire inexact and may be late until allowed in system settings."
+                    "Exact alarms aren't allowed — if turned on, reminders fire inexact and may be late until allowed in system settings."
                 }
             )
         }

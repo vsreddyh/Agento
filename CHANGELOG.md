@@ -12,10 +12,12 @@ see GitHub Releases for older notes.
 - **Inexact alarms say so (#436).** The Due-time reminders toggle no
   longer reads exact when the exact-alarm grant is missing: its own
   sub-line carries a persistent "Inexact — reminders may be late" badge
-  (on or off), with a hint explaining reminders fire inexact until the
-  grant is allowed in system settings. Each posted reminder's expanded
-  view carries the same badge as its last line, so a late fire traces to
-  its cause in-app instead of reading as an app bug.
+  (on or off), with a hint explaining the inexact mode until the grant
+  is allowed in system settings. Each inexactly-armed reminder carries
+  the same badge collapsed and as the last expanded-view line, so a late
+  fire traces to its cause in-app instead of reading as an app bug. The
+  badge records what was actually armed (including the
+  SecurityException-fallback arm), not a re-read at fire time.
 
 ## [6.2.0]
 - **Stale and failed data says so (#435).** The task widget badges cached

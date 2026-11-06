@@ -28,13 +28,11 @@ class InexactBadgeTest {
             "inexact sub must keep the base text, got: $sub",
             sub.startsWith(REMINDER_TOGGLE_SUB),
         )
+        // The exact shared badge, not a paraphrase: toggle sub and the
+        // collapsed notification line must read identically.
         assertTrue(
-            "inexact sub must say inexact, got: $sub",
-            sub.contains("Inexact", ignoreCase = true),
-        )
-        assertTrue(
-            "inexact sub must warn about lateness, got: $sub",
-            sub.contains("late", ignoreCase = true),
+            "inexact sub must carry the shared badge, got: $sub",
+            sub.contains(INEXACT_BADGE_SHORT),
         )
     }
 
