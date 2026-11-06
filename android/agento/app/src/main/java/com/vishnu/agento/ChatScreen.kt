@@ -2196,8 +2196,11 @@ internal fun ChatScreen(
             // could not tell "didn't hear me" from "errored". Non-OK is not
             // necessarily a user cancel (#449 review): the recognizer
             // answers CANCELED for its own errors too, so the wording stays
-            // neutral — and a genuine Back-button cancel is a benign no-op
-            // (Info, like the other picker/launcher no-ops), not an Error.
+            // neutral. A genuine Back-button cancel also lands here and
+            // toasts — unlike the camera/gallery pickers, which stay
+            // silent — because a silent CANCELED could be a recognizer
+            // error, and the toast names the retry either way. Info, like
+            // the other picker/launcher no-ops; never an Error.
             if (result.resultCode == Activity.RESULT_OK) {
                 toasts.toast("Didn't catch that — tap the mic to try again.", ToastKind.Error)
             } else {
