@@ -65,7 +65,7 @@ private fun Destination.icon() = when (this) {
     Destination.Settings -> Icons.Filled.Settings
 }
 
-/** Settings subsections; each gets its own drawer entry + screen (#60).
+/** Settings subsections; each gets its own hub row + screen (#60, #418).
  * Taxonomy follows Android conventions (General/Notifications/Data & sync,
  * Backup, About): connection setup first, feature areas next, device data
  * and app info last. */
@@ -388,6 +388,12 @@ class MainActivity : ComponentActivity() {
                                     wc = wc,
                                     onMenu = { scope.launch { drawerState.open() } },
                                     onPick = { section = it },
+                                    // Back arrow on subsection screens (#418):
+                                    // without this the arrow renders but does
+                                    // nothing, leaving no return path to the
+                                    // hub (the drawer has no subsection rows
+                                    // anymore).
+                                    onBack = { section = null },
                                     themeMode = themeMode,
                                     onTheme = {
                                         themeMode = it
