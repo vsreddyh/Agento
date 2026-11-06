@@ -84,6 +84,46 @@ class OptTaskIntTest {
     }
 
     @Test
+    fun `batch 404 matching sees through JSON escaping`() {
+        // Go Marshal escapes quote/backslash in the echoed body: match the
+        // escaped echo too, or a gone pathological id leaks (#480 review).
+        val msg = "HTTP 404: {\"id\":\"a\\\"b\",\"detail\":\"unknown task 'a\\\"b'\"}"
+        assertEquals(listOf("a\"b"), batchUnknownTaskIds(listOf("a\"b", "other"), msg))
+    }
+
+    @Test
+    fun `non-string raws escape like string raws`() {
+        // A JSONArray raw carries quotes; any raw can carry controls — one
+        // reset stays one log line on every fallback path (#480 review).
+        val arr = JSONObject("""{"id":"a","name":"A"}""")
+        arr.put("estimated_minutes", org.json.JSONArray(listOf("a;b")))
+        assertEquals("[\\\"a;b\\\"]", optTaskInt(arr, "estimated_minutes").raw)
+        assertEquals(0, optTaskInt(arr, "estimated_minutes").value)
+    }
+
+    @Test
+    fun `a dropped row still evicts its single entry`() {
+        // The page is the newer vintage for contained-but-dropped rows
+        // too: a blanked name must not leave the old parseable vintage
+        // behind forever (#480 review).
+        val key = "single:" + singleCoercionState("a")
+        try {
+            parseTask(JSONObject("""{"id":"a","name":"A","estimated_minutes":"abc"}"""))
+            assertEquals(1, TasksApi.lastCoercedNotes[key]?.size)
+            val page = parseTaskListPage(
+                """{"tasks":[{"id":"a","name":""}]}""",
+                "open",
+                "manager",
+            )
+            assertEquals(1, page.dropped)
+            assertTrue(key !in TasksApi.lastCoercedNotes)
+        } finally {
+            TasksApi.noteCoercedNotes("single", singleCoercionState("a"), emptyList())
+            TasksApi.noteCoercedNotes("manager", "open", emptyList())
+        }
+    }
+
+    @Test
     fun `numeric strings read as their number with no coercion`() {
         assertEquals(CoercedInt(90, null), optTaskInt(obj("90"), "k"))
         assertEquals(CoercedInt(7, null), optTaskInt(obj("  7  "), "k"))

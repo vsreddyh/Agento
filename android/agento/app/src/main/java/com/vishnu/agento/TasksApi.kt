@@ -483,7 +483,7 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
         if (!d.isFinite() || d < Int.MIN_VALUE || d > Int.MAX_VALUE ||
             d.toInt().toDouble() != d
         ) {
-            return CoercedInt(default, v.toString().take(40))
+            return CoercedInt(default, escapeTaskRawText(v.toString().take(40)))
         }
         return CoercedInt(v.toInt(), null)
     }
@@ -505,17 +505,29 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
         }
         return CoercedInt(default, visibleTaskRaw(v))
     }
-    return CoercedInt(default, v.toString().take(40))
+    // Unquoted (unlike strings) but escaped the same: a JSONArray raw
+    // carries quotes, and any raw can carry a newline (#480 review).
+    return CoercedInt(default, escapeTaskRawText(v.toString().take(40)))
 }
 
 /**
- * What the note names for an unreadable string (#480): the stored value
- * verbatim in quotes — never the trimmed parse copy — with control chars
- * escaped so one reset stays one log line. Capped like the other raws.
+ * What the note names for an unreadable value (#480): strings verbatim in
+ * quotes — never the trimmed parse copy — with backslash, quote and
+ * control chars escaped so one reset stays one log line. Capped like the
+ * other raws.
  */
 internal fun visibleTaskRaw(v: String): String =
-    "\"" + v.take(40).replace("\\", "\\\\").replace("\"", "\\\"")
-        .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\""
+    "\"" + escapeTaskRawText(v.take(40)) + "\""
+
+/**
+ * The escaping half of [visibleTaskRaw], shared by the non-string
+ * fallbacks in [optTaskInt] (a `JSONArray` raw carries quotes too) and the
+ * batch 404 matcher: backslash first, then quote and control chars, so a
+ * hostile stored value cannot break the quoted note format or span lines.
+ */
+internal fun escapeTaskRawText(v: String): String =
+    v.replace("\\", "\\\\").replace("\"", "\\\"")
+        .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
 
 /**
  * Bounded diagnostics slot for one task row's single-read resets (#480):
@@ -542,19 +554,26 @@ internal fun singleCoercionState(id: String): String =
  * Which op ids a batch 404 names (#480): the server truncates echoed ids
  * to 40 bytes (`TruncateBytes`, store.go — mirrored by
  * [truncateUtf8Bytes]) and quotes them — JSON double quotes
- * in the echoed body, single quotes in the `unknown task '…'` detail — so
+ * in the echoed body, single quotes in the `unknown task` detail — so
  * a full-length match would miss exactly the long ids the bounded-key
  * work exists for, while a bare substring would let id "a" match a
  * message naming only "ab". Both quote forms bound the token on both
- * sides. Pure for tests.
+ * sides, each raw and JSON-escaped (backslash/quote/newline-class only —
+ * Go's wider `\uXXXX`/HTML escapes are not mirrored, so an id needing
+ * those still misses). Pure for tests.
  */
 internal fun batchUnknownTaskIds(ids: List<String>, msg: String): List<String> {
     if ("HTTP 404:" !in msg || "unknown task" !in msg) return emptyList()
     return ids.filter { id ->
         // Byte-prefix, mirroring the server's TruncateBytes (not chars:
-        // long non-ASCII ids echo byte-truncated), in both quote forms.
+        // long non-ASCII ids echo byte-truncated), in both quote forms —
+        // and JSON-escaped, mirroring Marshal for the subset that can
+        // appear in an id (backslash, quote, \n\r\t): a gone `a"b` echoes
+        // as `a\"b`, never verbatim (#480 review).
         val echo = truncateUtf8Bytes(id.trim(), 40)
-        id.isNotEmpty() && ("\"$echo\"" in msg || "'$echo'" in msg)
+        val escaped = escapeTaskRawText(echo)
+        id.isNotEmpty() && ("\"$echo\"" in msg || "'$echo'" in msg ||
+            "\"$escaped\"" in msg || "'$escaped'" in msg)
     }
 }
 
@@ -697,19 +716,25 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
     var coerced = 0
     for (i in 0 until arr.length()) {
         val before = coercedNotes.size
-        val task = arr.optJSONObject(i)?.let { parseTask(it, coercedNotes) }
+        val obj = arr.optJSONObject(i)
+        val task = obj?.let { parseTask(it, coercedNotes) }
         if (task != null) {
             out.add(task)
-            // The page is the newer vintage for every row it contains: evict
-            // the row's single entry so two vintages never disagree — but only
-            // for a real fetch. A sourceless parse writes no record at all
-            // (see the KDoc), and must not delete either (#480 review).
-            if (source.isNotEmpty()) {
-                TasksApi.noteCoercedNotes("single", singleCoercionState(task.id), emptyList())
-            }
             if (coercedNotes.size > before) coerced++
         } else {
             dropped++
+        }
+        // The page is the newer vintage for every row it contains —
+        // parsed or dropped: a row turning unparseable (blanked name) must
+        // not leave its old parseable vintage behind forever, since no
+        // future parseable page will ever evict it (#480 review). But only
+        // for a real fetch: a sourceless parse writes no record at all
+        // (see the KDoc), and must not delete either.
+        if (source.isNotEmpty()) {
+            val rowId = task?.id ?: obj?.let { optJsonStr(it, "id") }.orEmpty()
+            if (rowId.isNotEmpty()) {
+                TasksApi.noteCoercedNotes("single", singleCoercionState(rowId), emptyList())
+            }
         }
     }
     if (dropped > 0) {
