@@ -244,6 +244,23 @@ class TaskNumericCoercionTest {
     }
 
     @Test
+    fun `a single-row reset enters diagnostics under its row id`() {
+        // List pages are not the only readers: a get() of one corrupted
+        // row must survive log rotation too — and a later clean read must
+        // clear it (#480 review).
+        try {
+            parseTask(JSONObject("""{"id":"solo","name":"S","estimated_minutes":"abc"}"""))
+            val notes = TasksApi.lastCoercedNotes["single:solo"].orEmpty()
+            assertEquals(1, notes.size)
+            assertTrue(notes.single().contains("estimated_minutes"))
+            parseTask(JSONObject("""{"id":"solo","name":"S","estimated_minutes":5}"""))
+            assertTrue("single:solo" !in TasksApi.lastCoercedNotes)
+        } finally {
+            TasksApi.noteCoercedNotes("single", "solo", emptyList())
+        }
+    }
+
+    @Test
     fun `coercion notes name the key raw and reset values`() {
         val notes = mutableListOf<String>()
         parseTask(

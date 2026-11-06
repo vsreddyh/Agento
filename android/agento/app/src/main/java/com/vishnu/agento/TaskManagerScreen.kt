@@ -365,12 +365,12 @@ internal fun TaskManagerScreen(
                     )
                 } else {
                     error = serverDetail(e.message ?: e.javaClass.simpleName)
-                    // The flag describes the rows on screen, so it resets with
-                    // them: a failed fetch leaves yesterday's rows up, and they
-                    // must not keep advertising yesterday's truncation.
-                    listTruncated = false
-                    droppedCount = 0
-                    coercedCount = 0
+                    // Kept with the rows, like the background path: a failed
+                    // fetch leaves yesterday's rows up, and the counts and
+                    // notes describe those rows — visible or not. Resetting
+                    // them while keeping the rows would split count, detail
+                    // and rows three ways (#480 review). Everything refreshes
+                    // together on the next landed load.
                 }
                 false
             },

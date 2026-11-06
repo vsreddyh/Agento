@@ -501,9 +501,13 @@ internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedIn
  * Mistyped numerics reset to their defaults AND report through [coerced]
  * (#437): each entry names the key, the raw value and the reset value
  * (`estimated_minutes "abc"->0`), so the caller can log it once instead
- * of the reset passing silently. Null [coerced] logs the row's own line
- * directly (a single-row read notifies once by construction); a list
- * caller passes its accumulator and logs one page summary itself. */
+ * of the reset passing silently. Null [coerced] means a single-row read
+ * (`get`/`create`/`update`/`resolve`/`batch`): it logs the row's own line
+ * directly (notifying once by construction) AND records under its row id
+ * for diagnostics — otherwise single-row resets would ride the log only,
+ * invisible after rotation (#480 review). A clean single read clears its
+ * row's entry. A list caller passes its accumulator and logs one page
+ * summary itself. */
 internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): ServerTask? {
     // Canonical `id` only (#433): the retired Mongo `_id` fallback is gone,
     // so a row that only carries `_id` is counted as unparseable instead of
@@ -515,10 +519,16 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
     // One lenient read per numeric field (#437): a mistyped server value
     // used to become 0 minutes with no word. The note carries the row so
     // a page summary can tell two rows' resets apart.
+    //
+    // Single-row mode collects into a local list: the notes flush to the
+    // log immediately (existing behaviour) and to the diagnostics record
+    // at the end, so both channels hold for single rows too.
+    val singleNotes = mutableListOf<String>()
     fun note(text: String) {
         if (coerced != null) {
             coerced.add(text)
         } else {
+            singleNotes.add(text)
             runCatching {
                 Log.w("TasksApi", "coerced $text")
             }
@@ -574,7 +584,15 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
         createdAt = optJsonStr(o, "createdAt"),
         contractVersion = version,
         skipped = o.optBoolean("skipped", false),
-    )
+    ).also {
+        // Single-row reads join both channels too: record under the row
+        // id (or clear it on a clean read, so a fixed row stops
+        // advertising). List callers pass an accumulator and skip this —
+        // the page records once for the whole batch.
+        if (coerced == null) {
+            TasksApi.noteCoercedNotes("single", id, singleNotes.take(3))
+        }
+    }
 }
 
 /** One message for a server that does not speak the canonical task list
