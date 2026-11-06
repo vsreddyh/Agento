@@ -54,10 +54,6 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // ON_RESUME, which re-lists immediately (same tick below).
     var pendingConnect by remember { mutableStateOf<String?>(null) }
     var busyId by remember { mutableStateOf<String?>(null) }
-    // Last poll-round failure, for the end-of-wait message (#484 review):
-    // a dead server through all 40 rounds is not a slow consent, and
-    // "Still waiting" would misdirect into waiting on the browser.
-    var pollError by remember { mutableStateOf("") }
 
     fun path(): String = catalogPath(ChatApi(context))
 
@@ -103,14 +99,20 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     val pending = pendingConnect
     LaunchedEffect(pending) {
         if (pending == null) return@LaunchedEffect
-        pollError = ""
+        // Wait-scoped, not remembered: each consent wait gets a fresh
+        // verdict. Error only when NO round succeeded — one transient
+        // blip in 39 good rounds is not a dead server, and one good round
+        // in 39 failures is not a healthy one (#484 review).
+        var anyOk = false
+        var lastError = ""
         repeat(40) {
             delay(3_000L)
             if (pendingConnect != pending) return@LaunchedEffect
             ConnectorsApi(context).list(path()).fold(
                 onSuccess = { list ->
                     connectors = list
-                    pollError = ""
+                    anyOk = true
+                    lastError = ""
                     // Same stale-banner rule as refresh() above: a good
                     // poll round heals a failed manual refresh (#484
                     // review).
@@ -128,22 +130,24 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     }
                 },
                 onFailure = { e ->
-                    pollError = e.message ?: e.javaClass.simpleName
+                    lastError = e.message ?: e.javaClass.simpleName
                 },
             )
         }
         // Wait ran out with the row still unchanged: stop polling, keep
-        // the manual check. Not an error — the consent page may still be
-        // open in the browser — unless every round failed, which is a dead
-        // server, not a slow consent (#484 review).
+        // the manual check. A wait that never reached the server is a
+        // dead server, not a slow consent; anything else is still just
+        // waiting on the browser.
         if (pendingConnect == pending) {
             pendingConnect = null
-            val last = pollError
-            pollError = ""
-            toasts.toast(
-                last.ifEmpty { "Still waiting — tap Check again after finishing in the browser." },
-                kind = if (last.isEmpty()) ToastKind.Info else ToastKind.Error,
-            )
+            if (anyOk) {
+                toasts.toast("Still waiting — tap Check again after finishing in the browser.")
+            } else {
+                toasts.toast(
+                    lastError.ifEmpty { "Couldn't reach the server." },
+                    kind = ToastKind.Error,
+                )
+            }
         }
     }
 
@@ -231,6 +235,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                 // waiting" toast for the impossible (#484
                                 // review).
                                 if (pendingConnect == c.id) pendingConnect = null
+                                // Same stale-banner rule as refresh/poll: a
+                                // failed Check again must not banner over
+                                // rows a later disconnect just fixed (#484
+                                // review).
+                                error = ""
                                 if (row != null) {
                                     connectors = connectors.map {
                                         if (it.id == row.id) row else it
@@ -334,6 +343,19 @@ private fun ConnectorRow(
                             else -> "Connect"
                         },
                     )
+                }
+                // Expired rows keep a Disconnect next to Reconnect (#484
+                // review): the server revokes expired grants without a
+                // fresh consent, so revoking must not require re-granting
+                // first. Same mutation gate as the connected path.
+                if (info.isExpired()) {
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        enabled = !busy && !mutateLocked,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(if (busy) "Working…" else "Disconnect")
+                    }
                 }
                 if (pending) {
                     OutlinedButton(onClick = onCheckAgain, modifier = Modifier.weight(1f)) {
