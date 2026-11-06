@@ -261,6 +261,20 @@ class TaskNumericCoercionTest {
     }
 
     @Test
+    fun `a pathological id cannot grow the diagnostics key`() {
+        // Keys ride take(24) like the note text: hex ObjectIds pass
+        // through whole, anything longer is bounded (#480 review).
+        val longId = "x".repeat(40)
+        try {
+            parseTask(JSONObject("""{"id":"$longId","name":"S","estimated_minutes":"abc"}"""))
+            assertTrue("single:$longId" !in TasksApi.lastCoercedNotes)
+            assertEquals(1, TasksApi.lastCoercedNotes["single:${"x".repeat(24)}"]?.size)
+        } finally {
+            TasksApi.noteCoercedNotes("single", "x".repeat(24), emptyList())
+        }
+    }
+
+    @Test
     fun `coercion notes name the key raw and reset values`() {
         val notes = mutableListOf<String>()
         parseTask(

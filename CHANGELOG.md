@@ -22,8 +22,9 @@ see GitHub Releases for older notes.
   revision clamp likewise) keep
   showing with the reset value while the list carries a hint counting
   rows (the per-field detail reads as a sample, not a second total);
-  single-row reads (`get`/`create`/`update`) join both channels under
-  their row id instead of riding the log only. the key, the raw value and what it became ride both the log and
+  single-row reads (`get`/`create`/`update`/`reopen`/`complete`/`skip`/
+  `batch`) join both channels under their row id instead of riding the
+  log only. the key, the raw value and what it became ride both the log and
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (the one screen that
   switches states prunes its own stale ones on each landed page) — and both channels name

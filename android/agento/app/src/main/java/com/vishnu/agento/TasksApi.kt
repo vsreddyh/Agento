@@ -451,10 +451,12 @@ internal fun optTaskDays(o: JSONObject, key: String): List<String> {
 /** Lenient int read that names its coercions (#437): int, long and
  * double arrive as [Number], and a numeric string (including a
  * double-encoded `"1.0"`) reads as its number — the same leniency
- * [parseContractVersion] allows. Anything else present-but-unreadable (a
- * non-numeric string, a boolean, an object) resets to [default] AND
- * reports the raw value in [CoercedInt.raw] (null raw means clean, so
- * only a reset notifies). Absent or JSON-null reads [default] with a null raw:
+ * [parseContractVersion] allows. The gate is finite, in-range AND
+ * integral: non-numeric strings, booleans/objects/arrays, non-finite
+ * doubles (`"NaN"`/`"Infinity"`), out-of-range ints/longs/doubles, and
+ * fractions (`5.9`/`"5.9"`) all reset to [default] AND report the raw
+ * value in [CoercedInt.raw] (null raw means clean, so only a reset
+ * notifies). Absent or JSON-null reads [default] with a null raw:
  * a default itself is fine, only a reset is reported. Bounds stay at the
  * call site — but the call site notifies, because a clamped negative is
  * still a reset, not a default (see `parseTask`). */
@@ -587,10 +589,13 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
     ).also {
         // Single-row reads join both channels too: record under the row
         // id (or clear it on a clean read, so a fixed row stops
-        // advertising). List callers pass an accumulator and skip this —
-        // the page records once for the whole batch.
+        // advertising). Keyed by the first 24 chars — ids are hex ObjectIds
+        // today, so that is the whole id, and a pathological server id
+        // cannot grow the map unboundedly (#480 review). List callers pass
+        // an accumulator and skip this — the page records once for the
+        // whole batch.
         if (coerced == null) {
-            TasksApi.noteCoercedNotes("single", id, singleNotes.take(3))
+            TasksApi.noteCoercedNotes("single", id.take(24), singleNotes.take(3))
         }
     }
 }
@@ -918,6 +923,10 @@ class TasksApi(context: Context) {
                     // read as a finished task.
                     val msg = e.message ?: ""
                     if ("HTTP 404:" in msg && "unknown task" in msg) {
+                        // Gone server-side: drop any diagnostics entry for
+                        // it, or About names a reset for a task that no
+                        // longer exists (#480 review).
+                        noteCoercedNotes("single", clean.take(24), emptyList())
                         Result.success(null)
                     } else {
                         Result.failure(e)
@@ -1298,7 +1307,10 @@ class TasksApi(context: Context) {
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
-            call("DELETE", "/api/tasks/$clean").map { }
+            call("DELETE", "/api/tasks/$clean").map { }.also {
+                // Gone: drop its diagnostics entry with it (#480 review).
+                if (it.isSuccess) noteCoercedNotes("single", clean.take(24), emptyList())
+            }
         }
 
     /**
