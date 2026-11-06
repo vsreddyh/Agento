@@ -582,6 +582,7 @@ internal fun batchUnknownTaskIds(ids: List<String>, msg: String): List<String> {
         ("\"$echo\"" in msg || '$echo' in msg ||
             "\"$escaped\"" in msg || '$escaped' in msg)
     }
+}
 
 /** One task row: null when the row carries no usable id or name (#430
  * counts those drops in [TaskList.dropped] instead of shrinking the
