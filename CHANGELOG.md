@@ -32,7 +32,9 @@ see GitHub Releases for older notes.
   Failure notices retract from a posted-notice record, so terminal
   failures (reported after their queue item is gone) also clear on
   disable or task-drop. Speech queued before DND flipped drops silently
-  at dequeue, extending the visual-only rule past the enqueue gate. When the device language isn't available in the engine,
+  at dequeue, audio playing when DND flips is stopped by a ringer-mode
+  listener, and the stored-voice check runs after the toggle re-check —
+  extending the visual-only rule past the enqueue gate on all three sides. When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is

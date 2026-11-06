@@ -3,12 +3,15 @@ package com.vishnu.agento
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.Build
 import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -182,6 +185,67 @@ object ReminderTts {
     // Lazy: object load must not require a main looper (unit tests have none).
     private val mainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
 
+    /**
+     * DND/ringer flips mid-utterance (#470 review): pump() only runs at
+     * transitions, so nothing would notice the flip until the audio
+     * finished — against "DND stays visual-only". A process-scoped dynamic
+     * receiver (runtime registration still gets system broadcasts)
+     * stops the playing utterance instead. Queued items are already
+     * covered by pump()'s dequeue-time silence check; the flip back to
+     * normal needs no action (nothing was lost that a fresh fire won't
+     * re-queue — DND drops are silent by design).
+     */
+    private var dndWatching = false
+    private val dndReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            // Runs on the main thread; keep it to state flips + binder
+            // calls outside the lock, like every other path here.
+            if (!isSilent(context)) return
+            var eng: TextToSpeech? = null
+            var point: Pair<String, String>? = null
+            synchronized(lock) {
+                if (!speaking) return
+                speakingId?.let { id ->
+                    // The success path can no longer retract this (see
+                    // dropTask): a kept-for-retry utterance stopped here
+                    // would orphan its ENGINE_INIT tag.
+                    owners.remove(id)?.let { point = it.taskId to it.kindKey }
+                    initReported.remove(id)
+                }
+                speaking = false
+                speakingId = null
+                eng = engine
+            }
+            runCatching { eng?.stop() }
+            point?.let { (t, k) -> cancelFailure(t, k) }
+            runCatching {
+                Log.w("ReminderTts", "DND/silent flipped mid-utterance, stopping speech")
+            }
+        }
+    }
+
+    /** Registers [dndReceiver] once per process (application context). */
+    private fun watchDnd(appCtx: Context) {
+        synchronized(lock) {
+            if (dndWatching) return
+            dndWatching = true
+        }
+        runCatching {
+            val filter = IntentFilter().apply {
+                addAction(AudioManager.ACTION_RINGER_MODE_CHANGED)
+                addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
+            }
+            // API 33+ requires an explicit export flag on dynamic
+            // receivers; below that the two-arg call stands.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appCtx.registerReceiver(dndReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                appCtx.registerReceiver(dndReceiver, filter)
+            }
+        }
+    }
+
     private fun progressListener(gen: Int) = object : UtteranceProgressListener() {
         override fun onStart(utteranceId: String) = Unit
         private fun finished(utteranceId: String, failed: Boolean) {
@@ -232,6 +296,10 @@ object ReminderTts {
         if (!TaskReminders.isEnabled(appCtx)) return
         if (isSilent(appCtx)) return
         appCtxRef = appCtx.applicationContext
+        // Mid-utterance DND flips need a listener: pump() only runs at
+        // transitions, so without this nothing would notice until the
+        // audio finished (#470 review). Once per process.
+        watchDnd(appCtx.applicationContext)
         // Quotes delimit the name in text but some engines verbalize "quote",
         // so they are stripped only on the speech path (reminderSpeech keeps them).
         val leadMinutes = BehaviourSettings.reminderLeadMinutes(appCtx)
@@ -704,7 +772,26 @@ object ReminderTts {
                 continue
             }
             // Stored voice/rate/pitch (#355); skipped at defaults so
-            // untouched installs speak exactly like before.
+            // untouched installs speak exactly like before. Runs AFTER the
+            // toggle re-check below: its VOICE_MISSING report would
+            // otherwise post a notice the disabled-drop branch never
+            // retracts (#470 review).
+            //
+            // Toggle-off between dequeue and speak (#470 review): a disable
+            // landing here would restart audio on the just-stopped engine.
+            // Re-check (cheap prefs read, outside the lock) and drop
+            // silently — same cleanup as the DND drop above, for the same
+            // wedge reason. The check-then-speak sliver itself is inherent.
+            val ctx2 = appCtxRef
+            if (ctx2 != null && !TaskReminders.isEnabled(ctx2)) {
+                synchronized(lock) {
+                    speaking = false
+                    speakingId = null
+                    initReported.remove(next.id)
+                    owners.remove(next.id)
+                }
+                continue
+            }
             appCtxRef?.let {
                 applyStoredTtsSettings(eng, it)
                 runCatching {
@@ -721,21 +808,6 @@ object ReminderTts {
             }
             // A throw (broken OEM binder state) counts like ERROR: clear and
             // advance. Uncaught here it would escape from onDone/onError's thread.
-            // Toggle-off between dequeue and speak (#470 review): a disable
-            // landing here would restart audio on the just-stopped engine.
-            // Re-check (cheap prefs read, outside the lock) and drop
-            // silently — same cleanup as the DND drop above, for the same
-            // wedge reason. The check-then-speak sliver itself is inherent.
-            val ctx2 = appCtxRef
-            if (ctx2 != null && !TaskReminders.isEnabled(ctx2)) {
-                synchronized(lock) {
-                    speaking = false
-                    speakingId = null
-                    initReported.remove(next.id)
-                    owners.remove(next.id)
-                }
-                continue
-            }
             val rc = runCatching {
                 eng.speak(next.text, TextToSpeech.QUEUE_ADD, null, next.id)
             }.getOrNull()
