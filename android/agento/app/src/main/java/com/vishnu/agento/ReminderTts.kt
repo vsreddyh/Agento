@@ -687,9 +687,14 @@ object ReminderTts {
             // entry goes with it so a later callback cannot report either.
             // Binder IPC, so outside the lock — like every other check out
             // here, the residual check-then-speak window is inherent.
+            // Speaking flags reset: nothing started, so leaving them set
+            // would wedge the queue until the watchdog (and its TIMED_OUT
+            // toast would fire audibly-adjacent during DND).
             val ctx = appCtxRef
             if (ctx != null && isSilent(ctx)) {
                 synchronized(lock) {
+                    speaking = false
+                    speakingId = null
                     initReported.remove(next.id)
                     owners.remove(next.id)
                 }
@@ -716,6 +721,21 @@ object ReminderTts {
             }
             // A throw (broken OEM binder state) counts like ERROR: clear and
             // advance. Uncaught here it would escape from onDone/onError's thread.
+            // Toggle-off between dequeue and speak (#470 review): a disable
+            // landing here would restart audio on the just-stopped engine.
+            // Re-check (cheap prefs read, outside the lock) and drop
+            // silently — same cleanup as the DND drop above, for the same
+            // wedge reason. The check-then-speak sliver itself is inherent.
+            val ctx2 = appCtxRef
+            if (ctx2 != null && !TaskReminders.isEnabled(ctx2)) {
+                synchronized(lock) {
+                    speaking = false
+                    speakingId = null
+                    initReported.remove(next.id)
+                    owners.remove(next.id)
+                }
+                continue
+            }
             val rc = runCatching {
                 eng.speak(next.text, TextToSpeech.QUEUE_ADD, null, next.id)
             }.getOrNull()
