@@ -229,4 +229,22 @@ class StaleDataTest {
         assertEquals("Synced", hubHealthStatus(true, false, false, true, false, "t"))
         assertEquals("Ready", hubHealthStatus(true, false, false, true, false, ""))
     }
+
+    @Test
+    fun `transient perm line reads unknown not ungranted`() {
+        // A dead client forces an empty grant set; "not granted yet"
+        // would imply a grant that cannot fix anything.
+        assertEquals(
+            "Permissions unknown — the client isn't responding",
+            healthPermLine(permissionsGranted = false, healthTransient = true),
+        )
+        assertEquals(
+            "Permissions granted",
+            healthPermLine(permissionsGranted = true, healthTransient = false),
+        )
+        assertEquals(
+            "Permissions not granted yet",
+            healthPermLine(permissionsGranted = false, healthTransient = false),
+        )
+    }
 }

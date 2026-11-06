@@ -162,10 +162,11 @@ object ChatNotifications {
      * shape as [notifyInstructSaved], but it opens the app with no autosend
      * target instead of deep-linking a thread id that was never persisted.
      *
-     * Gated by the same instruction-saved kind (#355): a user who silenced
-     * instruction cards silenced this one too. */
+     * Gated by the failure kind (#355), NOT the instruction-saved kind
+     * (#435 review): a user who muted "saved" cards to reduce noise must
+     * still hear about the exact loss this card exists to surface. */
     fun notifyInstructSaveFailed(context: Context, taskName: String) {
-        if (!BehaviourSettings.notifyInstruct(context) || !canPost(context)) return
+        if (!BehaviourSettings.notifyFailed(context) || !canPost(context)) return
         ensureChannel(context)
         val open = PendingIntent.getActivity(
             context, ("instruct-failed:$taskName").hashCode(),

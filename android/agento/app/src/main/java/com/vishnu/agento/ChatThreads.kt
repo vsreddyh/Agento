@@ -284,11 +284,17 @@ object ChatThreads {
      * change and foreign-written files must validate anyway.
      * Dirty tracking is by reference (see canonicalizeUnchanged); persists
      * happen at turn boundaries, never the per-token streaming loop.
+     * Returns whether this call landed: false only when the write threw
+     * (failure recorded via [recordSaveError]). A protective skip (corrupt
+     * file, empty list — #339) returns true: nothing failed, and the
+     * per-tab error flag keeps whatever it held. Callers that must branch
+     * on their own write (the task receiver's notification) use this, not
+     * the tab-global [saveError], which a concurrent writer can flip.
      */
     @androidx.annotation.WorkerThread
-    fun save(context: Context, tab: String, threads: List<ChatThread>) {
+    fun save(context: Context, tab: String, threads: List<ChatThread>): Boolean {
         requireIoThread("ChatThreads.save")
-        runCatching {
+        return runCatching {
             val capped = threads.take(MAX_THREADS).map { t ->
                 if (t.messages.size > MAX_MESSAGES) {
                     t.copy(messages = t.messages.takeLast(MAX_MESSAGES))
@@ -313,7 +319,7 @@ object ChatThreads {
                 if (!existingParses) {
                     // Corrupt file, empty list: keep the bytes on disk
                     // (they may be recoverable by hand) and skip the write.
-                    return@runCatching
+                    return@runCatching true
                 }
             }
             // Canonicalize only what changed since the last save: same
@@ -337,6 +343,7 @@ object ChatThreads {
             // invalidates the stamp fast path, so a same-size write inside
             // one mtime tick can never serve a stale list.
             lastLoad.remove(tab)
+            true
         }.onFailure { e ->
             // Logged, not swallowed (#339): a failed write (disk full, an
             // OOM) leaves memory and disk diverging, and the next cold
@@ -350,7 +357,7 @@ object ChatThreads {
             // and the map alone would not survive the restart it is about.
             recordSaveError(tab)
             setPersistedSaveError(context, tab, true)
-        }
+        }.getOrDefault(false)
     }
 
     /** Clears a recorded write failure for [tab] from memory and disk
