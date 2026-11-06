@@ -69,6 +69,13 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // stays plain remember — its coroutine dies with the scope on
     // rotation, so restoring it would wedge buttons on Working… forever.
     var pendingConnect by rememberSaveable { mutableStateOf<String?>(null) }
+    // Dead-server verdict, saveable like the wait it describes (#484
+    // review): the budget survives rotation, so the verdict must too —
+    // otherwise 30 healthy rounds forgotten at rotate turns 10 blips
+    // into a dead-server Error (or vice versa). Reset wherever a wait
+    // starts, alongside pendingConnect/pendingSince.
+    var pollReached by rememberSaveable { mutableStateOf(false) }
+    var pollLastError by rememberSaveable { mutableStateOf("") }
     // Wait start (uptime ms) for the poll budget below: rotation restarts
     // the effect, so without this every rotate would grant a fresh 40
     // rounds and repeated rotates could poll past the attempt TTL.
@@ -202,12 +209,6 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
             (SystemClock.uptimeMillis() - pendingSince).coerceAtLeast(0L)
         }
         val rounds = ((POLL_BUDGET_MS - elapsed) / POLL_ROUND_MS).toInt().coerceIn(0, POLL_ROUNDS)
-        // Wait-scoped, not remembered: each consent wait gets a fresh
-        // verdict. Error only when NO round succeeded — one transient
-        // blip in 39 good rounds is not a dead server, and one good round
-        // in 39 failures is not a healthy one (#484 review).
-        var anyOk = false
-        var lastError = ""
         repeat(rounds) {
             delay(POLL_ROUND_MS)
             if (pendingConnect != pending) return@LaunchedEffect
@@ -240,11 +241,16 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                             toasts.toast("Connected.", kind = ToastKind.Success)
                         }
                     }
-                    anyOk = true
-                    lastError = ""
+                    // Verdict accumulates into the saveable record, not
+                    // locals: the budget survives rotation, so the verdict
+                    // must too — otherwise healthy pre-rotate rounds are
+                    // forgotten and the epilogue misclassifies (#484
+                    // review). Error only when NO round succeeded.
+                    pollReached = true
+                    pollLastError = ""
                 },
                 onFailure = { e ->
-                    lastError = e.message ?: e.javaClass.simpleName
+                    pollLastError = e.message ?: e.javaClass.simpleName
                 },
             )
         }
@@ -254,11 +260,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
         // waiting on the browser.
         if (pendingConnect == pending) {
             pendingConnect = null
-            if (anyOk) {
+            if (pollReached) {
                 toasts.toast("Still waiting — tap Check again after finishing in the browser.")
             } else {
                 toasts.toast(
-                    lastError.ifEmpty { "Couldn't reach the server." },
+                    pollLastError.ifEmpty { "Couldn't reach the server." },
                     kind = ToastKind.Error,
                 )
             }
@@ -333,6 +339,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                         }
                                         pendingConnect = c.id
                                         pendingSince = SystemClock.uptimeMillis()
+                                        // Fresh wait, fresh verdict: stale
+                                        // verdicts from a previous wait must
+                                        // not leak into this one's epilogue.
+                                        pollReached = false
+                                        pollLastError = ""
                                     },
                                     onFailure = { e ->
                                         val msg = e.message.orEmpty()
@@ -380,7 +391,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                         // disconnected shape (tokens gone,
                                         // lastError cleared, no reconnect
                                         // hint — that rides expired rows
-                                        // only).
+                                        // only). Advances freshness past any
+                                        // in-flight fetch: a stale poll round
+                                        // landing now must not revert the
+                                        // confirmed row before the re-list
+                                        // heals it.
                                         connectors = connectors.map {
                                             if (it.id == c.id) {
                                                 it.copy(
@@ -391,6 +406,9 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                             } else {
                                                 it
                                             }
+                                        }
+                                        appliedSeq.getAndUpdate { cur ->
+                                            maxOf(cur, fetchSeq.get())
                                         }
                                         // Full re-list inline for the REST, not
                                         // a tick bump (#484 review): a tick

@@ -13,29 +13,22 @@ see GitHub Releases for older notes.
   per connector (Gmail, Calendar): live status, the exact scopes a tap grants
   (`gmail.read`/`gmail.draft`, `calendar.read`/`calendar.draft`), a Connect
   button that opens the one-time Google consent URL in the browser, and a
-  per-connector Disconnect. The app polls the list for ~2 minutes while a
-  consent page is outstanding and resolves automatically when the row flips
-  to connected ("Check again" covers slower consents — the server attempt
-  lives 10 minutes). A missing or empty `connectors` array fails loudly
-  instead of reading as an empty list, and a failed refresh banners even
-  over stale rows (healed by the next good list). Check-again buttons
-  stay dead while loading or mutating so concurrent refreshes cannot
-  plant stale banners — refresh entry itself refuses a second writer —
-  and mutation taps guard synchronously so a same-frame double-tap cannot
-  mint two consent attempts. Disconnect re-lists the whole section
-  instead of patching one row it cannot prove fresh — toasting success
-  only when the re-list lands, and an honest error when it does not.
-  Overlapping writers resolve by fetch sequence, so neither stale
-  successes nor late failures can plant over fresher rows — a counter
-  would order by application and let an older fetch applying last veto
-  fresher data. Wait resolution rides the freshness gate too (a vetoed
-  flip heals on the next round, never toasts over contradictory rows),
-  and the ~2-minute poll budget survives rotation instead of restarting,
-  so repeated rotates cannot poll past the attempt TTL. Disconnect maps
-  its row optimistically from the confirmed POST and toasts the action
-  itself; the re-list heals the rest. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
-  unconfigured servers read as "not set up". Expired rows offer Disconnect
-  next to Reconnect, so revoking never requires re-consenting first. The app never sees
+  per-connector Disconnect. The app polls the list for ~2 minutes total
+  across rotations while a consent page is outstanding and resolves
+  automatically when the row flips to connected ("Check again" covers
+  slower consents — the server attempt lives 10 minutes); the dead-server
+  verdict accumulates across rotations with the budget. A missing or empty
+  `connectors` array fails loudly instead of reading as an empty list, and
+  a failed refresh banners even over stale rows (healed by the next good
+  list). Overlapping writers resolve by fetch sequence so stale results
+  cannot plant over fresher rows; mutation taps guard synchronously so a
+  same-frame double-tap cannot mint two consent attempts. Disconnect maps
+  its row optimistically from the confirmed POST (advancing freshness past
+  in-flight fetches so nothing stale reverts it) and toasts the action
+  itself; the re-list heals the rest, banners only on a fresh failure.
+  Expired rows surface the server's `reconnect` hint as a Reconnect prompt
+  and offer Disconnect next to it, so revoking never requires re-consenting
+  first; unconfigured servers read as "not set up". The app never sees
   code/verifier/token (server-only exchange), and disconnect stops future
   access without wiping already-fetched chat history.
 
