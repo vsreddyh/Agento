@@ -67,15 +67,20 @@ data class ServerTask(
     val nextDueDate: String = "",
 )
 
-/** A bounded list response: the rows, whether more exist, and how many
+/** A bounded list response: the rows, whether more exist, how many
  * rows arrived unparseable (empty id/name) and were skipped rather than
- * shown (#430). A nonzero [dropped] means the server spoke rows this app
+ * shown (#430), and how many rows parsed only by resetting a mistyped
+ * numeric field to its default (#437). A nonzero [dropped] means the server spoke rows this app
  * cannot read — the list surfaces the count instead of shrinking
- * silently. */
+ * silently. A nonzero [coerced] means some rows ARE shown but with a
+ * reset value (e.g. `estimated_minutes: "abc"` read as 0) — the list
+ * surfaces that count too, and the key, raw value and reset value ride
+ * the log line so Settings → About diagnostics names them. */
 data class TaskList(
     val tasks: List<ServerTask>,
     val truncated: Boolean = false,
     val dropped: Int = 0,
+    val coerced: Int = 0,
 )
 
 /**
@@ -438,10 +443,42 @@ internal fun optTaskDays(o: JSONObject, key: String): List<String> {
     return canonicalRepeatDays(raw)
 }
 
+/** Lenient int read that names its coercions (#437): int, long and
+ * double arrive as [Number], and a numeric string (including a
+ * double-encoded `"1.0"`) reads as its number — the same leniency
+ * [parseContractVersion] allows. Anything else present-but-unreadable (a
+ * non-numeric string, a boolean, an object) resets to [default] AND
+ * reports the raw value in [CoercedInt.raw] (null raw means clean, so
+ * only a reset notifies). Absent or JSON-null reads [default] with a null raw:
+ * a default itself is fine, only a reset is reported. Negative clamping
+ * stays at the call site (a documented bound, like
+ * `BehaviourSettings.coerceIn`), not here. */
+internal data class CoercedInt(val value: Int, val raw: String?)
+
+internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedInt {
+    if (!o.has(key) || o.isNull(key)) return CoercedInt(default, null)
+    val v = o.opt(key)
+    if (v is Number) return CoercedInt(v.toInt(), null)
+    if (v is String) {
+        val t = v.trim()
+        t.toIntOrNull()?.let { return CoercedInt(it, null) }
+        t.toDoubleOrNull()?.let { return CoercedInt(it.toInt(), null) }
+        return CoercedInt(default, "\"$t\"".take(44))
+    }
+    return CoercedInt(default, v.toString().take(40))
+}
+
 /** One task row: null when the row carries no usable id or name (#430
  * counts those drops in [TaskList.dropped] instead of shrinking the
- * list silently). */
-internal fun parseTask(o: JSONObject): ServerTask? {
+ * list silently).
+ *
+ * Mistyped numerics reset to their defaults AND report through [coerced]
+ * (#437): each entry names the key, the raw value and the reset value
+ * (`estimated_minutes "abc"->0`), so the caller can log it once instead
+ * of the reset passing silently. Null [coerced] logs the row's own line
+ * directly (a single-row read notifies once by construction); a list
+ * caller passes its accumulator and logs one page summary itself. */
+internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): ServerTask? {
     // Canonical `id` only (#433): the retired Mongo `_id` fallback is gone,
     // so a row that only carries `_id` is counted as unparseable instead of
     // being silently reinterpreted under a different wire contract.
@@ -449,8 +486,25 @@ internal fun parseTask(o: JSONObject): ServerTask? {
     if (id.isEmpty()) return null
     val name = optJsonStr(o, "name")
     if (name.isEmpty()) return null
+    // One lenient read per numeric field (#437): a mistyped server value
+    // used to become 0 minutes with no word. The note carries the row so
+    // a page summary can tell two rows' resets apart.
+    fun num(key: String, default: Int = 0): Int {
+        val r = optTaskInt(o, key, default)
+        if (r.raw != null) {
+            val note = "task ${id.take(24)}: $key ${r.raw}->${r.value}"
+            if (coerced != null) {
+                coerced.add(note)
+            } else {
+                runCatching {
+                    Log.w("TasksApi", "coerced $note")
+                }
+            }
+        }
+        return r.value
+    }
     // estimated_minutes may encode as int, long, or double.
-    val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
+    val mins = num("estimated_minutes")
     // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
     // read-modify-write per row is 200 I/Os for one fact — and a
     // read-then-write that is not atomic can regress (sees v3, then a late
@@ -465,7 +519,7 @@ internal fun parseTask(o: JSONObject): ServerTask? {
         dueDate = optJsonStr(o, "due_date"),
         dueTime = optJsonStr(o, "due_time"),
         estimatedMinutes = mins.coerceAtLeast(0),
-        repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
+        repeatEvery = num("repeat_every"),
         repeatUnit = optJsonStr(o, "repeat_unit"),
         repeatDays = optTaskDays(o, "repeat_days"),
         repeatCustom = o.optBoolean("repeat_custom", false),
@@ -473,7 +527,7 @@ internal fun parseTask(o: JSONObject): ServerTask? {
         parallelable = o.optBoolean("parallelable", false),
         // Missing on pre-revision servers: 0 matches the backfill, so
         // an old server and a new app still agree (#184).
-        revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
+        revision = num("revision"),
         completedAt = optJsonStr(o, "completedAt"),
         createdAt = optJsonStr(o, "createdAt"),
         contractVersion = version,
@@ -487,7 +541,8 @@ internal const val TASKS_SHAPE_ERROR =
     "Unexpected response shape — the server sent no tasks list. Update the server."
 
 /** Parses one task-list page (#430): the canonical `tasks` envelope, the
- * rows, and how many rows arrived unparseable.
+ * rows, how many rows arrived unparseable, and how many rows parsed only
+ * by resetting a mistyped numeric field to its default (#437).
  *
  * The `data`/`items` fallbacks are gone (#433): a body without a `tasks`
  * array is a loud parse failure with an actionable message, never a clean
@@ -499,9 +554,17 @@ internal fun parseTaskListPage(body: String): TaskList {
     val arr = root.optJSONArray("tasks")
         ?: throw RuntimeException(TASKS_SHAPE_ERROR)
     var dropped = 0
+    val coercedNotes = mutableListOf<String>()
+    var coerced = 0
     for (i in 0 until arr.length()) {
-        val task = arr.optJSONObject(i)?.let { parseTask(it) }
-        if (task != null) out.add(task) else dropped++
+        val before = coercedNotes.size
+        val task = arr.optJSONObject(i)?.let { parseTask(it, coercedNotes) }
+        if (task != null) {
+            out.add(task)
+            if (coercedNotes.size > before) coerced++
+        } else {
+            dropped++
+        }
     }
     if (dropped > 0) {
         // Diagnostics for the readers with no screen: the widget and
@@ -513,7 +576,16 @@ internal fun parseTaskListPage(body: String): TaskList {
             Log.w("TasksApi", "dropped $dropped unparseable task row(s) in list response")
         }
     }
-    return TaskList(out, root.optBoolean("truncated", false), dropped)
+    if (coerced > 0) {
+        // One line per page, not per row: the rows stay shown (with reset
+        // values), and this names what was reset so a version-skewed
+        // writer is visible. Capped detail — the count is the signal.
+        runCatching {
+            Log.w("TasksApi", "coerced $coerced task row(s) to defaults in list response: " +
+                coercedNotes.take(3).joinToString("; ").take(400))
+        }
+    }
+    return TaskList(out, root.optBoolean("truncated", false), dropped, coerced)
 }
 
 /**
