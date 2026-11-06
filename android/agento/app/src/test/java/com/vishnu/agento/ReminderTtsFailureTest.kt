@@ -116,7 +116,6 @@ class TtsQueuePurgeTest {
         val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
         assertEquals(2, purged.dropped)
         assertEquals(false, purged.inFlight)
-        assertEquals(setOf("A" to "due", "A" to "start"), purged.points)
         assertEquals(listOf("b1"), queue.map { it.id })
         assertEquals(setOf("b1"), owners.keys)
         assertTrue(reported.isEmpty())
@@ -136,7 +135,6 @@ class TtsQueuePurgeTest {
         val purged = purgeTaskSpeech(queue, owners, reported, "a1", "A")
         assertEquals(0, purged.dropped)
         assertEquals(true, purged.inFlight)
-        assertEquals(setOf("A" to "due"), purged.points)
         assertEquals(listOf("b1"), queue.map { it.id })
         assertEquals(setOf("b1"), owners.keys)
         assertTrue(reported.isEmpty())
@@ -159,7 +157,6 @@ class TtsQueuePurgeTest {
         val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
         assertEquals(0, purged.dropped)
         assertEquals(false, purged.inFlight)
-        assertTrue(purged.points.isEmpty())
         assertEquals(setOf("b1"), owners.keys)
     }
 
@@ -167,7 +164,7 @@ class TtsQueuePurgeTest {
     fun `no match purges nothing`() {
         val (queue, owners, reported) = state(item("b1", "B"))
         val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
-        assertEquals(SpeechPurge(0, false, emptySet()), purged)
+        assertEquals(SpeechPurge(0, false), purged)
         assertEquals(1, queue.size)
     }
 
@@ -185,10 +182,6 @@ class TtsQueuePurgeTest {
         val purged = purgeTaskSpeech(queue, owners, reported, "s1", null)
         assertEquals(2, purged.dropped)
         assertEquals(true, purged.inFlight)
-        assertEquals(
-            setOf("A" to "due", "B" to "start", "C" to "due"),
-            purged.points,
-        )
         assertTrue(queue.isEmpty())
         assertTrue(owners.isEmpty())
         assertTrue(reported.isEmpty())

@@ -28,7 +28,11 @@ see GitHub Releases for older notes.
   notification taps (an edit/move also clears failure notices, which
   describe the pre-edit schedule). Turning reminders off purges the whole
   speech queue (stopping playback too) so nothing queued can outlive the
-  toggle; failures racing the toggle stay Log-only instead of toasting. When the device language isn't available in the engine,
+  toggle; failures racing the toggle stay Log-only instead of toasting.
+  Failure notices retract from a posted-notice record, so terminal
+  failures (reported after their queue item is gone) also clear on
+  disable or task-drop. Speech queued before DND flipped drops silently
+  at dequeue, extending the visual-only rule past the enqueue gate. When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is

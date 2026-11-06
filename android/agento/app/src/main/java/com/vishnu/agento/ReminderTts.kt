@@ -61,14 +61,15 @@ internal fun isStoredVoiceMissing(availableNames: Collection<String>, want: Stri
 }
 
 /**
- * What [purgeTaskSpeech] removed: queued items dropped, whether an
- * in-flight utterance was suppressed, and which reminder points lost
- * items ([taskId] + [kindKey] — their failure notices go too).
+ * What [purgeTaskSpeech] removed: queued items dropped and whether an
+ * in-flight utterance was suppressed. Failure-notice retraction rides a
+ * separate record ([ReminderTts.reportedPoints]): terminal failures post
+ * when the queue no longer holds the item, so the purge contents alone
+ * cannot enumerate them.
  */
 internal data class SpeechPurge(
     val dropped: Int,
     val inFlight: Boolean,
-    val points: Set<Pair<String, String>>,
 )
 
 /**
@@ -93,7 +94,6 @@ internal fun purgeTaskSpeech(
     speakingId: String?,
     taskId: String?,
 ): SpeechPurge {
-    val points = mutableSetOf<Pair<String, String>>()
     var dropped = 0
     val it = queue.iterator()
     while (it.hasNext()) {
@@ -101,7 +101,6 @@ internal fun purgeTaskSpeech(
         if (taskId == null || q.taskId == taskId) {
             it.remove()
             reported.remove(q.id)
-            points.add(q.taskId to q.kindKey)
             dropped++
         }
     }
@@ -109,13 +108,12 @@ internal fun purgeTaskSpeech(
     val inFlight = speakingOwner != null && (taskId == null || speakingOwner.taskId == taskId)
     if (inFlight) {
         reported.remove(speakingOwner!!.id)
-        points.add(speakingOwner.taskId to speakingOwner.kindKey)
     }
     // Owner entries for the purge go regardless: the queued ones above,
     // the suppressed in-flight one here, and any drift leftover (the map
     // only ever holds queued-or-speaking items).
     owners.entries.removeIf { e -> taskId == null || e.value.taskId == taskId }
-    return SpeechPurge(dropped, inFlight, points)
+    return SpeechPurge(dropped, inFlight)
 }
 
 /**
@@ -155,6 +153,18 @@ object ReminderTts {
      * (its tag is overwritten with the terminal reason).
      */
     private val initReported = HashSet<String>()
+    /**
+     * Reminder points with a failure notice posted or attempted this
+     * process (#470 review). Terminal failures (rejected, thrown,
+     * timed-out, errored, locale-gone, queue-overflow) report when the
+     * queue no longer holds the item, so the queue alone cannot enumerate
+     * what a task-drop or disable must retract — this set can. Adds happen
+     * only in [reportFailure]; every cancel path removes what it cancels.
+     * A missed removal costs a no-op cancel, never a missed one.
+     * Memory-only like the queue: a reboot clears posted notifications
+     * system-side, so there is nothing to retract.
+     */
+    private val reportedPoints = HashSet<Pair<String, String>>()
     @Volatile private var engine: TextToSpeech? = null
     private var ready = false
     private var inited = false
@@ -474,6 +484,12 @@ object ReminderTts {
             // the original alert instead of overwriting it.
             mgr.notify(failureTag(taskId, kindKey), ALARM_NOTIF_ID, notif)
         }
+        // Recorded even if the post above threw: a later cancel of a tag
+        // never posted is a harmless no-op, while a missed record is an
+        // orphaned notice no disable or task-drop can retract (#470
+        // review). Only reached when audible (the disabled gate above
+        // returned first), so every entry here was truly shown-or-attempted.
+        synchronized(lock) { reportedPoints.add(taskId to kindKey) }
     }
 
     /** Notification tag for one reminder point's speech-failure notice. */
@@ -481,6 +497,7 @@ object ReminderTts {
 
     /** Retracts one point's failure notice (its utterance later played). */
     private fun cancelFailure(taskId: String, kindKey: String) {
+        synchronized(lock) { reportedPoints.remove(taskId to kindKey) }
         val appCtx = appCtxRef ?: return
         runCatching {
             val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -496,6 +513,7 @@ object ReminderTts {
      * notice.
      */
     internal fun cancelFailures(appCtx: Context, taskId: String) {
+        synchronized(lock) { reportedPoints.removeIf { it.first == taskId } }
         runCatching {
             val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 ?: return
@@ -512,6 +530,7 @@ object ReminderTts {
      * point firing says nothing about another's speech (#434 review).
      */
     internal fun cancelFailureFor(appCtx: Context, taskId: String, kindKey: String) {
+        synchronized(lock) { reportedPoints.remove(taskId to kindKey) }
         runCatching {
             val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 ?: return
@@ -533,6 +552,7 @@ object ReminderTts {
      */
     internal fun dropTask(taskId: String) {
         var eng: TextToSpeech? = null
+        var doomed: Set<Pair<String, String>> = emptySet()
         val purged = synchronized(lock) {
             purgeTaskSpeech(queue, owners, initReported, speakingId, taskId).also {
                 // Capture under the lock, stop outside it: binder IPC must
@@ -540,10 +560,17 @@ object ReminderTts {
                 // suppressing — stopping audio for any other reason would
                 // be vandalism.
                 if (it.inFlight) eng = engine
+            }.also {
+                // Notices ride the posted record, not the purge contents:
+                // terminal failures post when the queue no longer holds the
+                // item, so purged points alone cannot enumerate them (#470
+                // review).
+                doomed = reportedPoints.filter { p -> p.first == taskId }.toSet()
+                reportedPoints.removeAll(doomed)
             }
         }
         runCatching { eng?.stop() }
-        for ((t, kindKey) in purged.points) cancelFailure(t, kindKey)
+        for ((t, kindKey) in doomed) cancelFailure(t, kindKey)
         if (purged.dropped > 0 || purged.inFlight) {
             runCatching {
                 Log.w("ReminderTts", "dropped ${purged.dropped} queued speech for task=$taskId" +
@@ -562,7 +589,7 @@ object ReminderTts {
      */
     internal fun dropAll() {
         val eng: TextToSpeech?
-        val points: Set<Pair<String, String>>
+        var doomed: Set<Pair<String, String>> = emptySet()
         var hadSpeech = false
         synchronized(lock) {
             val purged = purgeTaskSpeech(queue, owners, initReported, speakingId, null)
@@ -572,10 +599,13 @@ object ReminderTts {
             speaking = false
             speakingId = null
             eng = engine
-            points = purged.points
+            // Every posted notice, including terminal ones whose queue
+            // items are long gone (#470 review).
+            doomed = reportedPoints.toSet()
+            reportedPoints.clear()
         }
         runCatching { eng?.stop() }
-        for ((taskId, kindKey) in points) cancelFailure(taskId, kindKey)
+        for ((taskId, kindKey) in doomed) cancelFailure(taskId, kindKey)
         if (hadSpeech) {
             runCatching { Log.w("ReminderTts", "reminders disabled, dropped all queued speech") }
         }
@@ -650,6 +680,24 @@ object ReminderTts {
                 }
             }
             if (next == null) return
+            // DND/ringer flipped quiet after enqueue (#470 review): the
+            // enqueue gate's visual-only rule applies at dequeue too — drop
+            // silently, not loudly. This is not a failure (the visual alert
+            // already posted), so no failure notice goes out; the owner
+            // entry goes with it so a later callback cannot report either.
+            // Binder IPC, so outside the lock — like every other check out
+            // here, the residual check-then-speak window is inherent.
+            val ctx = appCtxRef
+            if (ctx != null && isSilent(ctx)) {
+                synchronized(lock) {
+                    initReported.remove(next.id)
+                    owners.remove(next.id)
+                }
+                runCatching {
+                    Log.w("ReminderTts", "DND/silent, dropping queued speech ${next.id}")
+                }
+                continue
+            }
             // Stored voice/rate/pitch (#355); skipped at defaults so
             // untouched installs speak exactly like before.
             appCtxRef?.let {
