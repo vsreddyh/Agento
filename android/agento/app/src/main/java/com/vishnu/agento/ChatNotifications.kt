@@ -159,17 +159,19 @@ object ChatNotifications {
      * Posts the task-instruction save-FAILED card (#435): the receiver's
      * save landed nowhere (disk full, OOM), so the "saved — tap to start"
      * card would open a thread the next load cannot contain. Same slot
-     * shape as [notifyInstructSaved], but it opens the app with no autosend
-     * target instead of deep-linking a thread id that was never persisted.
+     * shape as [notifyInstructSaved] — one card per thread id, so two
+     * failed forwards never collapse into one — but it opens the app with
+     * no autosend target instead of deep-linking a thread id that was
+     * never persisted.
      *
      * Gated by the failure kind (#355), NOT the instruction-saved kind
      * (#435 review): a user who muted "saved" cards to reduce noise must
      * still hear about the exact loss this card exists to surface. */
-    fun notifyInstructSaveFailed(context: Context, taskName: String) {
+    fun notifyInstructSaveFailed(context: Context, taskName: String, threadId: String) {
         if (!BehaviourSettings.notifyFailed(context) || !canPost(context)) return
         ensureChannel(context)
         val open = PendingIntent.getActivity(
-            context, ("instruct-failed:$taskName").hashCode(),
+            context, ("instruct-failed:$threadId").hashCode(),
             Intent(context, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -185,7 +187,7 @@ object ChatNotifications {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(INSTRUCT_NOTIFICATION_ID + ("instruct-failed:$taskName").hashCode(), notification)
+        nm.notify(INSTRUCT_NOTIFICATION_ID + ("instruct-failed:$threadId").hashCode(), notification)
     }
 
     /**

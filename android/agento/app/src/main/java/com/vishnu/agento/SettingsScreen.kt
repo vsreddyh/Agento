@@ -1718,9 +1718,17 @@ internal fun saveDiagnosticsFile(context: Context, text: String): java.io.File {
  * update branch dead code — update-required devices read "not installed"
  * while the sync card said "needs an update". Pure so a JVM test pins the
  * order; the strings stay here, next to their renderer. */
-internal fun healthStatusLine(healthAvailable: Boolean, healthUpdateRequired: Boolean): String =
+internal fun healthStatusLine(
+    healthAvailable: Boolean,
+    healthUpdateRequired: Boolean,
+    healthTransient: Boolean = false,
+): String =
     when {
         healthUpdateRequired -> "Health Connect needs an update"
+        // A transiently dead client reads as not responding, like the hub
+        // row and the sync message — never "ready" for a client that
+        // isn't answering (#471 review).
+        healthTransient -> "Health Connect isn't responding"
         !healthAvailable -> "Health Connect not installed"
         else -> "Health Connect ready"
     }
@@ -1766,7 +1774,11 @@ internal fun HealthStatusCard(state: UiState) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            val healthText = healthStatusLine(state.healthAvailable, state.healthUpdateRequired)
+            val healthText = healthStatusLine(
+                state.healthAvailable,
+                state.healthUpdateRequired,
+                state.healthTransient,
+            )
             val permText = healthPermLine(state.permissionsGranted, state.healthTransient)
             Text(healthText, style = MaterialTheme.typography.titleSmall)
             Text(

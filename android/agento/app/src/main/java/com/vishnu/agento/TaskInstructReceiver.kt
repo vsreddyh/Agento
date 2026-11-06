@@ -85,7 +85,7 @@ class TaskInstructReceiver : BroadcastReceiver() {
         // "failed" for one that landed.
         val saved = ChatThreads.save(appCtx, "chat", threads)
         if (!saved) {
-            ChatNotifications.notifyInstructSaveFailed(appCtx, name)
+            ChatNotifications.notifyInstructSaveFailed(appCtx, name, thread.id)
             return
         }
         // The tap-to-open card carries the thread id + autosend intent
