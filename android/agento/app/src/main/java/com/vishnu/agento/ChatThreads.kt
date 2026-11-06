@@ -96,6 +96,30 @@ object ChatThreads {
         lastSaveError.remove(tab)
     }
 
+    /** Prefs marker behind a recorded write failure (#435 review): the
+     * in-memory map dies with the process, and OOM — the likeliest
+     * save-killer — kills the process right after recording. The marker
+     * survives the restart the flag is about, and a landed save clears it.
+     * A stale marker (e.g. a backup import replaced the file meanwhile)
+     * still clears on the next successful save. */
+    internal fun saveErrorMarkerKey(tab: String): String = "threads_save_failed_$tab"
+
+    /** Whether a recorded write failure for [tab] survived a restart. */
+    internal fun hasPersistedSaveError(context: Context, tab: String): Boolean =
+        runCatching {
+            context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(saveErrorMarkerKey(tab), false)
+        }.getOrDefault(false)
+
+    private fun setPersistedSaveError(context: Context, tab: String, failed: Boolean) {
+        runCatching {
+            context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(saveErrorMarkerKey(tab), failed)
+                .apply()
+        }
+    }
+
     private fun file(context: Context, tab: String): File =
         File(context.filesDir, "chat_threads_$tab.json")
 
@@ -292,8 +316,13 @@ object ChatThreads {
             file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), out), Charsets.UTF_8)
             lastCanonical[tab] = capped to out
             // The write landed; whatever failed before no longer describes
-            // the file (#435).
+            // the file (#435). The prefs marker is only touched when set —
+            // a save lands every turn, and an unconditional remove would
+            // dirty prefs (and disk) on each one.
             clearSaveError(tab)
+            if (hasPersistedSaveError(context, tab)) {
+                setPersistedSaveError(context, tab, false)
+            }
             // The load cache is dropped here (#339): the app's own write
             // invalidates the stamp fast path, so a same-size write inside
             // one mtime tick can never serve a stale list.
@@ -306,8 +335,11 @@ object ChatThreads {
             // the call is guarded.
             runCatching { android.util.Log.e("ChatThreads", "save failed for $tab", e) }
             // And surfaced (#435): a persistent banner in the thread sheet,
-            // not only logcat, because memory is now ahead of disk.
+            // not only logcat, because memory is now ahead of disk. Pinned
+            // to prefs too — OOM kills the process right after recording,
+            // and the map alone would not survive the restart it is about.
             recordSaveError(tab)
+            setPersistedSaveError(context, tab, true)
         }
     }
 

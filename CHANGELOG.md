@@ -10,13 +10,19 @@ see GitHub Releases for older notes.
 
 ## [6.1.1]
 - **Stale and failed data says so (#435).** The task widget badges cached
-  rows after a failed fetch ("12 open · updated 09:14 — refresh failed")
-  instead of presenting yesterday's tasks as live. A thread-file write
-  failure (disk full, OOM) now banners the conversation sheet with
+  rows after a failed fetch ("12 open · updated 09:14 — refresh failed",
+  timeless "refresh failed — showing saved tasks" when the stamp itself is
+  missing) instead of presenting yesterday's tasks as live. A thread-file
+  write failure (disk full, OOM) now banners the conversation sheet with
   "Conversations couldn't be saved — storage may be full." and toasts once,
   because memory is ahead of disk and the next launch would silently show
-  the older conversation. Health sync on a device without Health Connect
-  reports "Health Connect unavailable on this device" instead of
+  the older conversation. The flag survives restarts (OOM kills the process
+  right after recording) via a prefs marker cleared by the next landed save,
+  so the next launch banners and toasts too; a task instruction whose save
+  fails posts an "Instruction not saved" card instead of a "saved" card that
+  deep-links a thread that was never persisted. Health sync on a device
+  without Health Connect reports "Health Connect unavailable on this
+  device" (or "needs an update", matching the settings card) instead of
   "permissions not granted", and never posts an empty day that reads as no
   data.
 
