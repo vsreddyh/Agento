@@ -398,7 +398,6 @@ object ReminderTts {
             }
             timedOut?.let { reportFailure(it.taskId, it.kindKey, it.taskName, TtsFailure.TIMED_OUT) }
             val (eng, next, wgen) = step ?: return
-            val (eng, next, wgen) = step
             // Posted outside the lock: postDelayed only enqueues, and the
             // critical section should end before it. Guarded: a no-main-looper
             // environment (local unit test) requeues and bails — falling
