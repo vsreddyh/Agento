@@ -62,19 +62,20 @@ internal fun isStoredVoiceMissing(availableNames: Collection<String>, want: Stri
 
 /**
  * What [purgeTaskSpeech] removed: queued items dropped, whether an
- * in-flight utterance was suppressed, and which reminder-point kinds lost
- * items (their failure notices go too).
+ * in-flight utterance was suppressed, and which reminder points lost
+ * items ([taskId] + [kindKey] — their failure notices go too).
  */
 internal data class SpeechPurge(
     val dropped: Int,
     val inFlight: Boolean,
-    val kindKeys: Set<String>,
+    val points: Set<Pair<String, String>>,
 )
 
 /**
- * Pure core of [ReminderTts.dropTask] (#470 review): removes every queued
- * utterance for [taskId] and every owner entry for it, plus the reported
- * flags of exactly the removed items.
+ * Pure core of [ReminderTts.dropTask]/[ReminderTts.dropAll] (#470
+ * review): removes every queued utterance for [taskId] — or every queued
+ * utterance when [taskId] is null — and every owner entry for it, plus
+ * the reported flags of exactly the removed items.
  *
  * The speaking item is suppressed, not stopped: its owner entry goes (so
  * the completion callback can neither report nor retract), but
@@ -88,31 +89,31 @@ internal fun purgeTaskSpeech(
     owners: MutableMap<String, ReminderTts.QueuedSpeech>,
     reported: MutableSet<String>,
     speakingId: String?,
-    taskId: String,
+    taskId: String?,
 ): SpeechPurge {
-    val kinds = mutableSetOf<String>()
+    val points = mutableSetOf<Pair<String, String>>()
     var dropped = 0
     val it = queue.iterator()
     while (it.hasNext()) {
         val q = it.next()
-        if (q.taskId == taskId) {
+        if (taskId == null || q.taskId == taskId) {
             it.remove()
             reported.remove(q.id)
-            kinds.add(q.kindKey)
+            points.add(q.taskId to q.kindKey)
             dropped++
         }
     }
     val speakingOwner = speakingId?.let { owners[it] }
-    val inFlight = speakingOwner?.taskId == taskId
+    val inFlight = speakingOwner != null && (taskId == null || speakingOwner.taskId == taskId)
     if (inFlight) {
         reported.remove(speakingOwner!!.id)
-        kinds.add(speakingOwner.kindKey)
+        points.add(speakingOwner.taskId to speakingOwner.kindKey)
     }
-    // Owner entries for the task go regardless: the queued ones above, the
-    // suppressed in-flight one here, and any drift leftover (the map only
-    // ever holds queued-or-speaking items).
-    owners.entries.removeIf { e -> e.value.taskId == taskId }
-    return SpeechPurge(dropped, inFlight, kinds)
+    // Owner entries for the purge go regardless: the queued ones above,
+    // the suppressed in-flight one here, and any drift leftover (the map
+    // only ever holds queued-or-speaking items).
+    owners.entries.removeIf { e -> taskId == null || e.value.taskId == taskId }
+    return SpeechPurge(dropped, inFlight, points)
 }
 
 /**
@@ -210,6 +211,9 @@ object ReminderTts {
     }
 
     internal fun speak(appCtx: Context, kind: ReminderKind, task: ServerTask, overdueElapsed: Long? = null) {
+        // Off means off: an alarm already in flight when the toggle flips
+        // must not enqueue behind the purge in cancelAll (#470 review).
+        if (!TaskReminders.isEnabled(appCtx)) return
         if (isSilent(appCtx)) return
         appCtxRef = appCtx.applicationContext
         // Quotes delimit the name in text but some engines verbalize "quote",
@@ -518,12 +522,42 @@ object ReminderTts {
         val purged = synchronized(lock) {
             purgeTaskSpeech(queue, owners, initReported, speakingId, taskId)
         }
-        for (kindKey in purged.kindKeys) cancelFailure(taskId, kindKey)
+        for ((t, kindKey) in purged.points) cancelFailure(t, kindKey)
         if (purged.dropped > 0 || purged.inFlight) {
             runCatching {
                 Log.w("ReminderTts", "dropped ${purged.dropped} queued speech for task=$taskId" +
                     if (purged.inFlight) " (in-flight finishes silently)" else "")
             }
+        }
+    }
+
+    /**
+     * Drops ALL queued speech (reminders disabled). Like [dropTask] for
+     * every task at once, plus the engine itself is stopped: off means
+     * off, so an utterance already playing must not finish audibly
+     * either. Called from [TaskReminders.cancelAll], so already-queued
+     * speech can never outlive the toggle — and [speak] refuses new
+     * utterances while disabled, closing the race where an alarm already
+     * in flight enqueues after the purge.
+     */
+    internal fun dropAll() {
+        val eng: TextToSpeech?
+        val points: Set<Pair<String, String>>
+        var hadSpeech = false
+        synchronized(lock) {
+            val purged = purgeTaskSpeech(queue, owners, initReported, speakingId, null)
+            hadSpeech = purged.dropped > 0 || purged.inFlight
+            // Unconditional: assigning false/null when idle is harmless,
+            // and a stale generation must never resume a cleared queue.
+            speaking = false
+            speakingId = null
+            eng = engine
+            points = purged.points
+        }
+        runCatching { eng?.stop() }
+        for ((taskId, kindKey) in points) cancelFailure(taskId, kindKey)
+        if (hadSpeech) {
+            runCatching { Log.w("ReminderTts", "reminders disabled, dropped all queued speech") }
         }
     }
 

@@ -116,7 +116,7 @@ class TtsQueuePurgeTest {
         val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
         assertEquals(2, purged.dropped)
         assertEquals(false, purged.inFlight)
-        assertEquals(setOf("due", "start"), purged.kindKeys)
+        assertEquals(setOf("A" to "due", "A" to "start"), purged.points)
         assertEquals(listOf("b1"), queue.map { it.id })
         assertEquals(setOf("b1"), owners.keys)
         assertTrue(reported.isEmpty())
@@ -124,15 +124,18 @@ class TtsQueuePurgeTest {
 
     @Test
     fun `an in-flight utterance is suppressed, not stopped`() {
-        val (queue, owners, reported) = state(item("a1", "A"), item("b1", "B"))
-        reported.add("a1")
+        // Production shape: pump() dequeues before speaking, so the
+        // speaking item is in owners but no longer in the queue.
+        val queue = ArrayDeque(listOf(item("b1", "B")))
+        val owners = mutableMapOf("a1" to item("a1", "A"), "b1" to item("b1", "B"))
+        val reported = mutableSetOf("a1")
         // The speaking id is untouched (the audio finishes); only its
         // owner/reported entries go, so the callback can no longer report
         // — and the caller cancels its notice instead of orphaning it.
         val purged = purgeTaskSpeech(queue, owners, reported, "a1", "A")
         assertEquals(0, purged.dropped)
         assertEquals(true, purged.inFlight)
-        assertEquals(setOf("due"), purged.kindKeys)
+        assertEquals(setOf("A" to "due"), purged.points)
         assertEquals(listOf("b1"), queue.map { it.id })
         assertEquals(setOf("b1"), owners.keys)
         assertTrue(reported.isEmpty())
@@ -155,7 +158,7 @@ class TtsQueuePurgeTest {
         val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
         assertEquals(0, purged.dropped)
         assertEquals(false, purged.inFlight)
-        assertTrue(purged.kindKeys.isEmpty())
+        assertTrue(purged.points.isEmpty())
         assertEquals(setOf("b1"), owners.keys)
     }
 
@@ -165,5 +168,28 @@ class TtsQueuePurgeTest {
         val purged = purgeTaskSpeech(queue, owners, reported, null, "A")
         assertEquals(SpeechPurge(0, false, emptySet()), purged)
         assertEquals(1, queue.size)
+    }
+
+    @Test
+    fun `a null task purges everything for the disable path`() {
+        // dropAll's core: every task's queue goes, every owner entry goes,
+        // and a speaking item of any task suppresses.
+        val queue = ArrayDeque(listOf(item("a1", "A"), item("b1", "B", "start")))
+        val owners = mutableMapOf(
+            "a1" to item("a1", "A"),
+            "b1" to item("b1", "B", "start"),
+            "s1" to item("s1", "C"),
+        )
+        val reported = mutableSetOf("a1", "s1")
+        val purged = purgeTaskSpeech(queue, owners, reported, "s1", null)
+        assertEquals(2, purged.dropped)
+        assertEquals(true, purged.inFlight)
+        assertEquals(
+            setOf("A" to "due", "B" to "start", "C" to "due"),
+            purged.points,
+        )
+        assertTrue(queue.isEmpty())
+        assertTrue(owners.isEmpty())
+        assertTrue(reported.isEmpty())
     }
 }

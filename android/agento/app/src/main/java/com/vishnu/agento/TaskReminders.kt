@@ -731,6 +731,10 @@ object TaskReminders {
             remove(PREF_ARMED)
             remove(PREF_BUDGET)
         }
+        // And the speech queue goes too: utterances queued before the
+        // toggle must not play audibly after it, nor fail back with
+        // toasts + re-posted notices (#470 review).
+        ReminderTts.dropAll()
     }
 
     private fun operation(appCtx: Context, key: String): PendingIntent {

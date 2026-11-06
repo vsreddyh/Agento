@@ -616,6 +616,14 @@ internal fun TaskManagerScreen(
                 val finish = if (verb == "skip") api.skip(t.id) else api.complete(t.id)
                 finish.fold(
                     onSuccess = { done ->
+                        // The task is gone from this device's future: its
+                        // posted visuals, failure notices AND queued speech
+                        // go with it — like the notification-tap path
+                        // (cancelPosted), not just future alarms (#470
+                        // review). A surviving queue entry would later speak
+                        // a done task or resurrect a cancelled tag.
+                        TaskReminders.cancelPosted(context, t.id)
+                        ReminderTts.dropTask(t.id)
                         // A structured cadence rolled itself over server-side:
                         // the next occurrence is a NEW row this response does
                         // not carry, so only then fall back to a refetch — a
@@ -758,6 +766,11 @@ internal fun TaskManagerScreen(
             try {
                 api.delete(t.id).fold(
                     onSuccess = {
+                        // Gone means gone everywhere: visuals, failure
+                        // notices and queued speech, like a resolve (#470
+                        // review).
+                        TaskReminders.cancelPosted(context, t.id)
+                        ReminderTts.dropTask(t.id)
                         pokeWidget()
                         toasts.toast("Task deleted.", ToastKind.Success)
                     },
@@ -818,6 +831,20 @@ internal fun TaskManagerScreen(
             try {
                 api.batch(ops).fold(
                     onSuccess = {
+                        // Same cleanup as the single-task paths, per verb
+                        // (#470 review): resolved tasks lose visuals +
+                        // notices + speech; moved tasks keep their visuals
+                        // (still live) but lose stale speech; duplicates
+                        // touch nothing existing.
+                        for ((verb, verbed) in ops.groupBy({ it.op }, { it.id })) {
+                            when (verb) {
+                                "complete", "skip" -> verbed.forEach {
+                                    TaskReminders.cancelPosted(context, it)
+                                    ReminderTts.dropTask(it)
+                                }
+                                "update" -> verbed.forEach { ReminderTts.dropTask(it) }
+                            }
+                        }
                         silentRefresh = true
                         refreshTick++
                         pokeWidget()
@@ -1484,6 +1511,12 @@ internal fun TaskManagerScreen(
                                 expectedRevision = next.revision,
                             ).fold(
                                 onSuccess = { saved ->
+                                    // The stored text may have changed under a
+                                    // queued utterance: drop this task's speech
+                                    // so the next fire speaks the saved words,
+                                    // not the stale ones (#470 review). Posted
+                                    // visuals stay — the task itself is live.
+                                    ReminderTts.dropTask(next.id)
                                     if (prevRow == null) {
                                         // The row was not in the fetched page at
                                         // all: backgrounded (#308) so pulling the

@@ -23,7 +23,10 @@ see GitHub Releases for older notes.
   both, like the reminder itself); otherwise swipe them away like the
   reminder itself. Queued speech purges with the task too: completing it
   drops its unplayed utterances (an in-flight one finishes silently)
-  instead of speaking a done task or resurrecting its failure notice. When the device language isn't available in the engine,
+  instead of speaking a done task or resurrecting its failure notice —
+  and that covers the in-app Complete/Skip/Delete/Edit paths, not just
+  notification taps. Turning reminders off purges the whole speech queue
+  (stopping playback too) so nothing queued can outlive the toggle. When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is
