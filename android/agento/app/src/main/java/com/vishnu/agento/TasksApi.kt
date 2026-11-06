@@ -705,7 +705,6 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
     if (source.isNotEmpty()) {
         TasksApi.noteCoercedNotes(source, state, coercedNotes.toList())
     }
-    }
     return TaskList(out, root.optBoolean("truncated", false), dropped, coerced, coercedNotes.take(3))
 }
 

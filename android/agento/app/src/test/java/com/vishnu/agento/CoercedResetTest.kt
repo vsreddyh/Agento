@@ -217,10 +217,6 @@ class TaskNumericCoercionTest {
             TasksApi.noteCoercedNotes("manager", "open", emptyList())
         }
     }
-        } finally {
-            TasksApi.noteCoercedNotes("manager", "open", emptyList())
-        }
-    }
 
     @Test
     fun `negative repeat and revision clamp to zero and notify`() {

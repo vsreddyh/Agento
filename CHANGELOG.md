@@ -29,8 +29,10 @@ see GitHub Releases for older notes.
   the diagnostics summary — per fetch source and state, so one screen's
   fetch can neither clobber nor clear another's (the one screen that
   switches states prunes its own stale ones on each landed page) — the
-  log and the page carry the same capped sample while diagnostics keeps
-  every row, so the hint points at on-screen detail.
+  log and the page carry the same capped sample while the diagnostics
+  record keeps every row (the About line shows the first 500 chars, so
+  very large pages reconcile by count, not by full text), so the hint
+  points at on-screen detail.
   Defaults themselves are unchanged — only the
   rewriting is now visible.
 
