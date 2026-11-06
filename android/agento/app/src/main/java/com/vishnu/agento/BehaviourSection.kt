@@ -192,8 +192,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     // Engine voices for the picker: a short-lived engine lists, then dies.
     // Matched by name at speak time (Voice objects are engine-specific).
-    // Bounded: a broken engine answers empty, never hangs the section.
-    var voices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    // Bounded: a broken engine answers null, never hangs the section.
+    // Null means the engine failed (distinct from an engine that genuinely
+    // offers no voices, #434); empty means no voices installed.
+    var voices by remember { mutableStateOf<List<Pair<String, String>>?>(emptyList()) }
     // Unkeyed on purpose: keying on refreshTick would clear the list on
     // every import before the effect below runs, so the settled-skip could
     // never hit and every import would pay the binder spin unconditionally.
@@ -203,12 +205,14 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     var listedGen by remember { mutableStateOf(-1) }
     LaunchedEffect(refreshTick, voiceGen) {
         val cur = voices
-        val settled = cur.isNotEmpty() && listedGen == voiceGen &&
+        val settled = cur != null && cur.isNotEmpty() && listedGen == voiceGen &&
             (ttsVoice.isEmpty() || cur.any { it.first == ttsVoice })
         if (!settled) {
             listingVoices = true
             try {
-                voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }.orEmpty()
+                // Null on timeout or engine failure: stays null so the hint
+                // below reads as engine failure, not "no voices" (#434).
+                voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }
             } finally {
                 listingVoices = false
             }
@@ -337,24 +341,14 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     ) {
         OptionMenu(
             label = "Voice",
-            shown = voiceShown(ttsVoice, voices),
-            options = listOf("" to "Engine default") + voices,
+            shown = voiceShown(ttsVoice, voices.orEmpty()),
+            options = listOf("" to "Engine default") + voices.orEmpty(),
             onPick = {
                 BehaviourSettings.setTtsVoice(context, it)
                 ttsVoice = BehaviourSettings.ttsVoice(context)
             },
         )
-        if (ttsVoice.isNotEmpty() && !listingVoices &&
-            (voices.isEmpty() || voices.none { it.first == ttsVoice })
-        ) {
-            HintLine(
-                if (voices.isEmpty()) {
-                    "The speech engine isn't answering — the pick is kept, and Reload voices retries it."
-                } else {
-                    "Kept from an import: this engine no longer offers that voice, but the pick is kept."
-                },
-            )
-        }
+        voiceListHint(listingVoices, voices, ttsVoice)?.let { HintLine(it) }
         TextButton(
             onClick = {
                 // Eager: two rapid taps must not spin two engines before
@@ -528,11 +522,40 @@ private fun voiceShown(saved: String, voices: List<Pair<String, String>>): Strin
     return voices.firstOrNull { it.first == saved }?.second ?: saved
 }
 
+/**
+ * Voice-picker hint (#434): a dead engine (null) reads as an engine failure
+ * with a retry, distinct from an engine that genuinely offers no voices
+ * (empty) and from a stored pick the engine no longer offers. Null while a
+ * listing is in flight (the button reads "Loading…" instead).
+ */
+internal fun voiceListHint(
+    listing: Boolean,
+    voices: List<Pair<String, String>>?,
+    savedVoice: String,
+): String? {
+    if (listing) return null
+    if (voices == null) {
+        return "The speech engine isn't answering — the pick is kept, and Reload voices retries it."
+    }
+    if (voices.isEmpty()) {
+        if (savedVoice.isEmpty()) {
+            return "This engine offers no voices — install a voice pack, or leave Engine default."
+        }
+        return "This engine offers no voices — the pick is kept, and Reload voices retries it."
+    }
+    if (savedVoice.isNotEmpty() && voices.none { it.first == savedVoice }) {
+        return "Kept from an import: this engine no longer offers that voice, but the pick is kept."
+    }
+    return null
+}
+
 /** Lists engine voices as (name to display) pairs, then shuts down.
- * Never throws and never hangs the caller: a constructor failure answers
- * empty (pair with the timeout in the caller, which cancels and resumes
- * empty via invokeOnCancellation's shutdown). */
-private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>> =
+ * Never throws and never hangs the caller: a constructor failure or an
+ * init failure answers null (pair with the timeout in the caller, which
+ * cancels and resumes null via invokeOnCancellation's shutdown) — an
+ * engine that inits fine but offers nothing answers an empty list, so
+ * callers can tell "dead engine" apart from "no voices" (#434). */
+private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>>? =
     suspendCancellableCoroutine { cont ->
         val ref = java.util.concurrent.atomic.AtomicReference<TextToSpeech?>(null)
         val statusRef = java.util.concurrent.atomic.AtomicInteger(Int.MIN_VALUE)
@@ -550,9 +573,9 @@ private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>> =
                             val loc = v.locale?.displayName?.takeIf { it.isNotBlank() }
                             v.name to if (loc != null) "$loc — ${v.name}" else v.name
                         }
-                }.getOrDefault(emptyList())
+                }.getOrNull()
             } else {
-                emptyList()
+                null
             }
             runCatching { tts.shutdown() }
             if (cont.isActive) cont.resume(out)
@@ -562,7 +585,7 @@ private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>> =
         // stashes its status, and the tail below finishes explicitly. The
         // CAS keeps a racing async callback from finishing twice.
         //
-        // A constructor that throws (missing/broken engine) answers empty
+        // A constructor that throws (missing/broken engine) answers null
         // instead of escaping the LaunchedEffect with `cont` unresumed.
         val tts = runCatching {
             TextToSpeech(appCtx) { status ->
@@ -571,7 +594,7 @@ private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>> =
             }
         }.getOrNull()
         if (tts == null) {
-            if (done.compareAndSet(false, true) && cont.isActive) cont.resume(emptyList())
+            if (done.compareAndSet(false, true) && cont.isActive) cont.resume(null)
             return@suspendCancellableCoroutine
         }
         ref.set(tts)

@@ -8,6 +8,19 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.1.0]
+- **Reminder speech failures are loud now (#434).** Every spoken alert that
+  never plays says so: a toast plus a persistent "Spoken alert couldn't
+  play" notification next to the reminder, instead of Log-only silence that
+  was indistinguishable from success. That covers a dead engine, a rejected
+  or interrupted utterance, a timeout, and a queue overflow — and a stored
+  voice the engine no longer offers still speaks, but says it fell back to
+  the default voice. When the device language isn't available in the engine,
+  the alert is skipped with an error rather than spoken in US English. The
+  voice picker tells a dead engine ("isn't answering — Reload retries it")
+  apart from one that genuinely offers no voices. Chat read-aloud is
+  unchanged (it leaves with Chat to T3).
+
 ## [6.0.0]
 - **Every legacy fallback is gone (#433).** One canonical key per setting,
   one endpoint per action, one envelope shape — and anything still on a
