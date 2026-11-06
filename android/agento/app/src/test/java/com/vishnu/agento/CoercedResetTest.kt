@@ -95,6 +95,29 @@ class TaskNumericCoercionTest {
     }
 
     @Test
+    fun `a negative estimate clamps to zero and counts as coerced`() {
+        // Well-typed but still a reset: the clamp rewrites -5 to 0, so it
+        // notifies like any other reset rather than passing as a default.
+        val page = parseTaskListPage(
+            """{"tasks":[{"id":"a","name":"A","estimated_minutes":-5}]}""",
+        )
+        assertEquals(0, page.tasks.single().estimatedMinutes)
+        assertEquals(1, page.coerced)
+    }
+
+    @Test
+    fun `the latest page notes land where diagnostics reads them`() {
+        parseTaskListPage("""{"tasks":[{"id":"a","name":"A","estimated_minutes":"abc"}]}""")
+        val notes = TasksApi.lastCoercedNotes
+        assertEquals(1, notes.size)
+        assertTrue("diagnostics must name the key: $notes", notes.single().contains("estimated_minutes"))
+        assertTrue("diagnostics must name the raw value: $notes", notes.single().contains("\"abc\""))
+        // A clean page clears them so stale notes never outlive their fetch.
+        parseTaskListPage("""{"tasks":[{"id":"a","name":"A"}]}""")
+        assertTrue(TasksApi.lastCoercedNotes.isEmpty())
+    }
+
+    @Test
     fun `a single-row parse reports through its own log line`() {
         // coerced == null: the single-row paths (get/create/update) log
         // directly — one row notifies once by construction. This just pins
@@ -141,6 +164,17 @@ class FilterSortCoercionTest {
         val msg = sortCoercionMessage("Priority")!!
         assertTrue(msg.contains("Priority"))
         assertTrue(msg.contains("Start"))
+    }
+
+    @Test
+    fun `long corrupt values truncate like the widget path`() {
+        val long = "X".repeat(100)
+        val f = filterCoercionMessage(long)!!
+        assertTrue(f.contains("X".repeat(40)))
+        assertTrue(!f.contains("X".repeat(41)))
+        val s = sortCoercionMessage(long)!!
+        assertTrue(s.contains("X".repeat(40)))
+        assertTrue(!s.contains("X".repeat(41)))
     }
 }
 

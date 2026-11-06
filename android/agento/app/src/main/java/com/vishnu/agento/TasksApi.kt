@@ -450,9 +450,9 @@ internal fun optTaskDays(o: JSONObject, key: String): List<String> {
  * non-numeric string, a boolean, an object) resets to [default] AND
  * reports the raw value in [CoercedInt.raw] (null raw means clean, so
  * only a reset notifies). Absent or JSON-null reads [default] with a null raw:
- * a default itself is fine, only a reset is reported. Negative clamping
- * stays at the call site (a documented bound, like
- * `BehaviourSettings.coerceIn`), not here. */
+ * a default itself is fine, only a reset is reported. Bounds stay at the
+ * call site — but the call site notifies, because a clamped negative is
+ * still a reset, not a default (see `parseTask`). */
 internal data class CoercedInt(val value: Int, val raw: String?)
 
 internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedInt {
@@ -489,22 +489,31 @@ internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): Ser
     // One lenient read per numeric field (#437): a mistyped server value
     // used to become 0 minutes with no word. The note carries the row so
     // a page summary can tell two rows' resets apart.
+    fun note(text: String) {
+        if (coerced != null) {
+            coerced.add(text)
+        } else {
+            runCatching {
+                Log.w("TasksApi", "coerced $text")
+            }
+        }
+    }
     fun num(key: String, default: Int = 0): Int {
         val r = optTaskInt(o, key, default)
         if (r.raw != null) {
-            val note = "task ${id.take(24)}: $key ${r.raw}->${r.value}"
-            if (coerced != null) {
-                coerced.add(note)
-            } else {
-                runCatching {
-                    Log.w("TasksApi", "coerced $note")
-                }
-            }
+            note("task ${id.take(24)}: $key ${r.raw}->${r.value}")
         }
         return r.value
     }
     // estimated_minutes may encode as int, long, or double.
-    val mins = num("estimated_minutes")
+    val minsRaw = num("estimated_minutes")
+    // A negative estimate is well-typed but still a reset: the clamp
+    // below rewrites it to 0, so it notifies like any other reset rather
+    // than passing as a default (#437 review).
+    val mins = minsRaw.coerceAtLeast(0)
+    if (mins != minsRaw) {
+        note("task ${id.take(24)}: estimated_minutes $minsRaw->$mins")
+    }
     // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
     // read-modify-write per row is 200 I/Os for one fact — and a
     // read-then-write that is not atomic can regress (sees v3, then a late
@@ -585,6 +594,10 @@ internal fun parseTaskListPage(body: String): TaskList {
                 coercedNotes.take(3).joinToString("; ").take(400))
         }
     }
+    // The diagnostics screen reads this, so the list's hint points at
+    // detail on that screen — always written, so a clean page clears a
+    // stale one (#437 review).
+    TasksApi.noteCoercedNotes(coercedNotes.takeLast(5))
     return TaskList(out, root.optBoolean("truncated", false), dropped, coerced)
 }
 
@@ -674,6 +687,25 @@ class TasksApi(context: Context) {
          * could land the older max last.
          */
         private val versionLock = Any()
+
+        /**
+         * The latest list page's numeric-reset notes (#437): each names
+         * the row, the key, the raw value and what it became. Capped at 5
+         * — the count is the signal, these are the examples. Read by
+         * [TaskWidget.diagnostics] so the Task Manager's "see Settings →
+         * About diagnostics" hint points at detail that is actually on
+         * that screen, not only in a log tail. Newest page wins (one
+         * number per response, like [maxContractVersion]); a clean page
+         * clears it so stale notes never outlive their fetch.
+         */
+        @Volatile
+        internal var lastCoercedNotes: List<String> = emptyList()
+            private set
+
+        /** Records one page's numeric-reset notes (see [lastCoercedNotes]). */
+        internal fun noteCoercedNotes(notes: List<String>) {
+            lastCoercedNotes = notes
+        }
     }
 
     private val appCtx = context.applicationContext
