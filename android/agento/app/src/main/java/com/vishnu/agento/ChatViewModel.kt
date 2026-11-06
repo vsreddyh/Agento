@@ -59,6 +59,11 @@ data class ChatUiState(
     val ready: Boolean = false,
     /** Conversations in this tab, newest first. */
     val threads: List<ThreadSummary> = emptyList(),
+    /** Last thread-file save failure (#435): "" when the last write landed.
+     * Memory is ahead of disk until a save succeeds, so the sheet banners it
+     * persistently — the next cold start would otherwise quietly show the
+     * older conversation. */
+    val threadsSaveError: String = "",
     val threadId: String = "",
     /** Reachability of the server; null = not checked yet. */
     val online: Boolean? = null,
@@ -375,6 +380,10 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
                         messages = ChatThreads.toUi(activeFinal.messages),
                         threads = summaries(),
                         threadId = threadId,
+                        // A writer outside this VM (the task receiver) may
+                        // have failed while it was dead (#435): the file is
+                        // older than memory claims, so say so from the start.
+                        threadsSaveError = ChatThreads.saveError(tab),
                         ready = true,
                     )
                 } else {
@@ -907,6 +916,18 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val snapshot = merged ?: threads.filter { it.messages.isNotEmpty() }
         viewModelScope.launch(Dispatchers.IO) {
             ChatThreads.save(appCtx, tab, snapshot)
+            val err = ChatThreads.saveError(tab)
+            withContext(Dispatchers.Main) {
+                if (_state.value.threadsSaveError == err) return@withContext
+                val firstFailure =
+                    err.isNotEmpty() && _state.value.threadsSaveError.isEmpty()
+                _state.value = _state.value.copy(threadsSaveError = err)
+                // Loud at the moment it happens (#435): the banner is
+                // persistent, but a user in the middle of a conversation
+                // should not have to open the sheet to learn the turn was
+                // not saved.
+                if (firstFailure) notify(err, ToastKind.Error)
+            }
         }
     }
 
