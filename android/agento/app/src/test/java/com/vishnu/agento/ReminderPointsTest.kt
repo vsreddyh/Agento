@@ -167,3 +167,77 @@ class ReminderPointsTest {
         assertFalse("2026-02-30".isIsoDate()) // parses as text, not as a real day
     }
 }
+
+/**
+ * Which dropped alarm keys purge a task's remnants (#470 review): only
+ * tasks with no live bid at all — completed, deleted, or rescheduled
+ * clean past every armed point. A still-live task must never land here,
+ * or a routine refresh would yank live alerts.
+ */
+class GoneTaskIdsTest {
+
+    @Test
+    fun `a task with no bids purges once across its kinds`() {
+        assertEquals(
+            setOf("gone"),
+            goneTaskIds(
+                armed = setOf("gone#due", "gone#start", "live#due"),
+                keep = setOf("live#due"),
+                candidateKeys = setOf("live#due"),
+            ),
+        )
+    }
+
+    @Test
+    fun `a lingering fired key never purges its live task`() {
+        // Fired one-shot keys are never removed at fire time, so they drop
+        // every refresh — but the task holds other bids, so its posted
+        // visuals for those points must survive.
+        assertEquals(
+            emptySet<String>(),
+            goneTaskIds(
+                armed = setOf("live#due", "live#start"),
+                keep = setOf("live#start"),
+                candidateKeys = setOf("live#due", "live#start"),
+            ),
+        )
+    }
+
+    @Test
+    fun `a budget-cut key keeps its task`() {
+        // Cut keys keep their bids (capped is a subset of candidates), so
+        // a task trimmed for budget is live, not gone.
+        assertEquals(
+            emptySet<String>(),
+            goneTaskIds(
+                armed = setOf("live#overdue"),
+                keep = emptySet(),
+                candidateKeys = setOf("live#overdue"),
+            ),
+        )
+    }
+
+    @Test
+    fun `legacy bare-id keys count as their own task`() {
+        assertEquals(
+            setOf("oldtask"),
+            goneTaskIds(
+                armed = setOf("oldtask"),
+                keep = emptySet(),
+                candidateKeys = emptySet(),
+            ),
+        )
+    }
+
+    @Test
+    fun `kept keys never purge even without bids`() {
+        assertEquals(
+            emptySet<String>(),
+            goneTaskIds(
+                armed = setOf("live#due"),
+                keep = setOf("live#due"),
+                candidateKeys = emptySet(),
+            ),
+        )
+    }
+}

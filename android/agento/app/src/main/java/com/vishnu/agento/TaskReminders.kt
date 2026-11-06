@@ -293,6 +293,32 @@ private fun addIfFuture(
 }
 
 /**
+ * Tasks whose armed keys all dropped AND that hold no live bid (#470
+ * review): completed, deleted, or rescheduled clean past every armed
+ * point behind them. Their posted visuals, failure notices and queued
+ * speech must purge with the keys — no future alarm will fire to run
+ * post()'s early-exit purge.
+ *
+ * Zero bids, not merely a dropped key: fired one-shot keys linger in the
+ * persisted set (nothing removes them at fire time) and budget-cut keys
+ * keep their bids — a still-live task must never land here, or a routine
+ * refresh would yank live alerts. Legacy bare-id keys (no `#`) count as
+ * their own task id, mirroring [TaskReminders.operation]. Pure and
+ * JVM-pinned.
+ */
+internal fun goneTaskIds(
+    armed: Set<String>,
+    keep: Set<String>,
+    candidateKeys: Set<String>,
+): Set<String> {
+    val live = candidateKeys.map { it.substringBeforeLast('#') }.toSet()
+    return armed.filter { it !in keep }
+        .map { it.substringBeforeLast('#') }
+        .filter { it !in live }
+        .toSet()
+}
+
+/**
  * Due-time reminders for server tasks. Opt-in via Settings → Behaviour
  * (default off: alarms must never surprise a fresh install). [refresh]
  * (re)computes the alarm set from **open** tasks that have a due time and
@@ -401,8 +427,9 @@ object TaskReminders {
         if (!isEnabled(appCtx)) return RefreshOutcome.Ok
         // Limit 500 (server max): the budget below can only arm what it
         // sees, and the default 200 would silently drop tasks past it.
-        val tasks = TasksApi(appCtx).list("open", limit = 500).getOrNull()?.tasks
+        val page = TasksApi(appCtx).list("open", limit = 500).getOrNull()
             ?: return RefreshOutcome.Failed
+        val tasks = page.tasks
         // IST-pinned (#124): due times are entered as wall-clock IST,
         // so "now" and the arming horizon must read the same zone.
         val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
@@ -482,6 +509,19 @@ object TaskReminders {
             .map { it.key }
             .toSet()
         val keep = LinkedHashSet(capped)
+        // Tasks with no live point left at all: completed, deleted, or
+        // rescheduled clean past every armed point behind them. Their
+        // posted visuals, failure notices and queued speech would otherwise
+        // orphan — no future alarm will fire to run post()'s early-exit
+        // purge, because this loop just cancelled the last triggers (#470
+        // review). cancelPosted() is the same bundle the tap paths use.
+        // Gated on a complete page: past the server cap "no bids" means
+        // "unseen", not "gone".
+        if (!page.truncated) {
+            for (taskId in goneTaskIds(armed, keep, candidates.map { it.key }.toSet())) {
+                cancelPosted(appCtx, taskId)
+            }
+        }
         for (key in armed) {
             if (key in keep) continue
             // Keys from 4.4 and earlier were a bare task id, armed with

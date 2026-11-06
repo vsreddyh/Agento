@@ -34,7 +34,13 @@ see GitHub Releases for older notes.
   disable or task-drop. Speech queued before DND flipped drops silently
   at dequeue, audio playing when DND flips is stopped by a ringer-mode
   listener, and the stored-voice check runs after the toggle re-check —
-  extending the visual-only rule past the enqueue gate on all three sides. When the device language isn't available in the engine,
+  extending the visual-only rule past the enqueue gate on all three sides.
+  Stopping speech always clears its flags and advances the queue (a
+  callback-less stop must not wedge it). A refresh that cancels a task's
+  last triggers purges its posted visuals, failure notices and queued
+  speech too — but only for tasks with no live bid left (a lingering
+  fired key or a budget cut keeps its task live), and only on a complete
+  page, so background completions and deletes cannot orphan. When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is

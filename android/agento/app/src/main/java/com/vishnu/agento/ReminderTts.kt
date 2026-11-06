@@ -218,6 +218,11 @@ object ReminderTts {
             }
             runCatching { eng?.stop() }
             point?.let { (t, k) -> cancelFailure(t, k) }
+            // Advance what is still queued: like dropTask, the stopped
+            // utterance's callback may never arrive to pump (#470 review).
+            // Under continuing DND this drains silently via pump()'s own
+            // dequeue check — the same outcome, sooner.
+            pump()
             runCatching {
                 Log.w("ReminderTts", "DND/silent flipped mid-utterance, stopping speech")
             }
@@ -626,8 +631,16 @@ object ReminderTts {
                 // Capture under the lock, stop outside it: binder IPC must
                 // never run while holding the queue lock. Only when
                 // suppressing — stopping audio for any other reason would
-                // be vandalism.
-                if (it.inFlight) eng = engine
+                // be vandalism. Flags clear here too, like every other
+                // stop path (dropAll, the DND receiver, pump's silent
+                // drops): the callback may never fire after stop(), so
+                // leaving them set would wedge the queue until the watchdog
+                // (#470 review).
+                if (it.inFlight) {
+                    eng = engine
+                    speaking = false
+                    speakingId = null
+                }
             }.also {
                 // Notices ride the posted record, not the purge contents:
                 // terminal failures post when the queue no longer holds the
@@ -639,6 +652,9 @@ object ReminderTts {
         }
         runCatching { eng?.stop() }
         for ((t, kindKey) in doomed) cancelFailure(t, kindKey)
+        // Advance whatever is still queued: the stopped utterance's
+        // callback may never arrive to pump (#470 review).
+        pump()
         if (purged.dropped > 0 || purged.inFlight) {
             runCatching {
                 Log.w("ReminderTts", "dropped ${purged.dropped} queued speech for task=$taskId" +
