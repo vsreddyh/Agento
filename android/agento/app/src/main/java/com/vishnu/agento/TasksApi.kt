@@ -479,10 +479,11 @@ internal fun parseTaskListPage(body: String): TaskList {
  * Client for the user's tasks (same bearer auth as chat/sync, served
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
- * validation the agent uses over MCP. Parsing is lenient across shapes;
- * rows without an id or name are skipped and counted
- * ([TaskList.dropped]), missing fields blank. A body with none of the
- * known list envelopes is a parse failure, never a clean empty (#430).
+ * validation the agent uses over MCP. Row fields are lenient (missing reads
+ * blank, rows without an id or name are skipped and counted
+ * ([TaskList.dropped])), but the list envelope is the canonical `tasks`
+ * array only — any other shape is a parse failure, never a clean empty
+ * (#430, #433).
  */
 class TasksApi(context: Context) {
 

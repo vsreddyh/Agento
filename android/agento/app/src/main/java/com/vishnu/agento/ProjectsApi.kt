@@ -193,7 +193,7 @@ class ProjectsApi(context: Context) {
 
     private fun parseOne(body: String): ServerProject =
         parseProject(JSONObject(body))
-            ?: throw RuntimeException("Unexpected response shape")
+            ?: throw RuntimeException(PROJECTS_SHAPE_ERROR)
 
     /** Ids are hex today, but encoded defensively so a malformed id can
      * never break the request path (the `+` fix-up mirrors TasksApi:
