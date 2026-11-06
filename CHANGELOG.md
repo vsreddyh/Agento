@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.1.1]
+- **Stale and failed data says so (#435).** The task widget badges cached
+  rows after a failed fetch ("12 open · updated 09:14 — refresh failed")
+  instead of presenting yesterday's tasks as live. A thread-file write
+  failure (disk full, OOM) now banners the conversation sheet with
+  "Conversations couldn't be saved — storage may be full." and toasts once,
+  because memory is ahead of disk and the next launch would silently show
+  the older conversation. Health sync on a device without Health Connect
+  reports "Health Connect unavailable on this device" instead of
+  "permissions not granted", and never posts an empty day that reads as no
+  data.
+
 ## [6.1.0]
 - **Reminder speech failures are loud now (#434).** Every spoken alert the
   engine drops says so: a toast plus a companion "Spoken alert couldn't
