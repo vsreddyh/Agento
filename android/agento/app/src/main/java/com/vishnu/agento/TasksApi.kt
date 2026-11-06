@@ -579,8 +579,8 @@ internal fun batchUnknownTaskIds(ids: List<String>, msg: String): List<String> {
     return echoes.values.filter { it.size == 1 }.flatten().filter { id ->
         val echo = truncateUtf8Bytes(id.trim(), 40)
         val escaped = escapeTaskRawText(echo)
-        ("\"$echo\"" in msg || '$echo' in msg ||
-            "\"$escaped\"" in msg || '$escaped' in msg)
+        ("\"$echo\"" in msg || "'$echo'" in msg ||
+            "\"$escaped\"" in msg || "'$escaped'" in msg)
     }
 }
 
