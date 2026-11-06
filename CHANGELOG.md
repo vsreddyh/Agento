@@ -28,8 +28,16 @@ see GitHub Releases for older notes.
     `tasks`/`jobs` arrays (no `data`/`items`), task rows accept only `id`
     (no `_id`), and the Scheduler pauses/resumes through the canonical POST
     actions only (no `PATCH {paused}` downgrade). An older gateway fails
-    with "Update the gateway" instead of reading as an empty list or being
-    driven through a different contract.
+    with "Update the server" instead of reading as an empty list or being
+    driven through a different contract. Job rows that still carry a
+    retired alias (`job_id`, `cron`, `enabled`/`state`/`status`, `deliver`,
+    `lastRun`/`nextRun`) are counted as unparseable rather than rendered as
+    a blank-but-healthy row.
+  - **Projects and reports:** project lists accept only the `projects`
+    envelope and rows only `id`; reports get a canonical `id` from
+    health-api and read only that (the `_id` read fallback is gone).
+    Toolsets/skills/session lists no longer accept the `data`/`items`
+    envelopes either.
   - **Tools inventory:** MCP servers come only from the gateway's explicit
     toolset rows; the derived `mcp__<server>__*` fallback is removed.
 

@@ -45,9 +45,9 @@ data class ReportDetail(
 )
 
 internal fun parseReportSummary(o: JSONObject): ReportSummary? {
-    val id = o.optString("id", "")
-        .ifEmpty { o.optString("_id", "") }
-        .trim()
+    // Canonical `id` only (#433): health-api's docOut maps the Mongo `_id`
+    // to `id` on the wire, so the old `_id` fallback is gone.
+    val id = o.optString("id", "").trim()
     if (id.isEmpty()) return null
     return ReportSummary(
         id = id,
@@ -72,9 +72,9 @@ internal fun parseReportSegment(o: JSONObject): ReportSegment? {
 }
 
 internal fun parseReportDetail(o: JSONObject): ReportDetail? {
-    val id = o.optString("id", "")
-        .ifEmpty { o.optString("_id", "") }
-        .trim()
+    // Canonical `id` only (#433): health-api's docOut maps the Mongo `_id`
+    // to `id` on the wire, so the old `_id` fallback is gone.
+    val id = o.optString("id", "").trim()
     if (id.isEmpty()) return null
     val segments = mutableListOf<ReportSegment>()
     val arr = o.optJSONArray("segments")

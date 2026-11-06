@@ -94,7 +94,7 @@ class ServerApi(context: Context) {
         withContext(Dispatchers.IO) {
             get(path, "v1/toolsets").map { body ->
                 val out = mutableListOf<ToolsetInfo>()
-                val arr = rootArray(body, "toolsets", "data", "items")
+                val arr = rootArray(body, "toolsets")
                     ?: throw RuntimeException("Unexpected response shape")
                 for (i in 0 until arr.length()) {
                     val item = arr.opt(i)
@@ -153,7 +153,7 @@ class ServerApi(context: Context) {
             get(path, "api/sessions/${urlEncode(sessionId)}/messages").map { body ->
                 val roles = mutableListOf<String>()
                 val indexed = mutableListOf<IndexedCall>()
-                val arr = rootArray(body, "messages", "data", "items")
+                val arr = rootArray(body, "messages")
                     ?: throw RuntimeException("Unexpected response shape")
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
@@ -234,7 +234,7 @@ class ServerApi(context: Context) {
  */
 fun parseServerSkillList(body: String): List<SkillInfo> {
     val out = mutableListOf<SkillInfo>()
-    val arr = rootArray(body, "skills", "data", "items")
+    val arr = rootArray(body, "skills")
         ?: throw RuntimeException("Unexpected response shape")
     for (i in 0 until arr.length()) {
         val item = arr.opt(i)
@@ -279,9 +279,11 @@ internal fun optFlag(o: JSONObject, vararg keys: String): Boolean? {
 }
 
 /**
- * Response root as an array: the documented shape is a bare top-level
- * array, with object-wrapped variants (`{skills:[...]}` etc.) as fallback.
- * Null when the body is neither.
+ * Response root as an array: each endpoint answers either with a bare
+ * top-level array (toolsets, messages) or a named array (`{skills:[...]}`);
+ * [keys] names the latter. The retired `data`/`items` wrappers are not
+ * accepted (#433) — an unknown shape returns null, never a clean empty
+ * list. Null when the body is neither shape.
  *
  * Top-level (not a member) so the pure transcript parsers below — and
  * their unit tests — can use it without a Context-bound ServerApi.
@@ -314,7 +316,7 @@ internal fun rootArray(body: String, vararg keys: String): JSONArray? {
  * same contract as the other transcript readers.
  */
 internal fun parseLastAssistantText(body: String): String? {
-    val arr = rootArray(body, "messages", "data", "items")
+    val arr = rootArray(body, "messages")
         ?: throw RuntimeException("Unexpected response shape")
     var text: String? = null
     for (i in 0 until arr.length()) {

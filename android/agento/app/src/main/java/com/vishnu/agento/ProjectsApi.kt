@@ -14,6 +14,11 @@ import java.util.concurrent.TimeUnit
 
 private val PROJECT_JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
+/** One message for a server that does not speak the canonical project list
+ * (#433): names the missing shape and the fix, never a clean empty list. */
+internal const val PROJECTS_SHAPE_ERROR =
+    "Unexpected response shape — the server sent no projects list. Update the server."
+
 /** One project row from the shared `projects` collection, served by
  * health-api (`/api/projects`) and managed by the agent over the
  * project-manager MCP. Status is one of Todo/Ongoing/Testing/Blocked/Paused/Done. */
@@ -39,8 +44,9 @@ fun projectTimeMs(iso: String): Long {
  * Client for the project board (same bearer auth as chat/sync, served
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
- * validation the agent uses over MCP. Parsing is lenient across shapes;
- * rows without an id or name are skipped, missing fields blank.
+ * validation the agent uses over MCP. Row fields are lenient (missing reads
+ * blank, rows without an id or name are skipped), but the list envelope is
+ * the canonical `projects` array only (#433).
  */
 class ProjectsApi(context: Context) {
 
@@ -67,8 +73,10 @@ class ProjectsApi(context: Context) {
     private fun password(): String = ServerEndpoint.password(prefs)
 
     private fun parseProject(o: JSONObject): ServerProject? {
-        val id = o.optString("id", "")
-            .ifEmpty { o.optString("_id", "") }.trim()
+        // Canonical `id` only (#433): the health-api maps Mongo `_id` to `id`
+        // (projects.toDoc), so the old `_id` fallback only ever bridged a
+        // shape this app does not speak.
+        val id = o.optString("id", "").trim()
         if (id.isEmpty()) return null
         val name = o.optString("name", "").trim()
         if (name.isEmpty()) return null
@@ -95,13 +103,14 @@ class ProjectsApi(context: Context) {
             val q = "?status=" + URLEncoder.encode(s, Charsets.UTF_8.name()).replace("+", "%20") +
                 (if (search.isNotBlank()) "&search=" + URLEncoder.encode(search.trim(), Charsets.UTF_8.name()).replace("+", "%20") else "") +
                 "&limit=$limit"
-            call("GET", "/api/projects$q").map { body ->
+            call("GET", "/api/projects$q").mapCatching { body ->
                 val out = mutableListOf<ServerProject>()
                 val root = JSONObject(body)
+                // Canonical `projects` envelope only (#433): the old
+                // data/items fallbacks and the silent empty on an unknown
+                // shape are gone, so a shape mismatch is a visible error.
                 val arr = root.optJSONArray("projects")
-                    ?: root.optJSONArray("data")
-                    ?: root.optJSONArray("items")
-                    ?: return@map out
+                    ?: throw RuntimeException(PROJECTS_SHAPE_ERROR)
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     parseProject(o)?.let { out.add(it) }

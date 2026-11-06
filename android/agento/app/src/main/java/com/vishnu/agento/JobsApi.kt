@@ -49,6 +49,11 @@ data class JobList(
 internal fun hasValue(o: JSONObject, key: String): Boolean =
     o.has(key) && !o.isNull(key)
 
+/** Field names only an older gateway sends (#433). A row carrying one is
+ * unparseable rather than a blank-but-healthy canonical row. */
+private val RETIRED_JOB_FIELDS =
+    listOf("job_id", "cron", "enabled", "state", "status", "deliver", "lastRun", "nextRun")
+
 /** One job row: null when the row carries no usable id.
  * Every string reads through [optJsonStr]: a bare `optString` would
  * coerce JSON null to the literal string "null", surfacing phantom
@@ -56,9 +61,13 @@ internal fun hasValue(o: JSONObject, key: String): Boolean =
 internal fun parseJob(o: JSONObject): CronJob? {
     val id = optJsonStr(o, "id")
     if (id.isEmpty()) return null
-    // Canonical gateway shape only (#433): `paused` is a boolean on every
-    // row; the retired `enabled`/`state`/`status` readings are gone, so a
-    // row that only speaks those reads as unknown instead of Active.
+    // Canonical gateway shape only (#433): a row carrying a retired alias is
+    // returned as unparseable so the list's dropped count names it, instead
+    // of rendering a blank schedule / unknown pause beside a stale alias that
+    // the reader silently ignored. Retired: job_id (handled above by the
+    // missing canonical id), cron, enabled/state/status, deliver, and the
+    // camelCase lastRun/nextRun.
+    if (RETIRED_JOB_FIELDS.any { hasValue(o, it) }) return null
     val paused = if (hasValue(o, "paused")) o.optBoolean("paused") else null
     return CronJob(
         id = id,
@@ -89,7 +98,7 @@ internal fun parseJob(o: JSONObject): CronJob? {
 /** One message for a gateway that does not speak the canonical job list
  * (#433): names the missing shape and the fix, never a clean empty page. */
 internal const val JOBS_SHAPE_ERROR =
-    "Unexpected response shape — the gateway sent no jobs list. Update the gateway."
+    "Unexpected response shape — the server sent no jobs list. Update the server."
 
 /** Parses one job-list page (#430): the canonical `jobs` envelope, the
  * rows, and how many rows arrived unparseable.
@@ -191,7 +200,7 @@ class JobsApi(context: Context) {
         val body = JSONObject()
             .put("prompt", prompt)
             .put("schedule", schedule)
-            .put("deliver", delivery.ifEmpty { "local" })
+            .put("delivery", delivery.ifEmpty { "local" })
         if (name.isNotBlank()) body.put("name", name)
         call("POST", "$path/api/jobs", body).map { }
     }
@@ -209,7 +218,7 @@ class JobsApi(context: Context) {
         if (name.isNotBlank()) body.put("name", name)
         if (prompt.isNotBlank()) body.put("prompt", prompt)
         if (schedule.isNotBlank()) body.put("schedule", schedule)
-        if (delivery.isNotBlank()) body.put("deliver", delivery)
+        if (delivery.isNotBlank()) body.put("delivery", delivery)
         call("PATCH", "$path/api/jobs/$id", body).map { }
     }
 

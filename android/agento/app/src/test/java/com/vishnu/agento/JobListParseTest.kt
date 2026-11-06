@@ -36,10 +36,11 @@ class JobListParseTest {
     }
 
     @Test
-    fun `retired job_id and row aliases are not read`() {
+    fun `retired row aliases are dropped loudly, not read as blanks`() {
         // #433: the canonical row carries `id`, `schedule`, `paused`,
-        // `delivery` and snake_case run timestamps. A row that only speaks
-        // the retired aliases is unparseable, not silently bridged.
+        // `delivery` and snake_case run timestamps. A row that speaks the
+        // retired aliases is counted as unparseable (the Scheduler shows the
+        // count) instead of rendering a blank-but-healthy canonical row.
         val page = parseJobList(
             """{"jobs":[
                 {"job_id":"k","name":"K"},
@@ -48,11 +49,8 @@ class JobListParseTest {
                 42
             ]}""",
         )
-        assertEquals(listOf("a"), page.jobs.map { it.id })
-        assertEquals("", page.jobs.single().schedule)
-        assertEquals(null, page.jobs.single().paused)
-        assertEquals("", page.jobs.single().delivery)
-        assertEquals(3, page.dropped)
+        assertEquals(emptyList<String>(), page.jobs.map { it.id })
+        assertEquals(4, page.dropped)
     }
 
     @Test
