@@ -115,6 +115,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                     // poll round heals a failed manual refresh (#484
                     // review).
                     error = ""
+                    // Re-checked after IO (#484 review): a manual Check
+                    // again may have resolved (and toasted) while this
+                    // round was in flight — a second "Connected." would
+                    // read as a second event.
+                    if (pendingConnect != pending) return@LaunchedEffect
                     if (list.any { it.id == pending && (it.isConnected() || it.isExpired()) }) {
                         pendingConnect = null
                         if (list.any { it.id == pending && it.isConnected() }) {
@@ -219,6 +224,13 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                         ConnectorsApi(context).disconnect(path(), c.id).fold(
                             onSuccess = { row ->
                                 busyId = null
+                                // A disconnect scrubs the server-side pending
+                                // states for this id: a consent wait on it
+                                // can never resolve, so stop polling now
+                                // instead of running 40 rounds into a "Still
+                                // waiting" toast for the impossible (#484
+                                // review).
+                                if (pendingConnect == c.id) pendingConnect = null
                                 if (row != null) {
                                     connectors = connectors.map {
                                         if (it.id == row.id) row else it
