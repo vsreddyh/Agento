@@ -3497,18 +3497,12 @@ internal fun ChatScreen(
                                                             }
                                                         }
                                                     }
-                                                    // Dead-grant reconnect prompt (#441):
-                                                    // an expired/disconnected grant in
-                                                    // this flow surfaces as a way back to
-                                                    // Settings → Connectors, never as a
-                                                    // password/token ask. Rendered, not
-                                                    // fetched: the marker substring is
-                                                    // what every server dead-grant message
-                                                    // carries.
-                                                    if (hasReconnectHint(msg.content)) {
-                                                        Spacer(modifier = Modifier.height(4.dp))
-                                                        ReconnectCard(onOpen = onOpenConnectors)
-                                                    }
+                                                    // Dead-grant reconnect prompt (#441)
+                                                    // lives below, covering both roles:
+                                                    // server dead-grant errors surface as
+                                                    // assistant content, so scoping it to
+                                                    // user bubbles would miss the primary
+                                                    // case. Rendered, not fetched.
                                                 }
                                             }
                                         } else {
@@ -3632,6 +3626,21 @@ internal fun ChatScreen(
                                                     }
                                                 }
                                             }
+                                        }
+                                        // Dead-grant reconnect prompt (#441),
+                                        // both roles: an expired/disconnected
+                                        // grant in this flow surfaces as a way
+                                        // back to Settings → Connectors, never
+                                        // as a password/token ask. The primary
+                                        // case is server dead-grant text in an
+                                        // assistant reply; a user echoing the
+                                        // phrase gets the same card on their
+                                        // own bubble. Rendered, not fetched:
+                                        // the marker substring is what every
+                                        // server dead-grant message carries.
+                                        if (hasReconnectHint(msg.content)) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            ReconnectCard(onOpen = onOpenConnectors)
                                         }
                                     }
                                 }

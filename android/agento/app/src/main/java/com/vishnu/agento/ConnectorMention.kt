@@ -82,6 +82,9 @@ fun mentionQuery(text: String): String? {
         if (folded == id) return null
         if (folded.startsWith(id)) return null
     }
+    // Not a prefix of any connector id, no rows could match: plain text,
+    // not a trigger (#485 review — `@foo` must not open an empty picker).
+    if (MENTIONABLE_CONNECTORS.none { it.startsWith(folded) }) return null
     if (!MENTION_QUERY_CHARS.matches(token)) return null
     return token
 }
