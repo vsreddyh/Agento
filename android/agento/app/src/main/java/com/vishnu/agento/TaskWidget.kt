@@ -144,6 +144,40 @@ internal fun List<ServerTask>.sortedForWidget(sort: TaskWidgetSort): List<Server
         TaskWidgetSort.Estimate -> sortedByMode(ServerTaskSort.Estimate)
     }
 
+/** A stored widget view name, defaulting to Open (#437). Unknown names
+ * reset — and that reset reports through [widgetViewCoercion], so a
+ * corrupt or version-skewed pref is visible instead of a placement
+ * changing for no apparent reason. */
+internal fun widgetViewForName(raw: String?): TaskWidgetView =
+    raw?.let { n -> TaskWidgetView.entries.firstOrNull { it.name == n } }
+        ?: TaskWidgetView.Open
+
+/** Names a widget view reset (#437): null when [raw] is absent (the
+ * default itself is fine) or known, otherwise `"raw"->became`. */
+internal fun widgetViewCoercion(raw: String?): String? =
+    if (raw == null || TaskWidgetView.entries.any { it.name == raw }) null
+    else "\"${raw.take(40)}\"->${TaskWidgetView.Open.name}"
+
+/** A stored widget density name, defaulting to Comfortable (#437). */
+internal fun widgetDensityForName(raw: String?): TaskWidgetDensity =
+    raw?.let { n -> TaskWidgetDensity.entries.firstOrNull { it.name == n } }
+        ?: TaskWidgetDensity.Comfortable
+
+/** Names a widget density reset (#437): null when absent or known. */
+internal fun widgetDensityCoercion(raw: String?): String? =
+    if (raw == null || TaskWidgetDensity.entries.any { it.name == raw }) null
+    else "\"${raw.take(40)}\"->${TaskWidgetDensity.Comfortable.name}"
+
+/** A stored widget sort name, defaulting to Server (#437). */
+internal fun widgetSortForName(raw: String?): TaskWidgetSort =
+    raw?.let { n -> TaskWidgetSort.entries.firstOrNull { it.name == n } }
+        ?: TaskWidgetSort.Server
+
+/** Names a widget sort reset (#437): null when absent or known. */
+internal fun widgetSortCoercion(raw: String?): String? =
+    if (raw == null || TaskWidgetSort.entries.any { it.name == raw }) null
+    else "\"${raw.take(40)}\"->${TaskWidgetSort.Server.name}"
+
 /** Whether two millis fall on the same device-local calendar day (#435
  * review): a yesterday 09:14 stamp badged as "updated 09:14" reads as
  * today, understating the cache age by a day. Pure java.util for JVM
@@ -394,6 +428,14 @@ class TaskWidget : AppWidgetProvider() {
                         "showDue=${showDueFor(ctx, id)} " +
                         "scrollable=${scrollableFor(ctx, id)}")
                 }
+                // Resets that notified (#437): the latest raw->became per
+                // pref key, so a placement that changed for no apparent
+                // reason traces to its cause here even after log rotation.
+                val coerced = lastCoercions
+                if (coerced.isNotEmpty()) {
+                    appendLine("coerced=" + coerced.toSortedMap()
+                        .map { (k, v) -> "$k $v" }.joinToString("; ").take(500))
+                }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
                 appendLine("factoryError=${lastFactoryError ?: "none"}")
@@ -553,25 +595,54 @@ class TaskWidget : AppWidgetProvider() {
             context.applicationContext.getSharedPreferences(
                 AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
 
-        /** This placement's view, defaulting to Open. */
+        /** This placement's view, defaulting to Open. A stored name
+         * nothing knows resets AND logs once (#437): what key held what
+         * raw value and what it became. The line surfaces in Settings →
+         * About diagnostics, so corruption reads as corruption instead of
+         * a placement changing for no apparent reason. */
         fun viewFor(context: Context, appWidgetId: Int): TaskWidgetView {
-            val name = prefs(context).getString("task_widget_view_$appWidgetId", null)
-            return TaskWidgetView.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetView.Open
+            val key = "task_widget_view_$appWidgetId"
+            val name = prefs(context).getString(key, null)
+            noteCoercion(key, widgetViewCoercion(name))
+            return widgetViewForName(name)
         }
 
-        /** This placement's density, defaulting to Comfortable. */
+        /** This placement's density, defaulting to Comfortable. Resets
+         * report like [viewFor] (#437). */
         fun densityFor(context: Context, appWidgetId: Int): TaskWidgetDensity {
-            val name = prefs(context).getString("task_widget_density_$appWidgetId", null)
-            return TaskWidgetDensity.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetDensity.Comfortable
+            val key = "task_widget_density_$appWidgetId"
+            val name = prefs(context).getString(key, null)
+            noteCoercion(key, widgetDensityCoercion(name))
+            return widgetDensityForName(name)
         }
 
-        /** This placement's row order, defaulting to Server (fetch order). */
+        /** This placement's row order, defaulting to Server (fetch order).
+         * Resets report like [viewFor] (#437). */
         fun sortFor(context: Context, appWidgetId: Int): TaskWidgetSort {
-            val name = prefs(context).getString("task_widget_sort_$appWidgetId", null)
-            return TaskWidgetSort.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetSort.Server
+            val key = "task_widget_sort_$appWidgetId"
+            val name = prefs(context).getString(key, null)
+            noteCoercion(key, widgetSortCoercion(name))
+            return widgetSortForName(name)
+        }
+
+        // Resets that already notified (#437): one log line per distinct
+        // key+raw per process, so every render does not re-log the same
+        // corruption. Reads and writes under [coercionLock]; the latest
+        // reset per key also lands in [lastCoercions] for diagnostics().
+        private val coercionSeen = mutableSetOf<String>()
+        private val coercionLock = Any()
+        @Volatile private var lastCoercions: Map<String, String> = emptyMap()
+
+        private fun noteCoercion(key: String, short: String?) {
+            if (short == null) return
+            val fresh = synchronized(coercionLock) {
+                if (!coercionSeen.add("$key|$short")) false
+                else {
+                    lastCoercions = lastCoercions + (key to short)
+                    true
+                }
+            }
+            if (fresh) runCatching { Log.w("TaskWidget", "coerced $key $short") }
         }
 
         /** Whether this placement's rows show the due line. */

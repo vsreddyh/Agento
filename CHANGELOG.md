@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.2.2]
+- **Reset values say so (#437).** A stored value that falls back to its
+  default no longer does it silently: a corrupt or version-skewed Task
+  Manager filter/sort toasts once naming what was stored and what it
+  became, each widget placement logs its view/density/sort reset (once per
+  value) into Settings → About diagnostics alongside a per-key summary,
+  and task rows whose numbers arrive mistyped (e.g.
+  `estimated_minutes: "abc"`) keep showing with the reset value while the
+  list carries a hint counting them and the log names the key, the raw
+  value and what it became. Defaults themselves are unchanged — only the
+  rewriting is now visible.
+
 ## [6.2.1]
 - **Inexact alarms say so (#436).** The Due-time reminders toggle no
   longer reads exact when the exact-alarm grant is missing: its own
