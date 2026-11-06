@@ -54,6 +54,28 @@ class ConnectorListParseTest {
             assertEquals(CONNECTORS_SHAPE_ERROR, e.message)
         }
     }
+
+    @Test
+    fun `empty array fails loudly`() {
+        // The server always returns its rows: [] is a wrong shape, not an
+        // empty account (#484 review).
+        try {
+            parseConnectorList("""{"connectors":[]}""")
+            throw AssertionError("must throw, not read as no connectors")
+        } catch (e: RuntimeException) {
+            assertEquals(CONNECTORS_SHAPE_ERROR, e.message)
+        }
+    }
+
+    @Test
+    fun `all id-less rows fail loudly`() {
+        try {
+            parseConnectorList("""{"connectors":[{"name":"x"},{"id":""}]}""")
+            throw AssertionError("must throw, not read as no connectors")
+        } catch (e: RuntimeException) {
+            assertEquals(CONNECTORS_SHAPE_ERROR, e.message)
+        }
+    }
 }
 
 /**

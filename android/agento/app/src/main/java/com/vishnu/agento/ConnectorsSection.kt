@@ -54,6 +54,10 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     // ON_RESUME, which re-lists immediately (same tick below).
     var pendingConnect by remember { mutableStateOf<String?>(null) }
     var busyId by remember { mutableStateOf<String?>(null) }
+    // Last poll-round failure, for the end-of-wait message (#484 review):
+    // a dead server through all 40 rounds is not a slow consent, and
+    // "Still waiting" would misdirect into waiting on the browser.
+    var pollError by remember { mutableStateOf("") }
 
     fun path(): String = catalogPath(ChatApi(context))
 
@@ -94,12 +98,14 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
     val pending = pendingConnect
     LaunchedEffect(pending) {
         if (pending == null) return@LaunchedEffect
+        pollError = ""
         repeat(40) {
             delay(3_000L)
             if (pendingConnect != pending) return@LaunchedEffect
             ConnectorsApi(context).list(path()).fold(
                 onSuccess = { list ->
                     connectors = list
+                    pollError = ""
                     if (list.any { it.id == pending && (it.isConnected() || it.isExpired()) }) {
                         pendingConnect = null
                         if (list.any { it.id == pending && it.isConnected() }) {
@@ -107,15 +113,23 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                         }
                     }
                 },
-                onFailure = { },
+                onFailure = { e ->
+                    pollError = e.message ?: e.javaClass.simpleName
+                },
             )
         }
         // Wait ran out with the row still unchanged: stop polling, keep
         // the manual check. Not an error — the consent page may still be
-        // open in the browser.
+        // open in the browser — unless every round failed, which is a dead
+        // server, not a slow consent (#484 review).
         if (pendingConnect == pending) {
             pendingConnect = null
-            toasts.toast("Still waiting — tap Check again after finishing in the browser.")
+            val last = pollError
+            pollError = ""
+            toasts.toast(
+                last.ifEmpty { "Still waiting — tap Check again after finishing in the browser." },
+                kind = if (last.isEmpty()) ToastKind.Info else ToastKind.Error,
+            )
         }
     }
 
@@ -123,10 +137,12 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
         title = "Connected accounts",
         subtitle = "Gmail and Calendar for chat lookups. Consent happens in the browser — never paste a password or token in chat.",
     ) {
-        if (loading && connectors.isEmpty()) {
+        if (loading) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
-        if (error.isNotEmpty() && connectors.isEmpty()) {
+        // A failed refresh says so even over stale rows (#484 review): a
+        // dead server must never read as a confirmed list.
+        if (error.isNotEmpty()) {
             ErrorCard(raw = error, onRetry = { refreshTick++ })
         }
         connectors.forEach { c ->
@@ -140,6 +156,12 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                 // toast and no cleanup. busyId joins the lock so a
                 // second tap during the first fetch cannot do it either.
                 connectLocked = pendingConnect != null || busyId != null,
+                // Disconnects serialize the same way: a second tap while
+                // one is in flight would overwrite busyId, and the first
+                // completion would re-enable the second button mid-request
+                // (#484 review). Pending consent does not lock this —
+                // rows are independent, only in-flight mutations serialize.
+                mutateLocked = busyId != null,
                 onConnect = {
                     busyId = c.id
                     scope.launch {
@@ -234,6 +256,7 @@ private fun ConnectorRow(
     busy: Boolean,
     pending: Boolean,
     connectLocked: Boolean,
+    mutateLocked: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onCheckAgain: () -> Unit,
@@ -273,7 +296,7 @@ private fun ConnectorRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (info.isConnected()) {
-                OutlinedButton(onClick = onDisconnect, enabled = !busy, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onDisconnect, enabled = !busy && !mutateLocked, modifier = Modifier.weight(1f)) {
                     Text(if (busy) "Working…" else "Disconnect")
                 }
             } else {

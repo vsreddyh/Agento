@@ -64,10 +64,15 @@ internal fun parseConnectorList(body: String): List<ConnectorInfo> {
         ?: throw RuntimeException(CONNECTORS_SHAPE_ERROR)
     val arr = root.optJSONArray("connectors")
         ?: throw RuntimeException(CONNECTORS_SHAPE_ERROR)
+    // An empty array is the same wrong shape, not an empty account: the
+    // server always returns its rows (#484 review).
+    if (arr.length() == 0) throw RuntimeException(CONNECTORS_SHAPE_ERROR)
     val out = mutableListOf<ConnectorInfo>()
     for (i in 0 until arr.length()) {
         parseConnector(arr.optJSONObject(i) ?: continue)?.let { out.add(it) }
     }
+    // Every row id-less is the same wrong shape one level down.
+    if (out.isEmpty()) throw RuntimeException(CONNECTORS_SHAPE_ERROR)
     return out
 }
 

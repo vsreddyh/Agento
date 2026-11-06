@@ -16,8 +16,8 @@ see GitHub Releases for older notes.
   per-connector Disconnect. The app polls the list for ~2 minutes while a
   consent page is outstanding and resolves automatically when the row flips
   to connected ("Check again" covers slower consents — the server attempt
-  lives 10 minutes). A missing `connectors` array fails loudly instead of
-  reading as an empty list. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
+  lives 10 minutes). A missing or empty `connectors` array fails loudly
+  instead of reading as an empty list. Expired rows surface the server's `reconnect` hint as a Reconnect prompt;
   unconfigured servers read as "not set up". The app never sees
   code/verifier/token (server-only exchange), and disconnect stops future
   access without wiping already-fetched chat history.
