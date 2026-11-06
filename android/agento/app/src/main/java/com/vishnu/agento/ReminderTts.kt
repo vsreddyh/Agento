@@ -142,11 +142,27 @@ object ReminderTts {
         val taskId: String,
         val kindKey: String,
         val taskName: String,
+        /**
+         * Drop generation at enqueue time (#470 review): [dropTask] bumps
+         * the task's generation, so a failure captured before the drop
+         * reports against a stale generation and is swallowed instead of
+         * resurrecting the tag just cancelled. Defaults to zero so older
+         * constructions and tests keep compiling.
+         */
+        val epoch: Long = 0L,
     )
 
     private val queue = ArrayDeque<QueuedSpeech>()
     /** Utterance id → queued speech, for async callbacks that only know the id. */
     private val owners = HashMap<String, QueuedSpeech>()
+    /**
+     * Per-task drop generation, bumped by every [dropTask] whether or not
+     * it purged anything: a racing capture belongs to a pre-bump item by
+     * construction, so unconditional bumps keep the check exact without
+     * tracking what was purged. Bounded by distinct tasks acted upon;
+     * entries are pointer-sized and process-lifetime like the queue.
+     */
+    private val dropEpoch = HashMap<String, Long>()
     /**
      * Utterance ids already reported as ENGINE_INIT while kept for retry.
      * A dead engine fires one init callback per ensureEngine, but the queue
@@ -267,7 +283,7 @@ object ReminderTts {
                 }
             }
             if (failed && owner != null) {
-                reportFailure(owner!!.taskId, owner!!.kindKey, owner!!.taskName, TtsFailure.UTTERANCE_ERROR)
+                reportFailure(owner!!, TtsFailure.UTTERANCE_ERROR)
             } else if (retractInit && owner != null) {
                 cancelFailure(owner!!.taskId, owner!!.kindKey)
             }
@@ -315,13 +331,17 @@ object ReminderTts {
                 initReported.remove(d.id)
                 out.add(d)
             }
-            queue.addLast(item)
-            owners[item.id] = item
+            // Stamp the drop generation: a task-drop landing between a
+            // failure's capture and its report must swallow it, not
+            // resurrect the tag (#470 review — see reportFailure).
+            val stamped = item.copy(epoch = dropEpoch.getOrDefault(task.id, 0L))
+            queue.addLast(stamped)
+            owners[stamped.id] = stamped
             out
         }
         dropped.forEach {
             Log.w("ReminderTts", "queue full, dropping oldest speech ${it.id}")
-            reportFailure(it.taskId, it.kindKey, it.taskName, TtsFailure.QUEUE_DROPPED)
+            reportFailure(it, TtsFailure.QUEUE_DROPPED)
         }
         ensureEngine(appCtx.applicationContext)
         pump()
@@ -378,7 +398,7 @@ object ReminderTts {
             }
             Log.w("ReminderTts", "engine constructor failed, keeping queued speech for retry")
             queued.forEach {
-                reportFailure(it.taskId, it.kindKey, it.taskName, TtsFailure.ENGINE_INIT)
+                reportFailure(it, TtsFailure.ENGINE_INIT)
             }
             return
         }
@@ -430,7 +450,7 @@ object ReminderTts {
                     runCatching { tts.shutdown() }
                     Log.w("ReminderTts", "device locale unavailable, dropping ${dropped.size} queued speech")
                     dropped.forEach {
-                        reportFailure(it.taskId, it.kindKey, it.taskName, TtsFailure.LOCALE_UNAVAILABLE)
+                        reportFailure(it, TtsFailure.LOCALE_UNAVAILABLE)
                     }
                     return
                 }
@@ -462,7 +482,7 @@ object ReminderTts {
             runCatching { dead?.shutdown() }
             Log.w("ReminderTts", "engine init failed, keeping queued speech for retry")
             queued.forEach {
-                reportFailure(it.taskId, it.kindKey, it.taskName, TtsFailure.ENGINE_INIT)
+                reportFailure(it, TtsFailure.ENGINE_INIT)
             }
         }
     }
@@ -481,7 +501,7 @@ object ReminderTts {
             speakingId = null
         }
         if (owner != null) {
-            reportFailure(owner!!.taskId, owner!!.kindKey, owner!!.taskName, TtsFailure.TIMED_OUT)
+            reportFailure(owner!!, TtsFailure.TIMED_OUT)
         }
         pump()
     }
@@ -494,16 +514,23 @@ object ReminderTts {
      * binder/main-looper failures in a BroadcastReceiver path must not
      * take down the queue.
      */
-    private fun reportFailure(taskId: String, kindKey: String, taskName: String, failure: TtsFailure) {
+    private fun reportFailure(item: QueuedSpeech, failure: TtsFailure) {
         val appCtx = appCtxRef ?: return
         val line = speechFailureLine(failure)
         runCatching {
-            Log.w("ReminderTts", "$line task=$taskId kind=$kindKey")
+            Log.w("ReminderTts", "$line task=${item.taskId} kind=${item.kindKey}")
         }
         // Off means off: never toast or post for a disabled reminder set,
         // however the failure raced the toggle (#470 review). The log line
         // above still fires — it is diagnostics, not user-visible.
         if (!TaskReminders.isEnabled(appCtx)) return
+        // Drop-after-capture guard (#470 review): every failure report is
+        // captured under the lock and posted after it, so a task-drop
+        // landing in between would resurrect the tag just cancelled. The
+        // item's generation pins the capture: a bump since means a drop
+        // owns this evidence now, so swallow it.
+        val live = synchronized(lock) { item.epoch == (dropEpoch[item.taskId] ?: 0L) }
+        if (!live) return
         runCatching {
             mainHandler.post {
                 runCatching {
@@ -523,13 +550,13 @@ object ReminderTts {
                     this.description = appCtx.getString(R.string.task_reminder_channel_desc)
                 },
             )
-            val title = taskName.ifBlank { FALLBACK_TASK_NAME }
+            val title = item.taskName.ifBlank { FALLBACK_TASK_NAME }
             val tap = PendingIntent.getActivity(
-                appCtx, ("tts-failed:$taskId#$kindKey").hashCode(),
+                appCtx, ("tts-failed:${item.taskId}#${item.kindKey}").hashCode(),
                 Intent(appCtx, MainActivity::class.java)
                     .setAction(TaskWidget.ACTION_TASKS)
-                    .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
-                    .setData(Uri.parse("agento://reminder/${Uri.encode(taskId)}")),
+                    .putExtra(TaskWidget.EXTRA_TASK_ID, item.taskId)
+                    .setData(Uri.parse("agento://reminder/${Uri.encode(item.taskId)}")),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val notif = NotificationCompat.Builder(appCtx, TaskReminders.CHANNEL_ID)
@@ -543,7 +570,7 @@ object ReminderTts {
                 .build()
             // Distinct tag per reminder point: the failure note sits next to
             // the original alert instead of overwriting it.
-            mgr.notify(failureTag(taskId, kindKey), ALARM_NOTIF_ID, notif)
+            mgr.notify(failureTag(item.taskId, item.kindKey), ALARM_NOTIF_ID, notif)
         }
     }
 
@@ -626,6 +653,12 @@ object ReminderTts {
     internal fun dropTask(appCtx: Context, taskId: String) {
         var eng: TextToSpeech? = null
         val purged = synchronized(lock) {
+            // Bump first: any failure captured before this — however far
+            // past the lock it has travelled — reports stale and is
+            // swallowed in reportFailure instead of resurrecting the tag
+            // cancelled below (#470 review). Unconditional: a racing
+            // capture belongs to a pre-bump item by construction.
+            dropEpoch[taskId] = (dropEpoch[taskId] ?: 0L) + 1
             purgeTaskSpeech(queue, owners, initReported, speakingId, taskId).also {
                 // Capture under the lock, stop outside it: binder IPC must
                 // never run while holding the queue lock. Only when
@@ -739,7 +772,7 @@ object ReminderTts {
                     }
                 }
             }
-            timedOut?.let { reportFailure(it.taskId, it.kindKey, it.taskName, TtsFailure.TIMED_OUT) }
+            timedOut?.let { reportFailure(it, TtsFailure.TIMED_OUT) }
             val (eng, next, wgen) = step ?: return
             // Posted outside the lock: postDelayed only enqueues, and the
             // critical section should end before it. Guarded: a no-main-looper
@@ -830,7 +863,7 @@ object ReminderTts {
                     // that lacks the pick reports.
                     val names = eng.voices?.map { v -> v.name } ?: return@runCatching
                     if (isStoredVoiceMissing(names, BehaviourSettings.ttsVoice(it))) {
-                        reportFailure(next.taskId, next.kindKey, next.taskName, TtsFailure.VOICE_MISSING)
+                        reportFailure(next, TtsFailure.VOICE_MISSING)
                     }
                 }
             }
@@ -847,7 +880,7 @@ object ReminderTts {
                     initReported.remove(next.id)
                     owners.remove(next.id)
                 }
-                reportFailure(next.taskId, next.kindKey, next.taskName, TtsFailure.SPEAK_THREW)
+                reportFailure(next, TtsFailure.SPEAK_THREW)
                 continue
             }
             if (rc != TextToSpeech.ERROR) return
@@ -861,7 +894,7 @@ object ReminderTts {
                 initReported.remove(next.id)
                 owners.remove(next.id)
             }
-            reportFailure(next.taskId, next.kindKey, next.taskName, TtsFailure.SPEAK_REJECTED)
+            reportFailure(next, TtsFailure.SPEAK_REJECTED)
         }
     }
 }

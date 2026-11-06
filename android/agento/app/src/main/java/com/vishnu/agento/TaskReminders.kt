@@ -488,38 +488,8 @@ object TaskReminders {
         // Background/agent-side reschedules never touch the UI mutation
         // paths, so nothing there purges their stale speech and failure
         // notices — but the stored schedule moved under them (#470
-        // review). Diff the last-seen schedule BEFORE the key loop below
-        // (which needs the same fetch): purging first fails safe — a crash
-        // between purge and store re-purges next time, while the reverse
-        // order could store first and never purge. Purge first, store
-        // after. Posted visuals stay, exactly like an in-app edit: the
-        // task itself is live, only its pre-edit evidence goes.
-        // Skipped on a truncated page (an unseen task is not a reschedule)
-        // and on first run (nothing to diff against).
-        if (!page.truncated) {
-            val next = scheduleSnapshot(tasks)
-            val prev = decodeSchedule(prefs(appCtx).getStringSet(PREF_SCHEDULE, emptySet()).orEmpty())
-            val prevLead = prefs(appCtx).getLong(PREF_SCHEDULE_LEAD, -1L)
-            val leadNow = BehaviourSettings.reminderLeadMinutes(appCtx)
-            if (prevLead != -1L) {
-                // A lead change moves every BeforeStart point at once: the
-                // queued text names the old lead, so every open task purges
-                // like a reschedule.
-                val changed = if (prevLead != leadNow) {
-                    next.keys
-                } else {
-                    rescheduledIds(prev, next)
-                }
-                for (id in changed) {
-                    ReminderTts.dropTask(appCtx, id)
-                    ReminderTts.cancelFailures(appCtx, id)
-                }
-            }
-            prefs(appCtx).edit {
-                putStringSet(PREF_SCHEDULE, encodeSchedule(next))
-                putLong(PREF_SCHEDULE_LEAD, leadNow)
-            }
-        }
+        // review). See purgeReschedules (same fetch, runs first).
+        purgeReschedules(appCtx, page, tasks)
         // One critical section from here to the final write. Everything
         // below is CPU-only plus the arm/cancel calls, and the point is
         // that an alarm firing on another thread cannot edit PREF_ARMED
@@ -642,6 +612,48 @@ object TaskReminders {
         }
         }
         return RefreshOutcome.Ok
+    }
+
+    /**
+     * Purges stale speech and failure notices for background/agent-side
+     * reschedules, found by diffing the last-seen schedule (#470 review).
+     * Runs BEFORE the key loop in [refreshInner] (same fetch): purging
+     * first fails safe — a crash between purge and store re-purges next
+     * time, while the reverse order could store first and never purge.
+     * Posted visuals stay, exactly like an in-app edit: the task itself
+     * is live, only its pre-edit evidence goes.
+     *
+     * Truncation-safe by construction: the diff only matches ids present
+     * in BOTH snapshots, and the lead-change branch only touches ids on
+     * this page — an unseen task is neither. Only the snapshot STORE
+     * needs a complete page: persisting a partial page would forget
+     * beyond-cap tasks and miss their next change.
+     */
+    private fun purgeReschedules(appCtx: Context, page: TaskList, tasks: List<ServerTask>) {
+        val next = scheduleSnapshot(tasks)
+        val prev = decodeSchedule(prefs(appCtx).getStringSet(PREF_SCHEDULE, emptySet()).orEmpty())
+        val prevLead = prefs(appCtx).getLong(PREF_SCHEDULE_LEAD, -1L)
+        val leadNow = BehaviourSettings.reminderLeadMinutes(appCtx)
+        if (prevLead != -1L) {
+            // A lead change moves every BeforeStart point at once: the
+            // queued text names the old lead, so every open task purges
+            // like a reschedule.
+            val changed = if (prevLead != leadNow) {
+                next.keys
+            } else {
+                rescheduledIds(prev, next)
+            }
+            for (id in changed) {
+                ReminderTts.dropTask(appCtx, id)
+                ReminderTts.cancelFailures(appCtx, id)
+            }
+        }
+        if (!page.truncated) {
+            prefs(appCtx).edit {
+                putStringSet(PREF_SCHEDULE, encodeSchedule(next))
+                putLong(PREF_SCHEDULE_LEAD, leadNow)
+            }
+        }
     }
 
     /**

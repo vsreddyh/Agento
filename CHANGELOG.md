@@ -45,11 +45,12 @@ see GitHub Releases for older notes.
   speech too — but only for tasks with no live bid left (a lingering
   fired key or a budget cut keeps its task live). That purge runs only on
   a complete page: past the server cap "no bids" means "unseen", so a
-  truncated page skips it rather than risk yanking live alerts (a
-  truncated refresh can still orphan — the alternative, purging on
-  guesses, is worse). A background reschedule diffs the last-seen
-  schedule (due, estimate, spoken name) and purges speech and failure
-  notices like an in-app edit (posted visuals stay — the task is live). When the device language isn't available in the engine,
+  truncated page skips it rather than risk yanking live alerts. A
+  background reschedule diffs the last-seen schedule (due, estimate,
+  spoken name) and purges speech and failure notices like an in-app edit
+  (posted visuals stay — the task is live); the diff only ever matches
+  ids on the page, so truncated pages purge reschedules too and only skip
+  storing the partial snapshot. When the device language isn't available in the engine,
   the alert is skipped with an error rather than spoken in US English. The
   voice picker tells a dead engine ("isn't answering — Reload retries it")
   apart from one that genuinely offers no voices. Chat read-aloud is
