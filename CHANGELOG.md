@@ -48,7 +48,14 @@ see GitHub Releases for older notes.
   resurrecting a cancelled tag — including across a quick re-enable.
   pump() re-checks utterance liveness right before speaking (a drop
   inside the slow voice block retracts the point's notice too), not just
-  at dequeue.
+  at dequeue. In-app edits purge only when speech/schedule fields moved
+  (description/repeat-only saves keep live speech, like the background
+  diff), bulk updates gate on the same wire keys, and lead changes purge
+  only BeforeStart points (only that text names the lead) — while a
+  reschedule riding a lead change still purges fully. Drop generations
+  ride per point, so a kind-scoped drop never swallows another kind's
+  concurrent failure; a DND dequeue drop retracts the point's notice
+  like the receiver does.
   Stopping speech always clears its flags and advances the queue (a
   callback-less stop must not wedge it). A refresh that cancels a task's
   last triggers purges its posted visuals, failure notices and queued

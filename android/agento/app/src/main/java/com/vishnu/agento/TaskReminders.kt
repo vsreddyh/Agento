@@ -646,15 +646,16 @@ object TaskReminders {
             // only BeforeStart text names the lead, so only that point
             // purges per task: dropping start/due/overdue speech would
             // lose live reminders silently, and their notices stay valid
-            // (#470 review).
+            // (#470 review). Reschedules purge alongside regardless: a
+            // rename riding a lead change must not keep stale
+            // due/start/overdue speech.
             val beforeKey = ReminderKind.BeforeStart.key
+            for (id in rescheduledIds(prev, next)) {
+                ReminderTts.dropTask(appCtx, id)
+                ReminderTts.cancelFailures(appCtx, id)
+            }
             if (prevLead != leadNow) {
                 for (id in next.keys) ReminderTts.dropTask(appCtx, id, beforeKey)
-            } else {
-                for (id in rescheduledIds(prev, next)) {
-                    ReminderTts.dropTask(appCtx, id)
-                    ReminderTts.cancelFailures(appCtx, id)
-                }
             }
         }
         if (!page.truncated) {

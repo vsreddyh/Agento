@@ -836,16 +836,21 @@ internal fun TaskManagerScreen(
                         // notices + speech; moved tasks keep their visuals
                         // (still live) but lose stale speech AND failure
                         // notices, which describe the pre-move schedule;
-                        // duplicates touch nothing existing.
-                        for ((verb, verbed) in ops.groupBy({ it.op }, { it.id })) {
+                        // duplicates touch nothing existing. Updates purge
+                        // only when their fields move speech/schedule
+                        // state — a description/repeat-only bulk keeps
+                        // live speech like a no-op single edit.
+                        for ((verb, verbed) in ops.groupBy({ it.op })) {
                             when (verb) {
-                                "complete", "skip" -> verbed.forEach {
+                                "complete", "skip" -> verbed.map { it.id }.forEach {
                                     TaskReminders.cancelPosted(context, it)
                                     ReminderTts.dropTask(context, it)
                                 }
-                                "update" -> verbed.forEach {
-                                    ReminderTts.dropTask(context, it)
-                                    ReminderTts.cancelFailures(context, it)
+                                "update" -> verbed.forEach { op ->
+                                    if (updateMovesSpeech(op.fields)) {
+                                        ReminderTts.dropTask(context, op.id)
+                                        ReminderTts.cancelFailures(context, op.id)
+                                    }
                                 }
                             }
                         }

@@ -147,7 +147,7 @@ object ReminderTts {
         val taskName: String,
         /**
          * Drop generation at enqueue time (#470 review): [dropTask] bumps
-         * the task's generation, so a failure captured before the drop
+         * the point's generation, so a failure captured before the drop
          * reports against a stale generation and is swallowed instead of
          * resurrecting the tag just cancelled. Defaults to zero so older
          * constructions and tests keep compiling.
@@ -166,13 +166,17 @@ object ReminderTts {
     /** Utterance id → queued speech, for async callbacks that only know the id. */
     private val owners = HashMap<String, QueuedSpeech>()
     /**
-     * Per-task drop generation, bumped by every [dropTask] whether or not
-     * it purged anything: a racing capture belongs to a pre-bump item by
+     * Per-point drop generation, keyed by task + kind and bumped by every
+     * [dropTask] purge — whole-task purges bump all four kinds (#470
+     * review). A racing failure capture belongs to a pre-bump item by
      * construction, so unconditional bumps keep the check exact without
-     * tracking what was purged. Bounded by distinct tasks acted upon;
-     * entries are pointer-sized and process-lifetime like the queue.
+     * tracking what was purged. Whole-task callers must not bump only the
+     * purged kinds: items are stamped per point, and a stale generation
+     * on any of them would swallow a still-valid report. Bounded by
+     * distinct points acted upon; entries are pointer-sized and
+     * process-lifetime like the queue.
      */
-    private val dropEpoch = HashMap<String, Long>()
+    private val dropPointEpoch = HashMap<Pair<String, String>, Long>()
     /**
      * Global drop generation, bumped by [dropAll]. A disable must
      * invalidate every in-flight capture at once — including ones whose
@@ -354,7 +358,7 @@ object ReminderTts {
             // failure's capture and its report must swallow it, not
             // resurrect the tag (#470 review — see reportFailure).
             val stamped = item.copy(
-                epoch = dropEpoch.getOrDefault(task.id, 0L),
+                epoch = dropPointEpoch.getOrDefault(task.id to kind.key, 0L),
                 generation = dropGeneration,
             )
             queue.addLast(stamped)
@@ -549,11 +553,12 @@ object ReminderTts {
         // Drop-after-capture guard (#470 review): every failure report is
         // captured under the lock and posted after it, so a task-drop
         // landing in between would resurrect the tag just cancelled. The
-        // item's generations pin the capture: a task bump since means its
+        // item's generations pin the capture: a point bump since means its
         // drop owns this evidence, and a global bump since means a disable
         // does — either way, swallow it.
         val live = synchronized(lock) {
-            item.epoch == (dropEpoch[item.taskId] ?: 0L) && item.generation == dropGeneration
+            item.epoch == (dropPointEpoch[item.taskId to item.kindKey] ?: 0L) &&
+                item.generation == dropGeneration
         }
         if (!live) return
         runCatching {
@@ -681,9 +686,18 @@ object ReminderTts {
             // Bump first: any failure captured before this — however far
             // past the lock it has travelled — reports stale and is
             // swallowed in reportFailure instead of resurrecting the tag
-            // cancelled below (#470 review). Unconditional: a racing
-            // capture belongs to a pre-bump item by construction.
-            dropEpoch[taskId] = (dropEpoch[taskId] ?: 0L) + 1
+            // cancelled below (#470 review). Unconditional, and per point:
+            // a kind-scoped drop must not invalidate other kinds'
+            // concurrent captures. Whole-task purges bump every kind.
+            if (kindKey == null) {
+                for (kind in ReminderKind.entries) {
+                    val point = taskId to kind.key
+                    dropPointEpoch[point] = (dropPointEpoch[point] ?: 0L) + 1
+                }
+            } else {
+                val point = taskId to kindKey
+                dropPointEpoch[point] = (dropPointEpoch[point] ?: 0L) + 1
+            }
             purgeTaskSpeech(queue, owners, initReported, speakingId, taskId, kindKey).also {
                 // Capture under the lock, stop outside it: binder IPC must
                 // never run while holding the queue lock. Only when
@@ -870,6 +884,12 @@ object ReminderTts {
                     initReported.remove(next.id)
                     owners.remove(next.id)
                 }
+                // Retracts the point's notice too: a kept-for-retry
+                // utterance dropped here would otherwise orphan its
+                // ENGINE_INIT tag — nothing later can retract it, since
+                // the success path is gone with the item (#470 review).
+                // Same as the DND receiver and the VOICE_MISSING refire.
+                cancelFailureFor(ctx, next.taskId, next.kindKey)
                 runCatching {
                     Log.w("ReminderTts", "DND/silent, dropping queued speech ${next.id}")
                 }

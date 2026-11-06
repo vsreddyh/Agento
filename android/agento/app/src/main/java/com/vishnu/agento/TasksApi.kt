@@ -205,6 +205,30 @@ internal val BULK_UPDATE_KNOWN_FIELDS = setOf(
     "repeat_custom", "repeat_rule", "parallelable", "expected_revision",
 )
 
+/** Wire keys whose change moves reminder speech or schedule (#470
+ * review): the spoken text (name/voice phrase), the due instant, and the
+ * estimate that derives the start. Matches [scheduleFingerprint] — repeat
+ * and description ride no alert and no utterance, so bulk updates
+ * touching only those keep live speech and notices, exactly like a
+ * no-op single edit. `expected_revision` is guard metadata, never a
+ * change. */
+internal val SPEECH_SCHEDULE_UPDATE_KEYS = setOf(
+    "name", "speak_name", "due_date", "due_time", "estimated_minutes",
+)
+
+/**
+ * Whether a bulk update op's fields move speech/schedule state. Null
+ * fields mean "unknown" — purge, fail-safe — since an uninspectable
+ * update may have moved anything.
+ */
+internal fun updateMovesSpeech(fields: JSONObject?): Boolean {
+    if (fields == null) return true
+    val keys = mutableSetOf<String>()
+    val it = fields.keys()
+    while (it.hasNext()) keys.add(it.next())
+    return keys.any { it in SPEECH_SCHEDULE_UPDATE_KEYS }
+}
+
 /** Names the `fields` entries [bulkUpdateSent] cannot assert. Empty means
  * the op asserts everything it sent. */
 internal fun bulkUnknownFields(fields: JSONObject): List<String> {
