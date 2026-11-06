@@ -228,7 +228,8 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // above: enabling without it falls back to inexact alarms, and the
     // copy must not promise otherwise. Same reader as the enable and
     // arming paths ([canScheduleExactAlarms]) — one source, though a grant
-    // flip between this read and the arm still lands inexact.
+    // flip between this read and the arm can still disagree about that
+    // instance's mode.
     val exactAlarms = remember(resumeTick) { canScheduleExactAlarms(appCtx) }
 
     SectionCard(
