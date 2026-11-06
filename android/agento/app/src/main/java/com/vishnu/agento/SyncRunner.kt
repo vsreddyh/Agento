@@ -19,6 +19,14 @@ internal const val HEALTH_CONNECT_UNAVAILABLE_MESSAGE =
 internal const val HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE =
     "Health Connect needs an update before syncing"
 
+/** Transient-client wording (#435 review): the SDK reports AVAILABLE but
+ * the client failed to build (provider IPC crash, transient bind failure).
+ * That is a "try again", never a device state — and it keeps the sync card
+ * consistent with the settings card, which reads "ready" for the same SDK
+ * state. */
+internal const val HEALTH_CONNECT_TRANSIENT_MESSAGE =
+    "Health Connect isn't responding — try again"
+
 /** Single-flight orchestrator: backfills history once, then sends today-only payloads. */
 object SyncRunner {
     private const val TAG = "SyncRunner"
@@ -35,18 +43,19 @@ object SyncRunner {
             // answers an empty permission set, and the sync reports "not
             // granted" — a permissions story for a device that has no
             // Health Connect at all. Never post an empty payload either:
-            // that would look like a day with no data. An outdated provider
-            // names its own fix instead of sharing the unavailable line, so
-            // the sync card and the settings card never disagree.
+            // that would look like a day with no data. The message follows
+            // the SDK status the settings card gates on (#435 review): an
+            // outdated provider names its fix, and an AVAILABLE platform
+            // with a dead client reads as transient ("try again"), not as
+            // a device state — so the two cards describe the same state.
             if (!manager.available) {
-                val message =
-                    if (HealthConnectManager.availabilityStatus(context) ==
-                        HealthConnectAvailability.UPDATE_REQUIRED
-                    ) {
+                val message = when (HealthConnectManager.availabilityStatus(context)) {
+                    HealthConnectAvailability.UPDATE_REQUIRED ->
                         HEALTH_CONNECT_UPDATE_REQUIRED_MESSAGE
-                    } else {
-                        HEALTH_CONNECT_UNAVAILABLE_MESSAGE
-                    }
+                    HealthConnectAvailability.AVAILABLE ->
+                        HEALTH_CONNECT_TRANSIENT_MESSAGE
+                    else -> HEALTH_CONNECT_UNAVAILABLE_MESSAGE
+                }
                 SyncResult(false, null, message)
             } else {
                 val granted = manager.grantedPermissions()
