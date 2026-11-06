@@ -391,11 +391,11 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                         // disconnected shape (tokens gone,
                                         // lastError cleared, no reconnect
                                         // hint — that rides expired rows
-                                        // only). Advances freshness past any
-                                        // in-flight fetch: a stale poll round
-                                        // landing now must not revert the
-                                        // confirmed row before the re-list
-                                        // heals it.
+                                        // only). Stamped fresh so every
+                                        // started fetch reads strictly older:
+                                        // advancing merely to the newest
+                                        // stamp would tie it, and ties pass
+                                        // (#484 review).
                                         connectors = connectors.map {
                                             if (it.id == c.id) {
                                                 it.copy(
@@ -407,8 +407,13 @@ internal fun ConnectorsSection(toasts: ToastCenter) {
                                                 it
                                             }
                                         }
+                                        // Stamp outside the update lambda: it may
+                                        // retry on contention, and every
+                                        // evaluation would mint (and skip) a
+                                        // sequence.
+                                        val fresh = stampFetch()
                                         appliedSeq.getAndUpdate { cur ->
-                                            maxOf(cur, fetchSeq.get())
+                                            maxOf(cur, fresh)
                                         }
                                         // Full re-list inline for the REST, not
                                         // a tick bump (#484 review): a tick
