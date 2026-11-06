@@ -225,14 +225,10 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     // Exact-alarm grant, re-read on the same resume tick as the switches
     // above: enabling without it falls back to inexact alarms, and the
-    // copy must not promise otherwise.
-    val exactAlarms = remember(resumeTick) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) true
-        else runCatching {
-            (appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
-                .canScheduleExactAlarms()
-        }.getOrDefault(true)
-    }
+    // copy must not promise otherwise. Single inventory with the arming
+    // path ([canScheduleExactAlarms]), so toggle and alarm can never
+    // disagree about the grant.
+    val exactAlarms = remember(resumeTick) { canScheduleExactAlarms(appCtx) }
 
     SectionCard(
         title = "Health sync cadence",
@@ -307,15 +303,23 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     ) {
         SwitchRow(
             text = "Due-time reminders",
-            sub = "Moved here from the Task Manager bell — one switch, same alarms.",
+            sub = reminderToggleSub(exactAlarms),
             checked = remindersOn,
             onChange = ::setReminders,
         )
         if (remindersDenied && !notifGrantedNow) {
             HintLine("Notifications are blocked — reminders stay off until allowed.")
         }
-        if (remindersOn && !exactAlarms) {
-            HintLine("Exact alarms aren't allowed — reminders still fire, but may be inexact until allowed in system settings.")
+        // Persistent (#436): whenever the grant is missing, on or off — an
+        // off toggle that enables inexact must not read exact either.
+        if (!exactAlarms) {
+            HintLine(
+                if (remindersOn) {
+                    "Exact alarms aren't allowed — reminders still fire, but may be inexact until allowed in system settings."
+                } else {
+                    "Exact alarms aren't allowed — reminders will fire inexact and may be late until allowed in system settings."
+                }
+            )
         }
         OptionMenu(
             label = "Warn me",
