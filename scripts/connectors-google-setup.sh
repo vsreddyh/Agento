@@ -318,6 +318,9 @@ canonical_redirect_uri() {
   local u="$1" scheme rest path hostport host port
   [[ "$u" == *://* ]] || { printf '%s' "$u"; return 0; }
   scheme="${u%%://*}"
+  # Lowercased like the server (url.Parse folds it): an uppercase scheme
+  # sends lowercase, so registering the input spelling mismatches.
+  scheme=$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')
   rest="${u#*://}"
   if [[ "$rest" == */* ]]; then
     path="/${rest#*/}"
@@ -755,14 +758,16 @@ if [[ -n "$_redirect_preset" ]]; then
   # Same treatment as the TS_DNS preset: write_env single-quote-escapes but
   # does not stop newlines, so a multiline preset would write a second line
   # into .env. read-based input can't contain one — only presets can.
-  # Host part validated label by label, like TS_DNS above.
+  # Host part validated label by label, like TS_DNS above. Scheme folded
+  # for matching (server lowercases it); the canonical form is stored.
+  _preset_fold="$(printf '%s' "${_redirect_preset%%://*}" | tr '[:upper:]' '[:lower:]')://${_redirect_preset#*://}"
   _uri_host=""
-  if [[ "$_redirect_preset" == https://*/api/connectors/callback ]]; then
+  if [[ "$_preset_fold" == https://*/api/connectors/callback ]]; then
     # Canonicalise before validating: an explicit :443, uppercase host,
     # or trailing dot sends identically but must not fail validation —
     # and the canonical form is what gets stored and registered.
     _redirect_preset="$(canonical_redirect_uri "$_redirect_preset")"
-    _uri_host="${_redirect_preset#https://}"
+    _uri_host="${_preset_fold#https://}"
     _uri_host="${_uri_host%/api/connectors/callback}"
     _uri_host="${_uri_host%%:*}"
   fi
@@ -770,7 +775,7 @@ if [[ -n "$_redirect_preset" ]]; then
     warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/api/connectors/callback URL; unset it to derive from TS_DNS"
     exit 1
   fi
-  unset _uri_host
+  unset _uri_host _preset_fold
   REDIRECT_URI="$_redirect_preset"
   _URI_FROM_PRESET=1
   note "using preset REDIRECT_URI (skipping derivation from TS_DNS)"
@@ -797,9 +802,13 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   # first, then tailor the question. Strict-pass keeps quietly offerable;
   # strict-fail keeps only via an explicit knowingly-keep.
   _rec_host=""
+  # Match on a scheme-folded copy (the server lowercases the scheme, so an
+  # uppercase-scheme recorded value is the same URL); convert/store from
+  # the original, and the final canonicalisation normalizes the case.
+  _rec_fold="$(printf '%s' "${_recorded_uri%%://*}" | tr '[:upper:]' '[:lower:]')://${_recorded_uri#*://}"
   # The /p/ spelling is checked FIRST: glob `*` spans `/`, so it would
   # also match the bare pattern below and skip conversion entirely.
-  if [[ "$_recorded_uri" == https://*/p/api/connectors/callback ]]; then
+  if [[ "$_rec_fold" == https://*/p/api/connectors/callback ]]; then
     # Pre-#488 spelling pointed at pi-gateway, which no longer serves it:
     # offer the same host bare. Declining falls through to the typo path
     # below, which names the mismatch and offers a knowingly-keep.
@@ -816,7 +825,7 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
       _rec_host=""
     fi
     unset _bare
-  elif [[ "$_recorded_uri" == https://*/api/connectors/callback ]]; then
+  elif [[ "$_rec_fold" == https://*/api/connectors/callback ]]; then
     # Same _uri_host derivation as probe/comment: scheme- and port-agnostic,
     # so an explicit `:443` spelling (same canonical form) passes here too.
     _rec_host=$(_uri_host "$_recorded_uri" || true)
@@ -838,7 +847,7 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
       warn "so the probe and the .env comment use ($TS_DNS), not the kept URL"
     fi
   fi
-  unset _rec_host _converted
+  unset _rec_host _converted _rec_fold
 fi
 # Canonicalise the final value before probing, printing, and writing:
 # Google exact-matches the sent bytes, and the server sends the canonical

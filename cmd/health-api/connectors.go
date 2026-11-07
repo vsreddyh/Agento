@@ -258,15 +258,65 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 	}
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/connectors/"), "/")
 	id, action, _ := strings.Cut(rest, "/")
-	id = connectors.NormalizedID(id)
-	action = strings.ToLower(connectors.TrimCredential(action))
-	if !connectors.Known(id) {
+	// Alloc guard before any fold or scan: a multi-MB segment answers the
+	// same oversized 400 as the contract gate below, without paying the
+	// trim/fold/scrub allocs first. No echo — the value is megabytes.
+	if len(id) > connectors.MaxSegmentAllocLen {
+		writeConnectorErr(w, connectors.NewStoreError("oversized connector id", false))
+		return
+	}
+	if len(action) > connectors.MaxSegmentAllocLen {
+		writeConnectorErr(w, connectors.NewStoreError("oversized path segment", false))
+		return
+	}
+	// Trim first, then check: edge whitespace and invisible format
+	// characters are forgiven, interior controls fail closed, and
+	// empty-after-trim stays on its natural branch (blank id 404s,
+	// blank verb hits the no-verb 405).
+	id = connectors.TrimCredential(id)
+	action = connectors.TrimCredential(action)
+	// Length on the trimmed form, before any scan or fold: padding must
+	// not turn a known id unknown, and anything over the cap skips the
+	// rune walks below.
+	if len(id) > connectors.MaxConnectorIDLen {
+		writeConnectorErr(w, connectors.NewStoreError("oversized connector id", false))
+		return
+	}
+	if len(action) > connectors.MaxConnectorIDLen {
+		writeConnectorErr(w, connectors.NewStoreError("oversized path segment", false))
+		return
+	}
+	if id == "" || connectors.HasControl(id) || !utf8.ValidString(id) {
+		// Bare 404, no echo: control bytes and undecodable input never
+		// reach a filter or a log line verbatim.
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown connector"})
+		return
+	}
+	if connectors.HasControl(action) || !utf8.ValidString(action) {
+		writeJSON(w, http.StatusNotFound, bson.M{
+			"detail": "unknown path " + connectorBounded(approvals.ScrubError(action))})
+		return
+	}
+	// Verbs fold like ids: a hand-tested "Disconnect" lands on the verb
+	// instead of 404ing as an unknown path. Trimmed above, folded here —
+	// the switch below sees only lowercase.
+	action = strings.ToLower(action)
+	// Normalise before Known: case and spacing fold, while a truly
+	// unknown id still 404s. Length re-checked post-fold (folding exotic
+	// spellings can grow byte length).
+	norm := connectors.NormalizedID(id)
+	if len(norm) > connectors.MaxConnectorIDLen {
+		writeConnectorErr(w, connectors.NewStoreError("oversized connector id", false))
+		return
+	}
+	if !connectors.Known(norm) {
 		// Echo the normalised id (what the store would see), scrubbed +
 		// bounded — triage greps the spelling the store saw.
 		writeJSON(w, http.StatusNotFound, bson.M{
-			"detail": "unknown connector " + connectorBounded(approvals.ScrubError(id))})
+			"detail": "unknown connector " + connectorBounded(approvals.ScrubError(norm))})
 		return
 	}
+	id = norm
 	switch action {
 	case "disconnect":
 		if r.Method != http.MethodPost {

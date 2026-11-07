@@ -70,13 +70,28 @@ func TestConnectorItemGuard(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("missing token: got %d", w.Code)
 	}
-	// Unknown id → 404 without touching OAuth config.
+	// Unknown id → 404 echoing the normalised id.
 	if w := withAuth(http.MethodPost, "/api/connectors/drive/disconnect"); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown id: got %d (%s)", w.Code, w.Body.String())
+	} else if body := w.Body.String(); !strings.Contains(body, "unknown connector drive") {
+		t.Fatalf("unknown id echo: got %s", body)
 	}
-	// Unknown verb → 405 with Allow (gateway answers no-verb 405, not 404).
+	// Oversized id → 400 with no echo, before any fold or scan.
+	big := strings.Repeat("a", 3000)
+	if w := withAuth(http.MethodPost, "/api/connectors/"+big+"/disconnect"); w.Code != http.StatusBadRequest {
+		t.Fatalf("oversized id: got %d (%s)", w.Code, w.Body.String())
+	}
+	// Control-bearing id → bare 404 with no echo.
+	if w := withAuth(http.MethodPost, "/api/connectors/gmail%00/disconnect"); w.Code != http.StatusNotFound {
+		t.Fatalf("control id: got %d (%s)", w.Code, w.Body.String())
+	} else if body := w.Body.String(); strings.Contains(body, "%00") || !strings.Contains(body, `"unknown connector"`) {
+		t.Fatalf("control id must answer bare 404, got %s", body)
+	}
+	// Unknown verb → 404 echoing the normalised action.
 	if w := withAuth(http.MethodPost, "/api/connectors/gmail/frobnicate"); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown verb: got %d (%s)", w.Code, w.Body.String())
+	} else if body := w.Body.String(); !strings.Contains(body, "unknown path frobnicate") {
+		t.Fatalf("unknown verb echo: got %s", body)
 	}
 	if w := withAuth(http.MethodPost, "/api/connectors/gmail/"); w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("no verb: got %d (%s)", w.Code, w.Body.String())
