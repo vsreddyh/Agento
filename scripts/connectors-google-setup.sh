@@ -911,9 +911,9 @@ if (( ! _final_ok )); then
   if ! confirm "Keep it anyway?"; then exit 1; fi
 fi
 unset _final_hostport _final_scheme _final_host _final_ok
-# Probe target follows the registered URI exactly — scheme and explicit
-# port included — so a green probe proves the registered host:port
-# answers, not just :443.
+# Probe-target parts follow the registered URI — scheme and explicit port
+# included — so fallback logic below answers for the right host:port.
+# The URL itself is probed verbatim a few lines down.
 _probe_scheme="${REDIRECT_URI%%://*}"
 _probe_rest="${REDIRECT_URI#*://}"
 _probe_hostport="${_probe_rest%%/*}"
@@ -937,18 +937,19 @@ say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # probe still reports status without the wait.
 ok=0
 issuer=""
-# Probe the registered callback route exactly — not liveness: only an
-# /api/ hit proves the serving path (a green /health with a broken /api/
-# location registers a URL that 404s at callback time). The callback needs
-# no bearer; without params it answers 400 (missing code/state) or 501
-# (OAuth unconfigured) — either proves routing + handler. Anything else
+# Probe the registered URI itself — path, case, query and all — not a
+# reconstructed scheme+host: a knowingly-kept non-canonical value must
+# prove (or fail) on its own bytes, or the probe greens a clean path while
+# the registered string 404s/501s. The callback needs no bearer; without
+# params a clean URL answers 400 (missing code/state) or 501 (OAuth
+# unconfigured) — either proves routing + handler. Anything else
 # (404/502/000) is a real failure to fix before registering.
 # _probe_hostport was derived from the final canonical REDIRECT_URI above;
 # TS_DNS is the fallback only if that derivation yielded nothing probabe
 # (loopback http included — the probe speaks the URI's own scheme).
 _probe_host="$_probe_hostport"
 _probe_host="${_probe_host:-$TS_DNS}"
-_probe_url="$_probe_scheme://$_probe_host/api/connectors/callback"
+_probe_url="$REDIRECT_URI"
 # 400/501 are the two in-contract answers for a param-less callback hit
 # (missing params / unconfigured OAuth); both prove the route serves.
 # curl without -f: -f would fail all of them and prove nothing.

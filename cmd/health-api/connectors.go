@@ -27,7 +27,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"html"
 	"log"
 	"net/http"
@@ -72,6 +71,10 @@ var (
 	// connectorCacheAt stamps the last Mongo attempt behind a cached
 	// memory fallback. Zero when the cache is durable.
 	connectorCacheAt time.Time
+	// connectorLastErr is the last Mongo open failure, scrubbed at write
+	// time. It lets the 501-reason path name "no database" without
+	// dialling a fresh client per tap.
+	connectorLastErr string
 )
 
 // connectorRetryBudget bounds how often a cached memory fallback
@@ -90,9 +93,22 @@ func connectorStore() connectors.Store {
 		if !connectorCache.Durable() && time.Since(connectorCacheAt) > connectorRetryBudget {
 			if ms, err := connectors.FromEnv(); err == nil {
 				connectorCache, connectorCacheAt = ms, time.Now()
+				connectorLastErr = ""
 				log.Print("connectors: MongoDB recovered, serving durable store")
+				// The recovered store never got its TTL: index it now,
+				// best-effort on a detached budget, or pending states
+				// accumulate until the next restart.
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					if err := ms.EnsureIndexes(ctx); err != nil {
+						log.Printf("connectors: WARNING recovered-store index setup failed: %s",
+							connectorBounded(approvals.ScrubError(err.Error())))
+					}
+				}()
 			} else {
 				connectorCacheAt = time.Now()
+				connectorLastErr = connectorBounded(approvals.ScrubError(err.Error()))
 			}
 		}
 		return connectorCache
@@ -105,6 +121,7 @@ func connectorStore() connectors.Store {
 		log.Printf("connectors: falling back to in-process (statuses do not survive restart): %s",
 			connectorBounded(approvals.ScrubError(err.Error())))
 		backend, connectorCacheAt = connectors.NewMemoryStore(), time.Now()
+		connectorLastErr = connectorBounded(approvals.ScrubError(err.Error()))
 	} else {
 		backend = ms
 	}
@@ -125,16 +142,21 @@ func connectorBounded(s string) string {
 
 // connectorOAuthDown explains why OAuth is unavailable: the triage
 // pointer the live 501s reference, mirroring logConnectorOAuth's boot
-// branches. Values scrubbed — a store error could echo connection text.
+// branches. Reads cached boot state only — never dials, so a 501 storm
+// during an Atlas blip cannot churn the cluster. Call with the store
+// freshly in hand (it is already locked or local at every call site).
 func connectorOAuthDown(store connectors.Store) string {
+	connectorStoreMu.Lock()
+	lastErr := connectorLastErr
+	connectorStoreMu.Unlock()
 	if !store.Durable() {
-		if _, err := connectors.FromEnv(); err != nil {
-			return fmt.Sprintf("no database (%s)", connectorBounded(approvals.ScrubError(err.Error())))
+		if lastErr != "" {
+			return "no database (" + lastErr + ")"
 		}
 		return "no durable store"
 	}
 	if _, err := connectors.OAuthConfigFromEnv(); err != nil {
-		return fmt.Sprintf("missing values (%s)", connectorBounded(approvals.ScrubError(err.Error())))
+		return "missing values (" + connectorBounded(approvals.ScrubError(err.Error())) + ")"
 	}
 	return "redirect invalid"
 }
@@ -423,10 +445,11 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	pinnedRedirect, err := connectors.CanonicalRedirectURL(oauth.RedirectURL)
 	if err != nil {
-		// Echo the attempted redirect (non-secret): triage compares it
-		// against the console registration without re-reading .env.
-		log.Printf("connectors: connect redirect invalid (want %q): %v",
-			connectors.RedactURL(oauth.RedirectURL), err)
+		// Echo the attempted redirect (non-secret) with the connector id:
+		// triage compares it against the console registration without
+		// re-reading .env. Scrubbed + bounded like every logged value.
+		log.Printf("connectors: connect redirect invalid for %q (want %q): %q", id,
+			connectors.RedactURL(oauth.RedirectURL), connectorBounded(approvals.ScrubError(err.Error())))
 		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "connect is not configured correctly on this server"})
 		return
 	}
@@ -670,15 +693,16 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		// row carrying a foreign redirect is visible here instead of
 		// silently sent. Redacted (non-secret) like every logged URL.
 		if st.RedirectURI != oauth.RedirectURL {
-			log.Printf("connectors: callback uses pinned redirect %q (live config differs; rotation or hand-inserted row)",
-				connectors.RedactURL(st.RedirectURI))
+			log.Printf("connectors: callback for %q uses pinned redirect %q (live config differs; rotation or hand-inserted row)",
+				id, connectors.RedactURL(st.RedirectURI))
 		}
 	} else {
 		// Pre-column rows carry no pinned redirect: the live config is
 		// the only candidate. Auditable — after a rotation this sends the
 		// NEW string for a row minted under the OLD one, so a mismatch
 		// here reads as rotation fallout, not a helper bug.
-		log.Printf("connectors: callback uses live redirect (no pinned value; pre-column row — rotation suspected if recently rotated)")
+		log.Printf("connectors: callback for %q uses live redirect %q (no pinned value; pre-column row — rotation suspected if recently rotated)",
+			id, connectors.RedactURL(oauth.RedirectURL))
 	}
 	// Granted-scope subset warns, not fails: granular consent can return
 	// fewer scopes than requested, and the grant still stores. A later
