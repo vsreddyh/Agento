@@ -74,10 +74,12 @@ var (
 	// connectorCacheAt stamps the last Mongo attempt behind a cached
 	// memory fallback. Zero when the cache is durable.
 	connectorCacheAt time.Time
-	// connectorDialing marks an in-flight recovery dial: concurrent verbs
-	// past budget serve the stale fallback instead of queueing behind it
-	// or opening a second dial (single-flight). Guarded by connectorStoreMu.
+	// connectorDialing + connectorDialCh single-flight the slow path
+	// (cold-start dial and blip-recovery re-dial): exactly one caller
+	// dials while the rest wait on the channel, then all share the
+	// swap. Guarded by connectorStoreMu.
 	connectorDialing bool
+	connectorDialCh  chan struct{}
 	// connectorLastErr is the last Mongo open failure, scrubbed at write
 	// time. It lets the 501-reason path name "no database" without
 	// dialling a fresh client per tap.
@@ -86,7 +88,7 @@ var (
 
 // connectorRetryBudget bounds how often a cached memory fallback
 // re-attempts Mongo: one recovery dial per minute max during an outage
-// (single-flight — concurrent verbs serve stale instead of dialling).
+// (single-flight — concurrent verbs wait for it instead of dialling).
 // Never per request.
 const connectorRetryBudget = time.Minute
 
@@ -98,30 +100,32 @@ func connectorStore() connectors.Store {
 		defer connectorStoreMu.Unlock()
 		return connectorCache
 	}
-	if connectorCache != nil && connectorDialing {
-		// Recovery already in flight: serve the stale fallback now
-		// rather than queueing behind the dial or opening a second one
-		// (single-flight). Bounded staleness (one dial duration); the
-		// next budget window converges.
-		stale := connectorCache
+	if connectorDialing {
+		// A dial is already in flight (cold-start burst or blip
+		// recovery): wait for it instead of opening a second one
+		// (single-flight). Bounded by the dial below — the waiter never
+		// blocks longer than the dialler does, and the result is cached
+		// for everyone.
+		ch := connectorDialCh
+		connectorStoreMu.Unlock()
+		<-ch
+		connectorStoreMu.Lock()
 		defer connectorStoreMu.Unlock()
-		return stale
+		return connectorCache
 	}
 	// Slow path: first boot, or a non-durable cache past its retry
-	// budget. The dial happens OUTSIDE the lock (unlock here, re-lock to
-	// swap), so one slow blip-retry never head-of-line blocks every
-	// concurrent verb — the swap is the only critical section.
-	// A Mongo recovery must not wait for a restart to take effect: a
-	// restart during an Atlas blip otherwise pins memory until a second
-	// restart, with 501s the whole while.
-	if connectorCache != nil {
-		connectorDialing = true
-	}
+	// budget. This caller owns the dial; concurrent verbs wait above.
+	// The dial happens OUTSIDE the lock, so serving (and the waiters'
+	// wakeup) never queues behind it — the swap is the only critical
+	// section.
+	connectorDialing = true
+	connectorDialCh = make(chan struct{})
 	connectorStoreMu.Unlock()
 	ms, err := connectors.FromEnv()
 	connectorStoreMu.Lock()
 	defer connectorStoreMu.Unlock()
 	connectorDialing = false
+	close(connectorDialCh)
 	// If/else, not a typed-nil assignment: a failed FromEnv yields a nil
 	// *MongoStore, which as an interface value is non-nil and would cache
 	// a panic. The else branch only ever holds a live store.

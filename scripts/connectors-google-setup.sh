@@ -1098,15 +1098,26 @@ _final_ok=0
 if [[ "$_final_scheme" == "https" ]]; then
   # Tailnet names first (the common case), then any dotted FQDN with a
   # lettered multi-char TLD — custom domains and nip.io register exactly
-  # like tailnet names (server validRedirectHost). Loopback also passes:
-  # direct-serve https on loopback is unusual but not unregistrable.
+  # like tailnet names (server validRedirectHost).
   if _valid_tsdns "$_final_host" 2>/dev/null || _valid_fqdn "$_final_host" 2>/dev/null; then
     _final_ok=1
-  else
-    case "$_final_host" in localhost|127.0.0.1|::1) _final_ok=1;; esac
   fi
 elif [[ "$_final_scheme" == "http" ]]; then
   case "$_final_host" in localhost|127.0.0.1|::1) _final_ok=1;; esac
+fi
+# https loopback can never serve: direct host ports are plain HTTP and the
+# funnel only publishes tailnet names — use plain `http` for direct
+# loopback instead. Refused outright (no keep path): keeping it would
+# register a URL nothing can deliver to.
+if [[ "$_final_scheme" == "https" ]]; then
+  case "$_final_host" in
+    localhost|127.0.0.1|::1)
+      warn "REDIRECT_URI is https loopback — nothing serves TLS on a direct host port:"
+      warn "  value: $REDIRECT_URI"
+      warn "Re-run with plain http for direct loopback (or a tailnet/FQDN name for funnel)."
+      exit 1
+      ;;
+  esac
 fi
 if (( ! _final_ok )); then
   warn "REDIRECT_URI host/scheme is not registrable (https needs a dotted FQDN, http needs loopback):"
@@ -1118,11 +1129,9 @@ fi
 # direct by health-api on the mapped host port (HEALTH_HOST_PORT, compose
 # default 8001) or through the proxy on APP_PORT (compose default 8080) —
 # two distinct registrations, so either mapped port passes but anything
-# else probes dead air and registers a URL nothing answers. http AND https
-# loopback alike: an https://localhost:<wrong-port> URL would otherwise
-# skip this check and die later as DNS-unreachable when the TLS probe
-# dials plain HTTP.
-if [[ "$_final_scheme" == "http" || "$_final_scheme" == "https" ]]; then
+# else probes dead air and registers a URL nothing answers. http loopback
+# only here — https loopback exits outright above.
+if [[ "$_final_scheme" == "http" ]]; then
   case "$_final_host" in
     localhost|127.0.0.1|::1)
       _loop_port="${REDIRECT_URI#*://}"

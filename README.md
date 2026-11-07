@@ -64,8 +64,8 @@ and unmanaged.)
 
 ### Network & Firewall Ports
 (Ports are compose defaults: `APP_PORT` / `HEALTH_HOST_PORT` / `PI_HOST_PORT` remap the host side.)
-- Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked from live dropdowns in Settings, path `/p/chat`. Direct ports stay published for comparison: `8643` (pi, what `/p/*` reaches) and `8001` (sync).
-- Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as the proxy).
+- Port `${APP_PORT:-8080}/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:${APP_PORT:-8080}`, Password = `PASSWORD`, provider/model picked from live dropdowns in Settings, path `/p/chat`. Direct ports stay published for comparison: `${PI_HOST_PORT:-8643}` (pi, what `/p/*` reaches) and `${HEALTH_HOST_PORT:-8001}` (sync).
+- Port `${HEALTH_HOST_PORT:-8001}/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as the proxy).
 - Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas, and GitHub.
 
 ---

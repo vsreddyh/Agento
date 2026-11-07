@@ -4,7 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	syncpkg "sync"
 	"testing"
+
+	"agento/internal/connectors"
 )
 
 // Connectors live on health-api now (#488). These tests pin the HTTP
@@ -168,6 +171,34 @@ func TestConnectorCallbackGuards(t *testing.T) {
 	connectorCallback(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("oversized: got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// The dial path is single-flighted across goroutines: a cold-start burst
+// must open one client, not N (the cluster warning in internal/mongo).
+func TestConnectorStoreSingleFlight(t *testing.T) {
+	connectorStoreMu.Lock()
+	connectorCache = nil
+	connectorDialing = false
+	connectorStoreMu.Unlock()
+	const n = 20
+	out := make([]connectors.Store, n)
+	var wg syncpkg.WaitGroup
+	for i := range out {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			out[i] = connectorStore()
+		}(i)
+	}
+	wg.Wait()
+	for i := 1; i < n; i++ {
+		if out[i] != out[0] {
+			t.Fatalf("concurrent cold start opened multiple stores (goroutine %d differs)", i)
+		}
+	}
+	if out[0] == nil {
+		t.Fatal("cold start returned nil store")
 	}
 }
 
