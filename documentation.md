@@ -193,7 +193,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 ```
 
 1. **Agento** (`android/agento/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
-2. **`health-api` Endpoint** (`:8001`): Authenticates requests via `Authorization: Bearer <PASSWORD>` and upserts metrics into MongoDB.
+2. **`health-api` Endpoint** (compose default `:8001`, `HEALTH_HOST_PORT` remaps the host side): Authenticates requests via `Authorization: Bearer <PASSWORD>` and upserts metrics into MongoDB.
 
 > **Upgrading from Health Gateway?** Agento ships under a new `applicationId` (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway app — settings do not transfer automatically.
 > 1. Install Agento → re-enter the sync server URL/token and chat-backend Settings manually.
@@ -363,7 +363,8 @@ Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 app to open in a browser; Google redirects to the single registered
 `GET /api/connectors/callback?code=&state=` — one registered string, one
 spelling: the bare `/api/connectors/callback` path on whichever host:port
-the browser reaches (direct `:8001`; the `:8080` proxy publish is plain
+the browser reaches (direct loopback on the mapped host port, compose
+default `:8001` via `HEALTH_HOST_PORT`; the `:8080` proxy publish is plain
 HTTP, so only loopback `http://localhost:8080/...` registers — public
 funnel traffic arrives on `:443`, stripped, never `:8080`). Non-default ports are variants of that
 path (default ports are not: `:443`

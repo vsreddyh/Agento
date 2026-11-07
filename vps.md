@@ -173,5 +173,6 @@ Measured (`podman system df` + image sizes), not guessed:
 - `proxy` (:8080) is the app's single URL and the only port that needs to be reachable
   from a phone.
 - `:8643` (pi) and `:8001` (health-api) stay published for direct access and debugging —
-  restrict them with a firewall or reverse proxy if the host is public.
+  restrict them with a firewall or reverse proxy if the host is public (compose defaults;
+  `PI_HOST_PORT` / `HEALTH_HOST_PORT` remap the host side).
 - SSH on 22 (restrict source IPs / use key auth).

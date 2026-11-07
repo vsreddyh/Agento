@@ -110,7 +110,11 @@ func recoverCrash(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				route := r.Method + " " + r.URL.EscapedPath()
+				// Decoded Path, not EscapedPath: dispatch, rate limiting,
+				// and every serving log key on it, so triage greps match.
+				// (An encoded spelling lands here exactly as the router
+				// saw it.)
+				route := r.Method + " " + r.URL.Path
 				secrets := []string{}
 				for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {
 					if t = strings.TrimSpace(t); t != "" {

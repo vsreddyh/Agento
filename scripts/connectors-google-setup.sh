@@ -516,7 +516,9 @@ banner "Google connectors over Tailscale Funnel"
 # deploy funnels to a dead port while the wizard reports green. Shell env
 # wins over .env, matching compose precedence. Non-numeric or out-of-range
 # values fail loudly with the winning source named — a silent default here
-# would funnel to a port compose does not serve.
+# would funnel to a port compose does not serve. Same treatment for the
+# health-api direct mapping below (HEALTH_HOST_PORT, compose default 8001):
+# a loopback REDIRECT_URI on any other port must warn, not probe dead air.
 _proxy_port="${APP_PORT:-}"
 _proxy_port_src="shell APP_PORT"
 if [[ -z "$_proxy_port" ]]; then
@@ -535,6 +537,23 @@ if [[ ${#_proxy_port} -gt 5 ]] || [[ ! "$_proxy_port" =~ ^[0-9]+$ ]] || (( 10#$_
   exit 1
 fi
 _proxy_target="http://127.0.0.1:$_proxy_port"
+# Direct-loopback health-api port, same precedence (shell → .env →
+# compose-default 8001). A loopback REDIRECT_URI naming any other port
+# fails the loopback-host/port cross-check below with a pointer here.
+_health_port="${HEALTH_HOST_PORT:-}"
+_health_port_src="shell HEALTH_HOST_PORT"
+if [[ -z "$_health_port" ]]; then
+  _health_port=$(_existing HEALTH_HOST_PORT 2>/dev/null || true)
+  _health_port_src="root .env HEALTH_HOST_PORT"
+fi
+if [[ -z "$_health_port" ]]; then
+  _health_port="8001"
+  _health_port_src="compose default"
+fi
+if [[ ${#_health_port} -gt 5 ]] || [[ ! "$_health_port" =~ ^[0-9]+$ ]] || (( 10#$_health_port < 1 || 10#$_health_port > 65535 )); then
+  warn "HEALTH_HOST_PORT is not numeric 1-65535 (from $_health_port_src: '${_health_port:-<empty>}') — fix it, do not proceed on a default."
+  exit 1
+fi
 
 # ── Stage 1: preflight ────────────────────────────────────────────────────
 stage "Preflight: what this will change"
@@ -1123,6 +1142,36 @@ if (( ! _final_ok )); then
   warn "  value: $REDIRECT_URI"
   warn "The server fails these closed — Google would never call back."
   if ! confirm "Keep it anyway?"; then exit 1; fi
+fi
+# Loopback-port cross-check: a loopback REDIRECT_URI is served direct by
+# health-api on the mapped host port (HEALTH_HOST_PORT, compose default
+# 8001) — not through the proxy — so any other port probes dead air and
+# registers a URL nothing answers.
+if [[ "$_final_scheme" == "http" ]]; then
+  case "$_final_host" in
+    localhost|127.0.0.1|::1)
+      _loop_port="${REDIRECT_URI#*://}"
+      _loop_port="${_loop_port%%/*}"
+      if [[ "$_loop_port" == \[*\]* ]]; then
+        _loop_port="${_loop_port#*]}"
+        _loop_port="${_loop_port#:}"
+      elif [[ "$_loop_port" == *:* ]]; then
+        _loop_port="${_loop_port##*:}"
+      else
+        _loop_port="80"
+      fi
+      # Empty (dangling colon) was already rejected above; default http
+      # port 80 on loopback is unreachable in practice (nothing serves
+      # it), so it fails the same way.
+      if [[ "$_loop_port" != "$_health_port" ]]; then
+        warn "loopback REDIRECT_URI port ($_loop_port) differs from the health-api host port ($_health_port from $_health_port_src):"
+        warn "  value: $REDIRECT_URI"
+        warn "Direct loopback is served on the mapped port only — fix the port or HEALTH_HOST_PORT."
+        if ! confirm "Keep it anyway?"; then exit 1; fi
+      fi
+      unset _loop_port
+      ;;
+  esac
 fi
 unset _final_hostport _final_scheme _final_host _final_ok
 # Probe-target parts follow the registered URI — scheme and explicit port
