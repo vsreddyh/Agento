@@ -823,69 +823,6 @@ fi
 printf '\n'
 printf '  %s✓%s %s\n' "$GREEN" "$RESET" "https://$TS_DNS"
 
-# ── Stage 4: funnel + public verification ─────────────────────────────────
-stage "Publish the callback over HTTPS"
-say "Funnel will terminate TLS with a publicly-trusted certificate and forward"
-say "to the existing proxy on $_proxy_target. Only ports 443/8443/10000 are"
-say "allowed, so 443 it is."
-printf '\n'
-note "First run may prompt you to enable HTTPS certificates / MagicDNS for the"
-note "tailnet, plus the 'funnel' node attribute in the tailnet policy file."
-note "If it complains, enable them and re-run this stage:"
-note "  DNS:     https://console.tailscale.com/admin/dns"
-note "  Funnel attribute (Access controls → Add Funnel to policy):"
-note "  https://console.tailscale.com/admin/acls"
-printf '\n'
-
-FOUT=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — re-run when /tmp is writable"; exit 1; }
-# Re-runs are safe: if 443 already forwards to this proxy, keep it instead
-# of erroring out of the wizard.
-_funnel_status=$(tailscale funnel status 2>/dev/null || true)
-# Real `funnel status` prints the public URL and the target on separate
-# lines (https://<host>… on one, "|-- / proxy http://127.0.0.1:<port>" on
-# another — port 443 is implied by https://, never printed next to the
-# proxy port), so match across the whole output — but bind the port to the
-# proxy word on its own line, or hint text mentioning a URL and the port
-# elsewhere would take the fast path without the binding existing. Also require the
-# served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
-# keeps host A while the URI, comment, and probe all use host B.
-# Hostname first: most selective on the common mismatch path, so the two
-# broader greps are skipped unless it hits. The -n guard is load-bearing:
-# grep -qF "" matches every line, so without it an empty TS_DNS would
-# turn the fast path into always-keep (empty exits earlier today, but the
-# safety belongs on this line, not on ordering). The port comes from
-# APP_PORT (validated numeric at the top), so a custom-port funnel that
-# already serves matches instead of starting a duplicate.
-if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF -- "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE "proxy.*${_proxy_port}|${_proxy_port}.*proxy" && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
-  note "funnel already serving 443 → this proxy; keeping it"
-  printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
-  rm -f "$FOUT" || true; FOUT=""
-fi
-unset _funnel_status
-if [[ -n "$FOUT" ]]; then
-  if ! tailscale funnel --bg --https=443 "$_proxy_target" </dev/null >"$FOUT" 2>&1; then
-    if grep -qiE -- "already|in use|exists" "$FOUT"; then
-      note "funnel reports it is already serving; keeping the existing one"
-      _check_kept_host
-    else
-      warn "funnel did not start:"
-      sed 's/^/      /' "$FOUT" 2>/dev/null || true
-      pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
-      tailscale funnel --bg --https=443 "$_proxy_target" </dev/null >"$FOUT" 2>&1 || {
-        if grep -qiE -- "already|in use|exists" "$FOUT"; then
-          note "funnel reports it is already serving; keeping the existing one"
-          _check_kept_host
-        else
-          warn "still failing:"; sed 's/^/      /' "$FOUT" 2>/dev/null || true; exit 1
-        fi
-      }
-    fi
-  fi
-  sed 's/^/      /' "$FOUT" 2>/dev/null || true
-  rm -f "$FOUT" || true; FOUT=""
-fi
-printf '\n'
-
 if [[ -n "$_redirect_preset" ]]; then
   # Same treatment as the TS_DNS preset: write_env single-quote-escapes but
   # does not stop newlines, so a multiline preset would write a second line
@@ -1174,6 +1111,95 @@ if [[ "$_final_scheme" == "http" ]]; then
   esac
 fi
 unset _final_hostport _final_scheme _final_host _final_ok
+# ── Stage 4: funnel + public verification ─────────────────────────────────
+# Position is load-bearing: this stage runs AFTER the final-URI gates, so
+# REDIRECT_URI is final (preset/recorded/derived/kept resolved). A stage-4
+# position before them would funnel for a URI later replaced.
+stage "Publish the callback over HTTPS"
+# Early exit before any funnel words: loopback http needs no public publish.
+_funnel_final_host="${REDIRECT_URI#*://}"
+_funnel_final_host="${_funnel_final_host%%/*}"
+if [[ "$_funnel_final_host" == \[*\]* ]]; then
+  _funnel_final_host="${_funnel_final_host#[}"
+  _funnel_final_host="${_funnel_final_host%%\]*}"
+else
+  _funnel_final_host="${_funnel_final_host%%:*}"
+fi
+_funnel_final_host="$(printf '%s' "$_funnel_final_host" | tr '[:upper:]' '[:lower:]')"
+_funnel_final_scheme="$(printf '%s' "${REDIRECT_URI%%://*}" | tr '[:upper:]' '[:lower:]')"
+_funnel_skip=0
+if [[ "$_funnel_final_scheme" == "http" ]]; then
+  case "$_funnel_final_host" in
+    localhost|127.0.0.1|::1)
+      note "loopback REDIRECT_URI ($REDIRECT_URI): reached directly — skipping the public funnel."
+      _funnel_skip=1
+      ;;
+  esac
+fi
+unset _funnel_final_host _funnel_final_scheme
+if (( ! _funnel_skip )); then
+say "Funnel will terminate TLS with a publicly-trusted certificate and forward"
+say "to the existing proxy on $_proxy_target. Only ports 443/8443/10000 are"
+say "allowed, so 443 it is."
+printf '\n'
+note "First run may prompt you to enable HTTPS certificates / MagicDNS for the"
+note "tailnet, plus the 'funnel' node attribute in the tailnet policy file."
+note "If it complains, enable them and re-run this stage:"
+note "  DNS:     https://console.tailscale.com/admin/dns"
+note "  Funnel attribute (Access controls → Add Funnel to policy):"
+note "  https://console.tailscale.com/admin/acls"
+printf '\n'
+
+FOUT=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — re-run when /tmp is writable"; exit 1; }
+# Re-runs are safe: if 443 already forwards to this proxy, keep it instead
+# of erroring out of the wizard.
+_funnel_status=$(tailscale funnel status 2>/dev/null || true)
+# Real `funnel status` prints the public URL and the target on separate
+# lines (https://<host>… on one, "|-- / proxy http://127.0.0.1:<port>" on
+# another — port 443 is implied by https://, never printed next to the
+# proxy port), so match across the whole output — but bind the port to the
+# proxy word on its own line, or hint text mentioning a URL and the port
+# elsewhere would take the fast path without the binding existing. Also require the
+# served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
+# keeps host A while the URI, comment, and probe all use host B.
+# Hostname first: most selective on the common mismatch path, so the two
+# broader greps are skipped unless it hits. The -n guard is load-bearing:
+# grep -qF "" matches every line, so without it an empty TS_DNS would
+# turn the fast path into always-keep (empty exits earlier today, but the
+# safety belongs on this line, not on ordering). The port comes from
+# APP_PORT (validated numeric at the top), so a custom-port funnel that
+# already serves matches instead of starting a duplicate.
+if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF -- "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE "proxy.*${_proxy_port}|${_proxy_port}.*proxy" && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
+  note "funnel already serving 443 → this proxy; keeping it"
+  printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
+  rm -f "$FOUT" || true; FOUT=""
+fi
+unset _funnel_status
+if [[ -n "$FOUT" ]]; then
+  if ! tailscale funnel --bg --https=443 "$_proxy_target" </dev/null >"$FOUT" 2>&1; then
+    if grep -qiE -- "already|in use|exists" "$FOUT"; then
+      note "funnel reports it is already serving; keeping the existing one"
+      _check_kept_host
+    else
+      warn "funnel did not start:"
+      sed 's/^/      /' "$FOUT" 2>/dev/null || true
+      pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
+      tailscale funnel --bg --https=443 "$_proxy_target" </dev/null >"$FOUT" 2>&1 || {
+        if grep -qiE -- "already|in use|exists" "$FOUT"; then
+          note "funnel reports it is already serving; keeping the existing one"
+          _check_kept_host
+        else
+          warn "still failing:"; sed 's/^/      /' "$FOUT" 2>/dev/null || true; exit 1
+        fi
+      }
+    fi
+  fi
+  sed 's/^/      /' "$FOUT" 2>/dev/null || true
+  rm -f "$FOUT" || true; FOUT=""
+fi
+fi
+unset _funnel_skip
+printf '\n'
 # Probe-target parts follow the registered URI — scheme and explicit port
 # included — so fallback logic below answers for the right host:port.
 # The URL itself is probed verbatim a few lines down.
@@ -1187,7 +1213,7 @@ fi
 unset _recorded_uri
 # Compare the *final* URI (after any keep) against the funnel host. Any
 # registered host other than TS_DNS — custom domain, loopback, or typo —
-# is a funnel-vs-registration split: the funnel below serves TS_DNS only,
+# is a funnel-vs-registration split: the funnel above serves TS_DNS only,
 # so a custom host needs its own serving (reverse proxy/DNS), and a
 # loopback host is reached directly, never through the funnel.
 _uri_check="${REDIRECT_URI#*://}"
@@ -1202,11 +1228,11 @@ _uri_check="$(printf '%s' "$_uri_check" | tr '[:upper:]' '[:lower:]')"
 if [[ -n "$_uri_check" && "$_uri_check" != "$TS_DNS" ]]; then
   case "$_uri_check" in
     localhost|127.0.0.1|::1)
-      note "REDIRECT_URI is loopback ($_uri_check): reached directly, the funnel below does not apply."
+      note "REDIRECT_URI is loopback ($_uri_check): reached directly, the funnel above does not apply."
       ;;
     *)
       warn "REDIRECT_URI host ($_uri_check) differs from TS_DNS ($TS_DNS):"
-      warn "the funnel below serves TS_DNS only — serve the custom host separately,"
+      warn "the funnel above serves TS_DNS only — serve the custom host separately,"
       warn "or Google registers a URL this funnel never delivers to."
       ;;
   esac
@@ -1552,7 +1578,7 @@ fi
 if [[ "$_comment_host" == "$TS_DNS" ]]; then
   _cb_line="# Callback is served over Tailscale Funnel: https://$_comment_host"
 else
-  _cb_line="# Callback host: $_comment_host (registered here — served separately, NOT by the funnel below)"
+  _cb_line="# Callback host: $_comment_host (registered here — served separately, NOT by the funnel above)"
 fi
 if (( _marker_present == 0 )); then
   {
