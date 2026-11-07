@@ -125,9 +125,9 @@ type Config struct {
 	// collections from its own process via the shared MONGODB_URI/MONGODB_DB
 	// pair; every MCP server except memory and browser hard-requires Mongo
 	// (log.Fatalf without it, and the entrypoint pi mcp list gate then
-	// refuses boot), so a gateway-side fallback only meets memory's and
-	// browser's ephemeral gates: anything else is down together, and the
-	// outage reads as degraded backlog plus gate_unavailable denies — not
+	// refuses boot), so a gateway-side fallback only serves pre-migration
+	// reads and sweeps — memory's and browser's own fallbacks run with an
+	// ephemeral audit trail, and the outage reads as degraded backlog, not
 	// silently increased throughput.
 	ApprovalStore approvals.Store
 

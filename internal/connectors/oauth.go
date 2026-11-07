@@ -97,8 +97,9 @@ func ClampAccessExpiry(expiryUnixMilli int64, now time.Time) int64 {
 //     only — it cannot send. The exact scope the draft-only rule needs:
 //     the token is incapable of sending even if the gate check vanished.
 //   - calendar: readonly. Draft events are agent-side objects (created
-//     locally, sent nowhere) until the approval-gate flow covers writes,
-//     so the grant carries no write bit at all.
+//     locally, sent nowhere — v1 has no tool path that creates them,
+//     refused outright rather than approved), so the grant carries no
+//     write bit at all.
 //
 // Follow-up sync obligation (same class as IsDraftOnlySend): if a wired MCP
 // server needs a broader scope, BOTH this table and the tool policy move

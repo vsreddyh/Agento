@@ -1,6 +1,11 @@
 # 0005 — Browser tasks
 
-Status: accepted (#312, server half)
+Status: accepted (#312, server half). T3-era note (#487, 2026-11):
+confirmation is a harness permission prompt per navigation, not an
+in-process hold — nothing ever parks. Read "holds for approval" /
+"human-approved" / "approval-gated" below as the prompt with the URL
+shown, and "fail fast without it" as ephemeral-unaudited operation. Do
+not run the hold flow as a live runbook.
 
 ## Context
 

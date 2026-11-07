@@ -107,11 +107,11 @@ func checkURL(raw string) (*url.URL, error) {
 	if scheme != "http" && scheme != "https" {
 		return nil, fmt.Errorf("only http and https urls are allowed, not %q", u.Scheme)
 	}
-	// Normalize in place: what the gate approved matches what Chromium
-	// dials and what the audit log records, modulo URL case (the audit keeps
-	// the raw arg, Chromium gets the lowercased scheme).
+	// Normalize in place: what the harness-prompted URL approved matches
+	// what Chromium dials and what the audit log records, modulo URL case
+	// (the audit keeps the raw arg, Chromium gets the lowercased scheme).
 	u.Scheme = scheme
-	// Web ports only: the approval gate is per-domain, not per-port, and a
+	// Web ports only: prompts are per-domain, not per-port, and a
 	// https://host:22/ URL would otherwise buy a raw TCP tunnel the human
 	// never approved as anything but a web page.
 	if port := u.Port(); port != "" && port != "80" && port != "443" {

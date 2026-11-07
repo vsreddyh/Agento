@@ -1,6 +1,11 @@
 # ADR-0010: Connector MCP servers (Gmail, Calendar)
 
-- Status: accepted (2026-10, first connectors)
+- Status: accepted (2026-10, first connectors). T3-era note (#487,
+  2026-11): the "approval-gate flow" passages below describe a release
+  path that never arrived — sends refuse outright, permanently for v1,
+  and confirmation is a harness prompt, not a hold. Read "waits for the
+  approval-gate flow" as "has no tool path" and "gated backstop" as
+  at-once denial. Do not run the hold flow as a live runbook.
 - Issue: #316 (follow-up to ADR-0009, stacked on #367)
 
 ## Context
