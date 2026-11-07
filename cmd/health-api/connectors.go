@@ -197,8 +197,11 @@ func connectorWire(c connectors.Connector) bson.M {
 }
 
 // writeConnectorErr maps store domain errors: unknown ids 404, transport
-// failures 502, anything else 400. The id echo is safe: callers only reach
-// it with a normalized known id or the fixed "unknown connector" string.
+// failures 502, anything else 400. Domain messages are echoed scrubbed +
+// bounded (triage greps them); the envelope stays health-api `detail`
+// (not the gateway's OpenAI-style error object) like every other route
+// in this service — status codes and success shapes match the gateway,
+// error envelopes follow this service.
 func writeConnectorErr(w http.ResponseWriter, err error) {
 	var se *connectors.StoreError
 	if errors.As(err, &se) {
@@ -207,7 +210,10 @@ func writeConnectorErr(w http.ResponseWriter, err error) {
 			writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown connector"})
 			return
 		case se.Upstream:
-			writeJSON(w, http.StatusBadGateway, bson.M{"detail": "the connector store did not answer in time"})
+			writeJSON(w, http.StatusBadGateway, bson.M{"detail": connectorBounded(approvals.ScrubError(se.Msg))})
+			return
+		default:
+			writeJSON(w, http.StatusBadRequest, bson.M{"detail": connectorBounded(approvals.ScrubError(se.Msg))})
 			return
 		}
 	}
@@ -510,6 +516,10 @@ func connectorCallbackDead(w http.ResponseWriter, r *http.Request) {
 func connectorWantsHTML(r *http.Request) bool {
 	accept := r.Header.Get("Accept")
 	if len(accept) > 512 {
+		// Length-only log: a browser tab that got JSON instead of the
+		// close-this-tab page reads as a regression with nothing to
+		// trace — same pointer class as the duplicate-params skip.
+		log.Printf("connectors: Accept header oversized (%d bytes), answering JSON", len(accept))
 		return false
 	}
 	lower := strings.ToLower(accept)

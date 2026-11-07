@@ -370,8 +370,10 @@ public Google console entry can hold them. Homelab setups must serve (and
 register) a dotted name or loopback address: use a nip.io-style wildcard,
 Tailscale funnel, or reverse proxy for a public name — or an SSH tunnel to
 localhost for direct-only access. Bare `*.local`/LAN names are out of scope
-by intent, not by omission. Health-api serves the exact spelling plus its
-trailing-slash variant — nothing else, no profile-tolerant prefixes (the
+by intent, not by omission. Health-api serves the exact path, case-insensitive
+on the last segment (`/CALLBACK` serves like `/callback` — unauthenticated
+callers are not distinguished by casing), plus its trailing-slash variant —
+nothing else, no profile-tolerant prefixes (the
 pi-gateway `/p/` spellings are gone with it). The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope
 key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to

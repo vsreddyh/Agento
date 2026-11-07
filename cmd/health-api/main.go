@@ -30,6 +30,10 @@ var IST = time.FixedZone("IST", 5*3600+30*60)
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	// nosniff on every JSON body: error text is scrubbed + bounded, but a
+	// sniffed content-type on an error page is still a MIME-confusion
+	// vector for browser-parsed responses.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
