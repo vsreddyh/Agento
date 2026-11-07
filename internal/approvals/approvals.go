@@ -199,10 +199,11 @@ func isDryRun(args map[string]any) bool {
 // Reads never prompt. Routine creates and updates (log_meal, create_task,
 // add_recipe, log_cook, ...) run free — prompting on every write would make
 // the agent ask permission to take notes, which is approval fatigue, not
-// safety. Sensitive: money writes, deletes, archives, destructive rewrites
-// (fix_*), and prunes that actually delete (the dry-run exemption lives in
-// NeedsApproval; the harness cannot see arguments, so counting prunes
-// prompt too).
+// safety. Sensitive: money writes (including log_transaction/log_text),
+// account lifecycle (create/archive), browser navigation (per-task URL
+// prompt), deletes, destructive rewrites (fix_*), and prunes that actually
+// delete (the dry-run exemption lives in NeedsApproval; the harness cannot
+// see arguments, so counting prunes prompt too).
 var gatedTools = map[string]map[string]bool{
 	"miser-money": {
 		"create_account": true, "list_accounts": false,

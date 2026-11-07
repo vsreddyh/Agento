@@ -290,8 +290,9 @@ All settings are configured in the single root `.env` file:
 Sensitive tool calls prompt for an explicit human decision before they
 execute. Confirmation lives in T3/opencode (permission prompts per
 `opencode.json`, mirrored from the sensitivity table in
-`internal/approvals`), not in an in-process wait: every `tools/call`
-through the wrapper (`internal/approvalgate`) runs at once and attempts one
+`internal/approvals`), not in an in-process wait: every known, non-refused
+`tools/call` through the wrapper (`internal/approvalgate`) runs at once and
+attempts one
 audit row with tool, redacted args, disposition and result — no decider:
 harness prompt decisions are not recorded (the join stops at pre-migration
 `Approval.DecidedBy`); best-effort, so treat a missing

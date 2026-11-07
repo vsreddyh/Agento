@@ -135,7 +135,8 @@ Two edits belong to accepting this ADR, not to implementing it, and must not be
 forgotten if implementation stalls:
 
 1. Flip ADR-0002's status line to `superseded in substance by ADR-0011` for the
-   process-isolation claim, leaving its approval/audit behaviour intact.
+   process-isolation claim (T3-era #487 went further and removed the hold
+   flow itself — see the banner there; behaviour is NOT intact anymore).
 2. File the `README.md:49` / `vps.md:154` memory correction as a tracked issue,
    per the consequence above.
 
