@@ -380,7 +380,9 @@ by intent, not by omission. Health-api serves the exact path, case-insensitive
 on the last segment (`/CALLBACK` serves like `/callback` — unauthenticated
 callers are not distinguished by casing), plus slash-collapsed variants
 (`//` collapses, so a double-slash paste serves — WAF/proxy rules must
-match on the collapsed form too) — but no profile-tolerant prefixes (the
+match on the collapsed form too) and percent-encoded spellings (Go decodes
+before matching, so `/%63allback` serves like `/callback` — match on the
+decoded form too) — but no profile-tolerant prefixes (the
 pi-gateway `/p/` spellings retire with it in #494 — until then both serve).
 The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope

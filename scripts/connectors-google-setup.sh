@@ -827,12 +827,16 @@ if [[ -n "$_redirect_preset" ]]; then
   # Same treatment as the TS_DNS preset: write_env single-quote-escapes but
   # does not stop newlines, so a multiline preset would write a second line
   # into .env. read-based input can't contain one — only presets can.
-  # Host part validated label by label, like TS_DNS above. Scheme folded
-  # for matching (server lowercases it); the canonical form is stored.
+  # Host part validated label by label, like TS_DNS above. Folded whole
+  # for matching (server lowercases scheme AND host; path case is
+  # significant but shape-matching it case-insensitively just defers an
+  # uppercase path to the final exact-path gate, which offers the same
+  # keep prompt a recorded value gets — instead of a hard exit here for
+  # the identical spelling). The canonical form is stored.
+  _preset_fold="$(printf '%s' "$_redirect_preset" | tr '[:upper:]' '[:lower:]')"
   # Accepts https tailnet/FQDN presets AND the documented http-loopback
   # testing shape (.env.example) — both of which the final gate passes,
   # so rejecting either here would contradict it.
-  _preset_fold="$(printf '%s' "${_redirect_preset%%://*}" | tr '[:upper:]' '[:lower:]')://${_redirect_preset#*://}"
   _uri_host=""
   _preset_ok=0
   if [[ "$_preset_fold" == https://*/api/connectors/callback ]]; then
@@ -840,19 +844,24 @@ if [[ -n "$_redirect_preset" ]]; then
     # or trailing dot sends identically but must not fail validation —
     # and the canonical form is what gets stored and registered.
     _redirect_preset="$(canonical_redirect_uri "$_redirect_preset")"
-    # Derive the host from the canonicalised value (not the scheme-only
-    # fold): uppercase hosts and trailing dots canonicalise to a valid
-    # tailnet name, and validating the raw spelling would exit 1 on a URL
-    # that sends identically.
-    _uri_host="${_redirect_preset#https://}"
+    # Derive the host from the canonicalised FOLD, not the stored value:
+    # an uppercase PATH would defeat the case-sensitive strip below and
+    # exit 1 on a spelling the final exact-path gate handles with a keep
+    # prompt — while explicit :443, trailing dots, and uppercase hosts
+    # still canonicalise away before validation, as before. (The fold
+    # lowercases the path too, but it is shape-only: the stored value
+    # keeps its case for the final gate.)
+    _fold_canon="$(canonical_redirect_uri "$_preset_fold")"
+    _uri_host="${_fold_canon#https://}"
     _uri_host="${_uri_host%/api/connectors/callback}"
     _uri_host="${_uri_host%%:*}"
+    unset _fold_canon
     if _valid_tsdns "$_uri_host" 2>/dev/null || _valid_fqdn "$_uri_host" 2>/dev/null; then
       _preset_ok=1
     fi
   elif [[ "$_preset_fold" == http://*/api/connectors/callback ]]; then
     _redirect_preset="$(canonical_redirect_uri "$_redirect_preset")"
-    _uri_host="${_redirect_preset#http://}"
+    _uri_host="${_preset_fold#http://}"
     _uri_host="${_uri_host%/api/connectors/callback}"
     if [[ "$_uri_host" == \[* ]]; then
       _uri_host="${_uri_host#[}"; _uri_host="${_uri_host%%\]*}"
