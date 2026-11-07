@@ -399,7 +399,10 @@ of the token columns on Mongo, whole-row delete on memory).
 Already-fetched data (chat history) is not wiped on
 disconnect; disconnect stops future access. Without Mongo the list still
 answers from memory but nothing survives a restart and no token can be
-stored. An expired row carries a `reconnect` hint instead of asking for a
+stored. The fallback is not instant on a post-boot drop: the first few
+taps 502 while the demotion counter trips (3 upstream failures inside a
+minute), then it flips to memory + 501 — a 502 right after an Atlas loss
+means Mongo, not Google. An expired row carries a `reconnect` hint instead of asking for a
 secret.
 Wire shape note: a row with no `updated_at` was never touched; an explicit
 disconnect sets it. Same status, different shape — the difference is the

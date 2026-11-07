@@ -1305,25 +1305,25 @@ issuer=""
 # reconstructed scheme+host: a knowingly-kept non-canonical value must
 # prove (or fail) on its own bytes, or the probe greens a clean path while
 # the registered string 404s/501s. The callback needs no bearer; without
-# params a clean URL answers 400 (missing code/state) or 501 (OAuth
-# unconfigured) — either proves routing + handler. Anything else
-# (404/502/000) is a real failure to fix before registering.
+# params a clean URL answers 400 (missing code/state) — that alone proves
+# routing + handler (the 400 precedes the config check by design, so a
+# param-less hit never 501s). Anything else (404/502/000) is a real
+# failure to fix before registering.
 # _probe_hostport was derived from the final canonical REDIRECT_URI above;
 # TS_DNS is the fallback only if that derivation yielded nothing probabe
 # (loopback http included — the probe speaks the URI's own scheme).
 _probe_host="$_probe_hostport"
 _probe_host="${_probe_host:-$TS_DNS}"
 _probe_url="$REDIRECT_URI"
-# 400/501/429 are the in-contract answers for a param-less callback hit
-# (missing params / unconfigured OAuth / throttled) — all three prove the
-# route serves. curl without -f: -f would fail all of them and prove nothing.
+# 400/429 are the in-contract answers for a param-less callback hit
+# (missing params / throttled) — both prove the route serves. curl without -f: -f would fail all of them and prove nothing.
 # -L follows the mux clean-path redirect: a knowingly-kept double-slash URL
 # 301s to the collapsed form before any handler runs, and the follow-up
 # code is what proves the route (capped at 2 hops — this must terminate).
 _probe_ok_code() {
   local code
   code=$(curl -sL --max-redirs 2 -o /dev/null -w '%{http_code}' --max-time 10 "$_probe_url" 2>/dev/null || echo "000")
-  [[ "$code" == "400" || "$code" == "501" || "$code" == "429" ]]
+  [[ "$code" == "400" || "$code" == "429" ]]
 }
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   if (( _DNS_FROM_PRESET )); then
@@ -1346,7 +1346,7 @@ else
 fi
 printf '\n'
 if (( ok )); then
-  printf '  %s✓%s callback route answers: %s (400/501/429 all prove the route serves)\n' "$GREEN" "$RESET" "$_probe_url"
+  printf '  %s✓%s callback route answers: %s (400/429 both prove the route serves)\n' "$GREEN" "$RESET" "$_probe_url"
   # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
   # outlast the probe budget — https only (loopback http has no TLS), at
   # the probed port. timeout is coreutils-Linux-only (macOS ships

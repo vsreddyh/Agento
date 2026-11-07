@@ -93,11 +93,12 @@ var (
 	// time. It lets the 501-reason path name "no database" without
 	// dialling a fresh client per tap.
 	connectorLastErr string
-	// connectorUpstreamFails counts consecutive store-side failures for
-	// demotion (see noteConnectorUpstream). connectorLastProbe stamps the
-	// last dial, so sustained failures cannot suppress the probe they
-	// should trigger. Guarded by connectorStoreMu.
+	// connectorUpstreamFails counts store-side failures inside one retry
+	// window for demotion (see noteConnectorUpstream).
+	// connectorLastProbe stamps the last dial, so sustained failures
+	// cannot suppress the probe they should trigger. Guarded by connectorStoreMu.
 	connectorUpstreamFails int
+	connectorLastFail     time.Time
 	connectorLastProbe    time.Time
 )
 
@@ -249,20 +250,30 @@ func connectorStoreFreshLocked() bool {
 		time.Since(connectorLastProbe) <= connectorRetryBudget
 }
 
-// connectorDemoteAfter bounds how many consecutive upstream failures a
-// durable cache absorbs before the next caller re-probes (and demotes on
-// a failed probe): enough to ride out one blip, few enough that a real
-// drop flips to memory + 501s instead of 502ing forever.
+// connectorDemoteAfter bounds how many upstream failures inside one
+// retry window a durable cache absorbs before the next caller re-probes
+// (and demotes on a failed probe): enough to ride out one blip, few
+// enough that a real drop flips to memory + 501s instead of 502ing
+// forever.
 const connectorDemoteAfter = 3
 
 // noteConnectorUpstream records one store-side failure (502-boundary:
-// deadline or upstream, never client-gone). Call it wherever a verb
-// answers for the store so a post-boot drop demotes instead of pinning
-// a stale "configured" cache.
+// deadline or upstream, never client-gone). Failures count inside one
+// retry window only: a failure arriving more than a budget after the
+// previous one restarts the count at 1, so two isolated blips weeks
+// apart (with thousands of successes between) never trip the demotion
+// probe — only sustained failure does. Call it wherever a verb answers
+// for the store so a post-boot drop demotes instead of pinning a stale
+// "configured" cache.
 func noteConnectorUpstream() {
 	connectorStoreMu.Lock()
 	defer connectorStoreMu.Unlock()
-	connectorUpstreamFails++
+	if time.Since(connectorLastFail) > connectorRetryBudget {
+		connectorUpstreamFails = 1
+	} else {
+		connectorUpstreamFails++
+	}
+	connectorLastFail = time.Now()
 }
 
 // connectorBounded caps one echoed string for API bodies, mirroring the
