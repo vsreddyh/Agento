@@ -564,7 +564,7 @@ say "      domain is bought. The app keeps its current Server URL."
 say "      Note: the funnel publishes the whole proxy (chat + sync stay"
 say "      PASSWORD-gated); the OAuth callback is the only new unauthenticated"
 say "      API surface (static liveness /health and /ping, plus pi liveness"
-say "      /p/healthz, ride along). Do not share the *.ts.net URL."
+say "      /p/healthz[/], ride along). Do not share the *.ts.net URL."
 printf '\n'
 say "What is on disk right now:"
 for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
@@ -1205,13 +1205,19 @@ _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
 # keeps host A while the URI, comment, and probe all use host B.
 # Hostname first: most selective on the common mismatch path, so the two
-# broader greps are skipped unless it hits. The -n guard is load-bearing:
+# broader greps are skipped unless it hits. Boundary-anchored, not
+# substring: a bare `grep -qF "$TS_DNS"` would also match
+# `https://<TS_DNS>.evil.com` and take the fast path for a funnel that
+# never serves this host (same class `_check_kept_host` guards with its
+# trailing `([^a-z0-9.-]|$)`). Dots escaped — in ERE an unescaped dot
+# matches any char, which would re-open the same hole one char wider.
+# The -n guard is load-bearing:
 # grep -qF "" matches every line, so without it an empty TS_DNS would
 # turn the fast path into always-keep (empty exits earlier today, but the
 # safety belongs on this line, not on ordering). The port comes from
 # APP_PORT (validated numeric at the top), so a custom-port funnel that
 # already serves matches instead of starting a duplicate.
-if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF -- "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE "proxy.*${_proxy_port}|${_proxy_port}.*proxy" && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
+if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qiE "https://${TS_DNS//./\\.}([^a-zA-Z0-9.-]|\$)" && printf '%s\n' "$_funnel_status" | grep -qiE "proxy.*${_proxy_port}|${_proxy_port}.*proxy" && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
   rm -f "$FOUT" || true; FOUT=""

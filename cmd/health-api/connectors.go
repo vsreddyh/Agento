@@ -748,8 +748,9 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 			// Length-only, never the value: a corrupt/hand-inserted row
 			// burns its single-use state here, and without this line its
 			// dead-attempt body is indistinguishable from genuine expiry.
-			log.Printf("connectors: callback pinned redirect misshapen (%d bytes stored), burning row and answering dead-attempt",
-				len(st.RedirectURI))
+			// Id included like every neighbouring dead branch.
+			log.Printf("connectors: callback pinned redirect misshapen for %q (%d bytes stored), burning row and answering dead-attempt",
+				connectorBounded(approvals.ScrubError(id)), len(st.RedirectURI))
 			connectorCallbackDead(w, r)
 			return
 		}
