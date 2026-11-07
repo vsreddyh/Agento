@@ -41,17 +41,18 @@
 // write to the Gmail API, so a created draft is an external side effect
 // that can land unaudited the same way (calendar drafts are validated
 // locally and sent nowhere — unaudited there means a local row only);
-// and connector sends are refused outright, so no external send can slip
-// through — only reads and drafts run. A destructive Mongo-backed write
-// that executes while unaudited needs the domain to succeed while the
+// and connector sends are refused outright, so no external connector
+// send can slip through — but browser navigation and gmail drafts still
+// can (neither is a read, and the draft is a real Gmail API write). A
+// destructive Mongo-backed write that executes while unaudited needs the
 // audit write alone fails — same-DB, transient-only. The browser and
 // gmail-draft cases are NOT same-DB transient: different stores, so plan
 // for them, don't dismiss them.
 //
-// Cancellation: the handler still receives the caller's ctx, but the
-// wrapper does not pre-check it — an already-cancelled call runs rather
-// than refusing. Failing open on cancel is safe here (the harness owns
-// the turn lifecycle) and keeps the wrapper a straight line.
+// Cancellation: a dead calling context refuses before anything executes
+// (stop means stop — teardown must prevent the side effect, not race
+// it), and the handler still receives the live ctx so an in-flight cancel
+// propagates into the call. The wrapper never waits on anything itself.
 //
 // The startup sweep lives in each server main: same per-server
 // MarkServerInterrupted call before serving, which now also expires any
@@ -115,6 +116,15 @@ func run[Out any](ctx context.Context, server, tool, name string, redacted map[s
 
 func decide[Out any](ctx context.Context, server, tool, name string, redacted map[string]any, store approvals.Store, exec func() (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
 	var zero Out
+
+	// Cancelled callers never execute: stop means stop, and the side
+	// effect must not win a race against it. Denied + audited, no hold
+	// to expire — the old teardown branch without the wait.
+	if ctx.Err() != nil {
+		audit(store, server, tool, redacted, approvals.DispositionDenied,
+			"abandoned: calling context ended before execution", "")
+		return nil, zero, errors.New("not executing " + server + "/" + name + ": calling context ended; failing closed")
+	}
 
 	// Draft-only refusal, before anything else (same order as the relay):
 	// connector send paths never reach a server, however permissive the

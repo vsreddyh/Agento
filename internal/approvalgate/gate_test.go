@@ -192,6 +192,27 @@ func TestGatedToolRunsOnUnsharedStore(t *testing.T) {
 	}
 }
 
+func TestCancelledContextDenies(t *testing.T) {
+	st := newStub(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ran := false
+	_, _, err := decide(ctx, "notes", "delete_note", "delete_note", map[string]any{}, st,
+		func() (*mcp.CallToolResult, map[string]any, error) {
+			ran = true
+			return okExec()
+		})
+	if err == nil || !strings.Contains(err.Error(), "failing closed") {
+		t.Fatalf("want fail-closed error, got %v", err)
+	}
+	if ran {
+		t.Error("cancelled call reached the handler")
+	}
+	if got := st.lastAudit(); got.Disposition != approvals.DispositionDenied {
+		t.Errorf("want denied audit, got %+v", got)
+	}
+}
+
 func TestUnknownToolDenied(t *testing.T) {
 	st := newStub(true)
 	// Unknown tool on a known server fails closed at once (#487: there is
