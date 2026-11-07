@@ -280,6 +280,42 @@ func TestConnectorsRouteRegistration(t *testing.T) {
 	}
 }
 
+// Client-gone Upstream errors must not demote: a cancelled app poll
+// surfaces as an Upstream store error with zero Mongo fault, so the
+// demotion counter must not move. A live client (or an expired verb
+// budget) still counts, like the callback's aborted/deadline split.
+func TestWriteConnectorErrClientGoneSkipsDemotion(t *testing.T) {
+	upstream := connectors.NewStoreError("boom", true)
+	fails := func() int {
+		connectorStoreMu.Lock()
+		defer connectorStoreMu.Unlock()
+		return connectorUpstreamFails
+	}
+	// Cancelled request → 502 but no demotion note.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/connectors", nil).WithContext(cancelled)
+	before := fails()
+	w := httptest.NewRecorder()
+	writeConnectorErr(w, req, upstream)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("cancelled: got %d, want 502", w.Code)
+	}
+	if got := fails(); got != before {
+		t.Fatalf("cancelled Upstream moved demotion counter %d -> %d", before, got)
+	}
+	// Live request → 502 and the counter moves.
+	req = httptest.NewRequest(http.MethodGet, "/api/connectors", nil)
+	w = httptest.NewRecorder()
+	writeConnectorErr(w, req, upstream)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("live: got %d, want 502", w.Code)
+	}
+	if got := fails(); got != before+1 {
+		t.Fatalf("live Upstream left counter at %d, want %d", got, before+1)
+	}
+}
+
 // No-slash-boundary misses must answer the service JSON envelope, not
 // Go's default text/plain 404: /api/connectorsfoo, /api/CONNECTORS, and
 // any other /api/* spelling no domain claimed. Auth first (the gateway

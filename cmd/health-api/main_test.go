@@ -19,6 +19,25 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+// The trailing-slash spelling serves the same static reply through the
+// mux — an exact-only registration would answer Go's text/plain 404 with
+// no detail envelope for a natural copy-paste probe.
+func TestHealthTrailingSlashRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	registerHealth(mux)
+	for _, target := range []string{"/health", "/health/"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: got %d (%s), want 200", target, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), `"status":"ok"`) {
+			t.Fatalf("%s: got %s", target, w.Body.String())
+		}
+	}
+}
+
 func TestAuthorize(t *testing.T) {
 	t.Setenv("PASSWORD", "test-secret-12345678")
 	req := httptest.NewRequest(http.MethodPost, "/api/health/sync", nil)

@@ -196,6 +196,11 @@ func upsert() *options.UpdateOptions {
 // registerHealth wires this domain's routes. One function per file so main stays a
 // list of domains, not a list of paths (#171).
 func registerHealth(mux *http.ServeMux) {
+	// Both spellings: the probe is hand-curled with and without the
+	// slash, and an exact-only registration answers the other with Go's
+	// text/plain 404 (no detail envelope). The handler ignores the
+	// request, so the alias serves identically.
 	mux.HandleFunc("/health", health)
+	mux.HandleFunc("/health/", health)
 	mux.HandleFunc("/api/health/sync", sync)
 }

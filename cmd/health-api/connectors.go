@@ -424,7 +424,15 @@ func connectorWire(c connectors.Connector) bson.M {
 // (not the gateway's OpenAI-style error object) like every other route
 // in this service — status codes and success shapes match the gateway,
 // error envelopes follow this service.
-func writeConnectorErr(w http.ResponseWriter, err error) {
+//
+// Client-gone never demotes: an app poll that timed out surfaces as an
+// Upstream store error (the driver reports context.Canceled as a Find
+// failure), but zero Mongo fault occurred. Same split as
+// connectorCallbackAborted — only a live client (nil ctx error) or an
+// expired verb budget (DeadlineExceeded, genuinely slow store) increments
+// the demotion counter; a hung-up caller must not push a healthy durable
+// cache toward memory + 501s.
+func writeConnectorErr(w http.ResponseWriter, r *http.Request, err error) {
 	var se *connectors.StoreError
 	if errors.As(err, &se) {
 		switch {
@@ -436,7 +444,9 @@ func writeConnectorErr(w http.ResponseWriter, err error) {
 			writeJSON(w, http.StatusNotFound, bson.M{"detail": connectorBounded(approvals.ScrubError(se.Msg))})
 			return
 		case se.Upstream:
-			noteConnectorUpstream()
+			if ctxErr := r.Context().Err(); ctxErr == nil || ctxErr == context.DeadlineExceeded {
+				noteConnectorUpstream()
+			}
 			writeJSON(w, http.StatusBadGateway, bson.M{"detail": connectorBounded(approvals.ScrubError(se.Msg))})
 			return
 		default:
@@ -468,7 +478,7 @@ func listConnectors(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	list, err := store.List(ctx)
 	if err != nil {
-		writeConnectorErr(w, err)
+		writeConnectorErr(w, r, err)
 		return
 	}
 	out := make([]any, 0, len(list))
@@ -495,11 +505,11 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 	// same oversized 400 as the contract gate below, without paying the
 	// trim/fold/scrub allocs first. No echo — the value is megabytes.
 	if len(id) > connectors.MaxSegmentAllocLen {
-		writeConnectorErr(w, connectors.NewStoreError("oversized connector id", false))
+		writeConnectorErr(w, r, connectors.NewStoreError("oversized connector id", false))
 		return
 	}
 	if len(action) > connectors.MaxSegmentAllocLen {
-		writeConnectorErr(w, connectors.NewStoreError("oversized path segment", false))
+		writeConnectorErr(w, r, connectors.NewStoreError("oversized path segment", false))
 		return
 	}
 	// Trim first, then check: edge whitespace and invisible format
@@ -512,11 +522,11 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 	// not turn a known id unknown, and anything over the cap skips the
 	// rune walks below.
 	if len(id) > connectors.MaxConnectorIDLen {
-		writeConnectorErr(w, connectors.NewStoreError("oversized connector id", false))
+		writeConnectorErr(w, r, connectors.NewStoreError("oversized connector id", false))
 		return
 	}
 	if len(action) > connectors.MaxConnectorIDLen {
-		writeConnectorErr(w, connectors.NewStoreError("oversized path segment", false))
+		writeConnectorErr(w, r, connectors.NewStoreError("oversized path segment", false))
 		return
 	}
 	if id == "" || connectors.HasControl(id) || !utf8.ValidString(id) {
@@ -539,7 +549,7 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 	// spellings can grow byte length).
 	norm := connectors.NormalizedID(id)
 	if len(norm) > connectors.MaxConnectorIDLen {
-		writeConnectorErr(w, connectors.NewStoreError("oversized connector id", false))
+		writeConnectorErr(w, r, connectors.NewStoreError("oversized connector id", false))
 		return
 	}
 	if !connectors.Known(norm) {
@@ -562,7 +572,7 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		c, err := store.Disconnect(ctx, id)
 		if err != nil {
-			writeConnectorErr(w, err)
+			writeConnectorErr(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, bson.M{"ok": true, "connector": connectorWire(c)})
@@ -646,7 +656,7 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	}); err != nil {
 		log.Printf("connectors: connect state store failed for %q: %s", id,
 			connectorBounded(approvals.ScrubError(err.Error())))
-		writeConnectorErr(w, err)
+		writeConnectorErr(w, r, err)
 		return
 	}
 	authURL := connectors.AuthURL(oauth, id, state, verifier, log.Printf)
@@ -1071,12 +1081,19 @@ func connectorCallbackPath(p string) bool {
 // these before its unknown-path 404), then the service `detail` envelope
 // with no-store so triage greps and the app's detail branch keep working.
 // Registered as /api/ + /api so it only sees what longer patterns missed.
+//
+// Global by construction: it also catches other domains' typos
+// (/api/task missing-s, /api/health/sync/ trailing slash — health and
+// files register exacts only). The log line below names the domain that
+// answered so those lines grep in the wrong place only once: the length
+// (never the value) is logged like every other dead branch here.
 func connectorsFallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
 		return
 	}
+	log.Printf("connectors: unclaimed /api path 404 (%d bytes), answering unknown-path", len(r.URL.Path))
 	writeJSON(w, http.StatusNotFound, bson.M{
 		"detail": "unknown path " + connectorBounded(approvals.ScrubError(r.URL.Path))})
 }

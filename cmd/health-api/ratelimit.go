@@ -271,10 +271,13 @@ func shortHash(s string) string {
 // rateLimit wraps h with the limiter. Exported-for-test seam: newLimiter takes
 // burst/refill and a clock, so the bucket's behaviour can be asserted without
 // sleeping.
-// exemptPath is the one route the limiter does not touch. EXACT match on purpose:
-// /api/health/sync is a different path and does write data, so a prefix rule here
-// would exempt the wrong thing.
-const exemptPath = "/health"
+// The liveness spellings the limiter does not touch. Exact keys on
+// purpose: /api/health/sync is a different path and does write data, so
+// a prefix rule here would exempt the wrong thing. Bare and
+// trailing-slash both skip: they serve the same static reply
+// (registerHealth), so throttling /health/ while exempting /health would
+// fail the probe for a slash.
+var exemptPaths = map[string]bool{"/health": true, "/health/": true}
 
 func rateLimit(l *limiter, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +291,7 @@ func rateLimit(l *limiter, h http.Handler) http.Handler {
 		// touches no database, so it adds no load to the thing the limiter exists to
 		// protect. Being unreachable under flood is the one property a liveness probe
 		// must never have.
-		if r.URL.Path == exemptPath {
+		if exemptPaths[r.URL.Path] {
 			h.ServeHTTP(w, r)
 			return
 		}
