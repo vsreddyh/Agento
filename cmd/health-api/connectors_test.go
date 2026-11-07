@@ -48,6 +48,10 @@ func TestConnectorsListMemoryFallback(t *testing.T) {
 	if !strings.Contains(body, `"disconnected"`) {
 		t.Fatalf("fresh fallback rows read as disconnected, got %s", body)
 	}
+	// Fresh rows carry no error: last_error omits rather than echoing empty.
+	if strings.Contains(body, "last_error") {
+		t.Fatalf("fresh rows must omit last_error, got %s", body)
+	}
 }
 
 func TestConnectorItemGuard(t *testing.T) {
@@ -70,13 +74,28 @@ func TestConnectorItemGuard(t *testing.T) {
 	if w := withAuth(http.MethodPost, "/api/connectors/drive/disconnect"); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown id: got %d (%s)", w.Code, w.Body.String())
 	}
-	// Unknown verb → 404.
+	// Unknown verb → 405 with Allow (gateway answers no-verb 405, not 404).
 	if w := withAuth(http.MethodPost, "/api/connectors/gmail/frobnicate"); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown verb: got %d (%s)", w.Code, w.Body.String())
 	}
-	// Wrong method on a known verb → 405.
+	if w := withAuth(http.MethodPost, "/api/connectors/gmail/"); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("no verb: got %d (%s)", w.Code, w.Body.String())
+	} else if allow := w.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("no verb Allow: got %q", allow)
+	}
+	// Wrong method on a known verb → 405 with Allow.
 	if w := withAuth(http.MethodGet, "/api/connectors/gmail/disconnect"); w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("get on disconnect: got %d (%s)", w.Code, w.Body.String())
+	} else if allow := w.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("disconnect Allow: got %q", allow)
+	}
+	// List + item verbs answer no-store (the app polls this loop).
+	lreq := httptest.NewRequest(http.MethodGet, "/api/connectors", nil)
+	lreq.Header.Set("Authorization", "Bearer test-secret-12345678")
+	lw := httptest.NewRecorder()
+	listConnectors(lw, lreq)
+	if cc := lw.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("list Cache-Control: got %q", cc)
 	}
 }
 
@@ -167,5 +186,16 @@ func TestConnectorsRouteRegistration(t *testing.T) {
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusNotImplemented || !strings.Contains(w.Body.String(), "<html>") {
 		t.Fatalf("html callback: got %d (%s)", w.Code, w.Body.String())
+	}
+	// Wrong method answers the page envelope too, with Allow: GET.
+	req = httptest.NewRequest(http.MethodPost, "/api/connectors/callback", nil)
+	req.Header.Set("Accept", "text/html")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed || !strings.Contains(w.Body.String(), "<html>") {
+		t.Fatalf("html callback 405: got %d (%s)", w.Code, w.Body.String())
+	}
+	if allow := w.Header().Get("Allow"); allow != http.MethodGet {
+		t.Fatalf("callback Allow: got %q", allow)
 	}
 }

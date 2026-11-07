@@ -356,9 +356,11 @@ connecting/disconnecting independently from the app:
 Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
 app to open in a browser; Google redirects to the single registered
-`GET /api/connectors/callback?code=&state=` — one registered string with
-two path shapes (bare direct, `/p/` via proxy); non-default ports are
-variants of whichever path they attach to (default ports are not: `:443`
+`GET /api/connectors/callback?code=&state=` — one registered string, one
+spelling: the bare `/api/connectors/callback` path on whichever host:port
+the browser reaches (direct `:8001`, or `:8080` through the proxy, which
+routes `/api/*` to health-api). Non-default ports are variants of that
+path (default ports are not: `:443`
 and `:80` are stripped by canonicalisation, so register the stripped form
 — see `.env.example`). Product constraint, not just validation:
 registrations must be public spellings (dotted FQDN or loopback) — LAN,
@@ -367,13 +369,9 @@ public Google console entry can hold them. Homelab setups must serve (and
 register) a dotted name or loopback address: use a nip.io-style wildcard,
 Tailscale funnel, or reverse proxy for a public name — or an SSH tunnel to
 localhost for direct-only access. Bare `*.local`/LAN names are out of scope
-by intent, not by omission. The bare spelling works direct on the pi
-port and the `/p/` spelling through nginx, which strips `/p` before
-forwarding (port included in the match — the `:8443` spelling and the
-no-port spelling are different registrations). The callback bypasses
-profile routing entirely, so any first segment serves — bare, `/p/`, or
-`/p/<anything>/` — direct or proxied, while every other verb 404s a
-miscased or cross-profile path. The server consumes the
+by intent, not by omission. Health-api serves the exact spelling plus its
+trailing-slash variant — nothing else, no profile-tolerant prefixes (the
+pi-gateway `/p/` spellings are gone with it). The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope
 key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to
 connected. Tokens land before the status flips — a connected-with-no-tokens
@@ -454,14 +452,13 @@ compose to prove they land in the rendered compose config. Its closing checklist
 then has the operator re-add the gmail/calendar entries inside `mcpServers`
 in `pi/mcp.json` by hand (unwired until OAuth is configured; OAuth alone
 does not restore the agent tools) and restart again. It never
-restarts the stack — the values are inert until the pi container is
-recreated (`./scripts/hermes.sh restart` recreates it; a plain container
+restarts the stack — the values are inert until the containers are
+recreated (`./scripts/hermes.sh restart` recreates them; a plain container
 restart without recreation will not pick up .env changes). It is safe
 to re-run: existing values stay defaults, and an existing
 envelope key is kept, since rotating it invalidates every stored grant.
-Register the `/p/` spelling it prints (through the proxy `/p` is stripped
-before pi sees it); the bare `https://<host>/api/...` form routes to
-health-api instead.
+Register the bare spelling it prints (health-api serves it direct on
+`:8001` and through the proxy on `:8080`).
 
 Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 

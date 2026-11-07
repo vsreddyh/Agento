@@ -701,12 +701,12 @@ if [[ -n "$_redirect_preset" ]]; then
   # into .env. read-based input can't contain one — only presets can.
   # Host part validated label by label, like TS_DNS above.
   _uri_host=""
-  if [[ "$_redirect_preset" == https://*/p/api/connectors/callback ]]; then
+  if [[ "$_redirect_preset" == https://*/api/connectors/callback ]]; then
     _uri_host="${_redirect_preset#https://}"
-    _uri_host="${_uri_host%/p/api/connectors/callback}"
+    _uri_host="${_uri_host%/api/connectors/callback}"
   fi
   if [[ -z "$_uri_host" ]] || ! _valid_tsdns "$_uri_host"; then
-    warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/p/api/connectors/callback URL; unset it to derive from TS_DNS"
+    warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/api/connectors/callback URL; unset it to derive from TS_DNS"
     exit 1
   fi
   unset _uri_host
@@ -714,7 +714,7 @@ if [[ -n "$_redirect_preset" ]]; then
   _URI_FROM_PRESET=1
   note "using preset REDIRECT_URI (skipping derivation from TS_DNS)"
 else
-  REDIRECT_URI="https://$TS_DNS/p/api/connectors/callback"
+  REDIRECT_URI="https://$TS_DNS/api/connectors/callback"
   _URI_FROM_PRESET=0
 fi
 unset _redirect_preset
@@ -736,18 +736,37 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   # first, then tailor the question. Strict-pass keeps quietly offerable;
   # strict-fail keeps only via an explicit knowingly-keep.
   _rec_host=""
-  if [[ "$_recorded_uri" == https://*/p/api/connectors/callback ]]; then
+  if [[ "$_recorded_uri" == https://*/api/connectors/callback ]]; then
     # Same _uri_host derivation as probe/comment: scheme- and port-agnostic,
     # so an explicit `:443` spelling (same canonical form) passes here too.
     _rec_host=$(_uri_host "$_recorded_uri" || true)
+  elif [[ "$_recorded_uri" == https://*/p/api/connectors/callback ]]; then
+    # Pre-#488 spelling pointed at pi-gateway, which no longer serves it:
+    # offer the same host bare. Declining falls through to the typo path
+    # below, which names the mismatch and offers a knowingly-keep.
+    _bare="${_recorded_uri%/p/api/connectors/callback}/api/connectors/callback"
+    warn "recorded URL uses the retired /p/ spelling (pi-gateway is gone):"
+    warn "  recorded: $_recorded_uri"
+    warn "  bare:     $_bare"
+    if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
+      REDIRECT_URI="$_bare"
+      note "keeping converted REDIRECT_URI (tailnet rename? re-check the Google console registration)"
+      _rec_host=$(_uri_host "$_bare" || true)
+      _converted=1
+    else
+      _rec_host=""
+    fi
+    unset _bare
   fi
-  if [[ -n "$_rec_host" ]]; then
+  if [[ -n "${_converted:-}" ]]; then
+    : # converted above; nothing left to keep or question.
+  elif [[ -n "$_rec_host" ]]; then
     if confirm "Keep the recorded URL?"; then
       REDIRECT_URI="$_recorded_uri"
       note "keeping recorded REDIRECT_URI (tailnet rename? re-check the Google console registration)"
     fi
   else
-    warn "recorded URL fails the expected shape (https://<host>.<tailnet>.ts.net/p/api/connectors/callback)"
+    warn "recorded URL fails the expected shape (https://<host>.<tailnet>.ts.net/api/connectors/callback)"
     warn "typo? keeping it registers a URL Google will never call back to."
     if confirm "Keep it anyway (only for deliberate non-standard setups)?"; then
       REDIRECT_URI="$_recorded_uri"
@@ -756,7 +775,7 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
       warn "so the probe and the .env comment use ($TS_DNS), not the kept URL"
     fi
   fi
-  unset _rec_host
+  unset _rec_host _converted
 fi
 unset _recorded_uri
 # Compare the *final* URI (after any keep) against the funnel host. A
@@ -828,10 +847,8 @@ unset ok issuer _probe_host
 printf '\n'
 say "This is the exact string to register in Google (copy it verbatim):"
 printf '\n  %s%s%s\n\n' "$BOLD" "$REDIRECT_URI" "$RESET"
-note "Through the proxy, /p/ is stripped before pi sees it, so this lands on"
+note "Through the proxy, /api/ goes straight to health-api, which serves"
 note "/api/connectors/callback — the one route that needs no bearer."
-note "Do NOT register the bare https://$TS_DNS/api/... form: on this proxy that"
-note "path goes to health-api, not to pi-gateway."
 pause "Press Enter once you've copied it."
 
 # ── Stage 5: GCP project + APIs ───────────────────────────────────────────

@@ -27,6 +27,7 @@ package main
 import (
 	"context"
 	"errors"
+	"html"
 	"log"
 	"net/http"
 	"strings"
@@ -34,6 +35,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"agento/internal/approvals"
 	"agento/internal/connectors"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -56,10 +58,13 @@ const connectorDeadAttempt = "that connect attempt expired or was already used; 
 
 // connectorStore opens the shared connectors collection (the same rows the
 // gmail/calendar MCP servers read grants from). Cached process-wide like
-// the other stores; failures are not cached, so a bad env recovers without
-// a restart. Without MongoDB it falls back to memory that cannot meet a
+// the other stores — including the memory fallback, so statuses and
+// pending states survive between requests and the log stays quiet.
+// Without MongoDB it falls back to memory that cannot meet a
 // restart — same contract as the gateway: the list still answers, but
-// connect answers 501 (nothing durable to store a grant in).
+// connect answers 501 (nothing durable to store a grant in). A Mongo
+// recovery still needs a restart to re-cache; failures are loud in the
+// log either way.
 var (
 	connectorStoreMu syncpkg.Mutex
 	connectorCache   connectors.Store
@@ -71,13 +76,26 @@ func connectorStore() connectors.Store {
 	if connectorCache != nil {
 		return connectorCache
 	}
-	store, err := connectors.FromEnv()
-	if err != nil {
+	var backend connectors.Store
+	if ms, err := connectors.FromEnv(); err != nil {
 		log.Printf("connectors: falling back to in-process (statuses do not survive restart): %v", err)
-		return connectors.NewMemoryStore()
+		backend = connectors.NewMemoryStore()
+	} else {
+		backend = ms
 	}
-	connectorCache = store
-	return store
+	connectorCache = backend
+	return backend
+}
+
+// connectorBounded caps one echoed string for API bodies, mirroring the
+// gateway's bounded(): rune-cut with a visible marker, never silent.
+func connectorBounded(s string) string {
+	const maxConnectorEcho = 128
+	runes := []rune(s)
+	if len(runes) <= maxConnectorEcho {
+		return s
+	}
+	return string(runes[:maxConnectorEcho]) + "… (truncated)"
 }
 
 // connectorOAuth resolves the Google OAuth config when it can serve one:
@@ -123,6 +141,11 @@ func connectorWire(c connectors.Connector) bson.M {
 		"scopes":       scopes,
 		"status":       string(c.Status),
 	}
+	// Last error, scrubbed + bounded like the gateway: the store column
+	// can carry provider text, and the app renders this verbatim.
+	if c.LastError != "" {
+		out["last_error"] = connectorBounded(approvals.ScrubError(c.LastError))
+	}
 	// The stored stamp is first-connected-at, retained across
 	// disconnect/expire: emitting it on an off-state row would read as
 	// "connected since X". A zero stamp on a connected row (corrupt)
@@ -161,6 +184,10 @@ func writeConnectorErr(w http.ResponseWriter, err error) {
 // listConnectors serves GET /api/connectors: the two v1 rows, disconnected
 // synthesised on fresh deploys.
 func listConnectors(w http.ResponseWriter, r *http.Request) {
+	// no-store first: the app polls this loop, and a heuristic cache
+	// would serve a stale disconnected after the callback flipped to
+	// connected.
+	w.Header().Set("Cache-Control", "no-store")
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
 		return
@@ -188,6 +215,9 @@ func listConnectors(w http.ResponseWriter, r *http.Request) {
 // POST /api/connectors/{id}/disconnect. Auth first; unknown ids and verbs
 // 404 without touching OAuth config (disconnect never reads it).
 func connectorItem(w http.ResponseWriter, r *http.Request) {
+	// no-store like every other verb on this surface: the success body
+	// completes a grant, so nothing here may sit in a heuristic cache.
+	w.Header().Set("Cache-Control", "no-store")
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
 		return
@@ -203,6 +233,7 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "disconnect":
 		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
 			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
 			return
 		}
@@ -217,12 +248,33 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, bson.M{"ok": true, "connector": connectorWire(c)})
 	case "connect":
 		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
 			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
 			return
 		}
 		connectorConnect(w, r, id)
+	case "":
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed,
+			bson.M{"detail": "no verb on /api/connectors/{id}; use /disconnect or /connect"})
 	default:
 		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+	}
+}
+
+// cleanupConnectorOrphanState best-effort consumes a just-minted state on
+// a detached budget (the verb ctx may be dead at exactly this point).
+// Only real IO failures log: NotFound means no row was ever minted, which
+// is the desired end state — not a failure. A failed build must mint
+// nothing observable.
+func cleanupConnectorOrphanState(id, state string) {
+	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cleanCancel()
+	if _, cerr := connectorStore().ConsumeState(cleanCtx, state); cerr != nil {
+		var se *connectors.StoreError
+		if errors.As(cerr, &se) && se.Upstream {
+			log.Printf("connectors: orphan state cleanup for %q failed: %q", id, connectorBounded(approvals.ScrubError(cerr.Error())))
+		}
 	}
 }
 
@@ -252,8 +304,11 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	// Persist first, build the URL second: a down store fails fast with no
 	// dead attempt minted. The pinned redirect travels with the row so a
-	// config rotation mid-consent cannot strand it with a mismatch.
-	if err := store.CreateState(r.Context(), connectors.OAuthState{
+	// config rotation mid-consent cannot strand it with a mismatch. The
+	// verb budget covers the whole attempt the app waits on.
+	ctx, cancel := context.WithTimeout(r.Context(), connectorVerbBudget)
+	defer cancel()
+	if err := store.CreateState(ctx, connectors.OAuthState{
 		State:       state,
 		Connector:   id,
 		Verifier:    verifier,
@@ -264,6 +319,9 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	authURL := connectors.AuthURL(oauth, id, state, verifier, log.Printf)
 	if authURL == "" {
+		// A failed build mints nothing observable: consume the just-minted
+		// row best-effort so no live attempt lingers that no client holds.
+		cleanupConnectorOrphanState(id, state)
 		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "connect is not configured correctly on this server"})
 		return
 	}
@@ -271,15 +329,18 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 // connectorCallbackPage answers a browser tab with the close-this-tab
-// page. Callers pass display-safe text (static guidance or a fixed domain
-// string); titles and bodies are fixed literals, never caller input.
+// page. Both envelopes escape inside the helper: callers pass raw text
+// (static guidance or a scrubbed domain message) and the helper escapes
+// it, so a future branch interpolating a connector id or provider string
+// lands escaped in a browser-parsed page. Safe by construction, not by
+// discipline; static strings escape to themselves.
 func connectorCallbackPage(w http.ResponseWriter, code int, title, body string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`<!doctype html><html><head><title>` + title +
-		`</title></head><body><p>` + body + `</p></body></html>`))
+	_, _ = w.Write([]byte(`<!doctype html><html><head><title>` + html.EscapeString(title) +
+		`</title></head><body><p>` + html.EscapeString(body) + `</p></body></html>`))
 }
 
 // connectorCallbackJSON answers API clients (the app polls
@@ -287,6 +348,41 @@ func connectorCallbackPage(w http.ResponseWriter, code int, title, body string) 
 func connectorCallbackJSON(w http.ResponseWriter, code int, detail string) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, code, bson.M{"detail": detail})
+}
+
+// connectorCallbackError answers a callback failure in both
+// representations: JSON for API clients, the close-this-tab page for the
+// Google-redirected browser tab. Same status, same message — only the
+// envelope differs, so no branch can drift into a guidance gap.
+func connectorCallbackError(w http.ResponseWriter, r *http.Request, code int, detail string) {
+	w.Header().Set("Cache-Control", "no-store")
+	if connectorWantsHTML(r) {
+		connectorCallbackPage(w, code, "Agento connect",
+			detail+" Close this tab and return to the Agento app.")
+		return
+	}
+	connectorCallbackJSON(w, code, detail)
+}
+
+// connectorMissingScopes reports requested scopes absent from a
+// space-delimited granted set (the ?scope= Google appends). Set compare:
+// order and repeats do not matter, only coverage. Empty granted means
+// Google sent none — treated as "nothing to compare", not a total miss.
+func connectorMissingScopes(want []string, granted string) []string {
+	if len(want) == 0 {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, s := range strings.Fields(granted) {
+		have[s] = true
+	}
+	var missing []string
+	for _, s := range want {
+		if !have[s] {
+			missing = append(missing, s)
+		}
+	}
+	return missing
 }
 
 // connectorCallbackDead answers a dead OAuth attempt (unknown, consumed,
@@ -335,7 +431,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		connectorCallbackJSON(w, http.StatusMethodNotAllowed, "/api/connectors/callback accepts GET")
+		connectorCallbackError(w, r, http.StatusMethodNotAllowed, "/api/connectors/callback accepts GET")
 		return
 	}
 	// Bound the raw query before anything else, including the unconfigured
@@ -348,23 +444,15 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	store := connectorStore()
 	oauth := connectorOAuth(store)
 	if oauth == nil {
-		// Same status, same message, two envelopes: a browser tab that
-		// just consented gets the close-this-tab page, API clients get
-		// JSON — like every other branch on this path.
-		msg := "callback is not configured on this server yet — never paste a token in chat"
-		if connectorWantsHTML(r) {
-			connectorCallbackPage(w, http.StatusNotImplemented, "Agento connect",
-				msg+" Close this tab and return to the Agento app.")
-			return
-		}
-		connectorCallbackJSON(w, http.StatusNotImplemented, msg)
+		connectorCallbackError(w, r, http.StatusNotImplemented,
+			"callback is not configured on this server yet — never paste a token in chat")
 		return
 	}
 	query := r.URL.Query()
 	code := connectors.TrimCredential(query.Get("code"))
 	state := connectors.TrimCredential(query.Get("state"))
 	if code == "" || state == "" {
-		connectorCallbackJSON(w, http.StatusBadRequest,
+		connectorCallbackError(w, r, http.StatusBadRequest,
 			"callback needs ?code= and ?state=; start over from connect")
 		return
 	}
@@ -411,6 +499,28 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		pinned := *oauth
 		pinned.RedirectURL = redirect
 		exCfg = &pinned
+	}
+	// Granted-scope subset warns, not fails: granular consent can return
+	// fewer scopes than requested, and the grant still stores. A later
+	// draft 403 traces back to this line. Unusable values (oversized,
+	// control-bearing, undecodable) skip the compare, never the grant —
+	// lengths only in the log, never values.
+	var scopes []string
+	for _, v := range query["scope"] {
+		if t := connectors.TrimCredential(v); t != "" {
+			scopes = append(scopes, t)
+		}
+	}
+	if granted := strings.Join(scopes, " "); granted != "" &&
+		len(granted) <= connectors.MaxStateFieldLen &&
+		!connectors.HasControl(granted) && utf8.ValidString(granted) {
+		if missing := connectorMissingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
+			log.Printf("connectors: grant for %q missing requested scopes %q (subset granted, drafts may 403)",
+				id, connectorBounded(strings.Join(missing, " ")))
+		}
+	} else if len(granted) > 0 {
+		log.Printf("connectors: grant for %q scope param unusable (%d bytes trimmed), subset check skipped",
+			id, len(granted))
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, log.Printf)
 	if err != nil {

@@ -57,6 +57,15 @@ services:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
       PASSWORD: ${PASSWORD:-}
+      # Google connectors OAuth (#488): the connector routes live here now
+      # (list/connect/disconnect/callback), so all four travel with this
+      # service — any piece missing leaves ConnectorOAuth nil and connect
+      # answers 501. Same four the pi service carries; each service reads
+      # its own copy from the root .env.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-}
+      CONNECTORS_ENCRYPTION_KEY: ${CONNECTORS_ENCRYPTION_KEY:-}
       # Same GC target as pi (ADR-0011): this service is a long-lived Go process
       # whose heap is almost entirely request-scoped, so halving the growth target
       # is expected to cut its resident set at a CPU cost this box is nowhere near
