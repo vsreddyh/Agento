@@ -131,8 +131,11 @@ func recoverCrash(next http.Handler) http.Handler {
 						secrets = append(secrets, v)
 					}
 				}
+				// Both halves redacted: the stack goes through Redact, and
+				// so must the panic value — a config echo or exchange error
+				// in `rec` would otherwise bypass the list just built.
 				fmt.Fprintf(os.Stdout, "crash route=%s panic=%v\nstack:\n%s\n",
-					route, rec, crashlog.Redact(string(debug.Stack()), secrets...))
+					route, crashlog.Redact(fmt.Sprintf("%v", rec), secrets...), crashlog.Redact(string(debug.Stack()), secrets...))
 				// `detail` like every other error in this binary (the app
 				// reads `detail`, never `error`, on this service).
 				writeJSON(w, http.StatusInternalServerError,
