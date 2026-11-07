@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,7 +189,7 @@ func TestConnectorStoreSingleFlight(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			out[i] = connectorStore()
+			out[i] = connectorStore(context.Background())
 		}(i)
 	}
 	wg.Wait()

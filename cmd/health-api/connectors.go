@@ -50,10 +50,18 @@ import (
 // state consume plus a live Google exchange.
 const connectorVerbBudget = 5 * time.Second
 
-// connectorCallbackBudget bounds one full OAuth callback: state consume +
-// Google exchange + sealed writes + status flip, all sequential against
-// live Google.
-const connectorCallbackBudget = 30 * time.Second
+// Per-step budgets for the callback pipeline (consume + exchange + writes,
+// all sequential against live Google). Each step derives fresh from
+// r.Context(), deliberately NOT from one shared parent: a slow Google
+// exchange must not starve the store writes into false "store did not
+// answer" 502s, and a step's DeadlineExceeded is then attributable to
+// THAT step — a store-write timeout genuinely means the store is slow
+// (worth a demotion note), never that Google ate a shared budget first.
+const (
+	connectorConsumeBudget    = 10 * time.Second
+	connectorExchangeBudget   = 20 * time.Second
+	connectorGrantStoreBudget = 10 * time.Second
+)
 
 // connectorDeadAttempt is the single answer for every dead OAuth attempt —
 // unknown, consumed, expired, or oversized state. One string so no branch
@@ -113,7 +121,7 @@ func connectorPing(ms *connectors.MongoStore) bool {
 	return ms.DB().Client().Ping(ctx, readpref.Primary()) == nil
 }
 
-func connectorStore() connectors.Store {
+func connectorStore(ctx context.Context) connectors.Store {
 	// Fast path under lock: cache hit (durable with no recent upstream
 	// failures, or non-durable still inside its retry budget) returns
 	// without any dial.
@@ -125,15 +133,29 @@ func connectorStore() connectors.Store {
 	if connectorDialing {
 		// A dial is already in flight (cold-start burst or blip
 		// recovery): wait for it instead of opening a second one
-		// (single-flight). Bounded by the dial below — the waiter never
-		// blocks longer than the dialler does, and the result is cached
-		// for everyone.
+		// (single-flight). Cancellable: a hung-up caller stops waiting
+		// instead of holding its goroutine for the full dial, then
+		// serving a response nobody reads.
 		ch := connectorDialCh
 		connectorStoreMu.Unlock()
-		<-ch
-		connectorStoreMu.Lock()
-		defer connectorStoreMu.Unlock()
-		return connectorCache
+		select {
+		case <-ch:
+			connectorStoreMu.Lock()
+			defer connectorStoreMu.Unlock()
+			return connectorCache
+		case <-ctx.Done():
+			connectorStoreMu.Lock()
+			stale := connectorCache
+			connectorStoreMu.Unlock()
+			if stale != nil {
+				return stale
+			}
+			// Cold start with nobody cached yet: a transient memory
+			// store, deliberately UNCACHED so the in-flight dial's swap
+			// still lands for everyone else. This response is discarded
+			// anyway (the client is gone).
+			return connectors.NewMemoryStore()
+		}
 	}
 	// Slow path: first boot, a non-durable cache past its retry budget,
 	// or a durable cache with enough consecutive upstream failures to
@@ -170,6 +192,13 @@ func connectorStore() connectors.Store {
 		} else {
 			log.Print("connectors: MongoDB unreachable (dial ok, ping failed) — falling back to in-process")
 			connectorLastErr = "unreachable (ping failed)"
+			// The failed client holds pool goroutines and a monitor:
+			// disconnect it or every probe leaks one for the outage.
+			func() {
+				dctx, dcancel := context.WithTimeout(context.Background(), connectorPingBudget)
+				defer dcancel()
+				_ = ms.DB().Client().Disconnect(dctx)
+			}()
 		}
 		backend, connectorCacheAt = connectors.NewMemoryStore(), time.Now()
 	} else {
@@ -297,7 +326,7 @@ func connectorOAuth(store connectors.Store) *connectors.OAuthConfig {
 // still serve a different snapshot than the boot lines, and the live
 // connectorOAuthDown reason on a 501 stays authoritative over both).
 func initConnectors() {
-	store := connectorStore()
+	store := connectorStore(context.Background())
 	if ms, ok := store.(*connectors.MongoStore); ok {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -422,7 +451,7 @@ func listConnectors(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
 		return
 	}
-	store := connectorStore()
+	store := connectorStore(r.Context())
 	ctx, cancel := context.WithTimeout(r.Context(), connectorVerbBudget)
 	defer cancel()
 	list, err := store.List(ctx)
@@ -516,7 +545,7 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
 			return
 		}
-		store := connectorStore()
+		store := connectorStore(r.Context())
 		ctx, cancel := context.WithTimeout(r.Context(), connectorVerbBudget)
 		defer cancel()
 		c, err := store.Disconnect(ctx, id)
@@ -567,7 +596,7 @@ func cleanupConnectorOrphanState(store connectors.Store, id, state string) {
 // a browser. The app never sees the verifier, the code, or any token.
 func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	w.Header().Set("Cache-Control", "no-store")
-	store := connectorStore()
+	store := connectorStore(r.Context())
 	oauth := connectorOAuth(store)
 	if oauth == nil {
 		log.Printf("connectors: connect for %q attempted while OAuth is unconfigured (%s)", id, connectorOAuthDown(store))
@@ -788,7 +817,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		connectorCallbackDead(w, r)
 		return
 	}
-	store := connectorStore()
+	store := connectorStore(r.Context())
 	oauth := connectorOAuth(store)
 	if oauth == nil {
 		log.Printf("connectors: callback attempted while OAuth is unconfigured (%s)", connectorOAuthDown(store))
@@ -796,16 +825,16 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 			"callback is not configured on this server yet — never paste a token in chat")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), connectorCallbackBudget)
-	defer cancel()
-	st, err := store.ConsumeState(ctx, state)
+	consumeCtx, consumeCancel := context.WithTimeout(r.Context(), connectorConsumeBudget)
+	defer consumeCancel()
+	st, err := store.ConsumeState(consumeCtx, state)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if consumeCtx.Err() == context.DeadlineExceeded {
 			noteConnectorUpstream()
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
-		if connectorCallbackAborted(ctx, "callback consume") {
+		if connectorCallbackAborted(consumeCtx, "callback consume") {
 			return
 		}
 		var se *connectors.StoreError
@@ -907,13 +936,15 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("connectors: grant for %q scope param unusable (%d bytes trimmed), subset check skipped",
 			id, len(granted))
 	}
-	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, log.Printf)
+	exchangeCtx, exchangeCancel := context.WithTimeout(r.Context(), connectorExchangeBudget)
+	defer exchangeCancel()
+	tok, err := connectors.Exchange(exchangeCtx, exCfg, id, code, st.Verifier, log.Printf)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if exchangeCtx.Err() == context.DeadlineExceeded {
 			connectorCallbackError(w, r, http.StatusBadGateway, "the grant exchange did not answer in time")
 			return
 		}
-		if connectorCallbackAborted(ctx, "callback exchange") {
+		if connectorCallbackAborted(exchangeCtx, "callback exchange") {
 			return
 		}
 		var se *connectors.StoreError
@@ -956,17 +987,22 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	if accessToken != "" && !tok.Expiry.IsZero() {
 		expiry = connectors.ClampAccessExpiry(tok.Expiry.UnixMilli(), time.Now())
 	}
-	if err := store.SetTokens(ctx, id, connectors.TokenRow{
+	// Fresh store budget, not the exchange's leftovers: Google slowness
+	// must not starve these writes into false store timeouts (and false
+	// demotion notes against a healthy Mongo).
+	storeCtx, storeCancel := context.WithTimeout(r.Context(), connectorGrantStoreBudget)
+	defer storeCancel()
+	if err := store.SetTokens(storeCtx, id, connectors.TokenRow{
 		RefreshCipher:         refreshSealed,
 		AccessCipher:          accessSealed,
 		AccessExpiryUnixMilli: expiry,
 	}); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if storeCtx.Err() == context.DeadlineExceeded {
 			noteConnectorUpstream()
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
-		if connectorCallbackAborted(ctx, "callback tokens") {
+		if connectorCallbackAborted(storeCtx, "callback tokens") {
 			return
 		}
 		noteConnectorUpstream()
@@ -975,14 +1011,14 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 		return
 	}
-	c, err := store.SetStatus(ctx, id, connectors.StatusConnected, "")
+	c, err := store.SetStatus(storeCtx, id, connectors.StatusConnected, "")
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if storeCtx.Err() == context.DeadlineExceeded {
 			noteConnectorUpstream()
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
-		if connectorCallbackAborted(ctx, "callback status") {
+		if connectorCallbackAborted(storeCtx, "callback status") {
 			return
 		}
 		noteConnectorUpstream()
