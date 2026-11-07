@@ -24,7 +24,7 @@ Batch with `Promise.allSettled()`.
   `summarize`, `fix_last_transaction`, `delete_transactions`, `prune_old`.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),
-  `update_recipe` (only on approval), `scale_recipe` (pure arithmetic),
+  `update_recipe`, `scale_recipe` (pure arithmetic),
   `list_ingredients`, `list_recipes`, `get_recipe`, `list_cooks`,
   `delete_ingredient`, `delete_recipe`.
 - **health-check** (9): `log_meal` takes user-supplied macros only —

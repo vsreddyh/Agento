@@ -102,7 +102,7 @@ func TestAskMirrorsGated(t *testing.T) {
 		for _, tool := range approvals.ToolsFor(server) {
 			// Draft-refused sends can never run however permitted, so
 			// they need no `ask` entry (and must not have one — see
-			// TestAskHasNoRefusedSends).
+			// TestAskHasNoOrphansOrRefusals).
 			if connectors.IsDraftOnlySend(server, tool) {
 				continue
 			}

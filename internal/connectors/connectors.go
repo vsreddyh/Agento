@@ -232,8 +232,8 @@ func TrimCredential(s string) string {
 }
 
 // IsDraftOnlySend reports whether (server, tool) is a send path that v1
-// refuses outright. Draft tools run (free or gated); send tools
-// never reach the server — the gate answers Pi with RefusalMessage.
+// refuses outright. Draft tools run (free or sensitive); send tools
+// never reach the server — the gate answers the harness with RefusalMessage.
 //
 // Case-insensitive on both parts: the server id is the code literal each
 // binary registers with, and an exact-case match would let a "Gmail"

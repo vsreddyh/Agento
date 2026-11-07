@@ -10,7 +10,7 @@ import (
 
 // The AddTool server literal must be this binary's id and known to the
 // policy table: a typo fails closed silently (every tool on this server
-// holds), so pin it here rather than relying on the startup warning
+// is denied at once), so pin it here rather than relying on the startup warning
 // alone. Same pin as the gmail/calendar policy tests.
 func TestGateServerLiteralPinned(t *testing.T) {
 	raw, err := os.ReadFile("main.go")

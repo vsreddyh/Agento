@@ -291,8 +291,10 @@ Sensitive tool calls prompt for an explicit human decision before they
 execute. Confirmation lives in T3/opencode (permission prompts per
 `opencode.json`, mirrored from the sensitivity table in
 `internal/approvals`), not in an in-process wait: every `tools/call`
-through the wrapper (`internal/approvalgate`) runs at once and writes one
-audit row with tool, redacted args, disposition, result and decider. Money
+through the wrapper (`internal/approvalgate`) runs at once and attempts one
+audit row with tool, redacted args, disposition, result and decider
+(best-effort: a failed audit write logs and continues, so treat a missing
+row as an outage gap, not as proof nothing ran). Money
 writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`) and
 prunes that actually delete (`prune_old`, counting prunes included —
 patterns cannot see arguments) prompt first; reads and routine writes run
@@ -321,7 +323,8 @@ Threat note — what this does and does not fix:
 
 - Fixed: unattended money writes, deletes, prunes and rewrites now need a
   human (T3 permission prompt); every executed call is attributable for
-  90 days; deny leaves state unchanged (the harness gets a tool error,
+  90 days short of an audit-write outage (see above); deny leaves state
+  unchanged (the harness gets a tool error,
   the turn continues).
 - NOT fixed: Pi built-in tools (`bash` file writes, `read`/`write`/`edit`
   via codemode) never traverse MCP, so they are observed but not gated — a

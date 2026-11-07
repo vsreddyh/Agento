@@ -178,9 +178,10 @@ func main() {
 			return fail(errors.New(connectors.RefusalMessage))
 		})
 
-	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
-	// between CreateApproval and decision leaves a pending row no live
-	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	// Sweep pre-migration orphaned holds (ADR-0011 Stage 2): before #487 a crash
+	// between CreateApproval and decision left a pending row no live holder
+	// polled. Nothing new parks, so this only expires rows predating the
+	// migration. Scoped by server, like the old relay sweep; best-effort.
 	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if _, serr := gate.MarkServerInterrupted(sweepCtx, "gmail", time.Now()); serr != nil {
 		log.Printf("gmail: startup sweep failed: %v", serr)

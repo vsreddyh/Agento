@@ -117,9 +117,10 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "reports": rows})
 		})
 
-	// Sweep this server's orphaned holds: a crash between CreateApproval and
-	// decision leaves a pending row no live holder polls. Scoped by server,
-	// like the other servers; best-effort.
+	// Sweep pre-migration orphaned holds: before #487 a crash between
+	// CreateApproval and decision left a pending row no live holder
+	// polled. Nothing new parks, so this only expires rows predating the
+	// migration. Scoped by server, like the other servers; best-effort.
 	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if _, serr := gate.MarkServerInterrupted(sweepCtx, "reports", time.Now()); serr != nil {
 		log.Printf("reports: startup sweep failed: %v", serr)
