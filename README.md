@@ -13,16 +13,17 @@ Fully containerized agent stack running one chat profile against OpenCode Go (`h
   chat ───  ONE pi host    │  agent dir   ▼   OpenCode Go Direct
           1 pi process    │   /opt/pi     │  (https://opencode.ai/zen/go/v1)
                           └─ API :8643 ─┤
-Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► pi :8643 ──► MongoDB
+Agento (Android) ──► proxy (:8080 compose default) ──┬──► /p/* ──► pi :8643 ──► MongoDB
                                      └──► /api/* ─► health-api ─► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
+(Ports are compose defaults: `APP_PORT` / `HEALTH_HOST_PORT` / `PI_HOST_PORT` remap the host side.)
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `pi` | `pi` container (`pi-gateway`, PID 1) | `8643` (app API) | The agent host: one `pi` process for the single chat profile behind an OpenAI-compatible gateway |
-| `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
-| `proxy` | `proxy` container (nginx) | `8080` | Single app URL: routes `/p/*` → pi chat, `/api/*` → health sync |
+| `pi` | `pi` container (`pi-gateway`, PID 1) | `8643` (app API; `PI_HOST_PORT` remaps) | The agent host: one `pi` process for the single chat profile behind an OpenAI-compatible gateway |
+| `health-api` | `health-api` container | `8001` (`HEALTH_HOST_PORT` remaps) | Ingests Health Connect sync data from Android and persists to MongoDB |
+| `proxy` | `proxy` container (nginx) | `8080` (`APP_PORT` remaps) | Single app URL: routes `/p/*` → pi chat, `/api/*` → health sync (except `/api/model/options` → pi, the provider picker) |
 | `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, its own `docker/retention/Dockerfile` image) |
 
 ---
@@ -62,6 +63,7 @@ and unmanaged.)
 - **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
 
 ### Network & Firewall Ports
+(Ports are compose defaults: `APP_PORT` / `HEALTH_HOST_PORT` / `PI_HOST_PORT` remap the host side.)
 - Port `8080/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:8080`, Password = `PASSWORD`, provider/model picked from live dropdowns in Settings, path `/p/chat`. Direct ports stay published for comparison: `8643` (pi, what `/p/*` reaches) and `8001` (sync).
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as the proxy).
 - Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas, and GitHub.
@@ -99,11 +101,11 @@ podman-compose -f docker/docker-compose.yml logs -f pi
 | Command | Action |
 |---|---|
 | `./scripts/hermes.sh init` | Self-installs host deps (curl, podman + compose, python3, cron), builds images, creates directories, reports the skills it finds, sets up cron. Container harness only — never installs the opencode CLI. |
-| `./scripts/hermes.sh start` | Starts all services (`podman-compose up -d --build`) and runs retention once. |
+| `./scripts/hermes.sh start` | Starts all services (`podman-compose up -d --build --force-recreate`, plain `up -d` with `PI_NO_BUILD=1`) and runs retention once. |
 | `./scripts/hermes.sh stop` | Shuts down the stack (`podman-compose down`). |
-| `./scripts/hermes.sh restart` | Performs a clean stop and start sequence. |
+| `./scripts/hermes.sh restart` | Rebuilds changed layers and recreates containers in place (`up -d --build --force-recreate`) — not a stop-then-start. |
 | `./scripts/hermes.sh status` | Displays container health and published ports (`podman-compose ps`). |
-| `./scripts/hermes.sh clean` | **Destructive.** Wipes containers, volumes, `run/`, rendered configs, per-profile `.env` files, and retention cron. Remote MongoDB is untouched. |
+| `./scripts/hermes.sh clean` | **Destructive.** Wipes containers, volumes, `run/`, rendered configs, and retention cron. Remote MongoDB is untouched (and there are no per-profile `.env` files — the single root `.env` is never touched either). |
 
 ---
 
