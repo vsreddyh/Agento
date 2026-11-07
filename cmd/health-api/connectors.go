@@ -688,11 +688,19 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		pinned := *oauth
 		pinned.RedirectURL = redirect
 		exCfg = &pinned
+		// Compare canonical-vs-canonical: the stored row is already
+		// canonical, so diffing against the raw env string would log
+		// rotation on spelling-only differences (case, :443, dot) whose
+		// sent bytes are identical.
+		live := oauth.RedirectURL
+		if canonical, cerr := connectors.CanonicalRedirectURL(oauth.RedirectURL); cerr == nil {
+			live = canonical
+		}
 		// Log the divergence when pinned != live: an operator rotation
 		// gets confirmation which string was sent, and a hand-inserted
 		// row carrying a foreign redirect is visible here instead of
 		// silently sent. Redacted (non-secret) like every logged URL.
-		if st.RedirectURI != oauth.RedirectURL {
+		if st.RedirectURI != live {
 			log.Printf("connectors: callback for %q uses pinned redirect %q (live config differs; rotation or hand-inserted row)",
 				id, connectors.RedactURL(st.RedirectURI))
 		}
@@ -803,6 +811,19 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bson.M{"ok": true, "connector": connectorWire(c)})
 }
 
+// connectorCallbackPath reports whether p reaches the OAuth callback
+// after the same trim/fold the dispatcher applies (case-insensitive last
+// segment, slash-collapsed). One predicate for both the dispatcher and
+// the rate limiter, so a spelling serving in one is enveloped in the
+// other.
+func connectorCallbackPath(p string) bool {
+	if !strings.HasPrefix(p, "/api/connectors/") {
+		return false
+	}
+	rest := strings.Trim(strings.TrimPrefix(p, "/api/connectors/"), "/")
+	return strings.EqualFold(rest, "callback")
+}
+
 // registerConnectors wires this domain's routes. One function per file so
 // main stays a list of domains, not a list of paths.
 func registerConnectors(mux *http.ServeMux) {
@@ -823,7 +844,7 @@ func connectorsSlash(w http.ResponseWriter, r *http.Request) {
 		listConnectors(w, r)
 		return
 	}
-	if strings.EqualFold(rest, "callback") {
+	if connectorCallbackPath(r.URL.Path) {
 		connectorCallback(w, r)
 		return
 	}

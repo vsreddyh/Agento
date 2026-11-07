@@ -282,8 +282,10 @@ func rateLimit(l *limiter, h http.Handler) http.Handler {
 			// Dual envelope on the OAuth callback: a Google-redirected
 			// browser tab landing mid-throttle gets the close-this-tab
 			// page like every other callback branch, not raw JSON.
+			// Same trim/fold predicate as the dispatcher, so every
+			// spelling that serves is enveloped.
 			// Everywhere else keeps the service `detail` envelope.
-			if (r.URL.Path == "/api/connectors/callback" || r.URL.Path == "/api/connectors/callback/") && connectorWantsHTML(r) {
+			if connectorCallbackPath(r.URL.Path) && connectorWantsHTML(r) {
 				connectorCallbackPage(w, http.StatusTooManyRequests, "Agento connect",
 					"Too many requests — slow down and return to the Agento app.")
 				return

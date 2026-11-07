@@ -213,4 +213,27 @@ func TestConnectorsRouteRegistration(t *testing.T) {
 	if allow := w.Header().Get("Allow"); allow != http.MethodGet {
 		t.Fatalf("callback Allow: got %q", allow)
 	}
+	// Case-folded and slash-collapsed spellings serve the same callback
+	// (and the same envelopes): the dispatcher and the limiter share one
+	// predicate, so neither can drift from the other. (Collapsed goes
+	// through the predicate directly: ServeMux itself redirects unclean
+	// paths before any handler runs.)
+	for _, target := range []string{"/api/connectors/CALLBACK", "/api/connectors/Callback/"} {
+		req = httptest.NewRequest(http.MethodPost, target, nil)
+		req.Header.Set("Accept", "text/html")
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusMethodNotAllowed || !strings.Contains(w.Body.String(), "<html>") {
+			t.Fatalf("%s: got %d (%s), want callback 405 page", target, w.Code, w.Body.String())
+		}
+	}
+	for _, target := range []string{
+		"/api/connectors//callback", "/api/connectors/callback//",
+		"/api/connectors", "/api/connectors/gmail/connect",
+	} {
+		want := strings.Contains(target, "callback")
+		if got := connectorCallbackPath(target); got != want {
+			t.Fatalf("connectorCallbackPath(%q) = %v, want %v", target, got, want)
+		}
+	}
 }
