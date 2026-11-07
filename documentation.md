@@ -213,8 +213,8 @@ curl http://<host>:8080/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
 Direct (bypassing the proxy):
 
 ```bash
-curl http://<host>:8643/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
-curl http://<host>:8643/p/chat/v1/chat/completions \
+curl http://<host>:8643/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
+curl http://<host>:8643/chat/v1/chat/completions \
   -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
   -d '{"provider": "opencode-go", "model": "mimo-v2.6-flash", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
