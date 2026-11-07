@@ -27,6 +27,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"html"
 	"log"
 	"net/http"
@@ -98,6 +99,21 @@ func connectorBounded(s string) string {
 	return string(runes[:maxConnectorEcho]) + "… (truncated)"
 }
 
+// connectorOAuthDown explains why OAuth is unavailable: the triage
+// pointer the live 501s reference, mirroring logConnectorOAuth's boot
+// branches. Values scrubbed — a store error could echo connection text.
+func connectorOAuthDown(store connectors.Store) string {
+	if !store.Durable() {
+		if _, err := connectors.FromEnv(); err != nil {
+			return fmt.Sprintf("no database (%s)", connectorBounded(approvals.ScrubError(err.Error())))
+		}
+		return "no durable store"
+	}
+	if _, err := connectors.OAuthConfigFromEnv(); err != nil {
+		return fmt.Sprintf("missing values (%s)", connectorBounded(approvals.ScrubError(err.Error())))
+	}
+	return "redirect invalid"
+}
 // connectorOAuth resolves the Google OAuth config when it can serve one:
 // all four values present AND a durable store behind them. Anything less
 // is unconfigured and connect/callback answer 501 — a half-open flow
@@ -382,7 +398,7 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	store := connectorStore()
 	oauth := connectorOAuth(store)
 	if oauth == nil {
-		log.Print("connectors: connect attempted while OAuth is unconfigured (missing values or no durable store)")
+		log.Printf("connectors: connect for %q attempted while OAuth is unconfigured (%s)", id, connectorOAuthDown(store))
 		writeJSON(w, http.StatusNotImplemented,
 			bson.M{"detail": "connect is not configured on this server yet — never paste a token in chat"})
 		return
@@ -561,6 +577,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	store := connectorStore()
 	oauth := connectorOAuth(store)
 	if oauth == nil {
+		log.Printf("connectors: callback attempted while OAuth is unconfigured (%s)", connectorOAuthDown(store))
 		connectorCallbackError(w, r, http.StatusNotImplemented,
 			"callback is not configured on this server yet — never paste a token in chat")
 		return

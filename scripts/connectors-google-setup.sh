@@ -865,8 +865,8 @@ unset _canon_uri
 # fragment, userinfo, percent-encodings, and path case are refused
 # outright by the server (501), so they must fail here with a pointer —
 # never sail into .env and die as redirect_uri_mismatch.
-_canonical_path="/${REDIRECT_URI#*://}"
-_canonical_path="/${_canonical_path#*/}"
+_canonical_rest="${REDIRECT_URI#*://}"
+_canonical_path="/${_canonical_rest#*/}"
 if [[ "$REDIRECT_URI" == *\?* || "$REDIRECT_URI" == *\#* || "$REDIRECT_URI" == *@* || "$REDIRECT_URI" == *%* ]]; then
   warn "REDIRECT_URI carries a query, fragment, userinfo, or percent-encoding — the server refuses all four (501)."
   warn "  value: $REDIRECT_URI"
