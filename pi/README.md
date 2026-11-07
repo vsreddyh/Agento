@@ -45,7 +45,7 @@ this PR added `mcp.json`, so the pi service must carry:
   them (`memory` and `browser` fall back to in-process stores whose calls run
   with an ephemeral audit trail that dies with the process — never blocked;
   the entrypoint gate still refuses boot because the
-  other six die)
+  other seven die)
 - `OPENCODE_API_KEY` — already enforced by the entrypoint
 
 `docker/docker-compose.yml` defines one anchor, `&mongo-env`, holding only the
