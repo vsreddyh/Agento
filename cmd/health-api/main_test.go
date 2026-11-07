@@ -38,6 +38,17 @@ func TestAuthorize(t *testing.T) {
 	if code, _ := authorize(req); code != http.StatusUnauthorized {
 		t.Fatalf("same-length wrong token: got %d", code)
 	}
+	// Scheme folds like the gateway: a lowercase bearer authorizes.
+	req.Header.Set("Authorization", "bearer test-secret-12345678")
+	if code, _ := authorize(req); code != 0 {
+		t.Fatalf("lowercase bearer: got %d", code)
+	}
+	// 401s carry the challenge for generic clients.
+	w := httptest.NewRecorder()
+	writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "x"})
+	if got := w.Header().Get("WWW-Authenticate"); got != `Bearer realm="agento"` {
+		t.Fatalf("challenge: got %q", got)
+	}
 }
 
 func TestAuthorizeMultiToken(t *testing.T) {

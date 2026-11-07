@@ -34,6 +34,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	// sniffed content-type on an error page is still a MIME-confusion
 	// vector for browser-parsed responses.
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Challenge on every 401: generic clients key off it, and authorize
+	// below is the only 401 producer in this binary.
+	if status == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
+	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
@@ -55,11 +60,22 @@ func authorize(r *http.Request) (int, string) {
 		log.Print("PASSWORD not set — rejecting all requests")
 		return http.StatusServiceUnavailable, "server not configured with tokens"
 	}
+	// Deliberate divergences from the gateway's authenticate, both
+	// health-api-wins and both predating the connector move: an empty
+	// PASSWORD fails closed here (503) instead of opening up, and
+	// comma-separated rotation tokens all work here instead of one.
+	// Both retire with the gateway in #494 — until then the two surfaces
+	// answer differently on empty/multi-token setups, and this side is
+	// the safe one.
 	h := r.Header.Get("Authorization")
-	if h == "" || !strings.HasPrefix(h, "Bearer ") {
+	const bearerPrefix = "Bearer "
+	// Scheme case-insensitive per RFC 7235 (and like the gateway): a
+	// lowercase `bearer` authorizes the same token instead of 401ing a
+	// working credential on hand-tests and generic clients.
+	if len(h) <= len(bearerPrefix) || !strings.EqualFold(h[:len(bearerPrefix)], bearerPrefix) {
 		return http.StatusUnauthorized, "missing bearer token"
 	}
-	got := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	got := strings.TrimSpace(h[len(bearerPrefix):])
 	// Constant-time bearer comparison (#416): map lookup short-circuits
 	// on the first differing byte (timing oracle), so compare against
 	// every accepted token with subtle.ConstantTimeCompare and accumulate
