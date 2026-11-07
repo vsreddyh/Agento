@@ -37,13 +37,16 @@
 // Three boundaries on that claim, stated so they stick: browser is
 // Chromium-backed, not Mongo-backed, so its navigation CAN execute while
 // unaudited during an outage (it goes away with #495; until then a missing
-// database means ephemeral audit, never blocked navigation); gmail and
-// calendar drafts write to Google APIs, so a created draft is an external
-// side effect that can land unaudited the same way; and connector sends
-// are refused outright, so no external send can slip through — only reads
-// and drafts run. A destructive write that executes while unaudited needs
-// the domain to succeed while the audit write alone fails — same-DB,
-// transient-only.
+// database means ephemeral audit, never blocked navigation); gmail drafts
+// write to the Gmail API, so a created draft is an external side effect
+// that can land unaudited the same way (calendar drafts are validated
+// locally and sent nowhere — unaudited there means a local row only);
+// and connector sends are refused outright, so no external send can slip
+// through — only reads and drafts run. A destructive Mongo-backed write
+// that executes while unaudited needs the domain to succeed while the
+// audit write alone fails — same-DB, transient-only. The browser and
+// gmail-draft cases are NOT same-DB transient: different stores, so plan
+// for them, don't dismiss them.
 //
 // Cancellation: the handler still receives the caller's ctx, but the
 // wrapper does not pre-check it — an already-cancelled call runs rather

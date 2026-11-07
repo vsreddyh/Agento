@@ -320,15 +320,16 @@ design; the T3 re-ownership is recorded in the migration issues).
 Threat note — what this does and does not fix:
 
 - Fixed: unattended money writes, deletes, prunes and rewrites now need a
-  human; every gated call is attributable for 90 days; deny leaves state
-  unchanged (Pi gets a tool error, the turn continues).
+  human (T3 permission prompt); every executed call is attributable for
+  90 days; deny leaves state unchanged (the harness gets a tool error,
+  the turn continues).
 - NOT fixed: Pi built-in tools (`bash` file writes, `read`/`write`/`edit`
   via codemode) never traverse MCP, so they are observed but not gated — a
   model told to `rm -rf` via bash is unimpeded. The agent still runs as root
   in the container, and the single bearer token still authenticates every
   route. Full sandboxing and per-connector OAuth vaults are out of scope
   (connectors own the vault).
-- Residual: a held call occupies its turn until expiry; an approval shows
+- Residual: a refused call occupies only its own turn; an audit row shows
   tool + args + time but not which conversation asked.
 
 ### First connectors — Gmail, Calendar (#316, OAuth grants + MCP servers)

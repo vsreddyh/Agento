@@ -5,12 +5,12 @@
       "/tmp/*": "allow"
     },
     "*delete*": "ask",
-    "*archive_account": "ask",
-    "*create_account": "ask",
+    "*archive_account*": "ask",
+    "*create_account*": "ask",
     "*fix_last*": "ask",
-    "*prune_old": "ask",
-    "*log_transaction": "ask",
-    "*log_text": "ask",
-    "*browser_goto": "ask"
+    "*prune_old*": "ask",
+    "*log_transaction*": "ask",
+    "*log_text*": "ask",
+    "*browser_goto*": "ask"
   }
 }

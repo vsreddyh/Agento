@@ -246,10 +246,11 @@ var gatedTools = map[string]map[string]bool{
 		"create_report": false, "get_report": false, "list_reports": false,
 	},
 	"memory": {
-		// A memory write is the point of the tool, and it starts pending: the
-		// second confirmation (use it or not) is the one that matters.
-		// Prompting on the write would make the agent ask twice for one
-		// fact. Reads never prompt anywhere.
+		// A memory write starts pending in the memory store (the user
+		// confirms it on the Memory screen before it steers an answer),
+		// which is the confirmation that matters. Prompting on the write
+		// as well would make the agent ask twice for one fact. Reads never
+		// prompt anywhere.
 		"save_memory": false, "list_memory": false,
 	},
 	"browser": {
@@ -272,9 +273,11 @@ var gatedTools = map[string]map[string]bool{
 	// must never run free.
 	// Follow-up sync obligation (both sides): the draft allowlist here
 	// (create_draft/create_event_draft:false) depends on exact tool
-	// names exactly like the refusal list does. A renamed draft tool
-	// misses the free rule and needs an `ask` pattern instead — without
-	// one it would run default-allow, which is exactly what
+	// names exactly like the refusal list does. A renamed draft tool is
+	// unknown to both lists, so the gate denies it outright — safe, but
+	// the draft flow breaks loudly instead of degrading. The subtler
+	// drift is a *known* sensitive tool missing its `ask` pattern: the
+	// gate runs it under default-allow, which is exactly what
 	// opencode_perm_test.go fails on. Sync both lists with the wired
 	// servers' real names when they land.
 	"gmail": {

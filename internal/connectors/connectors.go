@@ -257,19 +257,19 @@ func IsDraftOnlySend(server, tool string) bool {
 	if len(server) > MaxConnectorIDLen {
 		// Unknown by construction: Known length-checks first, so an
 		// oversized server can never be a known id — fall through to the
-		// gated backstop like any other unknown name. No Known() call
-		// here: it could never return true, and calling it would imply
-		// the branch is live for some input.
+		// policy backstop like any other unknown name (at-once denial).
+		// No Known() call here: it could never return true, and calling
+		// it would imply the branch is live for some input.
 		return false
 	}
 	if len(tool) > maxToolNameLen {
 		// Oversized tools fall through like oversized servers: a garbage
-		// tool name can never be a real send path, and the gated backstop
-		// (approval hold) is the honest answer — not a refusal text naming
+		// tool name can never be a real send path, and the policy backstop
+		// (at-once denial) is the honest answer — not a refusal text naming
 		// a draft workflow for a tool that cannot exist. Unknown by
 		// construction, like servers: length fails before identity, so no
 		// Known() call here either. A future legit upstream tool longer
-		// than this cap flips from gated to gated (not gated to refused),
+		// than this cap flips from sensitive to sensitive (not sensitive to refused),
 		// so widening the cap stays a UX change, never a security one.
 		return false
 	}
@@ -283,7 +283,7 @@ func IsDraftOnlySend(server, tool string) bool {
 	// against renames. NormalizedID already trimmed the edges, so any
 	// separator folded here is interior by construction. Covered set:
 	// "-", ".", " ", "/", ":", "+", "\\" — any other separator falls to
-	// the gated backstop by design. Runs collapse: "send--message" folds
+	// the policy backstop by design. Runs collapse: "send--message" folds
 	// to the same single-underscore form instead of a "send__message"
 	// that matches nothing — punctuation repetition never changes identity.
 	for _, sep := range []string{"-", ".", " ", "/", ":", "+", "\\"} {
