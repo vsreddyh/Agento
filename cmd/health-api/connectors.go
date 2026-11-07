@@ -5,8 +5,10 @@ package main
 //
 // The app used to reach these verbs on pi-gateway (:8643); they live here
 // now so connect/list/disconnect keep working with the pi container
-// stopped. Same contract, same Mongo rows (internal/connectors owns the
-// store and the OAuth helpers — this file is only the HTTP envelope):
+// stopped. Same status codes and success shapes, same Mongo rows
+// (internal/connectors owns the store and the OAuth helpers — this file
+// is only the HTTP envelope); error envelopes follow this service
+// (`detail`, not the gateway's OpenAI-style error object).
 //
 //	GET  /api/connectors                 list the two v1 rows
 //	POST /api/connectors/{id}/connect    mint state+verifier, return the

@@ -87,7 +87,8 @@ services:
   # ──────────────────────────────────────────────────────
   # Proxy — single URL for the Agento app (chat + sync on one port).
   # Routes /p/* → pi :8643 and /api/* + /health → health-api :8000
-  # (see docker/proxy/nginx.conf). App Server URL: http://<host>:${APP_PORT:-8080}.
+  # (except /api/model/options → pi, the provider picker;
+  # see docker/proxy/nginx.conf). App Server URL: http://<host>:${APP_PORT:-8080}.
   # Direct ports stay published for comparison: :8643 (pi) and :8001 (health-api)
   # — compose defaults; PI_HOST_PORT / HEALTH_HOST_PORT remap the host side.
   # The Hermes gateway's :8642 went with the service, and nothing but its own
