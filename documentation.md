@@ -290,9 +290,9 @@ All settings are configured in the single root `.env` file:
 Sensitive tool calls prompt for an explicit human decision before they
 execute. Confirmation lives in T3/opencode (permission prompts per
 `opencode.json`, mirrored from the sensitivity table in
-`internal/approvals`), not in an in-process wait: every known, non-refused
-`tools/call` through the wrapper (`internal/approvalgate`) runs at once and
-attempts one
+`internal/approvals`), not in an in-process wait: every known, non-refused,
+non-cancelled `tools/call` through the wrapper (`internal/approvalgate`) runs
+at once and attempts one
 audit row with tool, redacted args, disposition and result — no decider:
 harness prompt decisions are not recorded (the join stops at pre-migration
 `Approval.DecidedBy`); best-effort, so treat a missing
@@ -304,7 +304,8 @@ navigation (`browser_goto`, per-task with the URL shown) prompt first;
 reads and routine writes run
 free. Connector send paths are refused outright (draft instead); unknown
 servers/tools deny fail-closed (unknown *tools* are rejected by the SDK
-before the wrapper ever sees them). Disposition `allowed` means executed
+before the wrapper ever sees them); a dead calling context refuses before
+anything executes (stop means stop). Disposition `allowed` means executed
 (free, or under a harness grant — not "ran without asking");
 `approved`/`expired` rows are pre-migration only. Arg keys are redacted by
 substring and error text is pattern-scrubbed (300-rune cap), so treat
@@ -315,9 +316,10 @@ rows now — a "stuck" post-migration write is a T3 prompt, never a queued
 row. State is in Mongo (`approvals`, 15-minute TTL;
 `audit_log`, 90-day TTL) and survives restarts; without Mongo every server
 except memory and browser exits (log.Fatalf) — those two run with an
-ephemeral in-memory audit trail that dies with the process, and the app
-treats unaudited operation as degraded
-instead of showing an undecidable list. The app surface (since 5.7.0) is the
+ephemeral in-memory audit trail that dies with the process. The approvals
+list marks that store degraded instead of showing an undecidable list (the
+audit path carries no marker — treat an empty trail during ephemeral
+operation as missing, not complete). The app surface (since 5.7.0) is the
 **Approvals** sheet: the recent audit trail below stays live, but pending
 cards with redacted args + approve/deny are pre-migration only — post-migration
 nothing new parks, so a "stuck" write is a T3 prompt, never a card to tap. Full design: `docs/adr/0002-approval-gates.md` (pre-migration

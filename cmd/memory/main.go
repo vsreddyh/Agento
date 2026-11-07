@@ -9,10 +9,12 @@
 // actually said. A memory the model invented is worse than no memory, because
 // it is invisible and wrong.
 //
-// Every item written here starts pending. The gateway only injects confirmed
-// items, so a proposal is visible in the app for the user to confirm, edit or
-// delete before it can steer an answer. The agent cannot confirm its own
-// proposals, and it cannot delete items: deletion is the user's verb.
+// Every item written here starts pending when a database is configured.
+// The gateway only injects confirmed items, so a proposal is visible in
+// the app for the user to confirm, edit or delete before it can steer an
+// answer (ephemeral saves never reach the screen — see the note below).
+// The agent cannot confirm its own proposals, and it cannot delete items:
+// deletion is the user's verb.
 package main
 
 import (
@@ -183,7 +185,7 @@ func main() {
 
 	approvalgate.AddTool(s, "memory", gate, &mcp.Tool{Name: "save_memory",
 		Description: "Remember ONE durable thing the user explicitly told you: a preference, a format rule, a correction, a fact about their life or work. Write it in their terms (" +
-			"\"wants weekly reports as a table\", not \"likes tables\"). The item is saved as PENDING and shown in the app; the user confirms it before it affects answers. " +
+			"\"wants weekly reports as a table\", not \"likes tables\"). With a database configured the item is saved as PENDING and shown in the app; the user confirms it before it affects answers (ephemeral saves never reach the screen). " +
 			"Call this when they correct you or state a lasting preference, not for passing context or anything they have not said. Do not save secrets, credentials or one-off details."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in saveMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			item, truncated, errMsg := prepareSave(profile, in)

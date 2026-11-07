@@ -46,8 +46,9 @@ Batch with `Promise.allSettled()`.
   LaTeX, stored verbatim, compiled server-side on read. No update/delete
   tools: those verbs belong to the app, not the filing path.
 - **memory** (2): `save_memory`, `list_memory`. Saves are per-profile facts
-  that start **pending**: the user confirms them on the app's Memory screen
-  before they are injected into a turn, so say what you saved rather than
+  that start **pending** when a database is configured: the user confirms them
+  on the app's Memory screen before they are injected into a turn (ephemeral
+  saves never reach the screen), so say what you saved rather than
   assuming it is remembered. You cannot confirm, edit or delete memory — those
   are the user's verbs; point them at the screen instead of claiming a change.
 - **browser** (4): `browser_goto`, `browser_read`, `browser_screenshot`,
