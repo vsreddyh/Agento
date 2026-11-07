@@ -10,10 +10,11 @@
 // T3/opencode (permission rules in opencode.json), not in an in-process
 // wait for an app tap — there is no app attached to decide one, so a hold
 // would stall the turn for the full wait and then fail. What remains is
-// immediate execution with an audit row, plus two fail-closed refusals:
-// draft-only sends (connector write paths refused outright with the
-// drafts-instead message) and unknown (server, tool) pairs (a tool no
-// policy table reviewed never executes blind).
+// immediate execution with an audit row, plus three fail-closed refusals:
+// a dead calling context (stop means stop), draft-only sends (connector
+// write paths refused outright with the drafts-instead message) and unknown
+// (server, tool) pairs (a tool no policy table reviewed never executes
+// blind).
 //
 // Deliberately NOT consulted anymore: approvals.NeedsApproval, including
 // its arg-sensitive exemptions (a counting prune with dry_run=true prompts

@@ -287,8 +287,8 @@ All settings are configured in the single root `.env` file:
 
 ### Approval gates + audit log (#313)
 
-Sensitive tool calls prompt for an explicit human decision before they
-execute. Confirmation lives in T3/opencode (permission prompts per
+Sensitive tool calls on attended turns prompt for an explicit human decision
+before they execute. Confirmation lives in T3/opencode (permission prompts per
 `opencode.json`, mirrored from the sensitivity table in
 `internal/approvals`), not in an in-process wait: every known, non-refused,
 non-cancelled `tools/call` through the wrapper (`internal/approvalgate`) runs
@@ -329,8 +329,8 @@ Threat note — what this does and does not fix:
 
 - Fixed: attended money writes, deletes, prunes and rewrites now need a
   human via the T3 permission prompt (unattended scheduler fires have no
-  prompter — prompt text is their only enforcement, see the scheduler
-  note in the merge danger); every executed call is attributable for
+  prompter — prompt text is their only enforcement, see
+  `internal/gateway/scheduler.go` and `internal/cronjobs/scheduler.go`); every executed call is attributable for
   90 days short of an audit-write outage (see above); deny leaves state
   unchanged (the harness gets a tool error,
   the turn continues).

@@ -224,7 +224,8 @@ belongs to #312.
 - Fixed: attended money writes, deletes, prunes and rewrites now need an
   explicit human decision (pre-#487: in-app tap; post-#487: T3 permission
   prompt — attended turns only; unattended scheduler fires have no
-  prompter, see the scheduler note in the merge danger); every executed
+  prompter, see `internal/gateway/scheduler.go` and
+  `internal/cronjobs/scheduler.go` for their prompt-only enforcement); every executed
   call is attributable in the audit
   log for 90 days short of an audit-write outage; deny leaves state
   unchanged (the turn's harness gets a tool error and
