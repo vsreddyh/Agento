@@ -309,6 +309,41 @@ _uri_host() {
   printf '%s' "$u"
 }
 
+# _valid_fqdn mirrors the server's validRedirectHost for https: dotted
+# FQDN, lowercase alnum/hyphen labels, no leading/trailing hyphen, TLD of
+# 2+ letters (custom domains, nip.io — not just tailnet). The input must
+# already be lowercased (canonical form); this checks shape, not case.
+_valid_fqdn() {
+  local host="$1" label tld
+  local -a labels
+  [[ -n "$host" ]] || return 1
+  (( ${#host} <= 253 )) || return 1
+  [[ "$host" == "localhost" ]] && return 0
+  [[ "$host" == *.* ]] || return 1
+  IFS=. read -ra labels <<< "$host" || return 1
+  for label in "${labels[@]}"; do
+    (( ${#label} >= 1 && ${#label} <= 63 )) || return 1
+    [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
+  tld="${labels[${#labels[@]}-1]}"
+  if [[ "$tld" == xn--* ]]; then
+    # Punycode carve-out like the server: the suffix is encoded Unicode,
+    # validated by the label rules above — except a bare `xn--` prefix.
+    [[ "$tld" == "xn--" ]] && return 1
+  else
+    [[ "$tld" =~ ^[a-z][a-z]+$ ]] || return 1
+  fi
+  # Reserved + private-use TLDs can never hold a public registration
+  # (RFC-2606, mDNS, unqualified-LAN, special-use — server parity list).
+  case "$tld" in
+    test|example|invalid|local|internal|lan|home|corp|localdomain|intranet|onion|arpa) return 1;;
+  esac
+  # `*.localhost` / `localhost.*`: unregistrable both directions (only
+  # bare `localhost` passes, handled by the caller).
+  case "$host" in *.localhost|localhost.*) return 1;; esac
+  return 0
+}
+
 # canonical_redirect_uri prints the canonical form of a redirect URI the
 # way the server sends it: lowercased host, no trailing dot, no default
 # port (numeric compare, so :080/:0443 strip like :80/:443), non-default
@@ -897,6 +932,20 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
       _valid_fqdn "$_rec_host_bare" 2>/dev/null && _rec_host="$_rec_host_bare"
       unset _rec_host_bare
     fi
+  elif [[ "$_rec_fold" == http://*/api/connectors/callback ]]; then
+    # Documented loopback testing shape: like the preset gate, http passes
+    # for loopback hosts only — anything else falls to the typo branch.
+    _rec_host_bare="${_recorded_uri#*://}"
+    _rec_host_bare="${_rec_host_bare%%/*}"
+    if [[ "$_rec_host_bare" == \[*\]* ]]; then
+      _rec_host_bare="${_rec_host_bare#[}"
+      _rec_host_bare="${_rec_host_bare%%\]*}"
+    else
+      _rec_host_bare="${_rec_host_bare%%:*}"
+    fi
+    _rec_host_bare="$(printf '%s' "$_rec_host_bare" | tr '[:upper:]' '[:lower:]')"
+    case "$_rec_host_bare" in localhost|127.0.0.1|::1) _rec_host="$_rec_host_bare";; esac
+    unset _rec_host_bare
   fi
   if [[ -n "${_converted:-}" ]]; then
     : # converted above; nothing left to keep or question.
@@ -973,40 +1022,7 @@ if [[ -n "$_final_port_from_uri" ]]; then
   fi
 fi
 unset _final_port_from_uri
-# _valid_fqdn mirrors the server's validRedirectHost for https: dotted
-# FQDN, lowercase alnum/hyphen labels, no leading/trailing hyphen, TLD of
-# 2+ letters (custom domains, nip.io — not just tailnet). The input must
-# already be lowercased (canonical form); this checks shape, not case.
-_valid_fqdn() {
-  local host="$1" label tld
-  local -a labels
-  [[ -n "$host" ]] || return 1
-  (( ${#host} <= 253 )) || return 1
-  [[ "$host" == "localhost" ]] && return 0
-  [[ "$host" == *.* ]] || return 1
-  IFS=. read -ra labels <<< "$host" || return 1
-  for label in "${labels[@]}"; do
-    (( ${#label} >= 1 && ${#label} <= 63 )) || return 1
-    [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
-  done
-  tld="${labels[${#labels[@]}-1]}"
-  if [[ "$tld" == xn--* ]]; then
-    # Punycode carve-out like the server: the suffix is encoded Unicode,
-    # validated by the label rules above — except a bare `xn--` prefix.
-    [[ "$tld" == "xn--" ]] && return 1
-  else
-    [[ "$tld" =~ ^[a-z][a-z]+$ ]] || return 1
-  fi
-  # Reserved + private-use TLDs can never hold a public registration
-  # (RFC-2606, mDNS, unqualified-LAN, special-use — server parity list).
-  case "$tld" in
-    test|example|invalid|local|internal|lan|home|corp|localdomain|intranet|onion|arpa) return 1;;
-  esac
-  # `*.localhost` / `localhost.*`: unregistrable both directions (only
-  # bare `localhost` passes, handled by the caller).
-  case "$host" in *.localhost|localhost.*) return 1;; esac
-  return 0
-}
+
 # Host/scheme gate the final value: the server fails closed on http
 # non-loopback, non-loopback IPs, and non-FQDN hosts — a value passing the
 # shape checks above can still be unregistrable (LAN IP, single label,

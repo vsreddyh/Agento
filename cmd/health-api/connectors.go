@@ -490,6 +490,8 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 		Verifier:    verifier,
 		RedirectURI: pinnedRedirect,
 	}); err != nil {
+		log.Printf("connectors: connect state store failed for %q: %s", id,
+			connectorBounded(approvals.ScrubError(err.Error())))
 		writeConnectorErr(w, err)
 		return
 	}
@@ -685,6 +687,8 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.Upstream {
+			log.Printf("connectors: callback consume failed: %s",
+				connectorBounded(approvals.ScrubError(err.Error())))
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
@@ -812,6 +816,8 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		if connectorCallbackAborted(ctx, "callback tokens") {
 			return
 		}
+		log.Printf("connectors: callback token store failed for %q: %s", id,
+			connectorBounded(approvals.ScrubError(err.Error())))
 		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 		return
 	}
@@ -824,6 +830,8 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		if connectorCallbackAborted(ctx, "callback status") {
 			return
 		}
+		log.Printf("connectors: callback status store failed for %q: %s", id,
+			connectorBounded(approvals.ScrubError(err.Error())))
 		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 		return
 	}
