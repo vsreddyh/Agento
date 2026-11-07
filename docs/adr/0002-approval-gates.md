@@ -106,9 +106,11 @@ collections from their own processes. That sharing has one hard edge worth
 stating plainly: a *decision* needs a store both processes see. Without Mongo
 every server except memory and browser exits (log.Fatalf) and the entrypoint
 `pi mcp list` gate refuses boot — memory and browser fall back to unshared
-in-process stores whose gated calls deny immediately (`gate_unavailable`,
-error-level log naming the server, denied audit row) instead of burning the
-full hold. Same verdict as expiry, minutes earlier. The cross-restart record
+in-process stores. Pre-#487 their gated calls denied immediately
+(`gate_unavailable`, error-level log naming the server, denied audit row)
+instead of burning the full hold — same verdict as expiry, minutes earlier.
+Post-#487 calls run with an ephemeral audit trail that dies with the
+process. The cross-restart record
 is the convenience; the cross-process record is the requirement. A server
 restart expires its own pending rows (`MarkServerInterrupted`, scoped by
 server) and the gateway's global `MarkInterrupted` deletes expired ones.
@@ -182,14 +184,16 @@ server would expire the other's live hold — an approve that forwards
 nowhere. Supporting that would need a per-process instance token on each
 row and a liveness check, not a broader server-scoped sweep.
 
-A `gate_`-prefixed error marks a decision the gate made itself, not one a
+A `gate_`-prefixed error marked a decision the gate made itself, not one a
 tool or a human made: `gate_unavailable` (unshared store) and `gate_store`
-(store unavailable). The relay-era `relay_protocol` / `relay_notification` /
+(store unavailable) — both pre-#487 strings with no producer anymore. The relay-era `relay_protocol` / `relay_notification` /
 `relay_store` / `relay_closing` / `relay_evicted` errors — and the synthetic
 `(malformed)` tool for unparseable frames — no longer exist: without the
 relay there is no framing to fault, no notification path (the SDK never
-routes notifications to handlers), and no pending table to evict from. A
-`denied` **without** a prefix means a human said no.
+routes notifications to handlers), and no pending table to evict from. Pre-#487
+a `denied` **without** a prefix meant a human said no; post-#487 `denied`
+is overwhelmingly gate refusals (draft-only, unknown tool, cancelled
+context), and a human tap survives only in pre-migration rows.
 
 Error scrubbing is pattern-based, not exhaustive: `args` are redacted by key,
 while `error` is free text and is only masked where it matches a
@@ -210,8 +214,10 @@ belongs to #312.
 ### Threat note (what this does and does not fix)
 
 - Fixed: unattended money writes, deletes, prunes and rewrites now need an
-  explicit human decision; every gated call is attributable in the audit
-  log for 90 days; deny leaves state unchanged (Pi gets a tool error and
+  explicit human decision (pre-#487: in-app tap; post-#487: T3 permission
+  prompt); every executed call is attributable in the audit
+  log for 90 days short of an audit-write outage; deny leaves state
+  unchanged (the turn's harness gets a tool error and
   the turn continues).
 - NOT fixed: Pi built-in tools (`bash` file writes, `read`/`write`/`edit`
   via codemode) never traverse MCP, so they are observed (tool frames) but
@@ -219,8 +225,9 @@ belongs to #312.
   still runs as root in the container, and the single bearer token still
   authenticates every route. Full sandboxing and per-connector OAuth vaults
   are out of scope (connectors issue owns the vault).
-- Residual: a 14-minute held call occupies its turn until expiry; approvals
-  show tool + args + time but not which conversation asked.
+- Residual: pre-#487 a 14-minute held call occupied its turn until expiry;
+  post-#487 nothing parks, so a stuck sensitive write is a harness prompt,
+  never a hold. Approvals show tool + args + time but not which conversation asked.
 
 ## Consequences
 
