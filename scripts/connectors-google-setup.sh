@@ -1665,6 +1665,7 @@ unset v
 # not the funnel host that does not serve it.
 _comment_host="${REDIRECT_URI#*://}"
 _comment_host="${_comment_host%%/*}"
+_comment_hostport="$_comment_host"
 if [[ "$_comment_host" == \[*\]* ]]; then
   # Bracket/port aware (unlike _uri_host, which is tailnet-only): a custom
   # host must survive here, not fall back to TS_DNS silently.
@@ -1672,6 +1673,17 @@ if [[ "$_comment_host" == \[*\]* ]]; then
   _comment_host="${_comment_host%%\]*}"
 else
   _comment_host="${_comment_host%%:*}"
+fi
+# Port-aware like the funnel-vs-registration split check: the funnel serves
+# 443 only, so a knowingly-kept funnel-host URL with an explicit non-443
+# port must not be labeled funnel-served — the bare host strip above hides
+# the port the funnel never delivers to.
+_comment_port=""
+if [[ "$_comment_hostport" == \[*\]* ]]; then
+  _comment_after="${_comment_hostport#*]}"
+  [[ "$_comment_after" == :* ]] && _comment_port="${_comment_after#:}"
+else
+  case "$_comment_hostport" in *:*) _comment_port="${_comment_hostport##*:}";; esac
 fi
 _comment_host="${_comment_host:-$TS_DNS}"
 # ASCII sentinel in one variable: non-ASCII dashes would silently fork the
@@ -1691,14 +1703,21 @@ else
     exit 1
   fi
 fi
-# The serving line matches the setup: funnel host → funnel sentence,
-# anything else → registered-host sentence (a stale funnel sentence on a
-# custom host is exactly the misdirection being removed).
-if [[ "$_comment_host" == "$TS_DNS" ]]; then
+# The serving line matches the setup: funnel host with no explicit port
+# (443 is the funnel's only port; canonicalisation strips an explicit
+# :443) → funnel sentence; a funnel host with any other explicit port, or
+# any other host → registered-host sentence naming the full hostport (a
+# stale funnel sentence on a custom host is exactly the misdirection being
+# removed, and a port-stripped funnel sentence on :8443 hides the port the
+# funnel never delivers to).
+if [[ "$_comment_host" == "$TS_DNS" && ( -z "$_comment_port" || "$_comment_port" == "443" ) ]]; then
   _cb_line="# Callback is served over Tailscale Funnel: https://$_comment_host"
+elif [[ "$_comment_host" == "$TS_DNS" ]]; then
+  _cb_line="# Callback host: $_comment_hostport (registered here — the funnel serves 443 only, NOT :$_comment_port)"
 else
-  _cb_line="# Callback host: $_comment_host (registered here — served separately, NOT by the funnel above)"
+  _cb_line="# Callback host: $_comment_hostport (registered here — served separately, NOT by the funnel above)"
 fi
+unset _comment_port _comment_hostport _comment_after
 if (( _marker_present == 0 )); then
   {
     printf '\n'

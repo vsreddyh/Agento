@@ -490,8 +490,12 @@ envelope key is kept, since rotating it invalidates every stored grant.
 Register the bare spelling it prints: on a funnel run that is
 `https://<tailnet-host>/api/connectors/callback` (served via public TLS
 on `:443`); for direct loopback testing it is
-`http://localhost:<mapped-port>/api/connectors/callback` instead
-(`:8001` is the plain-HTTP direct-host mapping, never a funnel spelling).
+`http://localhost:<mapped-port>/api/connectors/callback` instead — two
+distinct registrations: `http://localhost:<HEALTH_HOST_PORT>` (compose
+default `:8001`) reaches health-api direct, `http://localhost:<APP_PORT>`
+(compose default `:8080`) reaches it through the proxy. Register the one
+the browser actually reaches (`:8001` is the plain-HTTP direct-host
+mapping, never a funnel spelling).
 
 Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 

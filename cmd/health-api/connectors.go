@@ -637,16 +637,14 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 			bson.M{"detail": "connect is not configured on this server yet — never paste a token in chat"})
 		return
 	}
-	pinnedRedirect, err := connectors.CanonicalRedirectURL(oauth.RedirectURL)
-	if err != nil {
-		// Echo the attempted redirect (non-secret) with the connector id:
-		// triage compares it against the console registration without
-		// re-reading .env. Scrubbed + bounded like every logged value.
-		log.Printf("connectors: connect redirect invalid for %q (want %q): %q", id,
-			connectors.RedactURL(oauth.RedirectURL), connectorBounded(approvals.ScrubError(err.Error())))
-		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "connect is not configured correctly on this server"})
-		return
-	}
+	// Pinned from the live config verbatim: connectorOAuth only returns
+	// configs built by OAuthConfigFromEnv, which already canonicalised
+	// this value — re-canonicalising canonical output cannot fail, so the
+	// old validate-and-502 branch here was dead code. A typo'd raw URL
+	// never reaches this line: it fails inside OAuthConfigFromEnv, so
+	// oauth is nil and the 501 above fires with connectorOAuthDown's
+	// per-tap "redirect invalid" reason (same runbook, one signal).
+	pinnedRedirect := oauth.RedirectURL
 	state, verifier, err := connectors.NewState()
 	if err != nil {
 		log.Printf("connectors: could not mint connect state for %q", id)
