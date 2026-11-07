@@ -1380,7 +1380,7 @@ finish
 
 # finish clears the screen, wiping the render ✓ lines just earned; restate
 # the proof beside the comparison step that now leans on it.
-note "render proof (cleared with the stage above): all four keys interpolated non-empty for health-api and pi"
+note "render proof (cleared with the stage above): all four keys interpolated non-empty for health-api (any pi lines above are warn-only, not proof)"
 
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"
@@ -1391,12 +1391,13 @@ printf '     ./scripts/hermes.sh restart recreates them (a plain container\n'
 printf '     restart without recreation will not pick up .env changes).\n'
 printf '  2. Compare the canonical string health-api logs at boot:\n'
 printf -v _compose_file '%q' "$REPO_DIR/docker/docker-compose.yml"
-printf '       %s -f %s logs health-api | grep "OAuth"\n' "${_compose[*]}" "$_compose_file"
+printf '       %s -f %s logs health-api | grep -E "OAuth (configured|unavailable|redirect invalid)"\n' "${_compose[*]}" "$_compose_file"
 unset _compose_file
 printf '     (if the render step above used sudo, prefix sudo here too)\n'
-printf '     Init runs detached, so poll until the status line lands\n'
-printf '     (e.g. repeat the grep a few seconds apart) — an immediate\n'
-printf '     empty grep means "not printed yet", not "misconfigured".\n'
+printf '     The narrowed pattern skips the "boot check started" starter\n'
+printf '     line on purpose: init runs detached, so poll until a status\n'
+printf '     line lands (repeat the grep a few seconds apart) — an empty\n'
+printf '     result means "not printed yet", not "misconfigured".\n'
 printf '     Expect the configured line; an unavailable line names the\n'
 printf '     reason (fix that first) — with what is registered in Google.\n'
 printf '     They must match byte-for-byte;\n'

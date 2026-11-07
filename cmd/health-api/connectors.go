@@ -207,8 +207,8 @@ func initConnectors() {
 	}
 	canonical, err := connectors.CanonicalRedirectURL(cfg.RedirectURL)
 	if err != nil {
-		log.Printf("connectors: OAuth redirect invalid (want %q): %v",
-			connectors.RedactURL(cfg.RedirectURL), err)
+		log.Printf("connectors: OAuth redirect invalid (want %q): %q",
+			connectors.RedactURL(cfg.RedirectURL), connectorBounded(approvals.ScrubError(err.Error())))
 		return
 	}
 	// Storable values log whole: compare this line byte-for-byte against

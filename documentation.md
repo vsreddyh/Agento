@@ -443,7 +443,9 @@ is an interactive wizard that walks the two things only a human can do —
 joining a tailnet and creating the Google client — and derives the rest.
 It publishes the callback over Tailscale Funnel (public TLS on 443 →
 `http://127.0.0.1:8080`, the same nginx proxy), because Google accepts only
-`https://` or a loopback `http://` and a bare-IP host can register neither.
+`https://` or a loopback `http://` and a non-loopback bare-IP host can
+register neither (loopback IPs like `127.0.0.1`/`::1` do register, over
+plain `http`).
 Note the funnel publishes the whole proxy (chat + sync stay PASSWORD-gated);
 the callback is the only new unauthenticated surface, so do not share the
 `*.ts.net` URL.
