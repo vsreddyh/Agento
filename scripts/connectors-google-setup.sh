@@ -878,7 +878,39 @@ elif [[ "$_canonical_path" != "/api/connectors/callback" ]]; then
   warn "Re-run with the exact path, or keep knowingly:"
   if ! confirm "Keep it anyway (registration will mismatch)?"; then exit 1; fi
 fi
-unset _canonical_path
+unset _canonical_path _canonical_rest
+# Host/scheme gate the final value: the server fails closed on http
+# non-loopback, non-loopback IPs, and non-FQDN hosts — a value passing the
+# shape checks above can still be unregistrable (LAN IP, single label,
+# underscore, *.localhost). https passes for tailnet FQDNs (and loopback);
+# http passes for loopback only.
+_final_hostport="${REDIRECT_URI#*://}"
+_final_hostport="${_final_hostport%%/*}"
+_final_scheme="${REDIRECT_URI%%://*}"
+_final_host="$_final_hostport"
+if [[ "$_final_host" == \[* ]]; then
+  _final_host="${_final_host#[}"
+  _final_host="${_final_host%%\]*}"
+else
+  _final_host="${_final_host%%:*}"
+fi
+_final_ok=0
+if [[ "$_final_scheme" == "https" ]]; then
+  if _valid_tsdns "$_final_host" 2>/dev/null; then
+    _final_ok=1
+  else
+    case "$_final_host" in localhost|127.0.0.1|::1) _final_ok=1;; esac
+  fi
+elif [[ "$_final_scheme" == "http" ]]; then
+  case "$_final_host" in localhost|127.0.0.1|::1) _final_ok=1;; esac
+fi
+if (( ! _final_ok )); then
+  warn "REDIRECT_URI host/scheme is not registrable (https needs a tailnet FQDN, http needs loopback):"
+  warn "  value: $REDIRECT_URI"
+  warn "The server fails these closed — Google would never call back."
+  if ! confirm "Keep it anyway?"; then exit 1; fi
+fi
+unset _final_hostport _final_scheme _final_host _final_ok
 # Probe target follows the registered URI exactly — scheme and explicit
 # port included — so a green probe proves the registered host:port
 # answers, not just :443.
@@ -951,6 +983,9 @@ if (( ok )); then
     _tls_name="${_tls_host#[}"; _tls_name="${_tls_name%]}"
     _tls_rest="${_tls_host#*]}"; _tls_rest="${_tls_rest#:}"
     [[ -n "$_tls_rest" ]] && _tls_port="$_tls_rest"
+    # Keep brackets on the connect target (bare ::1:port is ambiguous),
+    # bare name on SNI — mirroring the IPv4 branch below.
+    _tls_host="[$_tls_name]"
   elif [[ "$_tls_host" == *:* ]]; then
     _tls_port="${_tls_host##*:}"
     _tls_name="${_tls_host%%:*}"

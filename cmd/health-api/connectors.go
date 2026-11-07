@@ -129,37 +129,28 @@ func connectorOAuth(store connectors.Store) *connectors.OAuthConfig {
 	return cfg
 }
 
-// ensureConnectorIndexes creates the states TTL (pending OAuth attempts
-// reap themselves) best-effort at startup. Without it abandoned states
-// linger until superseded — harmless, but the index is what reaps them.
-func ensureConnectorIndexes() {
-	store, err := connectors.FromEnv()
-	if err != nil {
+// initConnectors opens the store ONCE at boot and shares the snapshot
+// between index setup, the OAuth boot log, and serving: three separate
+// FromEnv calls during an Atlas blip could disagree with each other (and
+// with the store that actually serves the first request), leaving a
+// `configured` boot line next to live 501s or vice versa. The cached
+// store serves every verb; the live connectorOAuthDown reason on a 501
+// stays authoritative over this point-in-time line.
+func initConnectors() {
+	store := connectorStore()
+	if ms, ok := store.(*connectors.MongoStore); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := ms.EnsureIndexes(ctx); err != nil {
+			log.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
+		}
+	} else {
 		// Loud, not silent: without Mongo there is no states TTL, and an
 		// operator grepping boot logs must see why.
-		log.Printf("connectors: no database, skipping index setup (oauth states will not reap): %v", err)
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := store.EnsureIndexes(ctx); err != nil {
-		log.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
-	}
-}
-
-// logConnectorOAuth prints the canonical callback URL at startup so the
-// operator can compare byte-for-byte against the Cloud console
-// registration — the same triage line pi-gateway prints, now from the
-// service that actually serves the callback. Storable values log whole;
-// compare against this line, never the input spelling.
-func logConnectorOAuth() {
-	store, err := connectors.FromEnv()
-	if err != nil {
-		log.Printf("connectors: OAuth unavailable (no database: %v); connect answers 501", err)
-		return
+		log.Print("connectors: no database, skipping index setup (oauth states will not reap)")
 	}
 	if !store.Durable() {
-		log.Printf("connectors: OAuth unavailable (no durable store); connect answers 501")
+		log.Print("connectors: OAuth unavailable (no durable store); connect answers 501")
 		return
 	}
 	cfg, err := connectors.OAuthConfigFromEnv()
@@ -173,6 +164,8 @@ func logConnectorOAuth() {
 			connectors.RedactURL(cfg.RedirectURL), err)
 		return
 	}
+	// Storable values log whole: compare this line byte-for-byte against
+	// the Cloud console registration, never the input spelling.
 	log.Printf("connectors: OAuth configured for %s (callback %q)",
 		strings.Join(connectors.ListIDs(), ", "), canonical)
 }

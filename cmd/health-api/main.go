@@ -145,12 +145,11 @@ func main() {
 		// it. The per-handler read budget above covers the abuse case (a stalled
 		// request body) without touching the response.
 	}
-	// Connector boot work runs BEFORE the listening line: both touch Mongo
-	// with a 10s budget, and logging "listening" first would lie during an
-	// Atlas blip (connection-refused while the log says up). Serving
-	// itself never waits — stores fall back per request.
-	ensureConnectorIndexes()
-	logConnectorOAuth()
+	// Connector boot work runs BEFORE the listening line: the index setup
+	// carries a 10s budget, and logging "listening" first would lie during
+	// an Atlas blip (connection-refused while the log says up). Serving
+	// itself never waits — every verb shares this same cached store.
+	initConnectors()
 	log.Print("health-api listening on :8000")
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
