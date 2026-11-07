@@ -243,7 +243,8 @@ through nginx — not `pi` itself.
 | `POST /{profile}/api/questions/{id}` | yes — answer a pending `ask_user` dialog, exactly once | `extension_ui_response` over Pi stdin |
 
 Approval gates (#313) prompt for sensitive tool calls through the harness
-(T3/opencode permission prompts per `opencode.json`): money writes, deletes,
+(T3/opencode permission prompts per `opencode.json`): money writes, account
+create/archive, browser navigation (per-task, URL shown), deletes,
 rewrites and real prunes ask first; pre-migration rows used to wait up to
 14 minutes for an in-app decision here. See `docs/adr/0002-approval-gates.md`
 (pre-migration design).

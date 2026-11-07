@@ -628,8 +628,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Approval gates + audit trail (#313). A sibling of the above: the servers
-	// hold sensitive tool calls, the app decides them here.
+	// Approval gates + audit trail (#313, pre-migration record). A sibling
+	// of the above: before #487 the servers held sensitive tool calls and
+	// the app decided them here. Nothing new parks — this surface only
+	// touches pre-migration rows now.
 	if rest == "api/approvals" || strings.HasPrefix(rest, "api/approvals/") {
 		s.handleApprovals(w, r, rest)
 		return

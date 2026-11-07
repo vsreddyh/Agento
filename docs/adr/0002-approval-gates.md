@@ -1,9 +1,14 @@
 # ADR-0002: Approval gates via an MCP relay, audit in Mongo
 
 - Status: superseded in substance by ADR-0011 (2026-11) for the
-  process-isolation claim; the approval/audit behaviour stands unchanged.
-  Enforcement moved from the `mcp-gate` relay process into an in-process
-  library inside each server (`internal/approvalgate`).
+  process-isolation claim, and by the T3 migration (#487, 2026-11) for the
+  hold flow itself: holds are gone entirely — no park, no poll, no wait.
+  Confirmation lives in T3/opencode permission prompts; the wrapper
+  executes known tools at once with an audit row (reads included) and
+  refuses draft-only sends plus unknown tools outright. `allowed`
+  post-migration means executed under a harness grant, not ran-without-
+  asking. The sections below describe the relay and the hold flow as
+  built; do not run them as a live runbook.
 - Issue: #313
 
 ## Context
