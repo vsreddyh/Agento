@@ -246,13 +246,15 @@ through nginx — not `pi` itself.
 Approval gates (#313) prompt for sensitive tool calls through the harness
 (T3/opencode permission prompts per `opencode.json`): money writes, account
 create/archive, browser navigation (per-task, URL shown), deletes,
-rewrites and real prunes ask first; pre-migration rows used to wait up to
+rewrites and real prunes ask first (counting prunes included — patterns
+cannot see arguments); pre-migration rows used to wait up to
 14 minutes for an in-app decision here. See `docs/adr/0002-approval-gates.md`
 (pre-migration design).
 
 Memory (#315) is the per-profile store behind the app's Memory screen. The
 gateway prefixes confirmed, unpaused items onto each turn; agent-proposed items
-land pending until the user confirms them, and deletion is immediate. The
+land pending until the user confirms them (when a database is configured —
+ephemeral saves never reach the screen), and deletion is immediate. The
 `memory` MCP server is how the agent
 proposes one, scoped by the `AGENTO_PROFILE` the gateway passes to Pi. See
 `docs/adr/0003-memory.md`.
