@@ -36,10 +36,10 @@ Retention ───────────────► one-shot container (c
 ```
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
-- **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001` (compose default, `HEALTH_HOST_PORT` remaps the host side), writing Health Connect metrics to MongoDB.
+- **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on container port `:8000` (compose default host publish `:8001`, `HEALTH_HOST_PORT` remaps the host side), writing Health Connect metrics to MongoDB.
 - **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any MCP server in `pi/mcp.json` fails to connect.
 - **proxy**: nginx single entrypoint (`:8080` compose default, `APP_PORT` remaps; `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync (except `/api/model/options` → pi, the provider picker). The app's one Server URL points here.
-- **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` (compose default, `PI_HOST_PORT` remaps) — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
+- **app API**: `pi-gateway` (`cmd/pi-gateway`) on container port `:8643` (compose default host publish `:8643`, `PI_HOST_PORT` remaps) — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Read-only web tasks via a headless-Chromium MCP server
   (`browser_goto` gated per domain, `browser_read`, `browser_screenshot`,
   `browser_save_evidence`); evidence lands in `exports/browser/`. No click/type
@@ -411,8 +411,10 @@ disconnect; disconnect stops future access. Without Mongo the list still
 answers from memory but nothing survives a restart and no token can be
 stored. The fallback is not instant on a post-boot drop: the first few
 taps 502 while the demotion counter trips (3 upstream failures inside a
-minute), then it flips to memory + 501 — a 502 right after an Atlas loss
-means Mongo, not Google. An expired row carries a `reconnect` hint instead of asking for a
+minute AND more than a minute since the last probe — boot and recovery
+both stamp it, so a drop right after either 502s until that minute
+expires, not just 3 taps), then it flips to memory + 501 — a 502 right
+after an Atlas loss means Mongo, not Google. An expired row carries a `reconnect` hint instead of asking for a
 secret.
 Wire shape note: a row with no `updated_at` was never touched; an explicit
 disconnect sets it. Same status, different shape — the difference is the
