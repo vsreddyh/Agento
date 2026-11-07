@@ -42,6 +42,7 @@ import (
 	"agento/internal/connectors"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 // connectorVerbBudget bounds the fast verbs (list/disconnect/connect
@@ -84,6 +85,11 @@ var (
 	// time. It lets the 501-reason path name "no database" without
 	// dialling a fresh client per tap.
 	connectorLastErr string
+	// connectorUpstreamFails + connectorLastFail count consecutive
+	// store-side failures for demotion (see noteConnectorUpstream).
+	// Guarded by connectorStoreMu.
+	connectorUpstreamFails int
+	connectorLastFail     time.Time
 )
 
 // connectorRetryBudget bounds how often a cached memory fallback
@@ -92,11 +98,26 @@ var (
 // Never per request.
 const connectorRetryBudget = time.Minute
 
+// connectorPingBudget bounds the reachability probe: the driver dials
+// lazily, so FromEnv succeeds with an unreachable URI and only a live
+// round-trip demotes. Same budget discipline as the retry path.
+const connectorPingBudget = 5 * time.Second
+
+// connectorPing reports whether ms answers. A parseable-but-unreachable
+// URI must fall back to memory (501s), not serve 502s on a
+// durable-looking cache — the documented contract.
+func connectorPing(ms *connectors.MongoStore) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), connectorPingBudget)
+	defer cancel()
+	return ms.DB().Client().Ping(ctx, readpref.Primary()) == nil
+}
+
 func connectorStore() connectors.Store {
-	// Fast path under lock: cache hit (durable, or non-durable still
-	// inside its retry budget) returns without any dial.
+	// Fast path under lock: cache hit (durable with no recent upstream
+	// failures, or non-durable still inside its retry budget) returns
+	// without any dial.
 	connectorStoreMu.Lock()
-	if connectorCache != nil && (connectorCache.Durable() || time.Since(connectorCacheAt) <= connectorRetryBudget) {
+	if connectorCache != nil && connectorStoreFreshLocked() {
 		defer connectorStoreMu.Unlock()
 		return connectorCache
 	}
@@ -113,15 +134,25 @@ func connectorStore() connectors.Store {
 		defer connectorStoreMu.Unlock()
 		return connectorCache
 	}
-	// Slow path: first boot, or a non-durable cache past its retry
-	// budget. This caller owns the dial; concurrent verbs wait above.
-	// The dial happens OUTSIDE the lock, so serving (and the waiters'
-	// wakeup) never queues behind it — the swap is the only critical
-	// section.
+	// Slow path: first boot, a non-durable cache past its retry budget,
+	// or a durable cache with enough consecutive upstream failures to
+	// suspect a post-boot drop. This caller owns the dial; concurrent
+	// verbs wait above. The dial happens OUTSIDE the lock, so serving
+	// (and the waiters' wakeup) never queues behind it — the swap is the
+	// only critical section.
+	// A Mongo recovery must not wait for a restart to take effect: a
+	// restart during an Atlas blip otherwise pins memory until a second
+	// restart, with 501s the whole while. Symmetrically, a post-boot drop
+	// demotes instead of 502ing forever on a stale "configured" line.
 	connectorDialing = true
 	connectorDialCh = make(chan struct{})
 	connectorStoreMu.Unlock()
 	ms, err := connectors.FromEnv()
+	// The driver dials lazily: FromEnv succeeds with an unreachable URI,
+	// so only a live round-trip promotes. Without this a typo'd-but-
+	// parseable URI caches "durable" and serves 502s where the docs
+	// promise memory + 501s.
+	pingOK := err == nil && ms != nil && connectorPing(ms)
 	connectorStoreMu.Lock()
 	defer connectorStoreMu.Unlock()
 	connectorDialing = false
@@ -130,17 +161,23 @@ func connectorStore() connectors.Store {
 	// *MongoStore, which as an interface value is non-nil and would cache
 	// a panic. The else branch only ever holds a live store.
 	var backend connectors.Store
-	if err != nil {
-		log.Printf("connectors: falling back to in-process (statuses do not survive restart): %s",
-			connectorBounded(approvals.ScrubError(err.Error())))
+	if err != nil || !pingOK {
+		if err != nil {
+			log.Printf("connectors: falling back to in-process (statuses do not survive restart): %s",
+				connectorBounded(approvals.ScrubError(err.Error())))
+			connectorLastErr = connectorBounded(approvals.ScrubError(err.Error()))
+		} else {
+			log.Print("connectors: MongoDB unreachable (dial ok, ping failed) — falling back to in-process")
+			connectorLastErr = "unreachable (ping failed)"
+		}
 		backend, connectorCacheAt = connectors.NewMemoryStore(), time.Now()
-		connectorLastErr = connectorBounded(approvals.ScrubError(err.Error()))
 	} else {
 		if connectorCache != nil && !connectorCache.Durable() {
 			log.Print("connectors: MongoDB recovered, serving durable store")
 		}
 		backend, connectorCacheAt = ms, time.Now()
 		connectorLastErr = ""
+		connectorUpstreamFails = 0
 		// The recovered store never got its TTL: index it now,
 		// best-effort on a detached budget, or pending states
 		// accumulate until the next restart. (Boot-time indexing lives
@@ -157,6 +194,38 @@ func connectorStore() connectors.Store {
 	}
 	connectorCache = backend
 	return backend
+}
+
+// connectorStoreFreshLocked reports whether the cached store needs no
+// probe: durable caches stay fresh until consecutive upstream failures
+// suggest a post-boot drop (then the next caller re-probes); non-durable
+// caches stay fresh inside the retry budget. Caller holds the lock.
+func connectorStoreFreshLocked() bool {
+	if connectorCache == nil {
+		return false
+	}
+	if !connectorCache.Durable() {
+		return time.Since(connectorCacheAt) <= connectorRetryBudget
+	}
+	return connectorUpstreamFails < connectorDemoteAfter ||
+		time.Since(connectorLastFail) <= connectorRetryBudget
+}
+
+// connectorDemoteAfter bounds how many consecutive upstream failures a
+// durable cache absorbs before the next caller re-probes (and demotes on
+// a failed probe): enough to ride out one blip, few enough that a real
+// drop flips to memory + 501s instead of 502ing forever.
+const connectorDemoteAfter = 3
+
+// noteConnectorUpstream records one store-side failure (502-boundary:
+// deadline or upstream, never client-gone). Call it wherever a verb
+// answers for the store so a post-boot drop demotes instead of pinning
+// a stale "configured" cache.
+func noteConnectorUpstream() {
+	connectorStoreMu.Lock()
+	defer connectorStoreMu.Unlock()
+	connectorUpstreamFails++
+	connectorLastFail = time.Now()
 }
 
 // connectorBounded caps one echoed string for API bodies, mirroring the
@@ -318,6 +387,7 @@ func writeConnectorErr(w http.ResponseWriter, err error) {
 			writeJSON(w, http.StatusNotFound, bson.M{"detail": connectorBounded(approvals.ScrubError(se.Msg))})
 			return
 		case se.Upstream:
+			noteConnectorUpstream()
 			writeJSON(w, http.StatusBadGateway, bson.M{"detail": connectorBounded(approvals.ScrubError(se.Msg))})
 			return
 		default:
@@ -468,13 +538,15 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 
 // cleanupConnectorOrphanState best-effort consumes a just-minted state on
 // a detached budget (the verb ctx may be dead at exactly this point).
-// Only real IO failures log: NotFound means no row was ever minted, which
-// is the desired end state — not a failure. A failed build must mint
-// nothing observable.
-func cleanupConnectorOrphanState(id, state string) {
+// Takes the already-resolved store: re-resolving could land on a
+// different backend (blip recovery between the two calls) and leak the
+// row the caller just minted. Only real IO failures log: NotFound means
+// no row was ever minted, which is the desired end state — not a
+// failure. A failed build must mint nothing observable.
+func cleanupConnectorOrphanState(store connectors.Store, id, state string) {
 	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cleanCancel()
-	if _, cerr := connectorStore().ConsumeState(cleanCtx, state); cerr != nil {
+	if _, cerr := store.ConsumeState(cleanCtx, state); cerr != nil {
 		var se *connectors.StoreError
 		if errors.As(cerr, &se) && se.Upstream {
 			log.Printf("connectors: orphan state cleanup for %q failed: %q", id, connectorBounded(approvals.ScrubError(cerr.Error())))
@@ -532,7 +604,7 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	if authURL == "" {
 		// A failed build mints nothing observable: consume the just-minted
 		// row best-effort so no live attempt lingers that no client holds.
-		cleanupConnectorOrphanState(id, state)
+		cleanupConnectorOrphanState(store, id, state)
 		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "connect is not configured correctly on this server"})
 		return
 	}
@@ -721,6 +793,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	st, err := store.ConsumeState(ctx, state)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
+			noteConnectorUpstream()
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
@@ -729,6 +802,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.Upstream {
+			noteConnectorUpstream()
 			log.Printf("connectors: callback consume failed: %s",
 				connectorBounded(approvals.ScrubError(err.Error())))
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
@@ -880,12 +954,14 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		AccessExpiryUnixMilli: expiry,
 	}); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
+			noteConnectorUpstream()
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
 		if connectorCallbackAborted(ctx, "callback tokens") {
 			return
 		}
+		noteConnectorUpstream()
 		log.Printf("connectors: callback token store failed for %q: %s", id,
 			connectorBounded(approvals.ScrubError(err.Error())))
 		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
@@ -894,12 +970,14 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	c, err := store.SetStatus(ctx, id, connectors.StatusConnected, "")
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
+			noteConnectorUpstream()
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
 		if connectorCallbackAborted(ctx, "callback status") {
 			return
 		}
+		noteConnectorUpstream()
 		log.Printf("connectors: callback status store failed for %q: %s", id,
 			connectorBounded(approvals.ScrubError(err.Error())))
 		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
