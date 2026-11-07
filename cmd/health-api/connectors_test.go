@@ -376,4 +376,19 @@ func TestConnectorsFallbackEnvelope(t *testing.T) {
 			t.Fatalf("%s post: got %d (%s), want callback 405", target, w.Code, w.Body.String())
 		}
 	}
+	// Oversized paths 400 with no echo before any fold/scan, like the
+	// item verbs — never pay ToLower/scrub on kilobytes.
+	big := strings.Repeat("a", 3000)
+	if got := connectorCallbackPath("/api/" + big); got {
+		t.Fatalf("oversized path must not read as callback")
+	}
+	oreq := httptest.NewRequest(http.MethodGet, "/api/"+big, nil)
+	oreq.Header.Set("Authorization", "Bearer test-secret-12345678")
+	ow := httptest.NewRecorder()
+	mux.ServeHTTP(ow, oreq)
+	if ow.Code != http.StatusBadRequest {
+		t.Fatalf("oversized fallback: got %d (%s), want 400", ow.Code, ow.Body.String())
+	} else if body := ow.Body.String(); strings.Contains(body, big[:64]) {
+		t.Fatalf("oversized fallback must not echo, got %s", body)
+	}
 }

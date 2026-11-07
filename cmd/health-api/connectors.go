@@ -192,6 +192,11 @@ func connectorStore(ctx context.Context) connectors.Store {
 	// of the 5s ping, once a minute for the whole outage. Only the swap
 	// is a critical section.
 	var stale *connectors.MongoStore
+	// The displaced durable cache, if any, closes outside the lock too:
+	// demote (durable→memory) and healthy re-probe (durable→durable) both
+	// orphan a live mongo.Client otherwise — pool goroutines, monitor,
+	// and Atlas-side conns held for the life of the process per probe.
+	var displaced *connectors.MongoStore
 	if err != nil || !pingOK {
 		if err != nil {
 			log.Printf("connectors: falling back to in-process (statuses do not survive restart): %s",
@@ -227,17 +232,32 @@ func connectorStore(ctx context.Context) connectors.Store {
 			}
 		}()
 	}
+	// Capture the displaced durable BEFORE the overwrite: whatever the
+	// outcome, a replaced *MongoStore must close or the swap leaks a
+	// client per probe. A memory cache holds no client (nil, skipped
+	// below); the fresh ms is never the displaced one (dialed this call).
+	if old, ok := connectorCache.(*connectors.MongoStore); ok && old != nil {
+		if ms == nil || old != ms {
+			displaced = old
+		}
+	}
 	connectorCache = backend
 	// Every slow-path dial stamps the probe time whatever the outcome:
 	// the durable freshness throttle keys on it, so a failed probe
 	// (demote) still buys a full budget before the next one.
 	connectorLastProbe = time.Now()
 	connectorStoreMu.Unlock()
-	if stale != nil {
+	// Best-effort closes outside the lock, newest-then-oldest: the failed
+	// dial first, then the displaced cache. Either Disconnect can block
+	// up to the ping budget; neither may hold the serving mutex.
+	for _, c := range []*connectors.MongoStore{stale, displaced} {
+		if c == nil {
+			continue
+		}
 		func() {
 			dctx, dcancel := context.WithTimeout(context.Background(), connectorPingBudget)
 			defer dcancel()
-			_ = stale.DB().Client().Disconnect(dctx)
+			_ = c.DB().Client().Disconnect(dctx)
 		}()
 	}
 	return backend
@@ -1078,6 +1098,12 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 // One predicate for the dispatcher, the fallback, and the rate limiter,
 // so a spelling serving in one is enveloped in the others.
 func connectorCallbackPath(p string) bool {
+	// Alloc guard first, like the item verbs: a multi-KB path answers
+	// false here (and the fallback's oversized branch below) without
+	// paying ToLower/scrub/rune walks. No echo — the value is kilobytes.
+	if len(p) > connectors.MaxSegmentAllocLen {
+		return false
+	}
 	cleaned := path.Clean("/" + strings.TrimPrefix(p, "/"))
 	trimmed := strings.TrimPrefix(cleaned, "/")
 	lower := strings.ToLower(trimmed)
@@ -1120,6 +1146,14 @@ func connectorsFallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	// Alloc guard before any scrub/log: an oversized path 400s with no
+	// echo like the item verbs, instead of paying ScrubError + rune
+	// slicing on kilobytes. The callback check above already rejected it
+	// (false on oversized), so this only sees non-callback spellings.
+	if len(r.URL.Path) > connectors.MaxSegmentAllocLen {
+		writeConnectorErr(w, r, connectors.NewStoreError("oversized path", false))
 		return
 	}
 	log.Printf("connectors: unclaimed path 404 (%d bytes), answering unknown-path", len(r.URL.Path))
