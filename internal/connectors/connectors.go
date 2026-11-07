@@ -14,8 +14,9 @@
 // back to memory that cannot meet — same contract as approvals: the list
 // still answers, but nothing survives a restart.
 //
-// Draft-only (v1): Gmail/Calendar send paths stay refused until the
-// approval-gate flow covers them. An attempted send is refused with a clear
+// Draft-only (v1): Gmail/Calendar send paths stay refused, permanently
+// for v1 — there is no approval flow left that could release them (a T3
+// `ask` approval still refuses). An attempted send is refused with a clear
 // message naming drafts as the supported path, not silently gated.
 package connectors
 
@@ -307,9 +308,9 @@ func IsDraftOnlySend(server, tool string) bool {
 	return false
 }
 
-// RefusalMessage is what Pi sees when a draft-only connector is asked to
-// send. It names the supported path (drafts) so the turn continues usefully
-// instead of dying on a bare denial.
+// RefusalMessage is what the harness sees when a draft-only connector is
+// asked to send. It names the supported path (drafts) so the turn continues
+// usefully instead of dying on a bare denial.
 const RefusalMessage = "sending is disabled for this connector in v1; create a draft instead and let the user send it"
 
 // StoreError is the domain error the HTTP layer maps onto status codes.

@@ -283,7 +283,7 @@ All settings are configured in the single root `.env` file:
 
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
 - **Container Isolation**: the `pi` container mounts only what it needs (`pi/`, `workspace/`, three read-only SSH files) with no host container-socket access (Podman is daemonless — there is no shared socket). The agent runs as root inside it, because the bind-mounted workspace is owned by the host uid.
-- **Single credential, one principal**: the same `PASSWORD` bearer authenticates chat (`pi-gateway`) and health sync, so every approval decision is attributed as `decided_by: "app"` — read it as "decided from the app", not a per-user id. The 90-day audit row records only a hash of IP + User-Agent per deciding device, never the values themselves. Per-user auth (and per-user attribution) arrives with per-user auth, not before.
+- **Single credential, one principal**: the same `PASSWORD` bearer authenticates chat (`pi-gateway`) and health sync, so every pre-migration approval decision is attributed as `decided_by: "app"` — read it as "decided from the app", not a per-user id. Post-migration harness prompt decisions leave no row at all (the audit entry carries no decider field), so `decided_by` only ever answers the pre-migration world. The 90-day audit row records only a hash of IP + User-Agent per deciding device, never the values themselves. Per-user auth (and per-user attribution) arrives with per-user auth, not before.
 
 ### Approval gates + audit log (#313)
 
@@ -372,7 +372,8 @@ connected. Tokens land before the status flips — a connected-with-no-tokens
 row is never servable. Without full OAuth config (client id/secret,
 redirect URL, envelope key, durable store) connect answers 501.
 
-The refusal is enforced in the gate before the approval check, audited as
+The refusal is enforced in the gate first of all — before the
+unknown-tool check, instead of any prompt — audited as
 `connector_draft_only`, and parks no approval card. Token placement: OAuth
 refresh tokens live **server-side in Mongo** (`connectors` collection,
 envelope-encrypted), never in the app and never pasted in chat — the API
@@ -425,8 +426,9 @@ worker). No grant means every tool that calls Google answers reconnect
 guidance, never a secrets prompt. `create_event_draft` is the exception:
 purely local, so it works grant-less — the draft is exactly what the
 user needs while disconnected. It builds a validated draft the agent
-presents to the user — actual creation waits for the approval-gate flow
-that covers calendar writes.
+presents to the user — actual creation never happens through tools in v1
+(`create_event`/`send_invite` are refused outright); the user confirms in
+their own calendar.
 Operator setup on a host with no domain: `scripts/connectors-google-setup.sh`
 is an interactive wizard that walks the two things only a human can do —
 joining a tailnet and creating the Google client — and derives the rest.

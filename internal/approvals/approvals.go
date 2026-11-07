@@ -105,7 +105,9 @@ func (s Status) Valid() bool {
 
 // Policy is the sensitivity record for one (server, tool): false runs
 // free, true is sensitive and must prompt in T3 (the `ask` rules in
-// opencode.json mirror this table, pinned by opencode_perm_test.go).
+// opencode.json mirror this table, pinned by opencode_perm_test.go) —
+// except the four draft-refused sends, which are gated==true as a
+// backstop but refuse outright and must NOT have an `ask` pattern.
 // Unknown servers deny: a tool added to an unlisted server is a write no
 // table reviewed, and failing closed beats executing blind. (Unknown
 // *tools* on a wired server never reach the gate — the MCP SDK rejects
