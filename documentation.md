@@ -296,9 +296,11 @@ audit row with tool, redacted args, disposition and result — no decider:
 harness prompt decisions are not recorded (the join stops at pre-migration
 `Approval.DecidedBy`); best-effort, so treat a missing
 row as an outage gap, not as proof nothing ran. Money
-writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`) and
+writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`),
 prunes that actually delete (`prune_old`, counting prunes included —
-patterns cannot see arguments) prompt first; reads and routine writes run
+patterns cannot see arguments), account create/archive, and browser
+navigation (`browser_goto`, per-task with the URL shown) prompt first;
+reads and routine writes run
 free. Connector send paths are refused outright (draft instead); unknown
 servers/tools deny fail-closed (unknown *tools* are rejected by the SDK
 before the wrapper ever sees them). Disposition `allowed` means executed
@@ -315,9 +317,9 @@ except memory and browser exits (log.Fatalf) — those two run with an
 ephemeral in-memory audit trail that dies with the process, and the app
 treats unaudited operation as degraded
 instead of showing an undecidable list. The app surface (since 5.7.0) is the
-**Approvals** sheet: pending cards with redacted args + approve/deny, a
-badged entry with an in-turn banner while streaming, and the recent audit
-trail below. Full design: `docs/adr/0002-approval-gates.md` (pre-migration
+**Approvals** sheet: the recent audit trail below stays live, but pending
+cards with redacted args + approve/deny are pre-migration only — post-migration
+nothing new parks, so a "stuck" write is a T3 prompt, never a card to tap. Full design: `docs/adr/0002-approval-gates.md` (pre-migration
 design; the T3 re-ownership is recorded in the migration issues).
 
 Threat note — what this does and does not fix:

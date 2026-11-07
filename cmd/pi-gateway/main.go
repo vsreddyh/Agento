@@ -380,9 +380,9 @@ func run() error {
 			logger.Printf("approvals: index setup failed (records will not auto-expire): %v", err)
 		}
 		cancelIndex()
-		// A restart orphans the servers that owned every pending wait.
-		// Expire them before serving so the list never shows a pending row
-		// nothing will ever decide.
+		// A restart orphans pre-migration pending waits (nothing new parks
+		// as of #487). Expire them before serving so the list never shows
+		// a pending row nothing will ever decide.
 		markCtx, cancelMark := context.WithTimeout(ctx, 10*time.Second)
 		if n, err := store.MarkInterrupted(markCtx, time.Now()); err != nil {
 			logger.Printf("approvals: could not expire pending rows: %v", err)
