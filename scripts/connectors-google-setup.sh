@@ -368,6 +368,10 @@ _clean_path() {
   done
   if (( ${#out[@]} == 0 )); then
     printf '/'
+  elif (( ${#out[@]} == 1 )); then
+    # Single segment: the second printf below would emit a bare `/`
+    # (missing %s arg prints the literal), so skip it — `/b` stays `/b`.
+    printf '/%s' "${out[0]}"
   else
     printf '/%s' "${out[0]}"
     printf '/%s' "${out[@]:1}"
@@ -510,13 +514,19 @@ banner "Google connectors over Tailscale Funnel"
 # Proxy host port follows APP_PORT (compose default 8080): every funnel
 # target, probe, and status match below must use it, or a custom-port
 # deploy funnels to a dead port while the wizard reports green. Shell env
-# wins over .env, matching compose precedence; numeric-only, else default.
+# wins over .env, matching compose precedence. Non-numeric or out-of-range
+# values fail loudly with the winning source named — a silent default here
+# would funnel to a port compose does not serve.
 _proxy_port="${APP_PORT:-}"
+_proxy_port_src="shell APP_PORT"
 if [[ -z "$_proxy_port" ]]; then
   _proxy_port=$(_existing APP_PORT 2>/dev/null || true)
+  _proxy_port_src="root .env APP_PORT"
 fi
-if [[ ! "$_proxy_port" =~ ^[0-9]+$ ]]; then
-  _proxy_port="8080"
+if [[ ${#_proxy_port} -gt 5 ]] || [[ ! "$_proxy_port" =~ ^[0-9]+$ ]] || (( 10#$_proxy_port < 1 || 10#$_proxy_port > 65535 )); then
+  warn "APP_PORT is not numeric 1-65535 (from $_proxy_port_src: '${_proxy_port:-<empty>}') — fix it, do not proceed on a default:"
+  warn "funnelling to a silently-defaulted port serves a URL nothing answers."
+  exit 1
 fi
 _proxy_target="http://127.0.0.1:$_proxy_port"
 
@@ -994,8 +1004,7 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
     if confirm "Keep it anyway (only for deliberate non-standard setups)?"; then
       REDIRECT_URI="$_recorded_uri"
       note "keeping non-standard recorded REDIRECT_URI as chosen"
-      warn "registered host is not a tailnet name; the funnel still serves $TS_DNS,"
-      warn "so the probe and the .env comment use ($TS_DNS), not the kept URL"
+      note "the probe below hits this kept URL verbatim, and the .env comment records its host"
     fi
   fi
   unset _rec_host _converted _rec_fold

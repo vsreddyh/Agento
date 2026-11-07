@@ -473,10 +473,11 @@ recreated (`./scripts/hermes.sh restart` recreates them; a plain container
 restart without recreation will not pick up .env changes). It is safe
 to re-run: existing values stay defaults, and an existing
 envelope key is kept, since rotating it invalidates every stored grant.
-Register the bare spelling it prints (health-api serves it direct on
-the mapped host port, compose default `:8001`; the `:8080` proxy publish is plain HTTP, so only loopback
-`http://localhost:8080/...` registers — never a public `https://...:8080`
-spelling).
+Register the bare spelling it prints: on a funnel run that is
+`https://<tailnet-host>/api/connectors/callback` (served via public TLS
+on `:443`); for direct loopback testing it is
+`http://localhost:<mapped-port>/api/connectors/callback` instead
+(`:8001` is the plain-HTTP direct-host mapping, never a funnel spelling).
 
 Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 
