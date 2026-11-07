@@ -324,7 +324,7 @@ func TestConnectorsFallbackEnvelope(t *testing.T) {
 	t.Setenv("PASSWORD", "test-secret-12345678")
 	mux := http.NewServeMux()
 	registerConnectors(mux)
-	for _, target := range []string{"/api/connectorsfoo", "/api/connectorsfoo/bar", "/api/CONNECTORS", "/api"} {
+	for _, target := range []string{"/api/connectorsfoo", "/api/connectorsfoo/bar", "/api/CONNECTORS", "/api", "/API/connectorsfoo", "/API/", "/API/connectors/callback"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		req.Header.Set("Authorization", "Bearer test-secret-12345678")
 		w := httptest.NewRecorder()
@@ -343,11 +343,17 @@ func TestConnectorsFallbackEnvelope(t *testing.T) {
 			t.Fatalf("%s: Content-Type = %q, want JSON", target, ct)
 		}
 	}
-	// Unauthenticated near-miss 401s before the 404, like every other verb.
-	req := httptest.NewRequest(http.MethodGet, "/api/connectorsfoo", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("no token near-miss: got %d (%s)", w.Code, w.Body.String())
+	// Unauthenticated near-miss 401s before the 404, like every other verb —
+	// including the uppercase spellings, which must not skip the auth gate.
+	for _, target := range []string{"/api/connectorsfoo", "/API/connectorsfoo"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s no token: got %d (%s)", target, w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("WWW-Authenticate"); got == "" {
+			t.Fatalf("%s: 401 without WWW-Authenticate challenge", target)
+		}
 	}
 }

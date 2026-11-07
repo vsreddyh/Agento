@@ -563,7 +563,7 @@ say "      existing nginx proxy on $_proxy_target. No ports are opened, no"
 say "      domain is bought. The app keeps its current Server URL."
 say "      Note: the funnel publishes the whole proxy (chat + sync stay"
 say "      PASSWORD-gated); the OAuth callback is the only new unauthenticated"
-say "      API surface (static liveness /health and /ping, plus pi liveness"
+say "      API surface (static liveness /health[/] and /ping, plus pi liveness"
 say "      /p/healthz[/], ride along). Do not share the *.ts.net URL."
 printf '\n'
 say "What is on disk right now:"

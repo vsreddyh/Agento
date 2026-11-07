@@ -1072,28 +1072,29 @@ func connectorCallbackPath(p string) bool {
 	return strings.EqualFold(rest, "callback")
 }
 
-// connectorsFallback answers /api/* paths no domain claimed — including
+// connectorsFallback answers every path no domain claimed — including
 // the no-slash-boundary misses (/api/connectorsfoo, /api/CONNECTORS)
-// that share the connectors prefix without the trailing-slash subtree.
-// Without it Go's default mux answers text/plain 404 with no envelope,
-// while the gateway answers the same spellings as JSON unknown-path with
-// no-store. Auth first like every other verb here (the gateway 401s
-// these before its unknown-path 404), then the service `detail` envelope
-// with no-store so triage greps and the app's detail branch keep working.
-// Registered as /api/ + /api so it only sees what longer patterns missed.
-//
-// Global by construction: it also catches other domains' typos
-// (/api/task missing-s, /api/health/sync/ trailing slash — health and
-// files register exacts only). The log line below names the domain that
-// answered so those lines grep in the wrong place only once: the length
-// (never the value) is logged like every other dead branch here.
+// that share the connectors prefix without the trailing-slash subtree,
+// and any other-cased prefix (/API/...) Go's case-sensitive mux never
+// matches. Without it Go's default mux answers text/plain 404 with no
+// envelope and no auth gate, while the gateway answers the same
+// spellings as JSON unknown-path behind auth. Auth first like every
+// other verb here (the gateway 401s unknown paths before its 404 —
+// including the uppercase spellings, which skip the auth gate entirely
+// without this catch), then the service `detail` envelope with no-store
+// so triage greps and the app's detail branch keep working.
+// Registered as the mux catch-all so it only sees what longer patterns
+// missed: it also answers other domains' typos (/api/task missing-s,
+// /api/health/sync/ trailing slash — health and files register exacts
+// only). The log line below names which unclaimed spelling landed here
+// (length only, never the value) like every other dead branch.
 func connectorsFallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
 		return
 	}
-	log.Printf("connectors: unclaimed /api path 404 (%d bytes), answering unknown-path", len(r.URL.Path))
+	log.Printf("connectors: unclaimed path 404 (%d bytes), answering unknown-path", len(r.URL.Path))
 	writeJSON(w, http.StatusNotFound, bson.M{
 		"detail": "unknown path " + connectorBounded(approvals.ScrubError(r.URL.Path))})
 }
@@ -1107,13 +1108,12 @@ func registerConnectors(mux *http.ServeMux) {
 	// trailing slash, and without this it would 404 (the subtree above
 	// only catches paths WITH the slash).
 	mux.HandleFunc("/api/connectors/callback", connectorCallback)
-	// Near-miss fallback: /api/connectorsfoo, /api/CONNECTORS, and any
-	// other /api/* spelling no longer pattern claimed. Longest-match wins,
-	// so every registered route above (and every other domain's /api/*
-	// routes, registered elsewhere) still takes precedence — this only
-	// converts the default-mux text/plain 404 into the service envelope.
-	mux.HandleFunc("/api/", connectorsFallback)
-	mux.HandleFunc("/api", connectorsFallback)
+	// Near-miss fallback: /api/connectorsfoo, /api/CONNECTORS, /API/*,
+	// and any other spelling no domain claimed. Catch-all (longest-match
+	// wins, so every registered route still takes precedence) — this only
+	// converts the default-mux text/plain 404 into the service envelope,
+	// behind auth like the gateway.
+	mux.HandleFunc("/", connectorsFallback)
 }
 
 // connectorsSlash dispatches under /api/connectors/: the callback (no

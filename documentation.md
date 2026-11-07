@@ -384,6 +384,9 @@ match on the collapsed form too) and percent-encoded spellings (Go decodes
 before matching, so `/%63allback` serves like `/callback` — match on the
 decoded form too) — but no profile-tolerant prefixes (the
 pi-gateway `/p/` spellings retire with it in #494 — until then both serve).
+The `/api` prefix itself is case-sensitive: `/API/...` answers the service
+JSON `unknown path` 404 behind auth (like the gateway), never the
+callback — WAF/proxy exact-matches must cover the uppercase spelling too.
 The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope
 key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to
@@ -464,7 +467,7 @@ register neither (loopback IPs like `127.0.0.1`/`::1` do register, over
 plain `http`).
 Note the funnel publishes the whole proxy (chat + sync stay PASSWORD-gated);
 the callback is the only new unauthenticated API surface (static liveness
-`/health` and `/ping`, plus pi liveness `/p/healthz[/]`, ride along), so do not share the
+`/health[/]` and `/ping`, plus pi liveness `/p/healthz[/]`, ride along), so do not share the
 `*.ts.net` URL.
 It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URL`, and `CONNECTORS_ENCRYPTION_KEY` into the root
