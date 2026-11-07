@@ -8,6 +8,14 @@ package agento_test
 // in the unsafe direction: add a gated tool, forget the pattern, and the
 // gate runs it at once under opencode default-allow. This test fails CI on
 // either drift direction instead.
+//
+// Matcher caveat, read before trusting green: matchGlob/candidates are
+// this test's own model of harness matching, not the harness matcher. A
+// pattern passing here but spelled in a form opencode does not match would
+// still run default-allow in prod. The candidates cover the plausible id
+// shapes (bare tool, server-prefixed, mcp_-prefixed, hyphen/underscore
+// folds); when the servers get wired (#489), verify once against the live
+// harness and tighten this to the observed form.
 
 import (
 	"encoding/json"
@@ -80,7 +88,12 @@ func matchGlob(pattern, value string) bool {
 // style — a pattern must hit at least one spelling.
 func candidates(server, tool string) []string {
 	flat := strings.ReplaceAll(server, "-", "_")
-	return []string{tool, server + "_" + tool, flat + "_" + tool}
+	return []string{
+		tool,
+		server + "_" + tool, flat + "_" + tool,
+		"mcp_" + server + "_" + tool, "mcp_" + flat + "_" + tool,
+		"mcp__" + server + "__" + tool, "mcp__" + flat + "__" + tool,
+	}
 }
 
 func TestAskMirrorsGated(t *testing.T) {

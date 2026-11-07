@@ -174,7 +174,7 @@ func main() {
 		})
 
 	approvalgate.AddTool(s, "calendar", gate, &mcp.Tool{Name: "create_event_draft",
-		Description: "Build a draft event (validated, sent nowhere — the grant is readonly). Attendees are single bare ASCII addresses (count uncapped in v1); summary caps at 200 runes, location at 500 (refused, not truncated); description is trimmed and capped at 5000 with a truncated flag. The agent presents the draft to the user; actual creation waits for the approval-gate flow that covers calendar writes. Start/end are RFC3339 date-times or YYYY-MM-DD dates (both ends must match in kind); end must be after start."},
+		Description: "Build a draft event (validated, sent nowhere — the grant is readonly). Attendees are single bare ASCII addresses (count uncapped in v1); summary caps at 200 runes, location at 500 (refused, not truncated); description is trimmed and capped at 5000 with a truncated flag. The agent presents the draft to the user; actual creation never happens through tools in v1 (create_event/send_invite are refused — the user confirms in their own calendar). Start/end are RFC3339 date-times or YYYY-MM-DD dates (both ends must match in kind); end must be after start."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in createEventDraftInput) (*mcp.CallToolResult, map[string]any, error) {
 			d, err := cal.Draft(in.Summary, in.Description, in.Location, in.Start, in.End, in.Attendees)
 			if err != nil {

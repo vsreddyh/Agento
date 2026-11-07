@@ -1,15 +1,19 @@
-// Package approvals is the approval-gate and audit-trail half of #313.
+// Package approvals is the sensitivity table and audit-trail half of #313,
+// re-owned by #487.
 //
 // Pi offers no pre-execution tool hook: its tool events are post-hoc
 // notifications, and the MCP servers run as Pi-spawned stdio subprocesses.
-// So enforcement lives in a gate inside each server (internal/approvalgate,
-// ADR-0011 Stage 2): every `tools/call` passes through it, reads and routine
-// writes forward untouched, and sensitive calls hold for an explicit in-app
-// decision.
+// Enforcement used to live in a hold inside each server (internal/
+// approvalgate, ADR-0011 Stage 2): reads and routine writes forwarded
+// untouched, and sensitive calls waited for an explicit in-app decision.
+// As of #487 the hold is gone — confirmation lives in T3/opencode
+// (permission prompts per opencode.json), so this package is the policy
+// table the prompts mirror plus the audit trail, not a waiting room.
+// Pre-migration pending rows are expired by each server's startup sweep;
+// nothing new parks.
 //
-// The app never sees secrets in this flow: approvals carry the tool, its
-// redacted arguments and the time — never credentials — and a decision is a
-// verb on an id, not a pasted password.
+// The app never sees secrets in this flow: audit rows carry the tool, its
+// redacted arguments and the time — never credentials.
 package approvals
 
 import (
@@ -31,15 +35,10 @@ const (
 	// outlives the approval that allowed it.
 	AuditCollection = "audit_log"
 
-	// ApprovalTTL bounds how long a call waits for a human. Fifteen minutes
-	// is long enough to see a notification and answer, short enough that a
-	// forgotten approval does not hold a turn past its budget (TurnTimeout
-	// is 960s; the gate hold is shorter, see WaitTimeout).
+	// ApprovalTTL bounds pending-approval rows: decided or not, they
+	// expire this long after creation (pre-migration rows age out; the
+	// startup sweep expires them sooner).
 	ApprovalTTL = 15 * time.Minute
-
-	// WaitTimeout is how long the gate holds one sensitive call. Slightly
-	// under ApprovalTTL so expiry, not the race, decides the outcome.
-	WaitTimeout = 14 * time.Minute
 
 	// AuditTTL is the audit retention the issue asks for in days. Ninety
 	// days keeps roughly a quarter of dispositions queryable without growing
@@ -54,13 +53,19 @@ const (
 type Disposition string
 
 const (
-	// DispositionAllow means the call ran without asking.
+	// DispositionAllow means the call executed (free, or under a harness
+	// permission grant — post-#487 this no longer means "ran without
+	// asking"; see the approvalgate package doc before querying on it).
 	DispositionAllow Disposition = "allowed"
-	// DispositionApproved means it ran after an explicit approval.
+	// DispositionApproved means it ran after an explicit in-app approval.
+	// Pre-migration rows only: nothing mints these anymore.
 	DispositionApproved Disposition = "approved"
-	// DispositionDenied means a human refused it; Pi got a tool error.
+	// DispositionDenied means the call was refused: a human refused it, the
+	// gate refused it outright (draft-only send, unknown tool), or no
+	// shared store could back it — never silent.
 	DispositionDenied Disposition = "denied"
 	// DispositionExpired means nobody answered in time; fail closed.
+	// Pre-migration rows only.
 	DispositionExpired Disposition = "expired"
 )
 
@@ -96,15 +101,16 @@ func (s Status) Valid() bool {
 	return false
 }
 
-// Policy is the gate rule for one (server, tool): false runs immediately,
-// true holds for approval. Unknown servers hold: a tool added to an
-// unlisted server is a write no table reviewed, and failing closed beats
-// executing blind. (Unknown *tools* on a wired server never reach the gate —
-// the MCP SDK rejects unregistered tools before any handler runs — so the
-// unknown-tool branch below is a backstop for direct callers, pinned by
-// TestUnknownToolHolds, not the wire path.) Pi built-in tools
-// (bash/read/write via codemode) never reach the gate at all — see the
-// ADR's threat note.
+// Policy is the sensitivity record for one (server, tool): false runs
+// free, true is sensitive and must prompt in T3 (the `ask` rules in
+// opencode.json mirror this table, pinned by opencode_perm_test.go).
+// Unknown servers deny: a tool added to an unlisted server is a write no
+// table reviewed, and failing closed beats executing blind. (Unknown
+// *tools* on a wired server never reach the gate — the MCP SDK rejects
+// unregistered tools before any handler runs — so the unknown-tool branch
+// below is a backstop for direct callers, pinned by TestUnknownToolDenied,
+// not the wire path.) Pi built-in tools (bash/read/write via codemode)
+// never reach the gate at all — see the ADR's threat note.
 func NeedsApproval(server, tool string, args map[string]any) bool {
 	// Case-insensitive like connectors.IsDraftOnlySend: the server id is a
 	// code literal in each cmd/*/main.go, so the fold guards callers that
@@ -124,7 +130,7 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 	if !ok {
 		return true
 	}
-	// Unknown tool on a known server holds: fail closed. (Unreachable from
+	// Unknown tool on a known server denies: fail closed. (Unreachable from
 	// the wire — the SDK rejects unregistered tools first — this is the
 	// backstop for direct callers.) The completeness test below forces an
 	// explicit rule the moment a server gains one.
@@ -133,7 +139,7 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 }
 
 // KnownServer reports whether the policy table has a row for this server.
-// Execution stays fail-closed either way: unknown servers hold every call.
+// Execution stays fail-closed either way: unknown servers deny every call.
 func KnownServer(server string) bool {
 	_, ok := gatedTools[strings.ToLower(strings.TrimSpace(server))]
 	return ok
@@ -153,7 +159,7 @@ func Servers() []string {
 
 // ToolsFor returns the policy table's tool names for a server, sorted. The
 // cmd policy tests assert the AddTool registration set equals this set, so
-// a registered-but-unclassified tool (holds fail-closed 14m in prod) and a
+// a registered-but-unclassified tool (denied fail-closed in prod) and a
 // classified-but-unregistered tool (dead policy row) both fail CI. Nil for
 // an unknown server.
 func ToolsFor(server string) []string {
@@ -180,17 +186,19 @@ func isDryRun(args map[string]any) bool {
 	return ok && b
 }
 
-// gatedTools names every known tool with its rule: true holds for approval,
-// false runs free. The table is COMPLETE by contract — an unknown tool on a
-// known server holds (fail closed), so adding a server tool without a rule
-// here gates it until someone classifies it. TestPolicyTableIsComplete pins
-// the coverage.
+// gatedTools names every known tool with its rule: true is sensitive
+// (must prompt in T3 via an `ask` pattern), false runs free. The table is
+// COMPLETE by contract — an unknown tool on a known server denies (fail
+// closed), so adding a server tool without a rule here denies it until
+// someone classifies it. TestPolicyTableIsComplete pins the coverage.
 //
-// Reads never gate. Routine creates and updates (log_meal, create_task,
-// add_recipe, log_cook, ...) run free — gating every write would make the
-// agent ask permission to take notes, which is approval fatigue, not safety.
-// Gate: money writes, deletes, archives, destructive rewrites (fix_*), and
-// prunes that actually delete (dry runs are arg-exempted above).
+// Reads never prompt. Routine creates and updates (log_meal, create_task,
+// add_recipe, log_cook, ...) run free — prompting on every write would make
+// the agent ask permission to take notes, which is approval fatigue, not
+// safety. Sensitive: money writes, deletes, archives, destructive rewrites
+// (fix_*), and prunes that actually delete (the dry-run exemption lives in
+// NeedsApproval; the harness cannot see arguments, so counting prunes
+// prompt too).
 var gatedTools = map[string]map[string]bool{
 	"miser-money": {
 		"create_account": true, "list_accounts": false,
@@ -218,7 +226,7 @@ var gatedTools = map[string]map[string]bool{
 		"reopen_task": false, "delete_task": true,
 		// A read of the change log. It cannot change anything, and it is
 		// exactly the tool the agent needs to explain a change it did not
-		// make — so it must never hold for approval.
+		// make — so it must never require confirmation.
 		"task_history": false,
 	},
 	"project-manager": {
@@ -237,34 +245,36 @@ var gatedTools = map[string]map[string]bool{
 	},
 	"memory": {
 		// A memory write is the point of the tool, and it starts pending: the
-		// second confirmation (use it or not) is the one that matters. Gating
-		// the write would make the agent ask twice for one fact. Reads never
-		// gate anywhere.
+		// second confirmation (use it or not) is the one that matters.
+		// Prompting on the write would make the agent ask twice for one
+		// fact. Reads never prompt anywhere.
 		"save_memory": false, "list_memory": false,
 	},
 	"browser": {
-		// Navigation holds with the URL in front of the human: every domain
-		// is an explicit per-task approval, which is the #312 allowlist.
-		// Reads, screenshots and evidence saves run free once the page is
-		// approved; re-navigation to a new URL holds again.
+		// Navigation is sensitive with the URL in front of the human: every
+		// domain is an explicit per-task prompt, which is the #312
+		// allowlist. Reads, screenshots and evidence saves run free once
+		// the navigation was approved; re-navigation to a new URL prompts
+		// again.
 		"browser_goto": true, "browser_read": false,
 		"browser_screenshot": false, "browser_save_evidence": false,
 	},
 	// First connectors, v1 (#316): gmail + calendar only — Drive was
 	// dropped from the connector set, so it has no policy row: an
-	// unknown server holds every call fail-closed by default, which is
+	// unknown server denies every call fail-closed by default, which is
 	// the correct posture for a server with no classification. (If Drive
 	// ever returns, its PR re-adds the row with its tools.) Reads and
-	// drafts run under the normal gate; write paths are refused outright
+	// drafts run free; write paths are refused outright
 	// by the gate (see connectors.IsDraftOnlySend), and the true here
 	// is the backstop for a caller that bypasses that check: a write
 	// must never run free.
 	// Follow-up sync obligation (both sides): the draft allowlist here
 	// (create_draft/create_event_draft:false) depends on exact tool
 	// names exactly like the refusal list does. A renamed draft tool
-	// misses the free rule and holds for approval instead — safe, but a
-	// stall on the exact flow v1 sells ("create a draft instead"). Sync
-	// both lists with the wired servers' real names when they land.
+	// misses the free rule and needs an `ask` pattern instead — without
+	// one it would run default-allow, which is exactly what
+	// opencode_perm_test.go fails on. Sync both lists with the wired
+	// servers' real names when they land.
 	"gmail": {
 		"search_gmail": false, "read_gmail": false,
 		"list_messages": false, "create_draft": false,
@@ -443,10 +453,10 @@ func NewID() string { return primitive.NewObjectID().Hex() }
 // it; the servers and the gateway share one.
 //
 // Shared reports whether this store is visible to other processes. Only a
-// shared (Mongo) store lets a gate-held call be decided from the gateway:
-// two memory fallbacks in two processes can never meet, so without Mongo the
-// gate denies gated calls immediately instead of parking
-// a hold no decision could ever release.
+// shared (Mongo) store survives a restart: two memory fallbacks in two
+// processes can never meet. As of #487 the gate no longer parks anything
+// decidable, so an unshared store runs calls with an ephemeral audit trail
+// instead of denying them.
 type Store interface {
 	Shared() bool
 	CreateApproval(ctx context.Context, a Approval) error

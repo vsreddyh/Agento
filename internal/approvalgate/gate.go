@@ -34,9 +34,14 @@
 // hold write, which no longer exists. In practice the domain write fails
 // first: every kept MCP server is Mongo-backed, so a down store errors
 // the handler before anything executes, and the failure is what gets
-// audited. A destructive write that executes while unaudited needs the
-// domain to succeed while the audit write alone fails — same-DB,
-// transient-only.
+// audited. Two boundaries on that claim, stated so they stick: browser is
+// Chromium-backed, not Mongo-backed, so its navigation CAN execute while
+// unaudited during an outage (it goes away with #495; until then a missing
+// database means ephemeral audit, never blocked navigation); and connector
+// write paths are refused outright, so no external send can slip through
+// unaudited — only reads and drafts run. A destructive write that executes
+// while unaudited needs the domain to succeed while the audit write alone
+// fails — same-DB, transient-only.
 //
 // Cancellation: the handler still receives the caller's ctx, but the
 // wrapper does not pre-check it — an already-cancelled call runs rather

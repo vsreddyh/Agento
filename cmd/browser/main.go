@@ -10,9 +10,10 @@
 // be pasted — a login wall stops the task with a report instead), buying
 // things, or fetching from non-public addresses (fail closed, see checkURL).
 //
-// Every navigation holds for approval (the policy table gates browser_goto):
-// the human approves each domain with the URL in front of them. Reads,
-// screenshots and evidence saves run free once the page is approved.
+// Every navigation is sensitive (the policy table marks browser_goto):
+// the human approves each domain with the URL in front of them, via the
+// harness permission prompt. Reads, screenshots and evidence saves run
+// free once the navigation was approved.
 package main
 
 import (
@@ -510,8 +511,8 @@ func (s *session) shotPath() string {
 }
 
 type gotoInput struct {
-	// Full http(s) URL. Holds for approval with this URL in front of the
-	// human; public addresses only (see checkURL).
+	// Full http(s) URL. Sensitive with this URL in front of the
+	// human at prompt time; public addresses only (see checkURL).
 	URL string `json:"url"`
 }
 
@@ -563,14 +564,16 @@ func main() {
 	store = &sessions{byProfile: map[string]*session{}, agentDir: agentDir, chrome: chrome}
 
 	// Browser holds no domain store, so the gate gets the process's one
-	// Mongo client (ADR-0011 Stage 2): approvals + audit need a shared
+	// Mongo client (ADR-0011 Stage 2): the audit trail needs a shared
 	// store, and this is the only dial in the process. Without Mongo the
-	// gate is unshared, like memory's ephemeral mode: reads run, goto
-	// denies fail-closed with audit — the server stays up instead of
-	// taking the entrypoint gate down with it.
+	// gate is unshared, like memory's ephemeral mode: everything runs
+	// with an in-memory audit trail that dies with the process — the
+	// server stays up instead of taking the entrypoint gate down with
+	// it. (This server goes away with #495; until then, treat a missing
+	// database as unaudited navigation, not blocked navigation.)
 	var gate approvals.Store = approvals.NewMemoryStore()
 	if _, db, err := mongostore.Open(mongostore.Env()); err != nil {
-		log.Printf("browser: no database, gated tools will deny: %v", err)
+		log.Printf("browser: no database, audit trail is ephemeral (unaudited on restart): %v", err)
 	} else {
 		gate = approvals.NewOn(db)
 	}
@@ -578,7 +581,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "browser", Version: "1.0.0"}, nil)
 
 	approvalgate.AddTool(s, "browser", gate, &mcp.Tool{Name: "browser_goto",
-		Description: "Open a page in the profile's persistent browser. Public http(s) only; login walls stop the call with a report (v1 cannot fill forms, so no password is ever pasted). Holds for approval with the URL shown."},
+		Description: "Open a page in the profile's persistent browser. Public http(s) only; login walls stop the call with a report (v1 cannot fill forms, so no password is ever pasted). Sensitive: the harness prompts with the URL shown."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in gotoInput) (*mcp.CallToolResult, map[string]any, error) {
 			u, err := checkURL(in.URL)
 			if err != nil {
