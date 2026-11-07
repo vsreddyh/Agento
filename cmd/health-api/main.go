@@ -48,7 +48,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// tokens reads accepted tokens fresh (env may rotate without a restart).
+// tokens reads accepted tokens fresh (env may rotate without a restart
+// in-process — under compose the root .env is baked at container creation,
+// so a PASSWORD edit needs `./scripts/hermes.sh restart` to recreate;
+// without it the app keeps 401ing on the old value).
 func tokens() map[string]bool {
 	out := map[string]bool{}
 	for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {

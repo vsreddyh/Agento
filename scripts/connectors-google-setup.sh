@@ -1080,12 +1080,14 @@ if (( ! _final_ok )); then
   warn "The server fails these closed — Google would never call back."
   if ! confirm "Keep it anyway?"; then exit 1; fi
 fi
-# Loopback-port cross-check: a loopback REDIRECT_URI is served direct by
-# health-api on the mapped host port (HEALTH_HOST_PORT, compose default
-# 8001) — not through the proxy — so any other port probes dead air and
-# registers a URL nothing answers. http AND https loopback alike: an
-# https://localhost:<wrong-port> URL would otherwise skip this check and
-# die later as DNS-unreachable when the TLS probe dials plain HTTP.
+# Loopback-port cross-check: a loopback REDIRECT_URI is served either
+# direct by health-api on the mapped host port (HEALTH_HOST_PORT, compose
+# default 8001) or through the proxy on APP_PORT (compose default 8080) —
+# two distinct registrations, so either mapped port passes but anything
+# else probes dead air and registers a URL nothing answers. http AND https
+# loopback alike: an https://localhost:<wrong-port> URL would otherwise
+# skip this check and die later as DNS-unreachable when the TLS probe
+# dials plain HTTP.
 if [[ "$_final_scheme" == "http" || "$_final_scheme" == "https" ]]; then
   case "$_final_host" in
     localhost|127.0.0.1|::1)
@@ -1096,17 +1098,21 @@ if [[ "$_final_scheme" == "http" || "$_final_scheme" == "https" ]]; then
         _loop_port="${_loop_port#:}"
       elif [[ "$_loop_port" == *:* ]]; then
         _loop_port="${_loop_port##*:}"
+      elif [[ "$_final_scheme" == "https" ]]; then
+        _loop_port="443"
       else
         _loop_port="80"
       fi
-      # Empty (dangling colon) was already rejected above; default http
-      # port 80 on loopback is unreachable in practice (nothing serves
-      # it), so it fails the same way.
-      if [[ "$_loop_port" != "$_health_port" ]]; then
-        warn "loopback REDIRECT_URI port ($_loop_port) differs from the health-api host port ($_health_port from $_health_port_src):"
+      # Empty (dangling colon) was already rejected above; default ports
+      # with nothing serving them (http:80, https:443 on loopback) fail
+      # the same way.
+      if [[ "$_loop_port" != "$_health_port" && "$_loop_port" != "$_proxy_port" ]]; then
+        warn "loopback REDIRECT_URI port ($_loop_port) matches neither the health-api host port ($_health_port from $_health_port_src) nor the proxy port ($_proxy_port):"
         warn "  value: $REDIRECT_URI"
-        warn "Direct loopback is served on the mapped port only — fix the port or HEALTH_HOST_PORT."
+        warn "Direct loopback is served on the mapped health port, proxy loopback on the proxy port — fix the port or the vars. Either spelling registers, but only the one the browser reaches."
         if ! confirm "Keep it anyway?"; then exit 1; fi
+      else
+        note "loopback REDIRECT_URI port ($_loop_port): served — direct-health vs proxy are distinct registrations, this one matches."
       fi
       unset _loop_port
       ;;

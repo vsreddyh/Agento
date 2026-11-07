@@ -84,47 +84,54 @@ var (
 const connectorRetryBudget = time.Minute
 
 func connectorStore() connectors.Store {
+	// Fast path under lock: cache hit (durable, or non-durable still
+	// inside its retry budget) returns without any dial.
 	connectorStoreMu.Lock()
-	defer connectorStoreMu.Unlock()
-	if connectorCache != nil {
-		// A Mongo recovery must not wait for a restart to take effect:
-		// while the cached store is non-durable, re-attempt past the
-		// budget. A restart during an Atlas blip otherwise pins memory
-		// until a second restart, with 501s the whole while.
-		if !connectorCache.Durable() && time.Since(connectorCacheAt) > connectorRetryBudget {
-			if ms, err := connectors.FromEnv(); err == nil {
-				connectorCache, connectorCacheAt = ms, time.Now()
-				connectorLastErr = ""
-				log.Print("connectors: MongoDB recovered, serving durable store")
-				// The recovered store never got its TTL: index it now,
-				// best-effort on a detached budget, or pending states
-				// accumulate until the next restart.
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer cancel()
-					if err := ms.EnsureIndexes(ctx); err != nil {
-						log.Printf("connectors: WARNING recovered-store index setup failed: %s",
-							connectorBounded(approvals.ScrubError(err.Error())))
-					}
-				}()
-			} else {
-				connectorCacheAt = time.Now()
-				connectorLastErr = connectorBounded(approvals.ScrubError(err.Error()))
-			}
-		}
+	if connectorCache != nil && (connectorCache.Durable() || time.Since(connectorCacheAt) <= connectorRetryBudget) {
+		defer connectorStoreMu.Unlock()
 		return connectorCache
 	}
+	// Slow path: first boot, or a non-durable cache past its retry
+	// budget. The dial happens OUTSIDE the lock (unlock here, re-lock to
+	// swap), so one slow blip-retry never head-of-line blocks every
+	// concurrent verb — the swap is the only critical section. A second
+	// concurrent caller either wins the race (its result stands) or
+	// re-dials redundantly once; both converge on the same outcome.
+	// A Mongo recovery must not wait for a restart to take effect: a
+	// restart during an Atlas blip otherwise pins memory until a second
+	// restart, with 501s the whole while.
+	connectorStoreMu.Unlock()
+	ms, err := connectors.FromEnv()
+	connectorStoreMu.Lock()
+	defer connectorStoreMu.Unlock()
 	// If/else, not a typed-nil assignment: a failed FromEnv yields a nil
 	// *MongoStore, which as an interface value is non-nil and would cache
 	// a panic. The else branch only ever holds a live store.
 	var backend connectors.Store
-	if ms, err := connectors.FromEnv(); err != nil {
+	if err != nil {
 		log.Printf("connectors: falling back to in-process (statuses do not survive restart): %s",
 			connectorBounded(approvals.ScrubError(err.Error())))
 		backend, connectorCacheAt = connectors.NewMemoryStore(), time.Now()
 		connectorLastErr = connectorBounded(approvals.ScrubError(err.Error()))
 	} else {
-		backend = ms
+		if connectorCache != nil && !connectorCache.Durable() {
+			log.Print("connectors: MongoDB recovered, serving durable store")
+		}
+		backend, connectorCacheAt = ms, time.Now()
+		connectorLastErr = ""
+		// The recovered store never got its TTL: index it now,
+		// best-effort on a detached budget, or pending states
+		// accumulate until the next restart. (Boot-time indexing lives
+		// in initConnectors; this covers the blip-recovery path only.
+		// ms is *MongoStore by construction — no assert needed.)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := ms.EnsureIndexes(ctx); err != nil {
+				log.Printf("connectors: WARNING recovered-store index setup failed: %s",
+					connectorBounded(approvals.ScrubError(err.Error())))
+			}
+		}()
 	}
 	connectorCache = backend
 	return backend
