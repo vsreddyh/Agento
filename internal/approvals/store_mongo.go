@@ -32,8 +32,9 @@ func (s *MongoStore) clock() time.Time {
 }
 
 // Shared reports true: Mongo is visible to every process holding the
-// same URI, which is what makes gate-held calls decidable from the
-// gateway.
+// same URI, which is what keeps the audit trail (and pre-migration
+// reads/sweeps) shared. Nothing new parks post-#487, so no live decision
+// flows gateway→server anymore.
 func (s *MongoStore) Shared() bool { return true }
 
 func (s *MongoStore) logf(format string, args ...any) {
@@ -148,7 +149,8 @@ func (s *MongoStore) CreateApproval(ctx context.Context, a Approval) error {
 		if mongoDrv.IsDuplicateKeyError(err) {
 			// Ids are ObjectIDs, so this is a retry, not a collision. A line
 			// still matters: "created" and "already existed" are different
-			// facts to a triager reading one hold's story.
+			// facts to a triager reading one row's story. Pre-migration
+			// only — no prod path calls CreateApproval anymore.
 			s.logf("approvals: ignored duplicate create for %s", a.ID)
 			return nil
 		}
@@ -331,9 +333,10 @@ func (s *MongoStore) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 
 // MarkServerInterrupted expires one server's pending rows at server startup.
 // Scoped by server because all servers share the collection and a restart of
-// one must not touch another's live hold. Deliberately unscoped by createdAt,
+// one must not touch another's rows. Deliberately unscoped by createdAt,
 // unlike the gateway-wide MarkInterrupted: this process owns the server's
-// queue from boot, so there is no live hold of its own to protect.
+// queue from boot. Post-#487 only pre-migration rows can be pending, so no
+// live hold is ever at risk here.
 func (s *MongoStore) MarkServerInterrupted(ctx context.Context, server string, at time.Time) (int64, error) {
 	res, err := s.approvals.UpdateMany(ctx,
 		bson.M{"server": server, "status": string(StatusPending)},
@@ -349,7 +352,7 @@ func (s *MongoStore) MarkServerInterrupted(ctx context.Context, server string, a
 
 // MarkInterrupted expires pending rows at startup and deletes expired ones,
 // matching the memory backend: no "pending" row may outlive the server that
-// owned its wait.
+// owned it. Post-#487 only pre-migration rows can be pending.
 func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, error) {
 	if _, err := s.approvals.DeleteMany(ctx, bson.M{
 		"status":    string(StatusPending),
@@ -359,7 +362,7 @@ func (s *MongoStore) MarkInterrupted(ctx context.Context, at time.Time) (int64, 
 	}
 	// createdAt < at, not just status=pending: a Create landing between the
 	// delete and this update belongs to this startup, not the dead one, and
-	// expiring it would kill a live hold's row. Both stamps are wall clock from
+	// expiring it would touch a row this boot owns. Both stamps are wall clock from
 	// processes on this one host (the servers and gateway share the stack), so a
 	// skew is an NTP fault, not a supported deployment; ObjectID time would be
 	// the next step if the two ever ran on different clocks.

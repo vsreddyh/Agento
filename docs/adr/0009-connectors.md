@@ -18,7 +18,7 @@ per-connector OAuth and no read vs write scopes.
 - Calendar: list/upcoming + draft event. Creates/invites refused outright.
 
 Draft-only is a refusal, not a gate: the gate (`internal/approvalgate` since
-ADR-0011 Stage 2; the `cmd/mcp-gate` relay before it) answers Pi
+ADR-0011 Stage 2; the `cmd/mcp-gate` relay before it) answers the harness
 with `connectors.RefusalMessage` ("create a draft instead") and audits a
 `connector_draft_only` deny. No approval card is parked for a refused send.
 The `approvals.gatedTools` rows for the same tools are `true` as a backstop
@@ -145,7 +145,7 @@ retention pass must not add a TTL to this collection.
 - `internal/gateway` serves the four routes (list, disconnect, connect,
   callback); `cmd/pi-gateway` wires the store with the same memory
   fallback + index pattern as the siblings.
-- The in-process gate refuses draft-only sends before the approval check
+- The in-process gate refuses draft-only sends instead of any prompt
   (`cmd/mcp-gate` did this when the relay existed).
 - App Connect UI and `mcp.json` wiring arrive stacked on top — this PR is
   the shape they fill in. Remaining follow-ups are the stacked set named

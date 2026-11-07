@@ -24,11 +24,11 @@ not enforcement.
 ## Decision
 
 > Relay-era record: ADR-0011 Stage 2 deleted the `mcp-gate` relay — enforcement
-> is now an in-process library inside each server (`internal/approvalgate`).
+> became an in-process library inside each server (`internal/approvalgate`).
 > The pump / framing / batch / teardown-join mechanics below describe the
-> relay as built; the hold → approve/deny/expire behaviour and the audit
-> contract are unchanged, only the process boundary is gone. Read
-> `internal/approvalgate/gate.go` for the live path.
+> relay as built. T3-era (#487) then removed the hold flow the relay had
+> established: no park, no poll, audit every known call including reads.
+> Read `internal/approvalgate/gate.go` for the live path.
 
 ### Enforce in a relay, not in Pi or the gateway
 
