@@ -242,10 +242,11 @@ through nginx — not `pi` itself.
 | `PUT /api/memory/topics/{topic}` | yes — pause/resume one topic | memory store |
 | `POST /{profile}/api/questions/{id}` | yes — answer a pending `ask_user` dialog, exactly once | `extension_ui_response` over Pi stdin |
 
-Approval gates (#313) hold sensitive tool calls in an in-process gate inside
-each server (`internal/approvalgate`, ADR-0011 Stage 2): money writes, deletes,
-rewrites and real prunes wait up to 14 minutes for a decision here, then run
-or fail closed. See `docs/adr/0002-approval-gates.md`.
+Approval gates (#313) prompt for sensitive tool calls through the harness
+(T3/opencode permission prompts per `opencode.json`): money writes, deletes,
+rewrites and real prunes ask first; pre-migration rows used to wait up to
+14 minutes for an in-app decision here. See `docs/adr/0002-approval-gates.md`
+(pre-migration design).
 
 Memory (#315) is the per-profile store behind the app's Memory screen. The
 gateway prefixes confirmed, unpaused items onto each turn; agent-proposed items

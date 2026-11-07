@@ -32,22 +32,25 @@
 // Outage posture: audit is best-effort (a wedged store logs and continues),
 // exactly like the relay — but the relay additionally failed closed on its
 // hold write, which no longer exists. In practice the domain write fails
-// first: most MCP servers are Mongo-backed, so a down store errors the
-// handler before anything executes, and the failure is what gets audited.
-// Three boundaries on that claim, stated so they stick: browser is
+// first on hard-requiring-Mongo servers: a down store errors the handler
+// before anything executes, and the failure is what gets audited. Four
+// boundaries on that claim, stated so they stick: browser is
 // Chromium-backed, not Mongo-backed, so its navigation CAN execute while
 // unaudited during an outage (it goes away with #495; until then a missing
-// database means ephemeral audit, never blocked navigation); gmail drafts
+// database means ephemeral audit, never blocked navigation); memory falls
+// back to an in-process domain store, so saves CAN execute with an audit
+// row that dies with the process; gmail drafts
 // write to the Gmail API, so a created draft is an external side effect
 // that can land unaudited the same way (calendar drafts are validated
 // locally and sent nowhere — unaudited there means a local row only);
 // and connector sends are refused outright, so no external connector
-// send can slip through — but browser navigation and gmail drafts still
+// *send* slips through — but browser navigation and gmail drafts still
 // can (neither is a read, and the draft is a real Gmail API write). A
 // destructive Mongo-backed write that executes while unaudited needs the
-// audit write alone fails — same-DB, transient-only. The browser and
-// gmail-draft cases are NOT same-DB transient: different stores, so plan
-// for them, don't dismiss them.
+// domain to succeed while the audit write alone fails — same-DB,
+// transient-only. The browser, memory and gmail-draft cases are NOT
+// same-DB transient: different stores, so plan for them, don't dismiss
+// them.
 //
 // Cancellation: a dead calling context refuses before anything executes
 // (stop means stop — teardown must prevent the side effect, not race

@@ -492,7 +492,7 @@ func launchBrowser(dir, chrome string) (bctx context.Context, btabCancel context
 	browser, browserCancel := chromedp.NewContext(alloc)
 	// Prove launch now, not on the first approved navigation: a missing
 	// chromium binary must fail the tool call that needs it, loudly, rather
-	// than parking an approval for a browser that can never start.
+	// than prompting for a navigation that can never start.
 	if err := chromedp.Do(browser, chromedp.Navigate("about:blank")); err != nil {
 		cancel()
 		ln.Close()
