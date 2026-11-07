@@ -11,6 +11,7 @@ package com.vishnu.agento
  * and the import list, which carries exactly what this file uses.
  */
 import android.content.Context
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -106,6 +107,11 @@ internal fun TaskManagerScreen(
     // the count rides with the page so the list says so instead of
     // shrinking silently (#430). Reset with the rows, like listTruncated.
     var droppedCount by remember { mutableStateOf(0) }
+    // Rows that parsed only by resetting a mistyped numeric field to its
+    // default (#437): shown, not dropped — but the reset must be visible,
+    // so its count rides with the page like droppedCount and the key/raw/
+    // became detail rides the log line into Settings → About diagnostics.
+    var coercedCount by remember { mutableStateOf(0) }
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
     var filterName by rememberSaveable { mutableStateOf(ServerTaskFilter.Open.name) }
@@ -113,13 +119,51 @@ internal fun TaskManagerScreen(
     // coroutine armed in one composition (the safety-net timer in doComplete)
     // runs after later ones, and has to see the filter that is showing when it
     // fires — not the snapshot that was current when it was armed.
-    fun filterNow(): ServerTaskFilter =
-        runCatching { ServerTaskFilter.valueOf(filterName) }
-            .getOrDefault(ServerTaskFilter.Open)
+    fun filterNow(): ServerTaskFilter = filterForName(filterName)
     val filter = filterNow()
     var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
-    val sort = runCatching { ServerTaskSort.valueOf(sortName) }
-        .getOrDefault(ServerTaskSort.Start)
+    val sort = sortForName(sortName)
+    // A corrupt or version-skewed saved value resets to the default above
+    // (#437) — and that reset toasts once per distinct raw value per
+    // vintage, naming what was stored and what it became, instead of the
+    // view changing for no apparent reason. A clean read re-arms the
+    // dedupe, so a fix-then-rebreak notifies again like the widget path
+    // (#480 review). Saveable like the names themselves: a plain
+    // remember would reset on rotation while the corrupt name survives,
+    // re-toasting the same value (#437 review). Lists, not sets — a Set
+    // is not Bundle-saveable (see BulkSelectionSaver below).
+    var filterCoercionNoted by rememberSaveable { mutableStateOf(listOf<String>()) }
+    var sortCoercionNoted by rememberSaveable { mutableStateOf(listOf<String>()) }
+    LaunchedEffect(filterName) {
+        val filterMsg = filterCoercionMessage(filterName)
+        if (filterMsg == null) {
+            // Clean read ends the vintage: this screen shows one filter,
+            // so forget the whole noted list (not the current clean name,
+            // which by construction is never in it) — a later
+            // re-corruption notifies again, mirroring the widget path
+            // (#480 review). Assigning unconditionally would loop
+            // recomposition; the emptiness guard writes only on change.
+            if (filterCoercionNoted.isNotEmpty()) {
+                filterCoercionNoted = emptyList()
+            }
+        } else if (filterName !in filterCoercionNoted) {
+            filterCoercionNoted = filterCoercionNoted + filterName
+            runCatching { Log.w("TaskManager", "coerced filter $filterMsg") }
+            toasts.toast(filterMsg, ToastKind.Error)
+        }
+    }
+    LaunchedEffect(sortName) {
+        val sortMsg = sortCoercionMessage(sortName)
+        if (sortMsg == null) {
+            if (sortCoercionNoted.isNotEmpty()) {
+                sortCoercionNoted = emptyList()
+            }
+        } else if (sortName !in sortCoercionNoted) {
+            sortCoercionNoted = sortCoercionNoted + sortName
+            runCatching { Log.w("TaskManager", "coerced sort $sortMsg") }
+            toasts.toast(sortMsg, ToastKind.Error)
+        }
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var sortMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ServerTask?>(null) }
@@ -280,7 +324,7 @@ internal fun TaskManagerScreen(
         if (!background) error = ""
         // fold's lambdas are not suspend, so the cursor read below runs after
         // the fold, not inside onSuccess.
-        val loaded = api.list(filter.state).fold(
+        val loaded = api.list(filter.state, source = "manager").fold(
             onSuccess = { page ->
                 // Rows still playing their leave animation are carried over
                 // the fresh page (#308): the server stops listing a task the
@@ -299,6 +343,13 @@ internal fun TaskManagerScreen(
                 tasks = mergeRefresh(page.tasks, tasks, leaving)
                 listTruncated = page.truncated
                 droppedCount = page.dropped
+                coercedCount = page.coerced
+                // This screen switches states per filter: a new page for one
+                // prunes the diagnostics notes of the filters no longer
+                // shown, so About never names another filter's resets next
+                // to this count (#480 review). Failure keeps the old rows —
+                // and their notes — untouched.
+                TasksApi.clearCoercedNotesExcept("manager", filter.state)
                 error = ""
                 // Which filter these rows are the answer for (#308): recorded
                 // with the rows themselves, so the enter-animation effect never
@@ -328,11 +379,12 @@ internal fun TaskManagerScreen(
                     )
                 } else {
                     error = serverDetail(e.message ?: e.javaClass.simpleName)
-                    // The flag describes the rows on screen, so it resets with
-                    // them: a failed fetch leaves yesterday's rows up, and they
-                    // must not keep advertising yesterday's truncation.
-                    listTruncated = false
-                    droppedCount = 0
+                    // Kept with the rows, like the background path: a failed
+                    // fetch leaves yesterday's rows up, and the counts and
+                    // notes describe those rows — visible or not. Resetting
+                    // them while keeping the rows would split count, detail
+                    // and rows three ways (#480 review). Everything refreshes
+                    // together on the next landed load.
                 }
                 false
             },
@@ -616,6 +668,14 @@ internal fun TaskManagerScreen(
                 val finish = if (verb == "skip") api.skip(t.id) else api.complete(t.id)
                 finish.fold(
                     onSuccess = { done ->
+                        // The task is gone from this device's future: its
+                        // posted visuals, failure notices AND queued speech
+                        // go with it — like the notification-tap path
+                        // (cancelPosted), not just future alarms (#470
+                        // review). A surviving queue entry would later speak
+                        // a done task or resurrect a cancelled tag.
+                        TaskReminders.cancelPosted(context, t.id)
+                        ReminderTts.dropTask(context, t.id)
                         // A structured cadence rolled itself over server-side:
                         // the next occurrence is a NEW row this response does
                         // not carry, so only then fall back to a refetch — a
@@ -758,6 +818,11 @@ internal fun TaskManagerScreen(
             try {
                 api.delete(t.id).fold(
                     onSuccess = {
+                        // Gone means gone everywhere: visuals, failure
+                        // notices and queued speech, like a resolve (#470
+                        // review).
+                        TaskReminders.cancelPosted(context, t.id)
+                        ReminderTts.dropTask(context, t.id)
                         pokeWidget()
                         toasts.toast("Task deleted.", ToastKind.Success)
                     },
@@ -814,10 +879,37 @@ internal fun TaskManagerScreen(
         // twice). The button state is only the visual hint.
         if (!bulkActionsLive(ids.toSet(), busyIds)) return
         ids.forEach(::markBusy)
+        // Pre-batch rows for the update-purge gate below: read now, not on
+        // success — a background refresh in between would compare against
+        // already-new values and miss the move (#470 review).
+        val prevById = tasks.associateBy { it.id }
         scope.launch {
             try {
                 api.batch(ops).fold(
                     onSuccess = {
+                        // Same cleanup as the single-task paths, per verb
+                        // (#470 review): resolved tasks lose visuals +
+                        // notices + speech; moved tasks keep their visuals
+                        // (still live) but lose stale speech AND failure
+                        // notices, which describe the pre-move schedule;
+                        // duplicates touch nothing existing. Updates purge
+                        // only when their fields move speech/schedule
+                        // state — a description/repeat-only bulk keeps
+                        // live speech like a no-op single edit.
+                        for ((verb, verbed) in ops.groupBy({ it.op })) {
+                            when (verb) {
+                                "complete", "skip" -> verbed.map { it.id }.forEach {
+                                    TaskReminders.cancelPosted(context, it)
+                                    ReminderTts.dropTask(context, it)
+                                }
+                                "update" -> verbed.forEach { op ->
+                                    if (updateMovesSpeech(op.fields, prevById[op.id])) {
+                                        ReminderTts.dropTask(context, op.id)
+                                        ReminderTts.cancelFailures(context, op.id)
+                                    }
+                                }
+                            }
+                        }
                         silentRefresh = true
                         refreshTick++
                         pokeWidget()
@@ -1147,6 +1239,9 @@ internal fun TaskManagerScreen(
                     if (droppedCount > 0) {
                         HintLine(taskDropMessage(droppedCount))
                     }
+                    if (coercedCount > 0) {
+                        HintLine(taskCoercedMessage(coercedCount))
+                    }
                     if (listTruncated) {
                         HintLine("The server held back rows — showing the first ${tasks.size}.")
                     }
@@ -1197,9 +1292,13 @@ internal fun TaskManagerScreen(
                     )
                     // Unparseable rows are a gateway-shape problem the user
                     // can report, not a filter: the count sits with the
-                    // count line, above the rows it describes (#430).
+                    // count line, above the rows it describes (#430). A
+                    // reset value is the same class of signal (#437).
                     if (droppedCount > 0) {
                         HintLine(taskDropMessage(droppedCount))
+                    }
+                    if (coercedCount > 0) {
+                        HintLine(taskCoercedMessage(coercedCount))
                     }
                     // Time sections (skipped on the Done filter, where due
                     // buckets carry no meaning); within a section the
@@ -1484,6 +1583,24 @@ internal fun TaskManagerScreen(
                                 expectedRevision = next.revision,
                             ).fold(
                                 onSuccess = { saved ->
+                                    // Purge only when speech/schedule-relevant
+                                    // fields moved — or the pre-edit row is
+                                    // unknown: exactly the background
+                                    // schedule-diff's rule, so a
+                                    // description/repeat-only edit keeps live
+                                    // speech and notices on both paths (#470
+                                    // review). Posted visuals stay either
+                                    // way — the task itself is live.
+                                    val moved = prevRow == null ||
+                                        prevRow.name != next.name ||
+                                        prevRow.speakName != next.speakName ||
+                                        prevRow.dueDate != next.dueDate ||
+                                        prevRow.dueTime != next.dueTime ||
+                                        prevRow.estimatedMinutes != mins
+                                    if (moved) {
+                                        ReminderTts.dropTask(context, next.id)
+                                        ReminderTts.cancelFailures(context, next.id)
+                                    }
                                     if (prevRow == null) {
                                         // The row was not in the fetched page at
                                         // all: backgrounded (#308) so pulling the
@@ -2674,6 +2791,21 @@ internal fun taskDropMessage(dropped: Int): String =
         "1 task could not be parsed — the server sent a row this app cannot read."
     } else {
         "$dropped tasks could not be parsed — the server sent rows this app cannot read."
+    }
+
+/** Shared copy for reset task values (#437): rows that parsed only by
+ * resetting a mistyped value to its default. Counts ROWS with resets,
+ * not reset values: one row with three bad fields counts once, while the
+ * diagnostics detail names each field — the capped note slice reads as a
+ * sample of the rows, not the total (#480 review). The count sits in the
+ * list; the key, raw value and reset value ride the log line, which
+ * surfaces in Settings → About diagnostics (first 500 chars, so the hint
+ * promises a sample, not the full text). */
+internal fun taskCoercedMessage(coerced: Int): String =
+    if (coerced == 1) {
+        "1 task showed reset values — see Settings → About diagnostics for a sample of what changed."
+    } else {
+        "$coerced tasks showed reset values — see Settings → About diagnostics for a sample of what changed."
     }
 
 /**

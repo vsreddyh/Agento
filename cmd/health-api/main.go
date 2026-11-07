@@ -4,8 +4,9 @@
 // remote MongoDB collection the health-check bot also reads (hc_days —
 // one doc per date, same shape the MCP writes).
 //
-// Auth: single PASSWORD bearer token (matches the Password field in the
-// Agento app Settings; same credential as gateway chat).
+// Auth: bearer token(s) from PASSWORD (comma-separated = multi-token;
+// matches the Password field in the Agento app Settings, same credential
+// as gateway chat).
 //
 // Env: MONGODB_URI (required), MONGODB_DB (default: hermes), PASSWORD.
 package main
@@ -58,9 +59,12 @@ func authorize(r *http.Request) (int, string) {
 	// Constant-time bearer comparison (#416): map lookup short-circuits
 	// on the first differing byte (timing oracle), so compare against
 	// every accepted token with subtle.ConstantTimeCompare and accumulate
-	// with OR — no early return. Lengths are folded into the comparison
-	// by comparing only equal-length candidates; an empty PASSWORD still
-	// fails closed above (503) before reaching here.
+	// with OR — no early return. Unequal-length candidates are skipped, so
+	// token length is not fully hidden (0 vs 1 compares); accepted as
+	// low-risk per #416 (shared secret(s) over a noisy network, and the
+	// multi-token case only widens the length signal, not the content
+	// oracle this fix removes). An empty PASSWORD still fails closed
+	// above (503) before reaching here.
 	match := 0
 	for t := range toks {
 		if len(got) == len(t) {
@@ -109,7 +113,7 @@ func main() {
 	registerReports(mux)
 	// Rate limiting wraps everything, and lives here because main is the only place
 	// that knows the whole handler set (#176). The API is network-reachable and
-	// authed by ONE shared password, so without a counter a stuck client retrying in
+	// authed by shared password(s), so without a counter a stuck client retrying in
 	// a loop — or anyone holding that password — is an unbounded write load on a
 	// shared production MongoDB.
 	//

@@ -79,7 +79,15 @@ class TaskInstructReceiver : BroadcastReceiver() {
         )
         val threads = listOf(thread) + ChatThreads.load(appCtx, "chat")
             .filter { it.id.isNotEmpty() && it.id != thread.id }
-        ChatThreads.save(appCtx, "chat", threads)
+        // Branch on THIS save's outcome (#435 review): the per-tab flag is
+        // global, and a concurrent VM persist can flip it between our save
+        // and our read — posting "saved" for an overwritten thread, or
+        // "failed" for one that landed.
+        val saved = ChatThreads.save(appCtx, "chat", threads)
+        if (!saved) {
+            ChatNotifications.notifyInstructSaveFailed(appCtx, name, thread.id)
+            return
+        }
         // The tap-to-open card carries the thread id + autosend intent
         // (InstructIntents extras), so no persisted flag is needed: the
         // receiver-to-chat path is the notification tap itself.

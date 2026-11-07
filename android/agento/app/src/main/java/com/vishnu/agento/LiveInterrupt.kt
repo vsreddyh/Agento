@@ -31,6 +31,12 @@ import kotlin.math.sqrt
  * Needs RECORD_AUDIO; without it live mode still works tap-to-talk.
  */
 class LiveInterrupt(private val onSpeech: () -> Unit) {
+    // Visible for the watchdog: a completed job is either a normal barge
+    // fire or a death, and only the death promotes to the unavailable
+    // indicator (#449 review). Set just before onSpeech() on the IO
+    // thread — volatile like the rest of the callback-shared state.
+    @Volatile var fired = false
+        private set
 
     private var job: Job? = null
     private var aec: AcousticEchoCanceler? = null
@@ -46,6 +52,7 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
     /** Arms the detector; false when recording can't start (no mic, no permission). */
     fun start(scope: CoroutineScope): Boolean {
         if (job?.isActive == true) return true
+        fired = false
         val rate = 16_000
         val minBuf = AudioRecord.getMinBufferSize(
             rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
@@ -129,6 +136,10 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
                         // raised ABSOLUTE_MIN floor.
                         if (loudSince == 0L) loudSince = now
                         if (now - loudSince >= SUSTAIN_MS) {
+                            // Fired, not died (#449 review): the watchdog
+                            // must not promote a working barge to
+                            // "unavailable" — the job ends either way.
+                            fired = true
                             onSpeech()
                             return@launch
                         }
@@ -153,11 +164,18 @@ class LiveInterrupt(private val onSpeech: () -> Unit) {
     fun stop() {
         job?.cancel()
         job = null
+        fired = false
         // Wake a thread blocked in read(); release happens in the
         // coroutine's finally (myAec) — releasing here too double-frees
         // and races a rapid restart.
         runCatching { rec?.stop() }
     }
+
+    /** True while the detector coroutine is up (#449 review): start() can
+     * report success and the job can still die later (20 bad reads, a
+     * mid-listen SecurityException), leaving the holder claiming running.
+     * The watchdog compares against this, not the flag. */
+    fun isAlive(): Boolean = job?.isActive == true
 
     private companion object {
         const val CALIBRATE_MS = 400L

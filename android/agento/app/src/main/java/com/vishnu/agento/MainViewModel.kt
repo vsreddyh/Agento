@@ -14,6 +14,10 @@ data class UiState(
     val password: String = "",
     val healthAvailable: Boolean = false,
     val healthUpdateRequired: Boolean = false,
+    /** SDK available but the client failed to build (#435 review): a
+     * transiently dead provider, not a missing one. Settings offers a
+     * retry for this, never a permission grant that cannot fix it. */
+    val healthTransient: Boolean = false,
     val healthPackageInfo: String = "",
     val permissionsGranted: Boolean = false,
     val syncing: Boolean = false,
@@ -76,13 +80,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             healthPackageInfo = HealthConnectManager.healthConnectPackageInfo(getApplication()),
         )
         viewModelScope.launch {
+            val mgr = HealthConnectManager(getApplication())
             val granted = try {
-                HealthConnectManager(getApplication()).grantedPermissions()
+                mgr.grantedPermissions()
             } catch (e: Exception) {
                 emptySet()
             }
             _state.value = _state.value.copy(
                 permissionsGranted = granted.intersect(HealthConnectManager.PERMISSIONS).isNotEmpty(),
+                // SDK available but the client failed to build (#435
+                // review): the null client also forces an empty grant set,
+                // so without this the section demands permissions for a
+                // dead client. [availability] is captured above, same
+                // refresh, so the two halves cannot straddle a change.
+                healthTransient = !mgr.available &&
+                    availability == HealthConnectAvailability.AVAILABLE,
             )
         }
     }

@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DarkMode
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
@@ -77,6 +79,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 internal enum class SettingSection(val title: String) {
     Connection("Connection"),
+    Connectors("Connectors"),
     Health("Health sync"),
     Appearance("Appearance"),
     Widget("Home-screen widget"),
@@ -90,8 +93,8 @@ internal enum class SettingSection(val title: String) {
 
 /** App theme mode keys (prefs `theme_mode`; #28). */
 
-/** Settings hub (#60): subsections live in the sidebar and each gets its
- * own screen; model pickers live on each tab's own page (#18). Theme toggle
+/** Settings hub (#60): subsections live in the hub and each gets its
+ * own screen (#418); model pickers live on each tab's own page (#18). Theme toggle
  * lives under Appearance (#28). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,6 +104,7 @@ internal fun SettingsScreen(
     wc: WindowClass = WindowClass.Compact,
     onMenu: () -> Unit = {},
     onPick: (SettingSection) -> Unit = {},
+    onBack: () -> Unit = {},
     themeMode: String = ThemeStore.SYSTEM,
     onTheme: (String) -> Unit = {},
 ) {
@@ -188,8 +192,14 @@ internal fun SettingsScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = onMenu) {
-                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    if (section != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    } else {
+                        IconButton(onClick = onMenu) {
+                            Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                        }
                     }
                 },
                 title = { Text(section?.title ?: "Settings") },
@@ -228,13 +238,14 @@ internal fun SettingsScreen(
                             } else {
                                 state.serverUrl
                             },
-                            healthStatus = when {
-                                !state.healthAvailable -> "Not installed"
-                                !state.permissionsGranted -> "Setup needed"
-                                state.syncing -> "Syncing…"
-                                state.lastSyncAt.isNotEmpty() -> "Synced"
-                                else -> "Ready"
-                            },
+                            healthStatus = hubHealthStatus(
+                                healthAvailable = state.healthAvailable,
+                                healthUpdateRequired = state.healthUpdateRequired,
+                                healthTransient = state.healthTransient,
+                                permissionsGranted = state.permissionsGranted,
+                                syncing = state.syncing,
+                                lastSyncAt = state.lastSyncAt,
+                            ),
                             themeStatus = when (themeMode) {
                                 ThemeStore.LIGHT -> "Light"
                                 ThemeStore.DARK -> "Dark"
@@ -439,6 +450,9 @@ internal fun SettingsScreen(
                         // explain — the "not set up yet" hint would
                         // misdirect into re-saving (#430).
                     }
+                    SettingSection.Connectors -> {
+                        ConnectorsSection(toasts)
+                    }
                     // #61: the "Chat backend" subsection is removed (provider +
                     // model are picked on each tab's own page; nothing to show).
                     SettingSection.Appearance -> {
@@ -476,10 +490,42 @@ internal fun SettingsScreen(
 
                         /** Three-step gate: install Health Connect, grant permissions, then sync. */
                         when {
+                            // SDK available but the client failed to build
+                            // (#435 review): a dead provider, so a permission
+                            // grant cannot fix it — offer a retry instead.
+                            state.healthTransient -> {
+                                SectionCard(
+                                    title = "Health Connect isn't responding",
+                                    subtitle = "The app is installed but isn't answering — retry the sync. Granting permissions again won't fix this.",
+                                ) {
+                                    Button(
+                                        onClick = { viewModel.syncNow() },
+                                        enabled = !state.syncing,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(if (state.syncing) "Syncing…" else "Retry sync")
+                                    }
+                                    if (state.healthPackageInfo.isNotEmpty()) {
+                                        HintLine("Health Connect: ${state.healthPackageInfo}")
+                                    }
+                                }
+                            }
                             !state.healthAvailable -> {
                                 SectionCard(
-                                    title = "Install Health Connect",
-                                    subtitle = "Health sync needs the Health Connect app before anything else.",
+                                    // An outdated provider is not a missing one
+                                    // (#435 review): the install branch used to
+                                    // claim "not installed" for both, so the
+                                    // update fix hid behind the wrong title.
+                                    title = if (state.healthUpdateRequired) {
+                                        "Update Health Connect"
+                                    } else {
+                                        "Install Health Connect"
+                                    },
+                                    subtitle = if (state.healthUpdateRequired) {
+                                        "Health sync needs a newer Health Connect provider before anything else."
+                                    } else {
+                                        "Health sync needs the Health Connect app before anything else."
+                                    },
                                 ) {
                                     Button(
                                         onClick = {
@@ -742,6 +788,7 @@ internal fun SettingsHub(
     val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, behaviourStatus, widgetStatus, usageStatus, appVersion) {
         listOf(
             HubRow(SettingSection.Connection, serverStatus),
+            HubRow(SettingSection.Connectors, "Gmail · Calendar"),
             HubRow(SettingSection.Health, healthStatus),
             HubRow(SettingSection.Appearance, themeStatus),
             HubRow(SettingSection.Widget, widgetStatus),
@@ -793,6 +840,7 @@ internal data class HubRow(val section: SettingSection, val status: String)
 
 internal fun SettingSection.hubIcon() = when (this) {
     SettingSection.Connection -> Icons.Filled.Cloud
+    SettingSection.Connectors -> Icons.Filled.Link
     SettingSection.Health -> Icons.Filled.Favorite
     SettingSection.Appearance -> Icons.Filled.DarkMode
     SettingSection.Widget -> Icons.Filled.Dashboard
@@ -1680,6 +1728,57 @@ internal fun saveDiagnosticsFile(context: Context, text: String): java.io.File {
     return file
 }
 
+/** Settings Health card headline (#435 review): update-required outranks
+ * not-installed. The old order checked availability first, which made the
+ * update branch dead code — update-required devices read "not installed"
+ * while the sync card said "needs an update". Pure so a JVM test pins the
+ * order; the strings stay here, next to their renderer. */
+internal fun healthStatusLine(
+    healthAvailable: Boolean,
+    healthUpdateRequired: Boolean,
+    healthTransient: Boolean = false,
+): String =
+    when {
+        healthUpdateRequired -> "Health Connect needs an update"
+        // A transiently dead client reads as not responding, like the hub
+        // row and the sync message — never "ready" for a client that
+        // isn't answering (#471 review).
+        healthTransient -> "Health Connect isn't responding"
+        !healthAvailable -> "Health Connect not installed"
+        else -> "Health Connect ready"
+    }
+
+/** Hub Health row (#435 review): same order as [healthStatusLine], short
+ * strings for the hub. A transiently dead client reads as not responding,
+ * never "setup needed" — setup cannot fix it. Pure for the same reason. */
+internal fun hubHealthStatus(
+    healthAvailable: Boolean,
+    healthUpdateRequired: Boolean,
+    healthTransient: Boolean,
+    permissionsGranted: Boolean,
+    syncing: Boolean,
+    lastSyncAt: String,
+): String = when {
+    healthUpdateRequired -> "Update needed"
+    healthTransient -> "Not responding"
+    !healthAvailable -> "Not installed"
+    !permissionsGranted -> "Setup needed"
+    syncing -> "Syncing…"
+    lastSyncAt.isNotEmpty() -> "Synced"
+    else -> "Ready"
+}
+
+/** Settings Health card permission line (#435 review): a transiently dead
+ * client forces an empty grant set, so "not granted yet" would imply a
+ * grant that cannot fix anything — the line says unknown instead. Pure
+ * for JVM pinning, like its neighbours. */
+internal fun healthPermLine(permissionsGranted: Boolean, healthTransient: Boolean): String =
+    when {
+        healthTransient -> "Permissions unknown — the client isn't responding"
+        permissionsGranted -> "Permissions granted"
+        else -> "Permissions not granted yet"
+    }
+
 /** Summarizes Health Connect install vs. permission state for Settings. */
 @Composable
 internal fun HealthStatusCard(state: UiState) {
@@ -1690,16 +1789,12 @@ internal fun HealthStatusCard(state: UiState) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            val healthText = when {
-                !state.healthAvailable -> "Health Connect not installed"
-                state.healthUpdateRequired -> "Health Connect needs an update"
-                else -> "Health Connect ready"
-            }
-            val permText = if (state.permissionsGranted) {
-                "Permissions granted"
-            } else {
-                "Permissions not granted yet"
-            }
+            val healthText = healthStatusLine(
+                state.healthAvailable,
+                state.healthUpdateRequired,
+                state.healthTransient,
+            )
+            val permText = healthPermLine(state.permissionsGranted, state.healthTransient)
             Text(healthText, style = MaterialTheme.typography.titleSmall)
             Text(
                 permText,

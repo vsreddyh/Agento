@@ -8,6 +8,229 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [6.4.0]
+- **In-chat connector mentions (#441).** Typing `@` in the composer offers
+  `@gmail` / `@calendar` rows; tapping one inserts the mention and the turn
+  sends wire-verbatim for the agent (which holds the connector tools) to
+  resolve — stored text untouched, `@<id>` rendering as a chip like
+  `/skill:` commands. Any message carrying the server's dead-grant wording
+  ("reconnect in Settings") renders a reconnect card that navigates to
+  Settings → Connectors instead of ever asking for a password or token in
+  chat.
+
+## [6.3.0]
+- **Connectors screen (#440).** New Settings → Connectors section with one row
+  per connector (Gmail, Calendar): live status, the exact scopes a tap grants
+  (`gmail.read`/`gmail.draft`, `calendar.read`/`calendar.draft`), a Connect
+  button that opens the one-time Google consent URL in the browser, and a
+  per-connector Disconnect. The app polls the list for ~2 minutes of wall
+  clock total across rotations while a consent page is outstanding and
+  resolves automatically when the row flips to connected ("Check again"
+  covers slower consents — the server attempt lives 10 minutes); the
+  dead-server verdict accumulates across rotations with the budget. A
+  missing consent URL or connector row fails loudly like the list. A missing or empty
+  `connectors` array fails loudly instead of reading as an empty list, and
+  a failed refresh banners even over stale rows (healed by the next good
+  list). Overlapping writers resolve by fetch sequence so stale results
+  cannot plant over fresher rows; mutation taps guard synchronously so a
+  same-frame double-tap cannot mint two consent attempts. Disconnect maps
+  its row optimistically from the confirmed POST (advancing freshness past
+  in-flight fetches so nothing stale reverts it) and toasts the action
+  itself; the re-list heals the rest, banners only on a fresh failure.
+  Expired rows surface the server's `reconnect` hint as a Reconnect prompt
+  and offer Disconnect next to it, so revoking never requires re-consenting
+  first; unconfigured servers read as "not set up". The app never sees
+  code/verifier/token (server-only exchange), and disconnect stops future
+  access without wiping already-fetched chat history.
+
+## [6.2.4]
+- **Voice input failures show errors (#432).** One-shot mic: an empty
+  result now toasts "Didn't catch that — tap the mic to try again." (Error);
+  an incomplete one toasts "Voice input didn't complete — tap the mic to
+  try again." (Info — the recognizer reports its own errors as cancelled,
+  so even a genuine Back-button cancel toasts: a silent CANCELED could be
+  a recognizer error, unlike the camera/gallery pickers which stay
+  silent). Live mode: when
+  barge-in detection fails its bounded retry — or dies mid-session, which a
+  watchdog promotes to the same flag — a persistent "Barge-in unavailable —
+  end the live session and start a new one." line shows until detection
+  recovers or the session ends, so tap-to-talk is distinguishable from a
+  working detector that never triggered.
+
+## [6.2.3]
+- **Settings sidebar loses its duplicate subsections (#418).** The drawer
+  and rail show one Settings entry that opens the hub; subsection rows are
+  gone (the hub rows already navigate there). Subsection screens gain a
+  back arrow returning to the hub.
+
+## [6.2.2]
+- **Reset values say so (#437).** A stored value that falls back to its
+  default no longer does it silently: a corrupt or version-skewed Task
+  Manager filter/sort toasts once per vintage naming what was stored and
+  what it became (a clean read re-arms, so a re-corruption notifies
+  again), each widget placement logs its view/density/sort reset (once per
+  value per vintage — dedupe on the full stored value, display truncated;
+  a fix re-arms the log, so a re-corruption notifies
+  again) into Settings → About diagnostics alongside a per-key summary
+  (cleared when the pref is fixed or the placement deleted, so
+  diagnostics reflects current state, not history), and task rows whose
+  numbers arrive mistyped (e.g.
+  `estimated_minutes: "abc"`, a negative estimate clamped to 0,
+  `"NaN"`/overflow/fractions no task can hold (blank strings report
+  verbatim, never as empty) — negative repeat and
+  revision clamp likewise) keep
+  showing with the reset value while the list carries a hint counting
+  rows (the per-field detail reads as a sample, not a second total);
+  single-row reads (`get`/`create`/`update`/`reopen`/`complete`/`skip`/
+  `batch`) join both channels under a bounded hash of their row id
+  instead of riding the log only; a list page evicts the single entries
+  of the rows it contains, so the two never disagree (the single
+  namespace is global — any containing page subsumes the entry, so a
+  clean page from one screen clears a single entry another surface
+  wrote); and a 404 naming
+  the row evicts it on every verb (already-gone included), not just
+  `get` — batch matches the quoted, server-truncated id, and only on a
+  uniquely-echoed row, so one gone row can never evict a live sibling
+  (a gone row sharing its echo with a live sibling instead keeps its
+  entry — no list page will ever contain a deleted row — until a
+  single-verb 404, a delete, or process restart clears it).
+  the key, the raw value and what it became ride both the log and
+  the diagnostics summary — per fetch source and state, so one screen's
+  fetch can neither clobber nor clear another's per-fetch entry (each surface that
+  switches states — manager per landed load, widget factory per settled
+  bind in its own per-placement namespace — prunes its own stale ones;
+  failed/empty binds and preview binds prune nothing; deleting a widget
+  drops that placement's factory entries, deleting the last one drops
+  the push entries too (counted through the provider-filtered list, so
+  a foreign id on the affected launcher cannot pin them), and turning
+  reminders off drops theirs) — the
+  log and the page carry the same capped sample while the diagnostics
+  record keeps every row (the About line shows the first 500 chars, so
+  very large pages reconcile by count, not by full text), so the hint
+  points at a sample of the on-screen detail.
+  Defaults themselves are unchanged — only the
+  rewriting is now visible.
+
+## [6.2.1]
+- **Inexact alarms say so (#436).** The Due-time reminders toggle no
+  longer reads exact when the exact-alarm grant is missing: its own
+  sub-line carries a persistent "Inexact — reminders may be late" badge
+  (on or off), with a hint explaining the inexact mode until the grant
+  is allowed in system settings. Each inexactly-armed reminder carries
+  the short badge collapsed and the long inexact notice as the last
+  expanded-view line, so a late fire traces to its cause in-app instead
+  of reading as an app bug. The badge records what was actually armed (including the
+  SecurityException-fallback arm), not a re-read at fire time — except
+  alarms armed before the flag existed, which fall back to the live grant
+  until re-armed (one-shots on the next refresh; an already-armed overdue
+  nag when it fires and re-arms its own cadence).
+
+## [6.2.0]
+- **Stale and failed data says so (#435).** The task widget badges cached
+  rows after a failed fetch ("12 open · updated 09:14 — refresh failed", with
+  the date when the fetch is older than today; timeless "refresh failed —
+  showing saved tasks" when the stamp itself is missing) instead of
+  presenting yesterday's tasks as live. A thread-file write failure (disk
+  full, OOM) now banners the conversation sheet with
+  "Conversations couldn't be saved — storage may be full." and toasts once,
+  because memory is ahead of disk and the next launch would silently show
+  the older conversation. The flag survives restarts via a synchronously
+  committed prefs marker cleared by the next landed save (a disk-full marker
+  targets the same full disk, so that path stays best-effort and re-reports
+  on the next failed save), so the next launch banners and toasts too; a
+  task instruction whose save fails posts an "Instruction not saved" card
+  (gated on the failure kind, never the muted success kind; branched on
+  that save's own result, not the tab-global flag a concurrent persist can
+  flip; keyed per thread, so two failed forwards never collapse into one
+  card) instead of a "saved" card that deep-links a thread that was never
+  persisted. A successful backup import clears the failure state, so a
+  restore never launches into a stale banner. The restart-seeded banner
+  names the loss ("was lost on restart") instead of claiming memory-only
+  messages that died with the process — and "seeded" means the
+  restart-surviving marker alone, so a same-process failure still reads
+  as memory-only with its turn intact. Health sync on a device
+  without Health Connect reports "Health Connect unavailable on this
+  device" ("needs an update" when the SDK says so, like the settings card;
+  "isn't responding — try again" for a transient client failure, where the
+  settings section offers the same retry instead of a useless permission
+  grant, the card headline reads "isn't responding" instead of "ready",
+  and the card's permission line reads unknown rather than
+  "not granted") instead of "permissions not granted", and never posts an empty
+  day that reads as no data. The settings Health card's update branch was
+  dead code behind the availability check; all three surfaces lead with
+  the update state now.
+
+## [6.1.0]
+- **Reminder speech failures are loud now (#434).** Every spoken alert the
+  engine drops says so: a toast plus a companion "Spoken alert couldn't
+  play" notice next to the reminder (auto-cancel, like the reminder
+  itself), instead of Log-only silence that was indistinguishable from
+  success. That covers a dead engine, a rejected or interrupted utterance,
+  a timeout, and a queue overflow — and a stored voice the engine no
+  longer offers still speaks, but says it fell back to the default voice.
+  (DND/silent stays visual-only by design, and a notice for an engine
+  failure that later recovers is retracted when the queued speech plays.)
+  Notices clear when that reminder point fires again, when the task goes
+  away or reschedules, or on successful Complete/Skip (a failed tap keeps
+  both, like the reminder itself); otherwise swipe them away like the
+  reminder itself. Queued speech purges with the task too: completing it
+  drops its unplayed utterances (stopping a playing one) instead of
+  speaking a done task or resurrecting its failure notice —
+  and that covers the in-app Complete/Skip/Delete/Edit paths, not just
+  notification taps (an edit/move also clears failure notices, which
+  describe the pre-edit schedule). Turning reminders off purges the whole
+  speech queue (stopping playback too) so nothing queued can outlive the
+  toggle; failures racing the toggle stay Log-only instead of toasting.
+  Failure notices retract by enumerating live failure tags, so terminal
+  failures (reported after their queue item is gone) also clear on
+  disable or task-drop — including pre-death ones, since tags outlive
+  the process that posted them. Speech queued before DND flipped drops silently
+  at dequeue, audio playing when DND flips is stopped by a ringer-mode
+  listener, and the stored-voice check runs after the toggle re-check —
+  extending the visual-only rule past the enqueue gate on all three sides.
+  The toggle is honored at both ends of every fetch: an alarm firing into
+  a disable drops silently (no visual, no nag re-arm), and a refresh
+  overtaken by one never arms over the wiped set. The toggle is honored
+  at both ends of every fetch and before every side effect: an alarm
+  firing into a disable drops silently (no visual, no nag re-arm — the
+  re-arm is decided early but acted on only under a live toggle), a
+  refresh overtaken by one never arms, and an imported toggle reconciles
+  through the same refresh/cancel paths instead of writing the pref raw.
+  Bulk updates purge on value diffs, not key presence, so same-value
+  rewrites keep live speech like no-op single edits. Failure reports carry
+  the drop generations stamped at enqueue, so a task-drop or disable
+  landing between capture and post swallows the report instead of
+  resurrecting a cancelled tag — including across a quick re-enable.
+  pump() re-checks utterance liveness right before speaking (a drop
+  inside the slow voice block retracts the point's notice too), not just
+  at dequeue. In-app edits purge only when speech/schedule fields moved
+  (description/repeat-only saves keep live speech, like the background
+  diff), bulk updates gate on the same wire keys, and lead changes purge
+  only BeforeStart points (only that text names the lead) — while a
+  reschedule riding a lead change still purges fully. Drop generations
+  ride per point, so a kind-scoped drop never swallows another kind's
+  concurrent failure; a DND dequeue drop retracts the point's notice
+  like the receiver does.
+  Stopping speech always clears its flags and advances the queue (a
+  callback-less stop must not wedge it). A refresh that cancels a task's
+  last triggers purges its posted visuals, failure notices and queued
+  speech too — but only for tasks with no live bid left (a lingering
+  fired key or a budget cut keeps its task live). That purge runs only on
+  a complete page: past the server cap "no bids" means "unseen", so a
+  truncated page skips it rather than risk yanking live alerts. A
+  background reschedule diffs the last-seen schedule (due, estimate,
+  spoken name) and purges speech and failure notices like an in-app edit
+  (posted visuals stay — the task is live); the diff only ever matches
+  ids on the page, so truncated pages purge reschedules too and only skip
+  storing the partial snapshot. In-app edits purge only when
+  speech/schedule fields moved (description/repeat-only saves keep live
+  speech, like the background diff), and lead changes purge only
+  BeforeStart points (only that text names the lead). When the device language isn't available in the engine,
+  the alert is skipped with an error rather than spoken in US English. The
+  voice picker tells a dead engine ("isn't answering — Reload retries it")
+  apart from one that genuinely offers no voices. Chat read-aloud is
+  unchanged (it leaves with Chat to T3).
+
 ## [6.0.0]
 - **Every legacy fallback is gone (#433).** One canonical key per setting,
   one endpoint per action, one envelope shape — and anything still on a

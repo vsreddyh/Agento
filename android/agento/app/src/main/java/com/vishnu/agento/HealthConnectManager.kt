@@ -24,15 +24,30 @@ import java.time.format.DateTimeFormatter
 
 /**
  * Reads health data from Health Connect and shapes it into [HealthSyncPayload]
- * for upload. All reads run on Dispatchers.IO; every method degrades to an
- * empty payload (never throws) when the client is unavailable.
+ * for upload. All reads run on Dispatchers.IO. A missing/unusable client
+ * degrades to empty results (never throws), but those are a transport floor,
+ * not data: callers MUST check [available] first and report a missing
+ * client as unavailable (#435) — disambiguating transient (SDK AVAILABLE,
+ * retry) from absent (install/update) via [availabilityStatus] — never as
+ * an empty day or a denial.
  */
 class HealthConnectManager(context: Context) {
 
-    /** Null when Health Connect is missing/unusable — callers treat null as "no data". */
+    /** Null when Health Connect is missing/unusable. Callers must NOT read
+     * null as "no data" (#435): [available] exists so an absent platform is
+     * reported as unavailable, never as an empty day. */
     private val client: HealthConnectClient? = runCatching {
         HealthConnectClient.getOrCreate(context)
     }.getOrNull()
+
+    /** True when the Health Connect client exists on this device. False
+     * means no usable client — either an absent platform OR a transient
+     * build failure (provider IPC crash: SDK AVAILABLE, `getOrCreate`
+     * threw) — never a statement about the user's data (#435): an empty
+     * day, an absent platform and a dead client are three different facts.
+     * Disambiguate with [availabilityStatus]: AVAILABLE + !available is a
+     * transient retry, anything else is install/update (#471 review). */
+    val available: Boolean get() = client != null
 
     /** Static helpers: permission set, install diagnostics, timestamp format. */
     companion object {
@@ -76,7 +91,9 @@ class HealthConnectManager(context: Context) {
             "https://play.google.com/store/apps/details?id=$HEALTH_CONNECT_PACKAGE"
     }
 
-    /** Currently granted permissions (subset of [PERMISSIONS]). */
+    /** Currently granted permissions (subset of [PERMISSIONS]). Empty when
+     * the client is missing — check [available] first (#435), or an absent
+     * platform reads as "permissions not granted". */
     suspend fun grantedPermissions(): Set<String> {
         val c = client ?: return emptySet()
         return withContext(Dispatchers.IO) {
@@ -104,6 +121,8 @@ class HealthConnectManager(context: Context) {
     /**
      * Today's payload: steps + active calories since UTC midnight, sleep and
      * workouts from the last 24h (covers last night's sleep spilling past midnight).
+     * A missing client yields an empty-shaped payload — a transport floor, not
+     * a day with no data. Check [available] first (#435).
      */
     suspend fun collectToday(): HealthSyncPayload {
         val c = client ?: return HealthSyncPayload(

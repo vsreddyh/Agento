@@ -251,6 +251,50 @@ internal fun overdueText(elapsedMillis: Long): String {
 internal fun postedTag(taskId: String, kind: ReminderKind) = "$taskId#${kind.key}"
 
 /**
+ * Due-time toggle sub that names its true mode (#436).
+ *
+ * The toggle enables away on the inexact path when the exact-alarm grant
+ * is missing ("never strand the toggle off"), so the ON row must not read
+ * exact when the alarms behind it are not: the sub carries the persistent
+ * "Inexact — reminders may be late" badge whenever the grant is missing.
+ */
+internal const val REMINDER_TOGGLE_SUB =
+    "Moved here from the Task Manager bell — one switch, same alarms."
+
+/** [REMINDER_TOGGLE_SUB], plus the inexact badge when the grant is missing. */
+internal fun reminderToggleSub(exactGranted: Boolean): String =
+    if (exactGranted) REMINDER_TOGGLE_SUB
+    else "$REMINDER_TOGGLE_SUB $INEXACT_BADGE_SHORT."
+
+/** Short badge shared by the toggle sub and the collapsed notification line. */
+internal const val INEXACT_BADGE_SHORT = "Inexact — reminders may be late"
+
+/**
+ * Expanded-view badge for one posted reminder (#436): the per-alarm half
+ * of the same downgrade. Null when exact, so call sites add it blindly.
+ */
+internal const val INEXACT_ALARM_NOTICE =
+    "Inexact alarm — may arrive late. Allow exact alarms in system settings for on-time reminders."
+
+/** [INEXACT_ALARM_NOTICE] when the exact grant is missing, else null. */
+internal fun inexactAlarmNotice(exactGranted: Boolean): String? =
+    if (exactGranted) null else INEXACT_ALARM_NOTICE
+
+/**
+ * Live exact-alarm grant (single inventory for every reader).
+ *
+ * Pre-S always true (no grant exists there); S+ reads the manager, and a
+ * throwing manager answers granted rather than stranding the toggle on a
+ * query failure.
+ */
+internal fun canScheduleExactAlarms(appCtx: Context): Boolean =
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) true
+    else runCatching {
+        (appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
+            .canScheduleExactAlarms()
+    }.getOrDefault(true)
+
+/**
  * The window line for the expanded view (#287): bare start-to-due times,
  * "8:30 to 9:00". Parsed from instants and zero-padded, never echoed from
  * storage (the stored due time is unpadded and [friendlyDue] carries a day
@@ -292,6 +336,71 @@ private fun addIfFuture(
     if (at > nowMillis) out[kind] = at
 }
 
+/** Schedule identity for one task: what a reschedule changes. Due, time
+ * and estimate drive the alarm set; the name and voice phrase drive the
+ * spoken text — a rename must purge stale speech like a reschedule does
+ * (#470 review). Description and repeat ride no alert and no utterance,
+ * so they stay out: purging on them would silence live reminders for a
+ * no-op change. */
+internal fun scheduleFingerprint(t: ServerTask): String =
+    "${t.dueDate}|${t.dueTime}|${t.estimatedMinutes}|${t.name}|${t.speakName}"
+
+/** The last-seen schedule per open task id. */
+internal fun scheduleSnapshot(tasks: List<ServerTask>): Map<String, String> =
+    tasks.associate { it.id to scheduleFingerprint(it) }
+
+/**
+ * Ids present in both snapshots whose schedule moved (#470 review): a
+ * background or agent-side edit that drops a point (estimate/lead
+ * change) cancels its future alarm in the key loop below, but its queued
+ * speech and failure notices would otherwise orphan — no future fire
+ * heals them, and the task stays live so [goneTaskIds] skips it.
+ */
+internal fun rescheduledIds(
+    prev: Map<String, String>,
+    next: Map<String, String>,
+): Set<String> =
+    next.keys.intersect(prev.keys).filter { prev[it] != next[it] }.toSet()
+
+/** Encodes a schedule snapshot for prefs (one entry per task). Task ids
+ * are hex ObjectIds today, so `|` never appears in one — the same
+ * belt-and-braces assumption the `#` split in `operation()` makes. */
+internal fun encodeSchedule(snapshot: Map<String, String>): Set<String> =
+    snapshot.map { (id, fp) -> "$id|$fp" }.toSet()
+
+/** Decodes [encodeSchedule]; malformed entries are skipped, never kept. */
+internal fun decodeSchedule(raw: Set<String>): Map<String, String> =
+    raw.mapNotNull { e ->
+        val cut = e.indexOf('|')
+        if (cut < 0) null else e.substring(0, cut) to e.substring(cut + 1)
+    }.toMap()
+
+/**
+ * Tasks whose armed keys all dropped AND that hold no live bid (#470
+ * review): completed, deleted, or rescheduled clean past every armed
+ * point behind them. Their posted visuals, failure notices and queued
+ * speech must purge with the keys — no future alarm will fire to run
+ * post()'s early-exit purge.
+ *
+ * Zero bids, not merely a dropped key: fired one-shot keys linger in the
+ * persisted set (nothing removes them at fire time) and budget-cut keys
+ * keep their bids — a still-live task must never land here, or a routine
+ * refresh would yank live alerts. Legacy bare-id keys (no `#`) count as
+ * their own task id, mirroring [TaskReminders.operation]. Pure and
+ * JVM-pinned.
+ */
+internal fun goneTaskIds(
+    armed: Set<String>,
+    keep: Set<String>,
+    candidateKeys: Set<String>,
+): Set<String> {
+    val live = candidateKeys.map { it.substringBeforeLast('#') }.toSet()
+    return armed.filter { it !in keep }
+        .map { it.substringBeforeLast('#') }
+        .filter { it !in live }
+        .toSet()
+}
+
 /**
  * Due-time reminders for server tasks. Opt-in via Settings → Behaviour
  * (default off: alarms must never surprise a fresh install). [refresh]
@@ -321,6 +430,14 @@ object TaskReminders {
 
     private const val PREF_ARMED = "task_reminder_armed"
     private const val PREF_BUDGET = "task_reminder_budget"
+    /**
+     * Last-seen schedule per open task (`taskId|dueDate|dueTime|estimate|
+     * name|speakName`), plus the lead it was read under. A background or
+     * agent-side edit moves these without touching the UI paths, so
+     * refresh diffs them to find reschedules (see [rescheduledIds]).
+     */
+    private const val PREF_SCHEDULE = "task_reminder_schedule"
+    private const val PREF_SCHEDULE_LEAD = "task_reminder_schedule_lead"
     /** Backed up (see SettingsBackup.BOOLEAN_KEYS): internal so the backup
      * test pins the key by reference, not by a string literal that could
      * drift silently on rename. */
@@ -365,7 +482,15 @@ object TaskReminders {
         prefs(context).edit {
             putBoolean(PREF_ENABLED, enabled)
         }
-        if (enabled) refresh(context) else cancelAll(context)
+        if (enabled) {
+            refresh(context)
+        } else {
+            cancelAll(context)
+            // Disabled means no fetch will ever refresh this entry again —
+            // drop it, or About names resets for a surface the user turned
+            // off (#480 review).
+            TasksApi.clearCoercedNotesSource("reminders")
+        }
     }
 
     private fun prefs(context: Context) =
@@ -401,12 +526,22 @@ object TaskReminders {
         if (!isEnabled(appCtx)) return RefreshOutcome.Ok
         // Limit 500 (server max): the budget below can only arm what it
         // sees, and the default 200 would silently drop tasks past it.
-        val tasks = TasksApi(appCtx).list("open", limit = 500).getOrNull()?.tasks
+        val page = TasksApi(appCtx).list("open", limit = 500, source = "reminders").getOrNull()
             ?: return RefreshOutcome.Failed
+        // Second half of the entry gate above: an enable→disable toggle
+        // inside the fetch window must not let this stale pass arm over
+        // the wiped set (#470 review).
+        if (!isEnabled(appCtx)) return RefreshOutcome.Ok
+        val tasks = page.tasks
         // IST-pinned (#124): due times are entered as wall-clock IST,
         // so "now" and the arming horizon must read the same zone.
         val nowMillis = LocalDateTime.now(IST).atZone(IST).toInstant().toEpochMilli()
         val horizon = LocalDate.now(IST).plusDays(HORIZON_DAYS).toString()
+        // Background/agent-side reschedules never touch the UI mutation
+        // paths, so nothing there purges their stale speech and failure
+        // notices — but the stored schedule moved under them (#470
+        // review). See purgeReschedules (same fetch, runs first).
+        purgeReschedules(appCtx, page, tasks)
         // One critical section from here to the final write. Everything
         // below is CPU-only plus the arm/cancel calls, and the point is
         // that an alarm firing on another thread cannot edit PREF_ARMED
@@ -482,6 +617,26 @@ object TaskReminders {
             .map { it.key }
             .toSet()
         val keep = LinkedHashSet(capped)
+        // Tasks with no live point left at all: completed, deleted, or
+        // rescheduled clean past every armed point behind them. Their
+        // posted visuals, failure notices and queued speech would otherwise
+        // orphan — no future alarm will fire to run post()'s early-exit
+        // purge, because this loop just cancelled the last triggers (#470
+        // review). cancelPosted() is the same bundle the tap paths use.
+        // Gated on a complete page: past the server cap "no bids" means
+        // "unseen", not "gone".
+        if (!page.truncated) {
+            for (taskId in goneTaskIds(armed, keep, candidates.map { it.key }.toSet())) {
+                cancelPosted(appCtx, taskId)
+            }
+        }
+        // Late toggle check (#470 review): a disable landing anywhere
+        // above — the fetch, the snapshot purge, the lock wait — must not
+        // let this stale pass arm over the wiped set or rewrite PREF_ARMED
+        // under it. Return before the first side effect, not just before
+        // the computation: the check-then-arm sliver past here is
+        // inherent, everything before it is closable.
+        if (!isEnabled(appCtx)) return RefreshOutcome.Ok
         for (key in armed) {
             if (key in keep) continue
             // Keys from 4.4 and earlier were a bare task id, armed with
@@ -519,6 +674,51 @@ object TaskReminders {
     }
 
     /**
+     * Purges stale speech and failure notices for background/agent-side
+     * reschedules, found by diffing the last-seen schedule (#470 review).
+     * Runs BEFORE the key loop in [refreshInner] (same fetch): purging
+     * first fails safe — a crash between purge and store re-purges next
+     * time, while the reverse order could store first and never purge.
+     * Posted visuals stay, exactly like an in-app edit: the task itself
+     * is live, only its pre-edit evidence goes.
+     *
+     * Truncation-safe by construction: the diff only matches ids present
+     * in BOTH snapshots, and the lead-change branch only touches ids on
+     * this page — an unseen task is neither. Only the snapshot STORE
+     * needs a complete page: persisting a partial page would forget
+     * beyond-cap tasks and miss their next change.
+     */
+    private fun purgeReschedules(appCtx: Context, page: TaskList, tasks: List<ServerTask>) {
+        val next = scheduleSnapshot(tasks)
+        val prev = decodeSchedule(prefs(appCtx).getStringSet(PREF_SCHEDULE, emptySet()).orEmpty())
+        val prevLead = prefs(appCtx).getLong(PREF_SCHEDULE_LEAD, -1L)
+        val leadNow = BehaviourSettings.reminderLeadMinutes(appCtx)
+        if (prevLead != -1L) {
+            // A lead change moves every BeforeStart point at once — but
+            // only BeforeStart text names the lead, so only that point
+            // purges per task: dropping start/due/overdue speech would
+            // lose live reminders silently, and their notices stay valid
+            // (#470 review). Reschedules purge alongside regardless: a
+            // rename riding a lead change must not keep stale
+            // due/start/overdue speech.
+            val beforeKey = ReminderKind.BeforeStart.key
+            for (id in rescheduledIds(prev, next)) {
+                ReminderTts.dropTask(appCtx, id)
+                ReminderTts.cancelFailures(appCtx, id)
+            }
+            if (prevLead != leadNow) {
+                for (id in next.keys) ReminderTts.dropTask(appCtx, id, beforeKey)
+            }
+        }
+        if (!page.truncated) {
+            prefs(appCtx).edit {
+                putStringSet(PREF_SCHEDULE, encodeSchedule(next))
+                putLong(PREF_SCHEDULE_LEAD, leadNow)
+            }
+        }
+    }
+
+    /**
      * Drop every reminder for one task (all kinds). Like [rearmOverdue] this
      * leaves PREF_BUDGET alone: the budget is a snapshot of the last
      * [refresh], and one task's alarms coming or going does not make that
@@ -542,6 +742,13 @@ object TaskReminders {
         for (kind in ReminderKind.entries) {
             runCatching { mgr.cancel(postedTag(taskId, kind), ALARM_NOTIF_ID) }
         }
+        // Companion speech-failure notices are per-point too: completing,
+        // skipping or dismissing the task must leave none orphaned (#434).
+        ReminderTts.cancelFailures(context.applicationContext, taskId)
+        // And its queued speech goes too: a surviving entry would later
+        // speak a completed task or fail and re-post a tag just cancelled
+        // (#470 review).
+        ReminderTts.dropTask(context.applicationContext, taskId)
     }
 
     /**
@@ -613,21 +820,34 @@ object TaskReminders {
      * A revoked grant between the check and the call throws
      * SecurityException; falling back per alarm keeps one revocation from
      * aborting the loop.
+     *
+     * The inexactness rides along as an intent extra ([EXTRA_REMINDER_INEXACT]),
+     * so the receiver badges what was actually armed (#436): a live re-read
+     * at fire time could disagree either way (grant allowed after an
+     * inexact arm, or revoked after an exact one). The SecurityException
+     * retry re-flags too — that alarm went out inexact despite the grant
+     * read saying exact.
      */
     private fun armAlarm(appCtx: Context, key: String, at: Long) {
         val mgr = appCtx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            mgr.canScheduleExactAlarms()
-        val op = operation(appCtx, key)
+        val exact = canScheduleExactAlarms(appCtx)
         val armedOk = runCatching {
             if (exact) {
-                mgr.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+                mgr.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP, at, operation(appCtx, key, inexact = false),
+                )
             } else {
-                mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op)
+                mgr.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP, at, operation(appCtx, key, inexact = true),
+                )
             }
         }.isSuccess
         if (!armedOk && exact) {
-            runCatching { mgr.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, op) }
+            runCatching {
+                mgr.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP, at, operation(appCtx, key, inexact = true),
+                )
+            }
         }
     }
 
@@ -724,9 +944,13 @@ object TaskReminders {
             remove(PREF_ARMED)
             remove(PREF_BUDGET)
         }
+        // And the speech queue goes too: utterances queued before the
+        // toggle must not play audibly after it, nor fail back with
+        // toasts + re-posted notices (#470 review).
+        ReminderTts.dropAll(appCtx)
     }
 
-    private fun operation(appCtx: Context, key: String): PendingIntent {
+    private fun operation(appCtx: Context, key: String, inexact: Boolean = false): PendingIntent {
         // Split on the LAST '#': the kind is a fixed suffix, so an id that
         // itself contained one would otherwise truncate the task id. Ids are
         // hex ObjectIds today, so this is belt-and-braces.
@@ -738,6 +962,10 @@ object TaskReminders {
         val fire = Intent(appCtx, TaskAlarmReceiver::class.java)
             .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
             .putExtra(EXTRA_REMINDER_KIND, kind)
+            // Arm-time inexactness (#436): extras don't count for
+            // PendingIntent identity, so cancelling with the default still
+            // matches an alarm armed with the flag set.
+            .putExtra(EXTRA_REMINDER_INEXACT, inexact)
             // The path segment is encoded: a '/' in an id would otherwise
             // change the URI's structure and break PendingIntent identity.
             .setData("agento://reminder/${Uri.encode(taskId)}/$kind".toUri())
@@ -750,6 +978,13 @@ object TaskReminders {
 
 /** Which reminder point fired; mirrors [ReminderKind.key]. */
 internal const val EXTRA_REMINDER_KIND = "agento.reminder.kind"
+
+/**
+ * Whether this alarm went out inexact (#436). Written by [TaskReminders]
+ * at arm time; absent on alarms armed before the flag existed, where the
+ * receiver falls back to the live grant.
+ */
+internal const val EXTRA_REMINDER_INEXACT = "agento.reminder.inexact"
 
 private fun reminderKindOrNull(raw: String?): ReminderKind? =
     ReminderKind.entries.firstOrNull { it.key == raw }
@@ -769,17 +1004,45 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // at the deadline, never a nag loop.
         val kind = reminderKindOrNull(intent.getStringExtra(EXTRA_REMINDER_KIND))
             ?: ReminderKind.Due
+        // Arm-time inexactness (#436) travels to [post]: the grant may
+        // have flipped either way since this alarm went out.
+        val armedInexact = intent.getBooleanExtra(EXTRA_REMINDER_INEXACT, false)
+        val armedInexactKnown = intent.hasExtra(EXTRA_REMINDER_INEXACT)
         val pending = goAsync()
         alarmScope.launch {
             try {
-                post(context.applicationContext, taskId, kind)
+                post(context.applicationContext, taskId, kind, armedInexact, armedInexactKnown)
             } finally {
                 pending.finish()
             }
         }
     }
 
-    private suspend fun post(appCtx: Context, taskId: String, kind: ReminderKind) {
+    private suspend fun post(
+        appCtx: Context,
+        taskId: String,
+        kind: ReminderKind,
+        armedInexact: Boolean,
+        armedInexactKnown: Boolean,
+    ) {
+        // Off means off at both ends of the fetch: a disable landing
+        // before it skips the network entirely, and one landing inside
+        // the fetch window still drops silently — no visual, no rearm, no
+        // speech — instead of posting while disabled or re-arming the nag
+        // over cancelAll's wiped set (#470 review). The check-then-act
+        // sliver past the second check is inherent.
+        if (!TaskReminders.isEnabled(appCtx)) return
+        // A stale speech-failure notice for THIS point must not outlive a
+        // fresh alert: a retried alarm that now plays would otherwise sit
+        // next to its own earlier failure. Other points' notices stay — one
+        // point firing says nothing about another's speech (#434).
+        // Unconditional, including silent fires (#470 review): a silent
+        // fire schedules no speech retry, so guarding on audible would
+        // leave the old tag next to the fresh visual with nothing to ever
+        // supersede it — for a one-shot point, possibly forever. The fresh
+        // visual is the current truth; the failure already toasted when it
+        // happened, and the Log keeps it.
+        ReminderTts.cancelFailureFor(appCtx, taskId, kind.key)
         // One indexed lookup, not the whole open list: the receiver knows
         // the id, and `GET /api/tasks/{id}` answers in one query where the
         // list made every nag quadratic (#168). Null means gone
@@ -793,23 +1056,39 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         // (only a timeout is null), and cancelling on failure would
         // silently drop the alarm for a task that is still open.
         val task = outcome?.getOrNull()
+        // Second half of the entry gate above: a disable inside the fetch
+        // window drops here, before any visual, rearm or speech.
+        if (!TaskReminders.isEnabled(appCtx)) return
         if (outcome?.isSuccess == true && (task == null || !task.isOpen())) {
             TaskReminders.cancelOne(appCtx, taskId)
+            // Done/deleted: the full bundle, like an in-app delete — posted
+            // visuals included. Anything less orphans: no future alarm will
+            // fire to clean up after this one (#470 review).
+            TaskReminders.cancelPosted(appCtx, taskId)
             return
         }
         // The overdue nag is the one self-repeating point: keep it going
         // only while the task is still open and still past due, so
         // completing, deleting or rescheduling it stops the nagging. The
         // one-shot points are the receiver's job to forget — their time
-        // has passed either way.
+        // has passed either way. Re-arming is DEFERRED, not direct (see
+        // the flag): acting here would let a disable between rearm and
+        // the final notify gate resurrect the nag over the wiped set
+        // (#470 review).
+        var rearmNag = false
         if (kind == ReminderKind.Overdue) {
             val due = task?.let { dueMillisOrNull(it.dueDate, it.dueTime) }
             if (task != null && due != null && due <= System.currentTimeMillis()) {
-                TaskReminders.rearmOverdue(appCtx, taskId)
+                rearmNag = true
             } else if (outcome?.isSuccess == true) {
                 // The fetch worked and the task is no longer past due: it
-                // was rescheduled, so stop the nag and say nothing.
+                // was rescheduled, so stop the nag and say nothing. Past
+                // points' failure notices go too — they describe a schedule
+                // that no longer exists (#434 review) — and so does their
+                // queued speech (#470 review).
                 TaskReminders.cancelOne(appCtx, taskId)
+                ReminderTts.cancelFailures(appCtx, taskId)
+                ReminderTts.dropTask(appCtx, taskId)
                 return
             } else {
                 // Fetch failed: unknowable, so keep the cadence rather than
@@ -818,7 +1097,8 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 // staying quiet here would end the nag until some unrelated
                 // edit happened to re-derive it. The next successful fetch
                 // drops it the moment the task is gone or rescheduled.
-                TaskReminders.rearmOverdue(appCtx, taskId)
+                // Deferred like the still-due arm above.
+                rearmNag = true
             }
         }
         val name = task?.name.orEmpty().ifEmpty {
@@ -867,13 +1147,24 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         }
         // Locals: task is nullable and conditions below don't smart-cast.
         val taskDesc = task?.description.orEmpty()
-        // Expanded view, at most three lines (#287): the message, the task's
-        // own description, and the bare start-to-due window ("8:30 to 9:00").
+        // Expanded view: the message, the task's own description, the bare
+        // start-to-due window ("8:30 to 9:00"), and the inexact badge when
+        // the alarm went out inexact (#436).
         // Deliberately not a dump of every field — the repeat rule, the
         // parallel flag and the estimate are things to look up in the app,
         // not to read on a lock screen (issue #160).
         val window = task?.let { reminderWindowLine(it) }.orEmpty()
         val fetchFailed = outcome?.isSuccess != true
+        // Inexact badge (#436): what was actually armed, not a live
+        // re-read — the grant may have flipped either way between arming
+        // and firing. Pre-flag alarms (armed before the extra existed)
+        // fall back to the live grant, the best signal available.
+        val inexact = if (armedInexactKnown) {
+            armedInexact
+        } else {
+            !canScheduleExactAlarms(appCtx)
+        }
+        val inexactNotice = inexactAlarmNotice(!inexact)
         val big = buildList {
             add(message)
             // The alert still fires (a missed alarm is worse than an ugly
@@ -881,6 +1172,7 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             if (fetchFailed) add("Task details couldn't be loaded — check the server connection.")
             if (taskDesc.isNotEmpty()) add(taskDesc)
             if (window.isNotEmpty()) add(window)
+            if (inexactNotice != null) add(inexactNotice)
         }.joinToString("\n")
         // Inline complete runs in the background receiver (no visible UI:
         // completes, refreshes widget/alarms). Data URI + own request
@@ -957,6 +1249,9 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(tap)
+            // Collapsed badge (#436): the shade row names the inexact mode
+            // without expanding; the expanded view repeats it last (above).
+            .apply { if (inexactNotice != null) setSubText(INEXACT_BADGE_SHORT) }
             // No icon (0): framework checkables render badly as action
             // icons on some OEMs.
             .addAction(0, "Completed", done)
@@ -971,6 +1266,13 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 NotificationCompat.BigTextStyle().bigText(big),
             )
         }
+        // Final toggle gate (#470 review): a disable anywhere between
+        // the fetch gate and here drops silently instead of posting a
+        // visual while off — and the deferred nag re-arm below only runs
+        // under a live toggle, so no disable window can resurrect it over
+        // the wiped set. Speech gates itself on the same flag.
+        if (!TaskReminders.isEnabled(appCtx)) return
+        if (rearmNag) TaskReminders.rearmOverdue(appCtx, taskId)
         mgr.notify(
             // Tag-based identity ([postedTag]): unique per task *and*
             // reminder point, so a task's start nudge, heads-up and each

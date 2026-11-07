@@ -173,3 +173,87 @@ class TaskBulkTest {
         assertNull(parseBatchError("HTTP 404: not found"))
     }
 }
+
+/**
+ * Bulk-update purge gating (#470 review): only field sets that move
+ * speech/schedule state purge — matching the single edit and the
+ * background schedule diff, so description/repeat-only bulks keep live
+ * speech and notices.
+ */
+class BulkUpdateMovesSpeechTest {
+
+    @Test
+    fun `due and estimate moves purge`() {
+        assertTrue(updateMovesSpeech(JSONObject().put("due_date", "2026-08-09")))
+        assertTrue(updateMovesSpeech(JSONObject().put("estimated_minutes", 30)))
+        assertTrue(updateMovesSpeech(JSONObject().put("name", "New")))
+        assertTrue(updateMovesSpeech(JSONObject().put("speak_name", "New")))
+        assertTrue(updateMovesSpeech(JSONObject().put("due_time", "10:00")))
+    }
+
+    @Test
+    fun `description repeat and guard metadata do not purge`() {
+        assertFalse(updateMovesSpeech(JSONObject().put("description", "x")))
+        assertFalse(updateMovesSpeech(JSONObject().put("repeat_every", 2)))
+        assertFalse(updateMovesSpeech(JSONObject().put("expected_revision", 3)))
+    }
+
+    @Test
+    fun `the bulk move shape purges through its guard key`() {
+        // doBulkMove sends due_date + expected_revision: the guard key
+        // must never itself count as a change.
+        assertTrue(
+            updateMovesSpeech(
+                JSONObject().put("due_date", "2026-08-09").put("expected_revision", 3),
+            ),
+        )
+    }
+
+    @Test
+    fun `null fields purge fail-safe`() {
+        assertTrue(updateMovesSpeech(null))
+    }
+}
+
+/**
+ * Bulk-update value diffing (#470 review): key presence purges only when
+ * there is no previous row to compare — a same-value rewrite (moving
+ * tasks already on that date) purges nothing, like a no-op single edit
+ * and the background schedule diff.
+ */
+class BulkUpdateValueDiffTest {
+
+    private val prev = ServerTask(
+        id = "a",
+        name = "Take meds",
+        dueDate = "2026-08-09",
+        dueTime = "09:00",
+        estimatedMinutes = 60,
+    )
+
+    @Test
+    fun `a same-value move purges nothing`() {
+        assertFalse(
+            updateMovesSpeech(
+                JSONObject().put("due_date", "2026-08-09").put("expected_revision", 3),
+                prev,
+            ),
+        )
+    }
+
+    @Test
+    fun `a changed value purges`() {
+        assertTrue(
+            updateMovesSpeech(JSONObject().put("due_date", "2026-08-10"), prev),
+        )
+        assertTrue(
+            updateMovesSpeech(JSONObject().put("estimated_minutes", 30), prev),
+        )
+        assertTrue(updateMovesSpeech(JSONObject().put("name", "Other"), prev))
+    }
+
+    @Test
+    fun `no previous row purges fail-safe`() {
+        assertTrue(updateMovesSpeech(JSONObject().put("due_date", "2026-08-09"), null))
+    }
+}

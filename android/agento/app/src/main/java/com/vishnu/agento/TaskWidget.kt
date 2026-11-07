@@ -144,6 +144,70 @@ internal fun List<ServerTask>.sortedForWidget(sort: TaskWidgetSort): List<Server
         TaskWidgetSort.Estimate -> sortedByMode(ServerTaskSort.Estimate)
     }
 
+/** A stored widget view name, defaulting to Open (#437). Unknown names
+ * reset — and that reset reports through [widgetViewCoercion], so a
+ * corrupt or version-skewed pref is visible instead of a placement
+ * changing for no apparent reason. */
+internal fun widgetViewForName(raw: String?): TaskWidgetView =
+    raw?.let { n -> TaskWidgetView.entries.firstOrNull { it.name == n } }
+        ?: TaskWidgetView.Open
+
+/** Names a widget view reset (#437): null when [raw] is absent (the
+ * default itself is fine) or known, otherwise `"raw"->became`. */
+internal fun widgetViewCoercion(raw: String?): String? =
+    if (raw == null || TaskWidgetView.entries.any { it.name == raw }) null
+    else "${visibleTaskRaw(raw)}->${TaskWidgetView.Open.name}"
+
+/** A stored widget density name, defaulting to Comfortable (#437). */
+internal fun widgetDensityForName(raw: String?): TaskWidgetDensity =
+    raw?.let { n -> TaskWidgetDensity.entries.firstOrNull { it.name == n } }
+        ?: TaskWidgetDensity.Comfortable
+
+/** Names a widget density reset (#437): null when absent or known. */
+internal fun widgetDensityCoercion(raw: String?): String? =
+    if (raw == null || TaskWidgetDensity.entries.any { it.name == raw }) null
+    else "${visibleTaskRaw(raw)}->${TaskWidgetDensity.Comfortable.name}"
+
+/** A stored widget sort name, defaulting to Server (#437). */
+internal fun widgetSortForName(raw: String?): TaskWidgetSort =
+    raw?.let { n -> TaskWidgetSort.entries.firstOrNull { it.name == n } }
+        ?: TaskWidgetSort.Server
+
+/** Names a widget sort reset (#437): null when absent or known. */
+internal fun widgetSortCoercion(raw: String?): String? =
+    if (raw == null || TaskWidgetSort.entries.any { it.name == raw }) null
+    else "${visibleTaskRaw(raw)}->${TaskWidgetSort.Server.name}"
+
+/** Whether two millis fall on the same device-local calendar day (#435
+ * review): a yesterday 09:14 stamp badged as "updated 09:14" reads as
+ * today, understating the cache age by a day. Pure java.util for JVM
+ * pinning; the widget renders device-local, so the comparison is too. */
+internal fun isSameDay(aMillis: Long, bMillis: Long): Boolean {
+    val a = java.util.Calendar.getInstance().apply { timeInMillis = aMillis }
+    val b = java.util.Calendar.getInstance().apply { timeInMillis = bMillis }
+    return a.get(java.util.Calendar.YEAR) == b.get(java.util.Calendar.YEAR) &&
+        a.get(java.util.Calendar.DAY_OF_YEAR) == b.get(java.util.Calendar.DAY_OF_YEAR)
+}
+
+/** Stale-widget badge (#435): rows rendered from cache after a failed
+ * fetch. [fetchedAt] is null when the fetch time is unknown — the badge
+ * then reads "refresh failed" with no time, never a clean count. */
+internal data class StaleBadge(val fetchedAt: Long?)
+
+/** Badge behind a widget render: non-null when the live fetch failed and
+ * cached rows stand in, null when the rows on screen are live (#435).
+ * Top-level and pure so a JVM test can pin the rule without Android —
+ * the "updated …" suffix itself needs a Context and stays in
+ * [TaskWidget]'s count line. A null stamp still badges (#435 review):
+ * [cachedViews] and [cachedAt] are separate Volatile writes, so a reader
+ * can observe a cached entry with a missing stamp, and that must never
+ * render as live data. */
+internal fun staleBadgeFor(
+    fresh: List<ServerTask>?,
+    cached: List<ServerTask>?,
+    fetchedAt: Long?,
+): StaleBadge? = if (fresh == null && cached != null) StaleBadge(fetchedAt) else null
+
 /**
  * Ids of *this* provider's placements.
  *
@@ -234,9 +298,10 @@ class TaskWidget : AppWidgetProvider() {
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         // Drop this placement's per-widget prefs so removed widgets don't
         // leak keys forever. Every key the widget writes is removed below —
-        // a new display key needs THREE matching edits, not a list trusted
+        // a new display key needs FOUR matching edits, not a list trusted
         // to stay current (#388): the write in TaskWidgetConfigActivity,
-        // the read in render(), and this removal loop.
+        // the read in render(), this removal loop, and the diagnostics
+        // prune below it.
         prefs(context).edit {
             for (id in appWidgetIds) {
                 remove("task_widget_view_$id")
@@ -247,6 +312,32 @@ class TaskWidget : AppWidgetProvider() {
                 // Retired diagnostic ladder: drop its key on delete too.
                 remove("task_widget_style_$id")
             }
+        }
+        // Diagnostics must not outlive the placement (#480 review): the
+        // clean-read clear never fires for a deleted id, so prune its
+        // entries (and its log-dedupe entries, so a reused id re-logs a
+        // real corruption) here.
+        for (id in appWidgetIds) {
+            pruneCoercionsFor(id)
+        }
+        // Task-notes lifecycle mirrors the pref prune above (#480 review).
+        // Factory entries are keyed per deleted placement
+        // (`widget-factory-<id>`), so they die with it unconditionally —
+        // the namespace names the deleted id and cannot touch a live
+        // placement's detail, even when the lookup below fails. The push
+        // path refetches all three states every cycle while any placement
+        // lives, so `widget:*` stays fresh on its own and is dropped only
+        // with the last placement — counted through the provider-filtered
+        // [taskWidgetIds], since the raw lookup can hand back another
+        // provider's id on the affected launcher and a foreign id must not
+        // pin this source's entries; a failed lookup keeps it, so a
+        // transient failure cannot delete live detail.
+        for (id in appWidgetIds) {
+            TasksApi.clearCoercedNotesSource("widget-factory-$id")
+        }
+        val remaining = runCatching { taskWidgetIds(context) }.getOrNull()
+        if (remaining != null && remaining.isEmpty()) {
+            TasksApi.clearCoercedNotesSource("widget")
         }
     }
 
@@ -315,6 +406,13 @@ class TaskWidget : AppWidgetProvider() {
         @Volatile var cachedViews: Map<String, List<ServerTask>> = emptyMap()
             private set
 
+        // When each cached state was last fetched successfully (#435):
+        // in-memory like the cache it describes. A stale render (fetch
+        // failed, cache used) names this time so yesterday's rows can never
+        // pass for live data.
+        @Volatile private var cachedAt: Map<String, Long> = emptyMap()
+            private set
+
         // Last fetch failure per server state (#130). Survives across
         // pulls so the empty view can name the reason (and offer a
         // tap-to-retry) instead of a dead generic error.
@@ -356,6 +454,23 @@ class TaskWidget : AppWidgetProvider() {
                         "density=${densityFor(ctx, id)} sort=${sortFor(ctx, id)} " +
                         "showDue=${showDueFor(ctx, id)} " +
                         "scrollable=${scrollableFor(ctx, id)}")
+                }
+                // Resets that notified (#437): the latest raw->became per
+                // pref key, so a placement that changed for no apparent
+                // reason traces to its cause here even after log rotation.
+                val coerced = lastCoercions
+                if (coerced.isNotEmpty()) {
+                    appendLine("coerced=" + coerced.toSortedMap()
+                        .map { (k, v) -> "$k $v" }.joinToString("; ").take(500))
+                }
+                // Task rows that parsed only by resetting a mistyped number
+                // (#437): the latest notes per fetched state, so each
+                // screen's hint points at its own rows' detail (#480).
+                val taskCoerced = TasksApi.lastCoercedNotes
+                if (taskCoerced.isNotEmpty()) {
+                    appendLine("taskCoerced=" + taskCoerced.toSortedMap()
+                        .map { (s, ns) -> "$s: " + ns.joinToString("; ") }
+                        .joinToString(" | ").take(500))
                 }
                 appendLine("cached=${cachedViews.mapValues { it.value.size }}")
                 appendLine("errors=${lastErrors.mapValues { it.value.take(300) }}")
@@ -516,25 +631,86 @@ class TaskWidget : AppWidgetProvider() {
             context.applicationContext.getSharedPreferences(
                 AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
 
-        /** This placement's view, defaulting to Open. */
+        /** This placement's view, defaulting to Open. A stored name
+         * nothing knows resets AND logs once (#437): what key held what
+         * raw value and what it became. The line surfaces in Settings →
+         * About diagnostics, so corruption reads as corruption instead of
+         * a placement changing for no apparent reason. */
         fun viewFor(context: Context, appWidgetId: Int): TaskWidgetView {
-            val name = prefs(context).getString("task_widget_view_$appWidgetId", null)
-            return TaskWidgetView.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetView.Open
+            val key = "task_widget_view_$appWidgetId"
+            val name = prefs(context).getString(key, null)
+            noteCoercion(key, widgetViewCoercion(name), name)
+            return widgetViewForName(name)
         }
 
-        /** This placement's density, defaulting to Comfortable. */
+        /** This placement's density, defaulting to Comfortable. Resets
+         * report like [viewFor] (#437). */
         fun densityFor(context: Context, appWidgetId: Int): TaskWidgetDensity {
-            val name = prefs(context).getString("task_widget_density_$appWidgetId", null)
-            return TaskWidgetDensity.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetDensity.Comfortable
+            val key = "task_widget_density_$appWidgetId"
+            val name = prefs(context).getString(key, null)
+            noteCoercion(key, widgetDensityCoercion(name), name)
+            return widgetDensityForName(name)
         }
 
-        /** This placement's row order, defaulting to Server (fetch order). */
+        /** This placement's row order, defaulting to Server (fetch order).
+         * Resets report like [viewFor] (#437). */
         fun sortFor(context: Context, appWidgetId: Int): TaskWidgetSort {
-            val name = prefs(context).getString("task_widget_sort_$appWidgetId", null)
-            return TaskWidgetSort.entries.firstOrNull { it.name == name }
-                ?: TaskWidgetSort.Server
+            val key = "task_widget_sort_$appWidgetId"
+            val name = prefs(context).getString(key, null)
+            noteCoercion(key, widgetSortCoercion(name), name)
+            return widgetSortForName(name)
+        }
+
+        // Resets that already notified (#437): one log line per distinct
+        // key+raw per process, so every render does not re-log the same
+        // corruption. Reads and writes under [coercionLock]; the latest
+        // reset per key also lands in [lastCoercions] for diagnostics().
+        // Internal for the JVM pin below, like the pure coercion helpers.
+        internal val coercionSeen = mutableSetOf<String>()
+        internal val coercionLock = Any()
+        @Volatile internal var lastCoercions: Map<String, String> = emptyMap()
+
+        internal fun noteCoercion(key: String, short: String?, full: String? = short) {
+            // A clean read clears the key AND re-arms the log dedupe: a
+            // fixed pref stops advertising its old reset, and a later
+            // re-corruption notifies again — a fix is a vintage boundary
+            // like a delete, not log spam protection (#480 review).
+            // Dedupe runs on the FULL raw, display on the capped short:
+            // two distinct stored values sharing a 40-char prefix are two
+            // vintages, not one (#480 review).
+            if (short == null) {
+                synchronized(coercionLock) {
+                    lastCoercions = lastCoercions - key
+                    coercionSeen.removeIf { seen -> seen.startsWith("$key|") }
+                }
+                return
+            }
+            val token = "$key|${full ?: short}"
+            val fresh = synchronized(coercionLock) {
+                lastCoercions = lastCoercions + (key to short)
+                coercionSeen.add(token)
+            }
+            if (fresh) runCatching { Log.w("TaskWidget", "coerced $key $short") }
+        }
+
+        /**
+         * Drops every diagnostics + log-dedupe entry for one placement's
+         * display keys (#480 review): deletion is the ultimate fix, and
+         * the clean-read clear never fires for a gone id — without this
+         * the About screen would name resets for widgets that no longer
+         * exist. Clearing the seen-set too, so a later placement reusing
+         * the id re-logs a real corruption.
+         */
+        internal fun pruneCoercionsFor(appWidgetId: Int) {
+            synchronized(coercionLock) {
+                val keys = setOf(
+                    "task_widget_view_$appWidgetId",
+                    "task_widget_density_$appWidgetId",
+                    "task_widget_sort_$appWidgetId",
+                )
+                lastCoercions = lastCoercions.filterKeys { it !in keys }
+                coercionSeen.removeIf { seen -> keys.any { seen.startsWith("$it|") } }
+            }
         }
 
         /** Whether this placement's rows show the due line. */
@@ -691,7 +867,7 @@ class TaskWidget : AppWidgetProvider() {
                     // 50 rows is the whole visible universe. Do not "fix"
                     // this into an unbounded fetch — the collection behind
                     // it is (#168).
-                    async { v.state to api.list(v.state, limit = 50) }
+                    async { v.state to api.list(v.state, limit = 50, source = "widget") }
                 }.awaitAll().forEach { (state, res) ->
                     res.getOrNull()?.tasks?.let { views[state] = it }
                         ?: run {
@@ -700,7 +876,11 @@ class TaskWidget : AppWidgetProvider() {
                         }
                 }
             }
-            if (views.isNotEmpty()) cachedViews = cachedViews + views
+            if (views.isNotEmpty()) {
+                val now = System.currentTimeMillis()
+                cachedViews = cachedViews + views
+                cachedAt = cachedAt + views.keys.associateWith { now }
+            }
             // Drop errors for states that just succeeded so a stale
             // message can never outlive its failure (#130 review).
             lastErrors = (lastErrors + errors) - views.keys
@@ -719,7 +899,12 @@ class TaskWidget : AppWidgetProvider() {
                 // the same order, and a second prefs read could straddle a
                 // settings write.
                 val sort = sortFor(appCtx, id)
-                val tasks = views[view.state]?.sortedForWidget(sort)
+                val fresh = views[view.state]
+                // Cache used because THIS state's fetch failed (#435): a
+                // failed fetch must never render as live data. Render the
+                // cached rows but badge them with when they were fetched.
+                val staleBadge = staleBadgeFor(fresh, cachedViews[view.state], cachedAt[view.state])
+                val tasks = fresh?.sortedForWidget(sort)
                     ?: cachedViews[view.state]?.sortedForWidget(sort)
                 if (scrollableFor(appCtx, id) && tasks != null &&
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.S
@@ -743,7 +928,7 @@ class TaskWidget : AppWidgetProvider() {
                 // One wedged placement must not abort the rest (#130).
                 runCatching {
                     mgr.updateAppWidget(
-                        id, render(appCtx, id, view, tasks, tasks == null, detail))
+                        id, render(appCtx, id, view, tasks, tasks == null, detail, staleBadge))
                 }.onFailure {
                     Log.w("TaskWidget", "updateAppWidget failed for id=$id", it)
                 }
@@ -774,6 +959,8 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             errorDetail: String? = null,
+            /** Stale-cache badge, null when the rows are live (#435). */
+            staleBadge: StaleBadge? = null,
         ): RemoteViews {
             val open = Intent(context, MainActivity::class.java).setAction(ACTION_TASKS)
             val openPending = PendingIntent.getActivity(
@@ -847,7 +1034,7 @@ class TaskWidget : AppWidgetProvider() {
                     setTextViewText(R.id.task_widget_view, view.title)
                     setTextViewText(R.id.task_widget_title, view.title)
                     setTextViewText(R.id.task_widget_count,
-                        countText(context, view, tasks, error, capped = true))
+                        countText(context, view, tasks, error, capped = true, staleBadge = staleBadge))
                 }
             }
             // E: the collection widget, on the same proven chrome.
@@ -897,7 +1084,7 @@ class TaskWidget : AppWidgetProvider() {
                 // toggle button is gone (it never rendered on this host).
                 setTextViewText(R.id.task_widget_title, view.title)
                 setTextViewText(R.id.task_widget_count,
-                    countText(context, view, tasks, error))
+                    countText(context, view, tasks, error, staleBadge = staleBadge))
                 val empty = emptyText(context, tasks, error, errorDetail)
                 setTextViewText(R.id.task_widget_empty, empty)
                 // Hide the empty line when rows are showing: an empty
@@ -933,13 +1120,15 @@ class TaskWidget : AppWidgetProvider() {
             tasks: List<ServerTask>?,
             error: Boolean,
             capped: Boolean = false,
+            /** Stale-cache badge, null when the rows are live (#435). */
+            staleBadge: StaleBadge? = null,
         ): String {
             val plural = when (view) {
                 TaskWidgetView.Open -> R.plurals.task_widget_open
                 TaskWidgetView.Done -> R.plurals.task_widget_done
                 TaskWidgetView.All -> R.plurals.task_widget_all
             }
-            return when {
+            val base = when {
                 tasks == null && !error -> context.getString(R.string.task_widget_loading)
                 tasks == null -> context.getString(R.string.task_widget_error)
                 tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
@@ -948,6 +1137,27 @@ class TaskWidget : AppWidgetProvider() {
                         " · showing " + STATIC_ROW_LIMIT
                 else -> context.resources.getQuantityString(plural, tasks.size, tasks.size)
             }
+            // Cache used after a failed fetch (#435): say so. Rows rendered
+            // without this read as live data, which is fabricated freshness.
+            // A missing stamp still badges, timelessly — the two cache maps
+            // are separate Volatile writes, so a torn read must never render
+            // a clean count. A non-today stamp names the date too (#435
+            // review): "updated 09:14" for yesterday's fetch reads as today.
+            if (staleBadge == null) return base
+            val staleAt = staleBadge.fetchedAt
+            if (staleAt == null) {
+                return base + " · " + context.getString(R.string.task_widget_stale_unknown)
+            }
+            val timePart = android.text.format.DateFormat.getTimeFormat(context)
+                .format(java.util.Date(staleAt))
+            val when0 = if (isSameDay(staleAt, System.currentTimeMillis())) {
+                context.getString(R.string.task_widget_stale, timePart)
+            } else {
+                val datePart = android.text.format.DateFormat.getDateFormat(context)
+                    .format(java.util.Date(staleAt))
+                context.getString(R.string.task_widget_stale, "$datePart $timePart")
+            }
+            return "$base · $when0"
         }
     }
 }

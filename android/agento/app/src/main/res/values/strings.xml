@@ -6,6 +6,8 @@
     <string name="task_widget_title">Task Manager</string>
     <string name="task_widget_loading">Loading…</string>
     <string name="task_widget_error">Couldn\'t load tasks</string>
+    <string name="task_widget_stale">updated %1$s — refresh failed</string>
+    <string name="task_widget_stale_unknown">refresh failed — showing saved tasks</string>
     <string name="task_widget_empty">All done!</string>
     <string name="task_widget_refresh">Refresh tasks</string>
     <string name="task_widget_complete">Complete task</string>

@@ -70,6 +70,66 @@ object ChatThreads {
     const val MAX_THREADS = 20
     const val MAX_MESSAGES = 200
 
+    /** Last thread-file write failure (#435): disk full, OOM, a read-only
+     * volume. Memory and disk now diverge, so the next cold start shows
+     * the older conversation with no other sign — the UI must say so. */
+    const val SAVE_FAILED_MESSAGE =
+        "Conversations couldn't be saved — storage may be full."
+
+    /** Last write failure per tab (#435). Cleared by the next save that
+     * actually lands. A ConcurrentHashMap: saves run on IO, reads on Main. */
+    private val lastSaveError: MutableMap<String, String> =
+        java.util.concurrent.ConcurrentHashMap()
+
+    /** The last thread-file write failure for [tab], or "" when the last
+     * save succeeded. Plain map read (no Context), so a JVM test can pin
+     * the record/clear transitions. */
+    fun saveError(tab: String): String = lastSaveError[tab] ?: ""
+
+    /** Records a failed write for [tab] (see [SAVE_FAILED_MESSAGE]). */
+    internal fun recordSaveError(tab: String) {
+        lastSaveError[tab] = SAVE_FAILED_MESSAGE
+    }
+
+    /** Clears a recorded write failure for [tab]: the write landed. */
+    internal fun clearSaveError(tab: String) {
+        lastSaveError.remove(tab)
+    }
+
+    /** Prefs marker behind a recorded write failure (#435 review): the
+     * in-memory map dies with the process, and OOM — the likeliest
+     * save-killer — kills the process right after recording. The marker
+     * (synchronously committed) survives the restart the flag is about,
+     * and a landed save clears it. Two honest limits: a stale marker (e.g.
+     * a backup import replaced the file meanwhile) still clears on the next
+     * successful save, and a disk-full marker targets the same full disk —
+     * best-effort, with the next failed save re-reporting loudly. */
+    internal fun saveErrorMarkerKey(tab: String): String = "threads_save_failed_$tab"
+
+    /** Whether a recorded write failure for [tab] survived a restart. */
+    internal fun hasPersistedSaveError(context: Context, tab: String): Boolean =
+        runCatching {
+            context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(saveErrorMarkerKey(tab), false)
+        }.getOrDefault(false)
+
+    private fun setPersistedSaveError(context: Context, tab: String, failed: Boolean) {
+        // Blocking commit, not apply (#435 review): apply flushes to disk
+        // asynchronously, and an OOM-kill before the flush loses the very
+        // marker the restart needs. Both directions commit — sets are rare
+        // (a failure, or a success that clears one) and save() is IO-gated.
+        // Disk-full callers stay best-effort: the marker targets the same
+        // full disk and may never land (runCatching swallows it). The next
+        // failed save then re-reports loudly, so the gap is one silent
+        // restart, not silent loss.
+        runCatching {
+            context.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(saveErrorMarkerKey(tab), failed)
+                .commit()
+        }
+    }
+
     private fun file(context: Context, tab: String): File =
         File(context.filesDir, "chat_threads_$tab.json")
 
@@ -224,11 +284,17 @@ object ChatThreads {
      * change and foreign-written files must validate anyway.
      * Dirty tracking is by reference (see canonicalizeUnchanged); persists
      * happen at turn boundaries, never the per-token streaming loop.
+     * Returns whether this call landed: false only when the write threw
+     * (failure recorded via [recordSaveError]). A protective skip (corrupt
+     * file, empty list — #339) returns true: nothing failed, and the
+     * per-tab error flag keeps whatever it held. Callers that must branch
+     * on their own write (the task receiver's notification) use this, not
+     * the tab-global [saveError], which a concurrent writer can flip.
      */
     @androidx.annotation.WorkerThread
-    fun save(context: Context, tab: String, threads: List<ChatThread>) {
+    fun save(context: Context, tab: String, threads: List<ChatThread>): Boolean {
         requireIoThread("ChatThreads.save")
-        runCatching {
+        return runCatching {
             val capped = threads.take(MAX_THREADS).map { t ->
                 if (t.messages.size > MAX_MESSAGES) {
                     t.copy(messages = t.messages.takeLast(MAX_MESSAGES))
@@ -253,7 +319,7 @@ object ChatThreads {
                 if (!existingParses) {
                     // Corrupt file, empty list: keep the bytes on disk
                     // (they may be recoverable by hand) and skip the write.
-                    return@runCatching
+                    return@runCatching true
                 }
             }
             // Canonicalize only what changed since the last save: same
@@ -265,10 +331,19 @@ object ChatThreads {
             val out = canonicalizeUnchanged(cached?.first, cached?.second, capped)
             file(context, tab).writeText(threadJson.encodeToString(ListSerializer(ChatThread.serializer()), out), Charsets.UTF_8)
             lastCanonical[tab] = capped to out
+            // The write landed; whatever failed before no longer describes
+            // the file (#435). The prefs marker is only touched when set —
+            // a save lands every turn, and an unconditional remove would
+            // dirty prefs (and disk) on each one.
+            clearSaveError(tab)
+            if (hasPersistedSaveError(context, tab)) {
+                setPersistedSaveError(context, tab, false)
+            }
             // The load cache is dropped here (#339): the app's own write
             // invalidates the stamp fast path, so a same-size write inside
             // one mtime tick can never serve a stale list.
             lastLoad.remove(tab)
+            true
         }.onFailure { e ->
             // Logged, not swallowed (#339): a failed write (disk full, an
             // OOM) leaves memory and disk diverging, and the next cold
@@ -276,7 +351,22 @@ object ChatThreads {
             // The JVM stub of Log throws, and this path is unit tested, so
             // the call is guarded.
             runCatching { android.util.Log.e("ChatThreads", "save failed for $tab", e) }
-        }
+            // And surfaced (#435): a persistent banner in the thread sheet,
+            // not only logcat, because memory is now ahead of disk. Pinned
+            // to prefs too — OOM kills the process right after recording,
+            // and the map alone would not survive the restart it is about.
+            recordSaveError(tab)
+            setPersistedSaveError(context, tab, true)
+        }.getOrDefault(false)
+    }
+
+    /** Clears a recorded write failure for [tab] from memory and disk
+     * (#435 review): a successful out-of-band rewrite (backup import)
+     * replaces the file the failure described, so the banner must not
+     * outlive the restore. A FAILED import keeps both, correctly. */
+    internal fun clearSaveErrorState(context: Context, tab: String) {
+        clearSaveError(tab)
+        setPersistedSaveError(context, tab, false)
     }
 
     /** Drops the dirty-tracking snapshot for [tab]: an out-of-band writer (the

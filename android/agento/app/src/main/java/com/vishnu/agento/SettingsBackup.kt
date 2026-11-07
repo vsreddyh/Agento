@@ -385,6 +385,19 @@ object SettingsBackup {
                     }
                 }
             }
+            // The reminders toggle bypasses its setter on import: a raw
+            // write would leave armed alarms + queued speech + failure tags
+            // live under a switch showing off (or nothing armed under one
+            // showing on). Route through the same paths the toggle uses —
+            // but only when the backup actually carried the key, so an
+            // unrelated import never bounces live alarms (#470 review).
+            if (values.has(TaskReminders.PREF_ENABLED) && values.opt(TaskReminders.PREF_ENABLED) is Boolean) {
+                if (values.optBoolean(TaskReminders.PREF_ENABLED)) {
+                    TaskReminders.refresh(context)
+                } else {
+                    TaskReminders.cancelAll(context)
+                }
+            }
             val files = json.optJSONObject("files")
             // Skipped files are named (#339): a skipped thread file is NOT
             // restored, and "Restored N setting(s)" over a dropped
@@ -459,6 +472,12 @@ object SettingsBackup {
                             // pre-import threads, and its next persist would
                             // write them back over this file.
                             ChatThreads.notifyRewritten(tab)
+                            // The restored file replaces whatever a recorded
+                            // write failure described (#435 review): clear
+                            // the banner state, or every launch cries
+                            // failure over a successful restore. A failed
+                            // import skips this, correctly.
+                            ChatThreads.clearSaveErrorState(context, tab)
                             applied++
                         }.onFailure { skipped += name }
                         continue

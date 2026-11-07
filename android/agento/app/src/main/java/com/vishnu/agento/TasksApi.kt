@@ -67,15 +67,28 @@ data class ServerTask(
     val nextDueDate: String = "",
 )
 
-/** A bounded list response: the rows, whether more exist, and how many
+/** A bounded list response: the rows, whether more exist, how many
  * rows arrived unparseable (empty id/name) and were skipped rather than
- * shown (#430). A nonzero [dropped] means the server spoke rows this app
+ * shown (#430), how many rows parsed only by resetting a mistyped
+ * numeric field to its default (#437), and which resets those were
+ * (#480 review): the first-3 sample rides the page for log parity —
+ * a per-field sample of the counted rows, not a second total — while the
+ * diagnostics record keeps every row's notes (see [lastCoercedNotes]), so
+ * evicting single entries never drops detail. No screen displays
+ * [coercedNotes] today: the hint's detail channel is the per-fetch record
+ * About reads, and this field exists so the page's own sample stays
+ * pinned by tests rather than implied by a global. A nonzero [dropped] means the server spoke rows this app
  * cannot read — the list surfaces the count instead of shrinking
- * silently. */
+ * silently. A nonzero [coerced] means some rows ARE shown but with a
+ * reset value (e.g. `estimated_minutes: "abc"` read as 0) — the list
+ * surfaces that count too, and the key, raw value and reset value ride
+ * the log line so Settings → About diagnostics names them. */
 data class TaskList(
     val tasks: List<ServerTask>,
     val truncated: Boolean = false,
     val dropped: Int = 0,
+    val coerced: Int = 0,
+    val coercedNotes: List<String> = emptyList(),
 )
 
 /**
@@ -204,6 +217,47 @@ internal val BULK_UPDATE_KNOWN_FIELDS = setOf(
     "estimated_minutes", "repeat_every", "repeat_unit", "repeat_days",
     "repeat_custom", "repeat_rule", "parallelable", "expected_revision",
 )
+
+/** Wire keys whose change moves reminder speech or schedule (#470
+ * review): the spoken text (name/voice phrase), the due instant, and the
+ * estimate that derives the start. Matches [scheduleFingerprint] — repeat
+ * and description ride no alert and no utterance, so bulk updates
+ * touching only those keep live speech and notices, exactly like a
+ * no-op single edit. `expected_revision` is guard metadata, never a
+ * change. */
+internal val SPEECH_SCHEDULE_UPDATE_KEYS = setOf(
+    "name", "speak_name", "due_date", "due_time", "estimated_minutes",
+)
+
+/**
+ * Whether a bulk update op's fields move speech/schedule state (#470
+ * review): the spoken text (name/voice phrase), the due instant, and the
+ * estimate that derives the start. Values compare, not keys — a
+ * same-value rewrite (bulk-moving tasks already on that date) purges
+ * nothing, exactly like a no-op single edit and the background
+ * schedule-diff. Null fields, or no previous row to compare against,
+ * mean "unknown": purge, fail-safe.
+ */
+internal fun updateMovesSpeech(fields: JSONObject?, prev: ServerTask? = null): Boolean {
+    if (fields == null) return true
+    val keys = mutableSetOf<String>()
+    val it = fields.keys()
+    while (it.hasNext()) keys.add(it.next())
+    if (keys.none { it in SPEECH_SCHEDULE_UPDATE_KEYS }) return false
+    if (prev == null) return true
+    // Raw values, like the single edit: the wire trims server-side, so a
+    // whitespace-only difference still counts as moved (safe direction —
+    // the stored text may genuinely differ).
+    fun str(key: String): String? =
+        if (fields.has(key) && !fields.isNull(key)) fields.optString(key, "") else null
+    fun num(key: String): Int? =
+        if (fields.has(key) && !fields.isNull(key)) (fields.opt(key) as? Number)?.toInt() else null
+    return str("name")?.let { it != prev.name } == true ||
+        str("speak_name")?.let { it != prev.speakName } == true ||
+        str("due_date")?.let { it != prev.dueDate } == true ||
+        str("due_time")?.let { it != prev.dueTime } == true ||
+        num("estimated_minutes")?.let { it != prev.estimatedMinutes } == true
+}
 
 /** Names the `fields` entries [bulkUpdateSent] cannot assert. Empty means
  * the op asserts everything it sent. */
@@ -397,10 +451,184 @@ internal fun optTaskDays(o: JSONObject, key: String): List<String> {
     return canonicalRepeatDays(raw)
 }
 
+/** Lenient int read that names its coercions (#437): int, long and
+ * double arrive as [Number], and a numeric string (including a
+ * double-encoded `"1.0"`) reads as its number. Deliberately stricter than
+ * [parseContractVersion]: the version read stays silent-lenient on
+ * fractions/`NaN`/overflow (unknown reads 0 = pre-version, reported via the
+ * write-path version warnings), while a task numeric resets AND reports on
+ * anything it cannot hold — a silent rewrite of a visible row is worse than
+ * a silent rewrite of a handshake marker (#480 review). The gate is finite,
+ * in-range AND
+ * integral: non-numeric strings, booleans/objects/arrays, non-finite
+ * doubles (`"NaN"`/`"Infinity"`), out-of-range ints/longs/doubles, and
+ * fractions (`5.9`/`"5.9"`) all reset to [default] AND report the raw
+ * value in [CoercedInt.raw] (null raw means clean, so only a reset
+ * notifies). Absent or JSON-null reads [default] with a null raw:
+ * a default itself is fine, only a reset is reported. Bounds stay at the
+ * call site — but the call site notifies, because a clamped negative is
+ * still a reset, not a default (see `parseTask`). */
+internal data class CoercedInt(val value: Int, val raw: String?)
+
+internal fun optTaskInt(o: JSONObject, key: String, default: Int = 0): CoercedInt {
+    if (!o.has(key) || o.isNull(key)) return CoercedInt(default, null)
+    val v = o.opt(key)
+    // Range-checked through Double: a bare toInt() wraps out-of-range
+    // Longs negative and saturates huge Doubles, both silently (#480
+    // review). Anything unrepresentable resets AND reports. Integral-only
+    // past that: a surviving fraction would truncate lossily, which is
+    // the same silent rewrite unrepresentability is (#480 review).
+    if (v is Number) {
+        val d = v.toDouble()
+        if (!d.isFinite() || d < Int.MIN_VALUE || d > Int.MAX_VALUE ||
+            d.toInt().toDouble() != d
+        ) {
+            return CoercedInt(default, escapeTaskRawText(v.toString().take(40)))
+        }
+        return CoercedInt(v.toInt(), null)
+    }
+    if (v is String) {
+        // Trimmed for parsing ("  7  " reads 7 clean), but reported
+        // verbatim: the note must name what was stored, so a blank write
+        // never reads as an empty one (#480 review). Control chars are
+        // escaped so the log line stays one line.
+        val t = v.trim()
+        t.toIntOrNull()?.let { return CoercedInt(it, null) }
+        // Finite, in-range AND integral: "NaN"/"Infinity" parse as Double
+        // but are not numbers the task can hold, and "5.9" would truncate
+        // (#480 review).
+        t.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { d ->
+            if (d < Int.MIN_VALUE || d > Int.MAX_VALUE || d.toInt().toDouble() != d) {
+                return CoercedInt(default, visibleTaskRaw(v))
+            }
+            return CoercedInt(d.toInt(), null)
+        }
+        return CoercedInt(default, visibleTaskRaw(v))
+    }
+    // Unquoted (unlike strings) but escaped the same: a JSONArray raw
+    // carries quotes, and any raw can carry a newline (#480 review).
+    return CoercedInt(default, escapeTaskRawText(v.toString().take(40)))
+}
+
+/**
+ * What the note names for an unreadable value (#480): strings verbatim in
+ * quotes — never the trimmed parse copy — with backslash, quote and
+ * control chars escaped so one reset stays one log line. Capped like the
+ * other raws.
+ */
+internal fun visibleTaskRaw(v: String): String =
+    "\"" + escapeTaskRawText(v.take(40)) + "\""
+
+/**
+ * The escaping half of [visibleTaskRaw], shared by the non-string
+ * fallbacks in [optTaskInt] (a `JSONArray` raw carries quotes too) and the
+ * batch 404 matcher: backslash, quote and control chars, so a hostile
+ * stored value cannot break the quoted note format or span lines.
+ * Beyond `\n`/`\r`/`\t` this covers the rest of C0/C1 (`\b`/`\f` as
+ * named escapes, the remainder as `\uXXXX` — including NEL, which
+ * `isISOControl` catches) plus U+2028/U+2029, which JSON can carry and
+ * which break lines without being ISO controls (#480 review).
+ * List delimiters (`;`, `|`) are deliberately NOT escaped: the About line
+ * is human-readable, not machine-parseable — a raw containing them reads
+ * ambiguously, and mangling common values for a parser that does not exist
+ * would trade a rare ambiguity for a certain one (#480 review).
+ */
+internal fun escapeTaskRawText(v: String): String {
+    val sb = StringBuilder(v.length)
+    for (c in v) {
+        when (c) {
+            '\\' -> sb.append("\\\\")
+            '"' -> sb.append("\\\"")
+            '\n' -> sb.append("\\n")
+            '\r' -> sb.append("\\r")
+            '\t' -> sb.append("\\t")
+            '\b' -> sb.append("\\b")
+            '\u000C' -> sb.append("\\f")
+            else ->
+                if (c.isISOControl() || c == '\u2028' || c == '\u2029') {
+                    sb.append("\\u" + c.code.toString(16).padStart(4, '0'))
+                } else {
+                    sb.append(c)
+                }
+        }
+    }
+    return sb.toString()
+}
+
+/**
+ * Bounded diagnostics slot for one task row's single-read resets (#480):
+ * the SHA-256 of the trimmed id, 12 hex chars (48 bits — collision odds
+ * negligible at this cardinality, birthday bound ~2^24, but not zero;
+ * never treat distinct hashes as distinct rows by guarantee). Raw ids
+ * would let a pathological server grow the map without bound; a raw
+ * prefix would alias two long ids into one slot (one row's clean read
+ * clearing another's dirty entry). The hash is fixed-size for any input.
+ * Record and clear sites must both go through here: deriving
+ * one side from the URL-encoded id broke the eviction for exactly the
+ * pathological ids the bound exists for (#480 review). The SHA-256
+ * lookup itself never fails on JVM/Android; the take(24) fallback is
+ * defence in depth and aliases by construction.
+ */
+internal fun singleCoercionState(id: String): String =
+    runCatching {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val digest = md.digest(id.trim().toByteArray(Charsets.UTF_8))
+        digest.take(6).joinToString("") { "%02x".format(it) }
+    }.getOrDefault(id.trim().take(24))
+
+/**
+ * Which op ids a batch 404 names (#480): the server truncates echoed ids
+ * to 40 bytes (`TruncateBytes`, store.go — mirrored by
+ * [truncateUtf8Bytes]) and quotes them — JSON double quotes
+ * in the echoed body, single quotes in the `unknown task` detail — so
+ * a full-length match would miss exactly the long ids the bounded-key
+ * work exists for, while a bare substring would let id "a" match a
+ * message naming only "ab". Both quote forms bound the token on both
+ * sides, each raw and JSON-escaped ([escapeTaskRawText] — backslash,
+ * quote and control-class; Go's wider `\uXXXX`/HTML escapes are not
+ * mirrored, so an id needing those still misses). Only a uniquely-echoed
+ * row auto-clears, so one
+ * gone long id can never evict a live sibling sharing its 40-byte prefix;
+ * the tradeoff is the colliding gone row keeps its single entry — no
+ * list page will ever contain a deleted row to subsume it, so it clears
+ * on a later single-verb 404 naming the row, a delete(), or process
+ * restart (#480 review). Pure for tests.
+ */
+internal fun batchUnknownTaskIds(ids: List<String>, msg: String): List<String> {
+    if ("HTTP 404:" !in msg || "unknown task" !in msg) return emptyList()
+    // Group by echo first: two ids sharing a 40-byte prefix echo
+    // identically, and clearing on a shared echo would evict a live sibling
+    // with the gone row — the truncation dual of the substring aliasing
+    // quoting fixed. Only a uniquely-echoed id auto-clears; colliding ones
+    // keep their entries until a list page re-reads (or drops) the row
+    // (#480 review).
+    val echoes = ids.filter { it.isNotEmpty() }
+        .groupBy { truncateUtf8Bytes(it.trim(), 40) }
+    return echoes.values.filter { it.size == 1 }.flatten().filter { id ->
+        val echo = truncateUtf8Bytes(id.trim(), 40)
+        val escaped = escapeTaskRawText(echo)
+        ("\"$echo\"" in msg || "'$echo'" in msg ||
+            "\"$escaped\"" in msg || "'$escaped'" in msg)
+    }
+}
+
 /** One task row: null when the row carries no usable id or name (#430
  * counts those drops in [TaskList.dropped] instead of shrinking the
- * list silently). */
-internal fun parseTask(o: JSONObject): ServerTask? {
+ * list silently).
+ *
+ * Mistyped numerics reset to their defaults AND report through [coerced]
+ * (#437): each entry names the key, the raw value and the reset value
+ * (`estimated_minutes "abc"->0`), so the caller can log it once instead
+ * of the reset passing silently. Null [coerced] means a single-row read
+ * (`get`/`create`/`update`/`resolve`/`batch`): it logs the row's own line
+ * directly (notifying once by construction) AND records under a bounded
+ * hash of the row id ([singleCoercionState]) for diagnostics — otherwise
+ * single-row resets would ride the log only, invisible after rotation
+ * (#480 review). A clean single read clears its row's entry, and a list
+ * page evicts the single entry of every row it contains (the page is the
+ * newer vintage). A list caller passes its accumulator and logs one page
+ * summary itself. */
+internal fun parseTask(o: JSONObject, coerced: MutableList<String>? = null): ServerTask? {
     // Canonical `id` only (#433): the retired Mongo `_id` fallback is gone,
     // so a row that only carries `_id` is counted as unparseable instead of
     // being silently reinterpreted under a different wire contract.
@@ -408,8 +636,50 @@ internal fun parseTask(o: JSONObject): ServerTask? {
     if (id.isEmpty()) return null
     val name = optJsonStr(o, "name")
     if (name.isEmpty()) return null
+    // One lenient read per numeric field (#437): a mistyped server value
+    // used to become 0 minutes with no word. The note carries the row so
+    // a page summary can tell two rows' resets apart.
+    //
+    // Single-row mode collects into a local list: the notes flush to the
+    // log immediately (existing behaviour) and to the diagnostics record
+    // at the end, so both channels hold for single rows too.
+    val singleNotes = mutableListOf<String>()
+    fun note(text: String) {
+        if (coerced != null) {
+            coerced.add(text)
+        } else {
+            singleNotes.add(text)
+            runCatching {
+                Log.w("TasksApi", "coerced $text")
+            }
+        }
+    }
+    fun num(key: String, default: Int = 0): CoercedInt {
+        val r = optTaskInt(o, key, default)
+        if (r.raw != null) {
+            // The id rides escaped like the raw: a pathological server id
+            // with a newline, quote or list delimiter must not break the
+            // one-line/quoted note format the escaper keeps (#480 review).
+            note("task ${escapeTaskRawText(id.take(24))}: $key ${r.raw}->${r.value}")
+        }
+        return r
+    }
+    // One lenient read with a floor per numeric field (#437, #480
+    // review): a mistyped value resets to the default with a note, and a
+    // well-typed negative is clamped to 0 with a note of its own — every
+    // numeric reset notifies, not just the estimate's. The revision floor
+    // matches its "0 = pre-version/backfill" rule (#184): a negative
+    // revision is corruption, never a version.
+    fun clampedNum(key: String, default: Int = 0): Int {
+        val r = num(key, default)
+        val v = r.value.coerceAtLeast(0)
+        if (v != r.value) {
+            note("task ${escapeTaskRawText(id.take(24))}: $key ${r.value}->$v")
+        }
+        return v
+    }
     // estimated_minutes may encode as int, long, or double.
-    val mins = (o.opt("estimated_minutes") as? Number)?.toInt() ?: 0
+    val mins = clampedNum("estimated_minutes")
     // Pure: no prefs here. list() parses up to 200 rows per refresh, so a
     // read-modify-write per row is 200 I/Os for one fact — and a
     // read-then-write that is not atomic can regress (sees v3, then a late
@@ -423,8 +693,8 @@ internal fun parseTask(o: JSONObject): ServerTask? {
         description = optJsonStr(o, "description"),
         dueDate = optJsonStr(o, "due_date"),
         dueTime = optJsonStr(o, "due_time"),
-        estimatedMinutes = mins.coerceAtLeast(0),
-        repeatEvery = (o.opt("repeat_every") as? Number)?.toInt() ?: 0,
+        estimatedMinutes = mins,
+        repeatEvery = clampedNum("repeat_every"),
         repeatUnit = optJsonStr(o, "repeat_unit"),
         repeatDays = optTaskDays(o, "repeat_days"),
         repeatCustom = o.optBoolean("repeat_custom", false),
@@ -432,12 +702,28 @@ internal fun parseTask(o: JSONObject): ServerTask? {
         parallelable = o.optBoolean("parallelable", false),
         // Missing on pre-revision servers: 0 matches the backfill, so
         // an old server and a new app still agree (#184).
-        revision = (o.opt("revision") as? Number)?.toInt() ?: 0,
+        revision = clampedNum("revision"),
         completedAt = optJsonStr(o, "completedAt"),
         createdAt = optJsonStr(o, "createdAt"),
         contractVersion = version,
         skipped = o.optBoolean("skipped", false),
-    )
+    ).also {
+        // Single-row reads join both channels too: record under a bounded
+        // hash of the row id (or clear it on a clean read, so a fixed row
+        // stops advertising). The hash — not a raw prefix — is the key:
+        // hex ObjectIds hash 1:1, and a pathological server id can neither
+        // grow the map unboundedly nor alias another row's slot (#480
+        // review). The human-readable `task <id.take(24)>:` prefix stays in
+        // the note text escaped like the raw — where a hash collision is
+        // display-only, a raw id would still be log injection. List callers
+        // pass an accumulator and skip the record — the page records once
+        // for the whole batch, and owns evicting the single entries of the
+        // rows it contains (see parseTaskListPage) — so a sourceless parse
+        // never mutates diagnostics it promised not to touch (#480 review).
+        if (coerced == null) {
+            TasksApi.noteCoercedNotes("single", singleCoercionState(id), singleNotes.take(3))
+        }
+    }
 }
 
 /** One message for a server that does not speak the canonical task list
@@ -446,21 +732,49 @@ internal const val TASKS_SHAPE_ERROR =
     "Unexpected response shape — the server sent no tasks list. Update the server."
 
 /** Parses one task-list page (#430): the canonical `tasks` envelope, the
- * rows, and how many rows arrived unparseable.
+ * rows, how many rows arrived unparseable, and how many rows parsed only
+ * by resetting a mistyped numeric field to its default (#437).
+ *
+ * [state] and [source] name the fetch for the diagnostics record
+ * ([noteCoercedNotes]): the widget pulls three states, the Task Manager
+ * one, reminders another — keying by fetch (source + state) stops one
+ * screen's fetch clobbering or clearing another's detail (#480 review).
+ * Blank in tests and direct calls (no record written without a source).
  *
  * The `data`/`items` fallbacks are gone (#433): a body without a `tasks`
  * array is a loud parse failure with an actionable message, never a clean
  * empty that reads as "no tasks". */
-internal fun parseTaskListPage(body: String): TaskList {
+internal fun parseTaskListPage(body: String, state: String = "", source: String = ""): TaskList {
     val out = mutableListOf<ServerTask>()
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(TASKS_SHAPE_ERROR)
     val arr = root.optJSONArray("tasks")
         ?: throw RuntimeException(TASKS_SHAPE_ERROR)
     var dropped = 0
+    val coercedNotes = mutableListOf<String>()
+    var coerced = 0
     for (i in 0 until arr.length()) {
-        val task = arr.optJSONObject(i)?.let { parseTask(it) }
-        if (task != null) out.add(task) else dropped++
+        val before = coercedNotes.size
+        val obj = arr.optJSONObject(i)
+        val task = obj?.let { parseTask(it, coercedNotes) }
+        if (task != null) {
+            out.add(task)
+            if (coercedNotes.size > before) coerced++
+        } else {
+            dropped++
+        }
+        // The page is the newer vintage for every row it contains —
+        // parsed or dropped: a row turning unparseable (blanked name) must
+        // not leave its old parseable vintage behind forever, since no
+        // future parseable page will ever evict it (#480 review). But only
+        // for a real fetch: a sourceless parse writes no record at all
+        // (see the KDoc), and must not delete either.
+        if (source.isNotEmpty()) {
+            val rowId = task?.id ?: obj?.let { optJsonStr(it, "id") }.orEmpty()
+            if (rowId.isNotEmpty()) {
+                TasksApi.noteCoercedNotes("single", singleCoercionState(rowId), emptyList())
+            }
+        }
     }
     if (dropped > 0) {
         // Diagnostics for the readers with no screen: the widget and
@@ -472,7 +786,30 @@ internal fun parseTaskListPage(body: String): TaskList {
             Log.w("TasksApi", "dropped $dropped unparseable task row(s) in list response")
         }
     }
-    return TaskList(out, root.optBoolean("truncated", false), dropped)
+    if (coerced > 0) {
+        // One line per page, not per row: the rows stay shown (with reset
+        // values), and this names what was reset so a version-skewed
+        // writer is visible. Capped detail — the count is the signal. The
+        // same first-3 slice rides the page ([TaskList.coercedNotes]) — the log
+        // and the page sample agree, while the diagnostics record keeps all rows'
+        // notes (see below) so nothing evicted is lost (#480 review).
+        runCatching {
+            Log.w("TasksApi", "coerced $coerced task row(s) to defaults in list response: " +
+                coercedNotes.take(3).joinToString("; ").take(400))
+        }
+    }
+    // The diagnostics screen reads this per fetch, so one screen's
+    // hint points at its own rows — and a clean page clears only its own
+    // fetch's entry, never another screen's (#480 review). The full
+    // note list lands here (page-bounded: at most one page of rows, replaced
+    // wholesale per fetch), while the log line above and [TaskList.coercedNotes]
+    // keep the first-3 sample — so evicting the single entries never deletes
+    // detail the fetch does not keep: every evicted row's notes survive here
+    // (#480 review).
+    if (source.isNotEmpty()) {
+        TasksApi.noteCoercedNotes(source, state, coercedNotes.toList())
+    }
+    return TaskList(out, root.optBoolean("truncated", false), dropped, coerced, coercedNotes.take(3))
 }
 
 /**
@@ -561,6 +898,84 @@ class TasksApi(context: Context) {
          * could land the older max last.
          */
         private val versionLock = Any()
+
+        /**
+         * The latest numeric-reset notes per fetch (#437, #480): each
+         * names the row, the key, the raw value and what it became — every
+         * row of the page, not the first-3 sample the log and [TaskList] carry
+         * (page-bounded and replaced wholesale per fetch, so it cannot grow
+         * without bound). Keyed by fetch (`source:state` — the Task Manager
+         * pulls one state, the widget push three, each widget factory one
+         * in its own per-placement namespace, reminders one) because any
+         * single slot lets one fetch clobber or clear another's detail
+         * — including same-state
+         * fetches at different limits. Read by [TaskWidget.diagnostics]
+         * so each screen's hint points at detail that is actually on that
+         * screen. A clean page clears only its own entry; sibling states
+         * under one source survive parallel writes, and each surface that
+         * switches states (manager, widget factory) prunes its stale
+         * siblings explicitly ([clearCoercedNotesExcept]); when a source's
+         * last writer goes away its entries go with it
+         * ([clearCoercedNotesSource]). That isolation is between
+         * per-fetch entries only: the `single:*` namespace below is
+         * global by design, and any list page containing the row subsumes
+         * its single entry as the newer vintage — a clean page from one
+         * screen clears a single entry another surface wrote (#480
+         * review).
+         */
+        @Volatile
+        internal var lastCoercedNotes: Map<String, List<String>> = emptyMap()
+            private set
+
+        /** Records one fetch's notes (see [lastCoercedNotes]). */
+        internal fun noteCoercedNotes(source: String, state: String, notes: List<String>) {
+            // No pruning here: parallel writers under one source (the
+            // widget's three state fetches) must all survive — pruning
+            // same-source siblings on every write keeps only the last
+            // completer (#480 review). Sibling pruning lives with the one
+            // screen that switches states ([clearCoercedNotesExcept]).
+            synchronized(versionLock) {
+                lastCoercedNotes = if (notes.isEmpty()) {
+                    lastCoercedNotes - "$source:$state"
+                } else {
+                    lastCoercedNotes + ("$source:$state" to notes)
+                }
+            }
+        }
+
+        /**
+         * Drops one source's entries for every state but [keepState].
+         * The Task Manager (one state per filter) and each widget factory
+         * (one state per bound placement, in its own per-placement
+         * namespace) prune to the settled state: without this
+         * the old filter's/view's notes would linger next to the new page (#480
+         * review). Called when a surface settles on rows: the manager on
+         * each successful load, the factory on each bind that settled on
+         * rows (cache hit or landed fetch — never a failed fetch showing
+         * nothing, never a preview bind), mirroring the manager's
+         * success-only call. Writers with a fixed state set
+         * (reminders, the widget push path) never need it.
+         */
+        internal fun clearCoercedNotesExcept(source: String, keepState: String) {
+            synchronized(versionLock) {
+                lastCoercedNotes = lastCoercedNotes.filterKeys {
+                    it == "$source:$keepState" || !it.startsWith("$source:")
+                }
+            }
+        }
+
+        /**
+         * Drops every entry for one source (#480 review): the task-notes
+         * equivalent of the widget-pref prune. Called when the source's last
+         * writer goes away — no placements left means no fetch will ever
+         * refresh (or clear) those entries again, so they would read as
+         * current state until process restart while being history.
+         */
+        internal fun clearCoercedNotesSource(source: String) {
+            synchronized(versionLock) {
+                lastCoercedNotes = lastCoercedNotes.filterKeys { !it.startsWith("$source:") }
+            }
+        }
     }
 
     private val appCtx = context.applicationContext
@@ -608,8 +1023,11 @@ class TasksApi(context: Context) {
      * One bounded page: [limit] <= 0 takes the server default (200, max
      * 500), and [TaskList.truncated] says whether more rows exist, so the
      * list never silently ends mid-collection (#168).
+     *
+     * [source] names the caller for the diagnostics record
+     * ([noteCoercedNotes]): each screen's fetch keeps its own entry.
      */
-    suspend fun list(state: String = "open", limit: Int = 0): Result<TaskList> =
+    suspend fun list(state: String = "open", limit: Int = 0, source: String = ""): Result<TaskList> =
         withContext(Dispatchers.IO) {
             val base = base()
             if (base.isEmpty()) {
@@ -621,7 +1039,7 @@ class TasksApi(context: Context) {
             }
             val query = if (limit > 0) "/api/tasks?state=$s&limit=$limit" else "/api/tasks?state=$s"
             call("GET", query).map { body ->
-                parseTaskListPage(body)
+                parseTaskListPage(body, s, source)
             }.also { r -> r.getOrNull()?.let { noteContractVersion(it.tasks) } }
         }
 
@@ -677,6 +1095,10 @@ class TasksApi(context: Context) {
                     // read as a finished task.
                     val msg = e.message ?: ""
                     if ("HTTP 404:" in msg && "unknown task" in msg) {
+                        // Gone server-side: drop any diagnostics entry for
+                        // it, or About names a reset for a task that no
+                        // longer exists (#480 review).
+                        clearSingleIfGone(id, msg)
                         Result.success(null)
                     } else {
                         Result.failure(e)
@@ -884,6 +1306,7 @@ class TasksApi(context: Context) {
         sent.parallelable?.let { body.put("parallelable", it) }
         if (expectedRevision != null) body.put("expected_revision", expectedRevision)
         call("PATCH", "/api/tasks/$clean", body).map { parseOne(it) }
+            .also { r -> r.exceptionOrNull()?.let { clearSingleIfGone(id, it.message ?: "") } }
             .also { r ->
                 r.getOrNull()?.let { task ->
                     // Only the fields this call actually sent are asserted; the rest stay
@@ -957,7 +1380,7 @@ class TasksApi(context: Context) {
                     // literal string "null" and reach the toast.
                     task.copy(nextDueDate = optJsonStr(next, "due_date"))
                 }
-            }
+            }.also { r -> r.exceptionOrNull()?.let { clearSingleIfGone(id, it.message ?: "") } }
         }
 
     /**
@@ -1031,6 +1454,14 @@ class TasksApi(context: Context) {
                     )
                 }
                 out.toList()
+            }.also { r ->
+                // A whole-call 404 names no row in its URL: drop only the
+                // entries the error itself names, so live rows keep theirs
+                // (#480 review). Success needs no clear — each item parse
+                // just re-recorded its row's current entry.
+                for (id in batchUnknownTaskIds(ops.map { it.id }, r.exceptionOrNull()?.message ?: "")) {
+                    noteCoercedNotes("single", singleCoercionState(id), emptyList())
+                }
             }
         }
 
@@ -1042,6 +1473,7 @@ class TasksApi(context: Context) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
             call("POST", "/api/tasks/$clean/reopen", JSONObject()).map { parseOne(it) }
+                .also { r -> r.exceptionOrNull()?.let { clearSingleIfGone(id, it.message ?: "") } }
                 .also { r ->
                     r.getOrNull()?.let {
                         noteContractVersion(listOf(it))
@@ -1057,7 +1489,16 @@ class TasksApi(context: Context) {
             if (clean.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("Missing task id"))
             }
-            call("DELETE", "/api/tasks/$clean").map { }
+            call("DELETE", "/api/tasks/$clean").map { }.also {
+                // Gone, or already gone: a 404 naming the row means it is
+                // gone regardless of verb — either way no fetch will ever
+                // refresh this entry again (#480 review).
+                if (it.isSuccess) {
+                    noteCoercedNotes("single", singleCoercionState(id), emptyList())
+                } else {
+                    clearSingleIfGone(id, it.exceptionOrNull()?.message ?: "")
+                }
+            }
         }
 
     /**
@@ -1115,6 +1556,20 @@ class TasksApi(context: Context) {
      * form-encoding emits `+` for space, valid only in query strings). */
     private fun encodeId(id: String): String =
         URLEncoder.encode(id.trim(), Charsets.UTF_8.name()).replace("+", "%20")
+
+    /**
+     * A 404 naming the row means the row is gone regardless of verb: a
+     * single-verb request URL already identifies which row (it carries
+     * exactly one id), so the body match alone is the eviction signal —
+     * or About names a reset for a task that no longer exists (#480
+     * review). Batch callers pass only ids the message itself names (a
+     * batch URL names no row).
+     */
+    private fun clearSingleIfGone(id: String, msg: String) {
+        if ("HTTP 404:" in msg && "unknown task" in msg) {
+            noteCoercedNotes("single", singleCoercionState(id), emptyList())
+        }
+    }
 
     private fun call(method: String, url: String, body: JSONObject? = null): Result<String> {
         val base = base()

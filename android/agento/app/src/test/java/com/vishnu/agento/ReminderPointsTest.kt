@@ -167,3 +167,134 @@ class ReminderPointsTest {
         assertFalse("2026-02-30".isIsoDate()) // parses as text, not as a real day
     }
 }
+
+/**
+ * Which dropped alarm keys purge a task's remnants (#470 review): only
+ * tasks with no live bid at all — completed, deleted, or rescheduled
+ * clean past every armed point. A still-live task must never land here,
+ * or a routine refresh would yank live alerts.
+ */
+class GoneTaskIdsTest {
+
+    @Test
+    fun `a task with no bids purges once across its kinds`() {
+        assertEquals(
+            setOf("gone"),
+            goneTaskIds(
+                armed = setOf("gone#due", "gone#start", "live#due"),
+                keep = setOf("live#due"),
+                candidateKeys = setOf("live#due"),
+            ),
+        )
+    }
+
+    @Test
+    fun `a lingering fired key never purges its live task`() {
+        // Fired one-shot keys are never removed at fire time, so they drop
+        // every refresh — but the task holds other bids, so its posted
+        // visuals for those points must survive.
+        assertEquals(
+            emptySet<String>(),
+            goneTaskIds(
+                armed = setOf("live#due", "live#start"),
+                keep = setOf("live#start"),
+                candidateKeys = setOf("live#due", "live#start"),
+            ),
+        )
+    }
+
+    @Test
+    fun `a budget-cut key keeps its task`() {
+        // Cut keys keep their bids (capped is a subset of candidates), so
+        // a task trimmed for budget is live, not gone.
+        assertEquals(
+            emptySet<String>(),
+            goneTaskIds(
+                armed = setOf("live#overdue"),
+                keep = emptySet(),
+                candidateKeys = setOf("live#overdue"),
+            ),
+        )
+    }
+
+    @Test
+    fun `legacy bare-id keys count as their own task`() {
+        assertEquals(
+            setOf("oldtask"),
+            goneTaskIds(
+                armed = setOf("oldtask"),
+                keep = emptySet(),
+                candidateKeys = emptySet(),
+            ),
+        )
+    }
+
+    @Test
+    fun `kept keys never purge even without bids`() {
+        assertEquals(
+            emptySet<String>(),
+            goneTaskIds(
+                armed = setOf("live#due"),
+                keep = setOf("live#due"),
+                candidateKeys = emptySet(),
+            ),
+        )
+    }
+}
+
+/**
+ * Schedule snapshots for background reschedules (#470 review): refresh
+ * diffs the last-seen due/estimate per task because agent-side edits
+ * never touch the UI mutation paths that purge stale speech and failure
+ * notices.
+ */
+class ScheduleSnapshotTest {
+
+    private fun task(id: String, due: String = "2026-08-09", time: String = "09:00", est: Int = 60) =
+        ServerTask(id = id, name = "N", dueDate = due, dueTime = time, estimatedMinutes = est)
+
+    @Test
+    fun `an unchanged schedule reschedules nothing`() {
+        val tasks = listOf(task("a"), task("b"))
+        val snap = scheduleSnapshot(tasks)
+        assertEquals(emptySet<String>(), rescheduledIds(snap, scheduleSnapshot(tasks)))
+    }
+
+    @Test
+    fun `a moved due date reschedules only that task`() {
+        val prev = scheduleSnapshot(listOf(task("a"), task("b")))
+        val next = scheduleSnapshot(listOf(task("a", due = "2026-08-10"), task("b")))
+        assertEquals(setOf("a"), rescheduledIds(prev, next))
+    }
+
+    @Test
+    fun `an estimate change reschedules — it drops Start points`() {
+        val prev = scheduleSnapshot(listOf(task("a")))
+        val next = scheduleSnapshot(listOf(task("a", est = 0)))
+        assertEquals(setOf("a"), rescheduledIds(prev, next))
+    }
+
+    @Test
+    fun `a rename reschedules — queued speech names the old words`() {
+        val prev = scheduleSnapshot(listOf(task("a")))
+        val renamed = task("a").copy(name = "New name")
+        val next = scheduleSnapshot(listOf(renamed))
+        assertEquals(setOf("a"), rescheduledIds(prev, next))
+    }
+
+    @Test
+    fun `arrivals and departures are not reschedules`() {
+        // Gone tasks are purged by the zero-bid path, new tasks have
+        // nothing stale — the diff only matches ids in both.
+        val prev = scheduleSnapshot(listOf(task("a"), task("gone")))
+        val next = scheduleSnapshot(listOf(task("a"), task("new")))
+        assertEquals(emptySet<String>(), rescheduledIds(prev, next))
+    }
+
+    @Test
+    fun `the prefs round trip keeps every entry and drops garbage`() {
+        val snap = scheduleSnapshot(listOf(task("a"), task("b", est = 0)))
+        assertEquals(snap, decodeSchedule(encodeSchedule(snap)))
+        assertEquals(snap, decodeSchedule(encodeSchedule(snap) + "garbage-without-separator"))
+    }
+}

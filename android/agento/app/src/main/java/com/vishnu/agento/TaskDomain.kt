@@ -29,6 +29,30 @@ internal enum class ServerTaskSort(val title: String) {
     Estimate("Estimate"),
 }
 
+/** Restores a persisted filter name, defaulting to Open (#437): a
+ * version-skewed or corrupt saved value must never crash the restore, but
+ * it must not pass silently either — see [filterCoercionMessage]. */
+internal fun filterForName(raw: String): ServerTaskFilter =
+    runCatching { ServerTaskFilter.valueOf(raw) }.getOrDefault(ServerTaskFilter.Open)
+
+/** Names a filter reset (#437): null when [raw] is a known filter (or the
+ * default itself), otherwise what key held what raw value and what it
+ * became — the caller toasts/logs it once. Truncated like the widget
+ * path: a corrupt value can be arbitrarily long. */
+internal fun filterCoercionMessage(raw: String): String? =
+    if (runCatching { ServerTaskFilter.valueOf(raw) }.isSuccess) null
+    else "View filter ${visibleTaskRaw(raw)} isn't known — showing Open instead."
+
+/** Restores a persisted sort name, defaulting to Start (#437). */
+internal fun sortForName(raw: String): ServerTaskSort =
+    runCatching { ServerTaskSort.valueOf(raw) }.getOrDefault(ServerTaskSort.Start)
+
+/** Names a sort reset (#437): null when [raw] is known, otherwise what
+ * was stored and what it became. */
+internal fun sortCoercionMessage(raw: String): String? =
+    if (runCatching { ServerTaskSort.valueOf(raw) }.isSuccess) null
+    else "Sort ${visibleTaskRaw(raw)} isn't known — showing Start time instead."
+
 /**
  * Sort key for "when should this begin": the start moment, with the due
  * time as a tie-break so two tasks starting together still order by their

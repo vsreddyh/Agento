@@ -415,6 +415,8 @@ internal fun ChatTab(
     targetAutosend: Boolean = false,
     autosendGen: Int = 0,
     onTargetConsumed: () -> Unit = {},
+    /** Opens Settings → Connectors for the dead-grant prompt (#441). */
+    onOpenConnectors: () -> Unit = {},
 ) {
     val factory = remember(tab) { ChatViewModelFactory(app, tab) }
     // Keyed by tab — the ViewModel survives recomposition.
@@ -1150,6 +1152,11 @@ internal fun ChatTab(
             slashQuery(state.pending) != null && state.pending != state.slashDismissedAt
         },
         onPickSkill = vm::pickSkill, onDismissSlash = vm::dismissSlash,
+        mention = state.mention.takeIf {
+            mentionQuery(state.pending) != null && state.pending != state.mentionDismissedAt
+        },
+        onPickMention = vm::pickMention, onDismissMention = vm::dismissMention,
+        onOpenConnectors = onOpenConnectors,
         onAnswerQuestion = vm::answerQuestion, onCancelQuestion = vm::cancelQuestion,
         onQuestionDraft = vm::setQuestionDraft, onSend = {
             // Staging empties on send: the next live sentence starts a new
@@ -1299,6 +1306,8 @@ internal fun ChatTab(
             title = title,
             threads = state.threads,
             activeId = state.threadId,
+            saveError = state.threadsSaveError,
+            saveErrorSeeded = state.threadsSaveErrorSeeded,
             onSearch = vm::searchThreads,
             onSwitch = { tts.stop(); vm.switchThread(it); showThreads = false },
             onNew = { tts.stop(); vm.newConversation() },
@@ -1423,6 +1432,12 @@ internal fun ThreadSheet(
     title: String,
     threads: List<ThreadSummary>,
     activeId: String,
+    /** Failed-write banner (#435): "" when the last save landed. */
+    saveError: String = "",
+    /** The failure predates this process (#435 review): seeded from the
+     * restart-surviving marker, so the hint below must not claim anything
+     * is "only in memory". */
+    saveErrorSeeded: Boolean = false,
     onSearch: (String) -> List<ThreadSummary>,
     onSwitch: (String) -> Unit,
     onNew: () -> Unit,
@@ -1446,6 +1461,25 @@ internal fun ThreadSheet(
                 FilledTonalButton(onClick = onNew) { Text("New") }
             }
             Spacer(modifier = Modifier.height(8.dp))
+            if (saveError.isNotEmpty()) {
+                // Loud and persistent, no retry button (#435): memory is
+                // ahead of disk until a later save lands, so the list below
+                // is NOT what the next launch shows. Freeing storage is the
+                // fix, and that is outside this sheet. After a restart the
+                // unsaved turn is gone with the process (#435 review), so
+                // the hint names the loss instead of memory-only messages.
+                ErrorCard(raw = saveError)
+                Spacer(modifier = Modifier.height(4.dp))
+                HintLine(
+                    if (saveErrorSeeded) {
+                        "The last change wasn't saved — it was lost on restart. " +
+                            "Free up storage so new turns save."
+                    } else {
+                        "Newest messages are only in memory — free up storage, then send again."
+                    }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -1847,6 +1881,12 @@ internal fun ChatScreen(
     slash: SlashPickerState? = null,
     onPickSkill: (String) -> Unit = {},
     onDismissSlash: () -> Unit = {},
+    /** `@` connector mention picker (#441): same gate shape as [slash]. */
+    mention: MentionPickerState? = null,
+    onPickMention: (String) -> Unit = {},
+    onDismissMention: () -> Unit = {},
+    /** Opens Settings → Connectors (expired-grant reconnect prompt). */
+    onOpenConnectors: () -> Unit = {},
     /** ask_user card (#373): answer/cancel/draft for the pending dialog. */
     onAnswerQuestion: (String) -> Unit = {},
     onCancelQuestion: () -> Unit = {},
@@ -2021,6 +2061,10 @@ internal fun ChatScreen(
     // the actual stop(): the holder must never claim "stopped" while the
     // recorder still holds the mic, or vice versa.
     val detectCtl = remember(tab) { DetectCtl() }
+    // True when barge-in detection could not start after its bounded retry
+    // (#432): the session keeps working as tap-to-talk, but the user must
+    // be able to tell a dead mic from "just never barged in".
+    var bargeUnavailable by remember(tab) { mutableStateOf(false) }
     // Session generation for stale detector triggers (#317): the detector
     // posts via scope.launch, so a trigger fired just before hang-up can
     // land after it. endLive/startLive bump this; onBargeIn only honors the
@@ -2134,6 +2178,8 @@ internal fun ChatScreen(
         interrupt.stop()
         detectCtl.running = false
         detectCtl.phase = -1
+        // A new session retries detection from scratch (#432).
+        bargeUnavailable = false
         liveRec.cancel()
         tts.stop()
         if (reason != null) toasts.toast(reason, ToastKind.Error)
@@ -2157,6 +2203,25 @@ internal fun ChatScreen(
         // lag a fast typist the same way.
         if (heard.isNotEmpty()) {
             onAppendPending(heard)
+        } else {
+            // Never silent (#432): a cancelled dialog and a recognized
+            // nothing both used to fold into "" with no signal, so the user
+            // could not tell "didn't hear me" from "errored". Non-OK is not
+            // necessarily a user cancel (#449 review): the recognizer
+            // answers CANCELED for its own errors too, so the wording stays
+            // neutral. A genuine Back-button cancel also lands here and
+            // toasts — unlike the camera/gallery pickers, which stay
+            // silent — because a silent CANCELED could be a recognizer
+            // error, and the toast names the retry either way. Info, like
+            // the other picker/launcher no-ops; never an Error.
+            if (result.resultCode == Activity.RESULT_OK) {
+                toasts.toast("Didn't catch that — tap the mic to try again.", ToastKind.Error)
+            } else {
+                toasts.toast(
+                    "Voice input didn't complete — tap the mic to try again.",
+                    ToastKind.Info,
+                )
+            }
         }
     }
     fun startVoice() {
@@ -2241,6 +2306,11 @@ internal fun ChatScreen(
         interrupt.stop()
         detectCtl.running = false
         detectCtl.phase = -1
+        // A stuck true from a previous session must not describe a session
+        // that never failed (#449 review): startLive owns the same fresh
+        // slate as endLive, so it clears the flag directly instead of
+        // depending on endLive having run.
+        bargeUnavailable = false
         // A killed turn arrives claimed (see above); a fresh start clears
         // any stale claim from the previous session and opens a new trigger
         // generation, so pre-start detector firings can't leak into it.
@@ -2444,6 +2514,7 @@ internal fun ChatScreen(
             // change retries; a truly dead mic fails fast each time and
             // the loop runs tap-to-talk.
             detectCtl.running = interrupt.start(scope)
+            if (detectCtl.running) bargeUnavailable = false
             if (!detectCtl.running) {
                 // One bounded retry (#317): a long tool task sits in a
                 // single phase, so an entry failure would leave the whole
@@ -2462,6 +2533,11 @@ internal fun ChatScreen(
                 delay(DETECT_RETRY_MS)
                 if (detecting && detectPhase == detectCtl.phase) {
                     detectCtl.running = interrupt.start(scope)
+                    // Either attempt decides the flag (#449 review): a
+                    // retry success after a failure must clear what the
+                    // failure set — otherwise the banner claims
+                    // "unavailable" while the detector is running.
+                    bargeUnavailable = !detectCtl.running
                 }
             }
         } else if (!detecting && detectCtl.running) {
@@ -2475,6 +2551,26 @@ internal fun ChatScreen(
         // A cut cue would otherwise leave a stale true behind and the next
         // driver run would double the stream-end effect's own listen.
         wasSpeaking = speakingKey != null && !cueSpeaking
+    }
+    // Watchdog: a started detector can still die mid-phase (#449 review —
+    // 20 bad reads bail the job, a mid-listen drop kills it), leaving
+    // detectCtl.running true with nothing listening. The driver above only
+    // runs on transitions, so a long single-phase tool task would sit
+    // tap-to-talk with no banner until the next phase change. Poll while
+    // the session lives and promote the death to the same indicator. The
+    // expectation flag (not `detecting`) is the comparison, so legitimate
+    // stops — which always clear the flag alongside stop() — stay quiet;
+    // and a fired barge is not a death (LiveInterrupt.fired), so a working
+    // cut-in never banners as "unavailable".
+    LaunchedEffect(liveMode) {
+        if (!liveMode) return@LaunchedEffect
+        while (true) {
+            delay(5_000L)
+            if (detectCtl.running && !interrupt.isAlive() && !interrupt.fired) {
+                detectCtl.running = false
+                bargeUnavailable = true
+            }
+        }
     }
     // Tool milestones (#317): while a live turn streams, announce newly
     // appearing tools once per change so a long task is audible. The cue
@@ -2889,11 +2985,35 @@ internal fun ChatScreen(
                             onDismiss = onDismissSlash,
                         )
                     }
+                    // `@` connector mention picker (#441): same anchor as
+                    // the slash card, mutually exclusive by trigger.
+                    val mentionNow = mention
+                    if (mentionNow != null) {
+                        MentionPickerCard(
+                            state = mentionNow,
+                            onPick = onPickMention,
+                            onDismiss = onDismissMention,
+                        )
+                    }
                     // ask_user card (#373): the agent is blocked on this
                     // answer, so the card sits above the composer like the
                     // picker above. Gated by conversation like the store
                     // path: a card for a thread already left never renders
                     // on the new one.
+                    // Barge-in unavailable (#432): the live session is
+                    // running as tap-to-talk after detector starts failed
+                    // (or the detector died mid-session — see the watchdog
+                    // below). Persistent while detection is down: a one-off
+                    // toast would be missed while the user watches the
+                    // transcript, and recovery (or session end) clears it.
+                    // Worded as two taps (#449 review): the button only ends
+                    // the session, a new one starts from Start.
+                    if (liveMode && bargeUnavailable) {
+                        HintLine(
+                            "Barge-in unavailable — end the live session and start a new one.",
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
+                    }
                     val questionNow = state.pendingQuestion
                         .takeIf { it != null && questionAttaches(it, state.threadId) }
                     if (questionNow != null) {
@@ -3339,29 +3459,50 @@ internal fun ChatScreen(
                                                     // as blank lines — trimmed for
                                                     // display, never for the wire.
                                                     // A sent skill command renders as
-                                                    // a chip plus the remainder (#372):
-                                                    // still projection-only, the
-                                                    // stored string is untouched.
-                                                    val cmd = parseSkillCommand(msg.content)
-                                                    if (cmd != null) {
-                                                        SkillChip(cmd.name)
-                                                        if (cmd.args.isNotBlank()) {
+                                                    // a chip plus the remainder (#372),
+                                                    // and a connector mention the same
+                                                    // way (#441): still projection-only,
+                                                    // the stored string is untouched.
+                                                    val mentionCmd = parseConnectorMention(msg.content)
+                                                    if (mentionCmd != null) {
+                                                        ConnectorChip(mentionCmd.name)
+                                                        if (mentionCmd.args.isNotBlank()) {
                                                             Spacer(modifier = Modifier.height(4.dp))
                                                             SelectionContainer {
                                                                 Text(
-                                                                    cmd.args.trimEnd(),
+                                                                    mentionCmd.args.trimEnd(),
                                                                     style = MaterialTheme.typography.bodyMedium,
                                                                 )
                                                             }
                                                         }
                                                     } else {
-                                                        SelectionContainer {
-                                                            Text(
-                                                                msg.content.trimEnd().ifEmpty { "…" },
-                                                                style = MaterialTheme.typography.bodyMedium,
-                                                            )
+                                                        val cmd = parseSkillCommand(msg.content)
+                                                        if (cmd != null) {
+                                                            SkillChip(cmd.name)
+                                                            if (cmd.args.isNotBlank()) {
+                                                                Spacer(modifier = Modifier.height(4.dp))
+                                                                SelectionContainer {
+                                                                    Text(
+                                                                        cmd.args.trimEnd(),
+                                                                        style = MaterialTheme.typography.bodyMedium,
+                                                                    )
+                                                                }
+                                                            }
+                                                        } else {
+                                                            SelectionContainer {
+                                                                Text(
+                                                                    msg.content.trimEnd().ifEmpty { "…" },
+                                                                    style = MaterialTheme.typography.bodyMedium,
+                                                                )
+                                                            }
                                                         }
                                                     }
+                                                    // Dead-grant reconnect prompt (#441)
+                                                    // lives below, covering both roles:
+                                                    // server dead-grant errors surface as
+                                                    // assistant content, so scoping it to
+                                                    // user bubbles would miss the primary
+                                                    // case. Rendered, not fetched.
                                                 }
                                             }
                                         } else {
@@ -3485,6 +3626,21 @@ internal fun ChatScreen(
                                                     }
                                                 }
                                             }
+                                        }
+                                        // Dead-grant reconnect prompt (#441),
+                                        // both roles: an expired/disconnected
+                                        // grant in this flow surfaces as a way
+                                        // back to Settings → Connectors, never
+                                        // as a password/token ask. The primary
+                                        // case is server dead-grant text in an
+                                        // assistant reply; a user echoing the
+                                        // phrase gets the same card on their
+                                        // own bubble. Rendered, not fetched:
+                                        // the marker substring is what every
+                                        // server dead-grant message carries.
+                                        if (hasReconnectHint(msg.content)) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            ReconnectCard(onOpen = onOpenConnectors)
                                         }
                                     }
                                 }
@@ -3849,6 +4005,123 @@ internal fun SkillChip(name: String) {
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
         )
+    }
+}
+
+/**
+ * `@` connector mention picker card (#441): anchored above the composer
+ * like the slash card. The list is the two known ids, filtered by the
+ * trigger query — no fetch, so no loading/error states. Tapping inserts
+ * `@<id> ` and closes.
+ */
+@Composable
+internal fun MentionPickerCard(
+    state: MentionPickerState,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val rows = remember(state.query, state.connectors) {
+        val q = state.query.lowercase(java.util.Locale.ROOT)
+        state.connectors.filter { it.startsWith(q) }
+    }
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (state.query.isEmpty()) "Mention a connector" else "Connectors matching “${state.query}”",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+            if (rows.isEmpty()) {
+                Text(
+                    "No matching connectors.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            } else {
+                rows.forEach { id ->
+                    Surface(
+                        onClick = { onPick(id) },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surface,
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text(
+                                "@$id",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                if (id == "gmail") "Search and read mail" else "Upcoming events",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Render-time connector chip (#441): a sent `@<id> …` turn shows
+ * `@<id>` plus the remainder as normal text. Syntax-only
+ * ([parseConnectorMention]) — like [SkillChip], the stored string is
+ * untouched and a mention sent while disconnected still chips (the
+ * reconnect card beside it says what to do).
+ */
+@Composable
+internal fun ConnectorChip(name: String) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Text(
+            "@$name",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/**
+ * Dead-grant reconnect prompt (#441): a message carrying the server's
+ * reconnect hint renders a way back to Settings → Connectors. Never a
+ * password/token ask — the button only navigates.
+ */
+@Composable
+internal fun ReconnectCard(onOpen: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(
+                "That connector session expired or was never connected.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Reconnect in Settings — never paste a password or token in chat.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = onOpen) {
+                Text("Open Connectors")
+            }
+        }
     }
 }
 
