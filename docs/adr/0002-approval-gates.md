@@ -79,7 +79,8 @@ Deny-by-default for money and deletes, exactly as the issue scopes it:
 
 - gate: all `miser-money` writes, every `delete_*`/`archive_*`, destructive
   rewrites (`fix_*`), and prunes that actually delete (`prune_old` with
-  `dry_run=false`; a counting dry run runs free);
+  `dry_run=false`; pre-#487 a counting dry run ran free — post-#487 it
+  prompts in T3 like a real one, since patterns cannot see arguments);
 - free: reads and routine creates/updates (`log_meal`, `create_task`,
   `add_recipe`, `log_cook`, ...).
 
@@ -121,8 +122,11 @@ timed out can never be shown as pending and then 409 on decide. Because
 `TimeoutApproval` marks `status=expired` without extending `expiresAt`,
 `?status=expired` is only observable for the rest of that original 15-minute
 window. That is deliberate: the approvals collection is the live queue, and
-the **audit log is the durable history** — every expiry writes an `expired`
-audit row, retained for 90 days, and that is the record to query.
+the **audit log is the durable history** — relay-era, every expiry wrote an
+`expired` audit row, retained for 90 days, and that was the record to query.
+Post-#487 there are no live holds to expire: every expiry is a startup
+sweep (status flip only, no per-row audit — the count log is the record),
+so sweep-expired rows leave no audit row behind.
 
 ### The app decides, never with secrets
 

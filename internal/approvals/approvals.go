@@ -61,8 +61,9 @@ const (
 	// Pre-migration rows only: nothing mints these anymore.
 	DispositionApproved Disposition = "approved"
 	// DispositionDenied means the call was refused: a human refused it
-	// (pre-migration), or the gate refused it outright (draft-only send,
-	// unknown tool) — never silent.
+	// (pre-migration), the gate refused it outright (draft-only send,
+	// unknown tool), or the calling context ended before execution
+	// (cancelled — stop means stop) — never silent.
 	DispositionDenied Disposition = "denied"
 	// DispositionExpired means nobody answered in time; fail closed.
 	// Pre-migration rows only.
@@ -255,8 +256,9 @@ var gatedTools = map[string]map[string]bool{
 		"create_report": false, "get_report": false, "list_reports": false,
 	},
 	"memory": {
-		// A memory write starts pending in the memory store (the user
-		// confirms it on the Memory screen before it steers an answer),
+		// A memory write starts pending in the memory store when a database
+		// is configured (the user confirms it on the Memory screen before
+		// it steers an answer; ephemeral saves never reach the screen),
 		// which is the confirmation that matters. Prompting on the write
 		// as well would make the agent ask twice for one fact. Reads never
 		// prompt anywhere.
