@@ -11,10 +11,6 @@
     "*prune_old": "ask",
     "*log_transaction": "ask",
     "*log_text": "ask",
-    "*send_message": "ask",
-    "*send_gmail": "ask",
-    "*create_event": "ask",
-    "*send_invite": "ask",
     "*browser_goto": "ask"
   }
 }

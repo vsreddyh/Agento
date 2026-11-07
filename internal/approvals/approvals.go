@@ -139,6 +139,18 @@ func KnownServer(server string) bool {
 	return ok
 }
 
+// Servers returns the policy table's server names, sorted. The
+// opencode.json pin test walks this set, so a server added here without
+// `ask` coverage fails CI instead of running default-allow in T3.
+func Servers() []string {
+	out := make([]string, 0, len(gatedTools))
+	for server := range gatedTools {
+		out = append(out, server)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ToolsFor returns the policy table's tool names for a server, sorted. The
 // cmd policy tests assert the AddTool registration set equals this set, so
 // a registered-but-unclassified tool (holds fail-closed 14m in prod) and a

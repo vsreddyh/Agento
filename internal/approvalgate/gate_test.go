@@ -13,14 +13,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// stubStore is a shared in-memory approvals.Store: holds are decidable by
-// calling Decide/Expire directly, like the gateway would over Mongo.
+// stubStore is an in-memory approvals.Store. Nothing parks: since #487
+// the gate executes at once, so the approvals map stays empty and these
+// Decide/Timeout helpers exist only to satisfy the Store interface.
 type stubStore struct {
 	mu        sync.Mutex
 	shared    bool
 	approvals map[string]approvals.Approval
 	audits    []approvals.AuditEntry
-	createErr error
 }
 
 func newStub(shared bool) *stubStore {
@@ -32,9 +32,6 @@ func (s *stubStore) Shared() bool { return s.shared }
 func (s *stubStore) CreateApproval(_ context.Context, a approvals.Approval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.createErr != nil {
-		return s.createErr
-	}
 	a.CreatedAt = time.Now().Unix()
 	s.approvals[a.ID] = a
 	return nil

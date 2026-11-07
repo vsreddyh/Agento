@@ -2,18 +2,46 @@
 // re-owned by #487).
 //
 // It replaces cmd/mcp-gate's relay process with a wrapper applied where each
-// MCP server registers its tools: the same approvals.NeedsApproval / audit
-// logging, minus the JSON-RPC re-parsing. One deployment serves one
-// client and one turn at a time.
+// MCP server registers its tools: the same audit logging, minus the
+// JSON-RPC re-parsing. One deployment serves one client and one turn at
+// a time.
 //
 // Behaviour as of #487: the gate NEVER parks a hold. Confirmation lives in
 // T3/opencode (permission rules in opencode.json), not in an in-process
 // wait for an app tap — there is no app attached to decide one, so a hold
 // would stall the turn for the full wait and then fail. What remains is
-// decision-for-decision with the old allow path plus two fail-closed
-// refusals: draft-only sends (connector write paths refused outright with
-// the drafts-instead message) and unknown (server, tool) pairs (a tool no
+// immediate execution with an audit row, plus two fail-closed refusals:
+// draft-only sends (connector write paths refused outright with the
+// drafts-instead message) and unknown (server, tool) pairs (a tool no
 // policy table reviewed never executes blind).
+//
+// Deliberately NOT consulted anymore: approvals.NeedsApproval, including
+// its arg-sensitive exemptions (a counting prune with dry_run=true prompts
+// in T3 like a real one — opencode.json patterns cannot see arguments).
+// The policy table stays as the documented sensitivity record that the
+// `ask` rules mirror (pinned by opencode_perm_test.go at the repo root),
+// not as an enforcement switch.
+//
+// Audit meaning, read carefully: every executed call audits
+// DispositionAllow — including tools the old gate held. Post-migration
+// `allowed` means "executed under a harness permission grant" (or free),
+// NOT "ran without asking"; pre-migration `approved` rows keep their old
+// meaning (a human tapped approve in the app). Queries spanning the
+// migration must not treat `allowed` as unreviewed.
+//
+// Outage posture: audit is best-effort (a wedged store logs and continues),
+// exactly like the relay — but the relay additionally failed closed on its
+// hold write, which no longer exists. In practice the domain write fails
+// first: every kept MCP server is Mongo-backed, so a down store errors
+// the handler before anything executes, and the failure is what gets
+// audited. A destructive write that executes while unaudited needs the
+// domain to succeed while the audit write alone fails — same-DB,
+// transient-only.
+//
+// Cancellation: the handler still receives the caller's ctx, but the
+// wrapper does not pre-check it — an already-cancelled call runs rather
+// than refusing. Failing open on cancel is safe here (the harness owns
+// the turn lifecycle) and keeps the wrapper a straight line.
 //
 // The startup sweep lives in each server main: same per-server
 // MarkServerInterrupted call before serving, which now also expires any
@@ -50,12 +78,13 @@ var warned sync.Map
 // (opencode.json permission rules), so every known tool executes once the
 // harness has permitted the call.
 func AddTool[In, Out any](s *mcp.Server, server string, store approvals.Store, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
-	// Unknown server holds every call fail-closed, so say so once at
+	// Unknown server denies every call fail-closed, so say so once at
 	// startup: without this a typo in the server literal is silent until
-	// a human wonders why every tool on it parks holds.
+	// a human wonders why every tool on it is denied with no pending row
+	// to decide anywhere.
 	if !approvals.KnownServer(server) {
 		if _, loaded := warned.LoadOrStore(server, true); !loaded {
-			log.Printf("approvalgate: warning: server %q is not in the approval policy table; every tool call will hold", server)
+			log.Printf("approvalgate: warning: server %q is not in the approval policy table; every tool call will be denied", server)
 		}
 	}
 	name := strings.ToLower(strings.TrimSpace(t.Name))
@@ -113,9 +142,12 @@ func decide[Out any](ctx context.Context, server, tool, name string, args, redac
 }
 
 // knownTool reports whether the policy table names this tool for the
-// server. Both sides fold: the table keys stay lowercase and the caller
-// passes the already-folded tool name.
+// server. Folds both sides: the table keys stay lowercase and the server
+// fold lives in ToolsFor, so the tool name folds here — a mixed-case
+// direct caller executes rather than eating a fail-closed denial for a
+// spelling difference.
 func knownTool(server, name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
 	for _, t := range approvals.ToolsFor(server) {
 		if t == name {
 			return true
