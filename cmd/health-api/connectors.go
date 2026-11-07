@@ -85,11 +85,12 @@ var (
 	// time. It lets the 501-reason path name "no database" without
 	// dialling a fresh client per tap.
 	connectorLastErr string
-	// connectorUpstreamFails + connectorLastFail count consecutive
-	// store-side failures for demotion (see noteConnectorUpstream).
-	// Guarded by connectorStoreMu.
+	// connectorUpstreamFails counts consecutive store-side failures for
+	// demotion (see noteConnectorUpstream). connectorLastProbe stamps the
+	// last dial, so sustained failures cannot suppress the probe they
+	// should trigger. Guarded by connectorStoreMu.
 	connectorUpstreamFails int
-	connectorLastFail     time.Time
+	connectorLastProbe    time.Time
 )
 
 // connectorRetryBudget bounds how often a cached memory fallback
@@ -193,13 +194,21 @@ func connectorStore() connectors.Store {
 		}()
 	}
 	connectorCache = backend
+	// Every slow-path dial stamps the probe time whatever the outcome:
+	// the durable freshness throttle keys on it, so a failed probe
+	// (demote) still buys a full budget before the next one.
+	connectorLastProbe = time.Now()
 	return backend
 }
 
 // connectorStoreFreshLocked reports whether the cached store needs no
 // probe: durable caches stay fresh until consecutive upstream failures
-// suggest a post-boot drop (then the next caller re-probes); non-durable
-// caches stay fresh inside the retry budget. Caller holds the lock.
+// suggest a post-boot drop (then the next caller re-probes, at most once
+// per budget); non-durable caches stay fresh inside the retry budget.
+// Throttle keys on the last PROBE, not the last failure — sustained 502s
+// refresh LastFail every tap, and keying on it would livelock: fresh
+// forever while traffic continues, demoting only when nobody needs it.
+// Caller holds the lock.
 func connectorStoreFreshLocked() bool {
 	if connectorCache == nil {
 		return false
@@ -208,7 +217,7 @@ func connectorStoreFreshLocked() bool {
 		return time.Since(connectorCacheAt) <= connectorRetryBudget
 	}
 	return connectorUpstreamFails < connectorDemoteAfter ||
-		time.Since(connectorLastFail) <= connectorRetryBudget
+		time.Since(connectorLastProbe) <= connectorRetryBudget
 }
 
 // connectorDemoteAfter bounds how many consecutive upstream failures a
@@ -225,7 +234,6 @@ func noteConnectorUpstream() {
 	connectorStoreMu.Lock()
 	defer connectorStoreMu.Unlock()
 	connectorUpstreamFails++
-	connectorLastFail = time.Now()
 }
 
 // connectorBounded caps one echoed string for API bodies, mirroring the
