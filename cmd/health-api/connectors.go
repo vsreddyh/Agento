@@ -63,8 +63,8 @@ const connectorDeadAttempt = "that connect attempt expired or was already used; 
 // Without MongoDB it falls back to memory that cannot meet a
 // restart — same contract as the gateway: the list still answers, but
 // connect answers 501 (nothing durable to store a grant in). A Mongo
-// recovery still needs a restart to re-cache; failures are loud in the
-// log either way.
+// recovery is picked up automatically within the retry budget below —
+// no restart needed for serving or TTL.
 var (
 	connectorStoreMu syncpkg.Mutex
 	connectorCache   connectors.Store

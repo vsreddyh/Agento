@@ -297,7 +297,14 @@ _valid_tsdns() {
 # loopback URL can never be mistaken for the funnel host.
 _uri_host() {
   local u="${1#*://}"
-  u="${u%%/*}"; u="${u%%:*}"
+  u="${u%%/*}"
+  # Bracketed IPv6 first: a bare `%%:*` would truncate `[::1]:8001` to `[`.
+  if [[ "$u" == \[* ]]; then
+    u="${u#[}"
+    u="${u%%\]*}"
+  else
+    u="${u%%:*}"
+  fi
   _valid_tsdns "$u" || return 1
   printf '%s' "$u"
 }

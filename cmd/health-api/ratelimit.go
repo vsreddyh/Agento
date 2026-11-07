@@ -234,10 +234,15 @@ func sourceKey(r *http.Request) string {
 
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
-	if !strings.HasPrefix(h, "Bearer ") {
+	// Scheme folds like authorize (RFC 7235): the same credential must
+	// land in the same bucket whatever case the client used, or one
+	// spelling shares the unauthenticated bucket while the other gets
+	// its own.
+	const bearerPrefix = "Bearer "
+	if len(h) <= len(bearerPrefix) || !strings.EqualFold(h[:len(bearerPrefix)], bearerPrefix) {
 		return ""
 	}
-	return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	return strings.TrimSpace(h[len(bearerPrefix):])
 }
 
 // shortHash is a stable, non-cryptographic digest. The limiter only needs buckets
