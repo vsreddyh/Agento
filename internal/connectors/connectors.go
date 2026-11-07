@@ -270,8 +270,9 @@ func IsDraftOnlySend(server, tool string) bool {
 		// a draft workflow for a tool that cannot exist. Unknown by
 		// construction, like servers: length fails before identity, so no
 		// Known() call here either. A future legit upstream tool longer
-		// than this cap flips from sensitive to sensitive (not sensitive to refused),
-		// so widening the cap stays a UX change, never a security one.
+		// than this cap flips from draft-refusal to unknown-denial (both
+		// deny with different messages), so widening the cap stays a UX
+		// change, never a security one.
 		return false
 	}
 	server = NormalizedID(server)

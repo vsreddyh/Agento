@@ -292,9 +292,10 @@ execute. Confirmation lives in T3/opencode (permission prompts per
 `opencode.json`, mirrored from the sensitivity table in
 `internal/approvals`), not in an in-process wait: every `tools/call`
 through the wrapper (`internal/approvalgate`) runs at once and attempts one
-audit row with tool, redacted args, disposition, result and decider
-(best-effort: a failed audit write logs and continues, so treat a missing
-row as an outage gap, not as proof nothing ran). Money
+audit row with tool, redacted args, disposition and result — no decider:
+harness prompt decisions are not recorded (the join stops at pre-migration
+`Approval.DecidedBy`); best-effort, so treat a missing
+row as an outage gap, not as proof nothing ran. Money
 writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`) and
 prunes that actually delete (`prune_old`, counting prunes included —
 patterns cannot see arguments) prompt first; reads and routine writes run

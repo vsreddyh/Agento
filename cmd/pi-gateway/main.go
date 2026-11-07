@@ -360,12 +360,12 @@ func run() error {
 
 	// Approval gates + audit trail (#313). Same database, sibling
 	// collections to runs. Without it the gateway answers approvals from
-	// memory — but a decision then needs a SHARED store, and every MCP
-	// server except memory and browser hard-requires Mongo (fatal without
-	// it, and the entrypoint gate refuses boot), so a gateway-side fallback
-	// only meets memory's and browser's ephemeral gates: anything else is
-	// down together, fast, rather than a 14-minute hang (Store.Shared
-	// documents the contract).
+	// memory — but no new decision ever parks as of #487 (the gate runs
+	// tools at once; DecideApproval only touches pre-migration rows), and
+	// every MCP server except memory and browser hard-requires Mongo
+	// (fatal without it, and the entrypoint gate refuses boot), so a
+	// gateway-side fallback only serves pre-migration reads and sweeps,
+	// not live decisions (Store.Shared documents the contract).
 	var approvalStore approvals.Store
 	if store, err := approvals.FromEnv(); err != nil {
 		logger.Printf("approvals: falling back to in-memory: %v", err)
