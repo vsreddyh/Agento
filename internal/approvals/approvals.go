@@ -474,9 +474,12 @@ type Store interface {
 	GetApproval(ctx context.Context, id string) (Approval, error)
 	// DecideApproval flips a pending approval terminal. Anything else is an
 	// error: a decision lands exactly once, and races after expiry lose.
+	// Pre-migration rows only (gateway API surface); nothing new parks.
 	DecideApproval(ctx context.Context, id string, approved bool, by string, at time.Time) (Approval, error)
 	// TimeoutApproval flips a still-pending approval expired. No-op when it
-	// already decided — the gate calls this after its wait, win or lose.
+	// already decided. Pre-migration only: no live caller remains (the
+	// gate never waits), kept for the interface and the sweeps that
+	// expire old rows.
 	TimeoutApproval(ctx context.Context, id string, at time.Time) error
 	ListApprovals(ctx context.Context, f ApprovalFilter) ([]Approval, error)
 	Audit(ctx context.Context, e AuditEntry) error
