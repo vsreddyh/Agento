@@ -344,6 +344,36 @@ _valid_fqdn() {
   return 0
 }
 
+# _clean_path prints the path.Clean equivalent of an absolute path:
+# collapse // runs, resolve /./ and /x/../ (leading /.. stays at root,
+# like Clean). The server Cleans before comparing/sending, so printing
+# anything else as "exact string to register" mismatches its bytes.
+_clean_path() {
+  local p="$1" seg
+  local -a out=()
+  while [[ "$p" == *//* ]]; do p="${p//\/\//\/}"; done
+  local IFS=/
+  local -a segs=()
+  read -ra segs <<< "$p" || true
+  for seg in "${segs[@]}"; do
+    case "$seg" in
+      ""|.) continue ;;
+      ..)
+        if (( ${#out[@]} > 0 )); then
+          unset 'out[${#out[@]}-1]'
+        fi
+        ;;
+      *) out+=("$seg") ;;
+    esac
+  done
+  if (( ${#out[@]} == 0 )); then
+    printf '/'
+  else
+    printf '/%s' "${out[0]}"
+    printf '/%s' "${out[@]:1}"
+  fi
+}
+
 # canonical_redirect_uri prints the canonical form of a redirect URI the
 # way the server sends it: lowercased host, no trailing dot, no default
 # port (numeric compare, so :080/:0443 strip like :80/:443), non-default
@@ -371,9 +401,13 @@ canonical_redirect_uri() {
     path="/"
     hostport="$rest"
   fi
-  # One trailing slash trimmed per pass, looped like the server TrimRight:
-  # root stays root, and a double slash collapses fully.
-  while [[ "$path" != "/" && "$path" == */ ]]; do path="${path%/}"; done
+  # Server path.Clean parity (interior //, /./, /x/../): the server sends
+  # the cleaned form, so the printed string must be cleaned too — a dirty
+  # path kept verbatim would mismatch its bytes. Deliberately NOT covered:
+  # query, fragment, userinfo, encodings, and path case are refused
+  # outright by the server, so the final block rejects those shapes instead
+  # of normalising them.
+  path="$(_clean_path "$path")"
   if [[ "$hostport" == \[*\]* ]]; then
     host="${hostport%%\]*}]"
     port="${hostport#*]}"

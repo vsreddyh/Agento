@@ -757,8 +757,8 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		len(granted) <= connectors.MaxStateFieldLen &&
 		!connectors.HasControl(granted) && utf8.ValidString(granted) {
 		if missing := connectorMissingScopes(connectors.GoogleScopes(id), granted); len(missing) > 0 {
-			log.Printf("connectors: grant for %q missing requested scopes %q (subset granted, drafts may 403)",
-				id, connectorBounded(strings.Join(missing, " ")))
+			log.Printf("connectors: grant for %q missing requested scopes %q (granted %q; subset granted, drafts may 403)",
+				id, connectorBounded(strings.Join(missing, " ")), connectorBounded(approvals.ScrubError(granted)))
 		}
 	} else if len(granted) > 0 {
 		log.Printf("connectors: grant for %q scope param unusable (%d bytes trimmed), subset check skipped",
