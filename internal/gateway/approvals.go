@@ -13,8 +13,10 @@ import (
 )
 
 // requestIdentity hashes the request's network + client markers for the
-// audit log: enough to tell two devices apart across the 90-day trail,
-// not enough to recover either value from the log.
+// gateway log line: enough to tell two devices apart in container logs,
+// not enough to recover either value. Log-only — it is never persisted
+// to the audit row (AuditEntry has no device field), so per-device triage
+// over the 90-day trail is impossible; read gateway logs instead.
 func requestIdentity(r *http.Request) string {
 	h := sha256.Sum256([]byte(r.RemoteAddr + "\x00" + r.UserAgent()))
 	return hex.EncodeToString(h[:])[:16]
@@ -186,10 +188,10 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		// decided_by stays "app" (single-PASSWORD deployment: one principal),
-		// but the 90-day audit row should still say which device decided. A
-		// hash of IP + User-Agent distinguishes devices without storing
-		// either verbatim in the log.
+		// decided_by stays "app" (single-PASSWORD deployment: one principal).
+		// The hash below is log-only triage (AuditEntry has no device
+		// field): it distinguishes devices in container logs without
+		// storing either value verbatim anywhere.
 		s.cfg.Logf("approvals: %s %s decided by client %s", action, id, requestIdentity(r))
 		a, err := s.approvals.DecideApproval(ctx, id, action == "approve", "app", time.Now())
 		if err != nil {

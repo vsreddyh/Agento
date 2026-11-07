@@ -417,7 +417,9 @@ func TestStoresRedactOnWrite(t *testing.T) {
 }
 
 // A server restart expires only its own server's queue: all servers share one
-// collection, and one restarting must not kill another's live hold.
+// collection, and one restarting must not touch another's rows (pre-#487:
+// must not kill another's live hold; post-#487 only pre-migration rows can
+// be pending at all).
 func TestMarkServerInterruptedIsScoped(t *testing.T) {
 	ctx := context.Background()
 	m := NewMemoryStore()
