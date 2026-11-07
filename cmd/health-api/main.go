@@ -148,9 +148,12 @@ func main() {
 	// Connector boot work is detached: initConnectors() runs in the
 	// background so boot (and /health) never waits on Mongo — a 10s index
 	// budget during an Atlas blip must not hold readiness. Serving uses
-	// the same cached store every verb, populated by init or lazily on
-	// first request, whichever wins the race (mutex-guarded either way).
+	// the same cached store every verb (lazy per-verb fallback until the
+	// cache lands, then a 60s-budgeted Mongo retry while non-durable),
+	// and the boot lines below may lag "listening" by seconds — poll the
+	// log, don't grep it once.
 	go initConnectors()
+	log.Print("connectors: boot check started (OAuth status line follows)")
 	log.Print("health-api listening on :8000")
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)

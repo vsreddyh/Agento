@@ -318,7 +318,7 @@ install_retention_cron
     echo "  Next: edit .env with real keys (OPENCODE_API_KEY, PASSWORD, Mongo URI), then ./scripts/hermes.sh start"
     echo "  Access: Agento app (single URL: chat + sync) at http://<host>:8080  (APP_PORT in .env)"
     echo "  Access: agent API at http://<host>:8643  (bearer PASSWORD)"
-    echo "  Access: health-api at http://<host>:8001"
+    echo "  Access: health-api at http://<host>:${HEALTH_HOST_PORT:-8001}  (HEALTH_HOST_PORT in .env)"
 }
 
 # ────────────────────────────────────────────────────────────

@@ -329,9 +329,9 @@ canonical_redirect_uri() {
     path="/"
     hostport="$rest"
   fi
-  # One trailing slash trimmed (server path.Clean semantics for our shape);
-  # root stays root.
-  [[ "$path" != "/" ]] && path="${path%/}"
+  # One trailing slash trimmed per pass, looped like the server TrimRight:
+  # root stays root, and a double slash collapses fully.
+  while [[ "$path" != "/" && "$path" == */ ]]; do path="${path%/}"; done
   if [[ "$hostport" == \[*\]* ]]; then
     host="${hostport%%\]*}]"
     port="${hostport#*]}"
@@ -1320,6 +1320,9 @@ if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/dock
     ' "$RENDER_OUT"
   }
   _render_missing=""
+  # Health-api is REQUIRED (it serves connect/callback); pi is warn-only
+  # (its verbs die with the #494 teardown, after which a required check
+  # here would block setup on a correct tree).
   for _svc in health-api pi; do
     _block_out=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — stopping before the render"; exit 1; }
     _service_block "$_svc" >"$_block_out"
@@ -1336,8 +1339,15 @@ if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/dock
           rm -f "$_block_out" || true
           exit 1
         fi
-        printf '  %s✗%s %s renders EMPTY for %s — fix it before restarting\n' "$YELLOW" "$RESET" "$k" "$_svc"
-        _render_missing="${_render_missing:+$_render_missing }${_svc}/${k}"
+        if [[ "$_svc" == "pi" ]]; then
+          # Warn-only: the pi verbs (and their env mapping) die with the
+          # #494 teardown — a required check here would block setup on a
+          # correct tree the moment they land.
+          printf '  %s!%s %s missing for %s (serving copy is health-api; pi mapping dies with #494)\n' "$YELLOW" "$RESET" "$k" "$_svc"
+        else
+          printf '  %s✗%s %s renders EMPTY for %s — fix it before restarting\n' "$YELLOW" "$RESET" "$k" "$_svc"
+          _render_missing="${_render_missing:+$_render_missing }${_svc}/${k}"
+        fi
       fi
     done
     rm -f "$_block_out" || true
@@ -1383,6 +1393,9 @@ printf -v _compose_file '%q' "$REPO_DIR/docker/docker-compose.yml"
 printf '       %s -f %s logs health-api | grep "OAuth"\n' "${_compose[*]}" "$_compose_file"
 unset _compose_file
 printf '     (if the render step above used sudo, prefix sudo here too)\n'
+printf '     Init runs detached, so poll until the status line lands\n'
+printf '     (e.g. repeat the grep a few seconds apart) — an immediate\n'
+printf '     empty grep means "not printed yet", not "misconfigured".\n'
 printf '     Expect the configured line; an unavailable line names the\n'
 printf '     reason (fix that first) — with what is registered in Google.\n'
 printf '     They must match byte-for-byte;\n'

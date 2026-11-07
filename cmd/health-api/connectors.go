@@ -69,12 +69,32 @@ const connectorDeadAttempt = "that connect attempt expired or was already used; 
 var (
 	connectorStoreMu syncpkg.Mutex
 	connectorCache   connectors.Store
+	// connectorCacheAt stamps the last Mongo attempt behind a cached
+	// memory fallback. Zero when the cache is durable.
+	connectorCacheAt time.Time
 )
+
+// connectorRetryBudget bounds how often a cached memory fallback
+// re-attempts Mongo: one extra client per minute max during an outage,
+// never per request.
+const connectorRetryBudget = time.Minute
 
 func connectorStore() connectors.Store {
 	connectorStoreMu.Lock()
 	defer connectorStoreMu.Unlock()
 	if connectorCache != nil {
+		// A Mongo recovery must not wait for a restart to take effect:
+		// while the cached store is non-durable, re-attempt past the
+		// budget. A restart during an Atlas blip otherwise pins memory
+		// until a second restart, with 501s the whole while.
+		if !connectorCache.Durable() && time.Since(connectorCacheAt) > connectorRetryBudget {
+			if ms, err := connectors.FromEnv(); err == nil {
+				connectorCache, connectorCacheAt = ms, time.Now()
+				log.Print("connectors: MongoDB recovered, serving durable store")
+			} else {
+				connectorCacheAt = time.Now()
+			}
+		}
 		return connectorCache
 	}
 	// If/else, not a typed-nil assignment: a failed FromEnv yields a nil
@@ -84,7 +104,7 @@ func connectorStore() connectors.Store {
 	if ms, err := connectors.FromEnv(); err != nil {
 		log.Printf("connectors: falling back to in-process (statuses do not survive restart): %s",
 			connectorBounded(approvals.ScrubError(err.Error())))
-		backend = connectors.NewMemoryStore()
+		backend, connectorCacheAt = connectors.NewMemoryStore(), time.Now()
 	} else {
 		backend = ms
 	}
