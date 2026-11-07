@@ -839,6 +839,27 @@ if [[ -n "$_redirect_preset" ]]; then
   # so rejecting either here would contradict it.
   _uri_host=""
   _preset_ok=0
+  # Retired /p/ spelling first: glob `*` spans `/`, so the bare patterns
+  # below also match `https://host/p/api/...` — canonicalising that keeps
+  # the `/p/` in the path, the host strip yields `host/p`, and CI exits 1
+  # where an interactive recorded value gets a bare-URL conversion offer
+  # for the identical string. Detect /p/ up front (either scheme) and
+  # offer the same conversion instead.
+  if [[ "$_preset_fold" == */p/api/connectors/callback ]]; then
+    _bare="$(printf '%s' "$_redirect_preset" | sed 's|/[Pp]/[Aa][Pp][Ii]/[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Oo][Rr][Ss]/[Cc][Aa][Ll][Ll][Bb][Aa][Cc][Kk]$|/api/connectors/callback|')"
+    warn "preset REDIRECT_URI uses the retired /p/ spelling (pre-#488 pointed at pi-gateway; health-api serves the bare path):"
+    warn "  preset: $_redirect_preset"
+    warn "  bare:   $_bare"
+    if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
+      _redirect_preset="$_bare"
+      _preset_fold="$(printf '%s' "$_redirect_preset" | tr '[:upper:]' '[:lower:]')"
+      note "keeping converted preset REDIRECT_URI (re-check the Google console registration)"
+    else
+      warn "preset REDIRECT_URI is not a registrable https tailnet/FQDN or http loopback .../api/connectors/callback URL; unset it to derive from TS_DNS"
+      exit 1
+    fi
+    unset _bare
+  fi
   if [[ "$_preset_fold" == https://*/api/connectors/callback ]]; then
     # Canonicalise before validating: an explicit :443, uppercase host,
     # or trailing dot sends identically but must not fail validation —
@@ -947,6 +968,27 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
       _valid_fqdn "$_rec_host_bare" 2>/dev/null && _rec_host="$_rec_host_bare"
       unset _rec_host_bare
     fi
+  elif [[ "$_rec_fold" == http://*/p/api/connectors/callback ]]; then
+    # Same retired-/p/ conversion as the https branch above, checked
+    # BEFORE the bare http pattern for the same `*`-spans-`/` reason: the
+    # bare branch would strict-pass `http://loopback:port/p/api/...` as a
+    # valid registration, but health-api serves no /p/ prefix direct (and
+    # the proxy /p/ goes to pi) — so the probe 404s and misreports
+    # DNS-unreachability for a path-shape bug. Offer the bare URL instead;
+    # declining falls to the typo path with a knowingly-keep like https.
+    _bare="${_recorded_uri%/p/api/connectors/callback}/api/connectors/callback"
+    warn "recorded URL uses the retired /p/ spelling (pi-gateway still serves it until the #494 teardown; health-api does not):"
+    warn "  recorded: $_recorded_uri"
+    warn "  bare:     $_bare"
+    if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
+      REDIRECT_URI="$_bare"
+      note "keeping converted REDIRECT_URI (tailnet rename? re-check the Google console registration)"
+      _rec_host=$(_uri_host "$_bare" || true)
+      _converted=1
+    else
+      _rec_host=""
+    fi
+    unset _bare
   elif [[ "$_rec_fold" == http://*/api/connectors/callback ]]; then
     # Documented loopback testing shape: like the preset gate, http passes
     # for loopback hosts only — anything else falls to the typo branch.

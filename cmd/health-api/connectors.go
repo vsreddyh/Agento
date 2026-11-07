@@ -98,8 +98,8 @@ var (
 	// connectorLastProbe stamps the last dial, so sustained failures
 	// cannot suppress the probe they should trigger. Guarded by connectorStoreMu.
 	connectorUpstreamFails int
-	connectorLastFail     time.Time
-	connectorLastProbe    time.Time
+	connectorLastFail      time.Time
+	connectorLastProbe     time.Time
 )
 
 // connectorRetryBudget bounds how often a cached memory fallback
@@ -315,6 +315,7 @@ func connectorOAuthDown(store connectors.Store) string {
 	}
 	return "redirect invalid"
 }
+
 // connectorOAuth resolves the Google OAuth config when it can serve one:
 // all four values present AND a durable store behind them. Anything less
 // is unconfigured and connect/callback answer 501 — a half-open flow
@@ -459,7 +460,7 @@ func listConnectors(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "/api/connectors accepts GET"})
 		return
 	}
 	store := connectorStore(r.Context())
@@ -553,7 +554,7 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 	case "disconnect":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
-			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "/api/connectors/{id}/disconnect accepts POST"})
 			return
 		}
 		store := connectorStore(r.Context())
@@ -568,7 +569,7 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 	case "connect":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
-			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "/api/connectors/{id}/connect accepts POST"})
 			return
 		}
 		connectorConnect(w, r, id)
@@ -1061,6 +1062,25 @@ func connectorCallbackPath(p string) bool {
 	return strings.EqualFold(rest, "callback")
 }
 
+// connectorsFallback answers /api/* paths no domain claimed — including
+// the no-slash-boundary misses (/api/connectorsfoo, /api/CONNECTORS)
+// that share the connectors prefix without the trailing-slash subtree.
+// Without it Go's default mux answers text/plain 404 with no envelope,
+// while the gateway answers the same spellings as JSON unknown-path with
+// no-store. Auth first like every other verb here (the gateway 401s
+// these before its unknown-path 404), then the service `detail` envelope
+// with no-store so triage greps and the app's detail branch keep working.
+// Registered as /api/ + /api so it only sees what longer patterns missed.
+func connectorsFallback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	writeJSON(w, http.StatusNotFound, bson.M{
+		"detail": "unknown path " + connectorBounded(approvals.ScrubError(r.URL.Path))})
+}
+
 // registerConnectors wires this domain's routes. One function per file so
 // main stays a list of domains, not a list of paths.
 func registerConnectors(mux *http.ServeMux) {
@@ -1070,6 +1090,13 @@ func registerConnectors(mux *http.ServeMux) {
 	// trailing slash, and without this it would 404 (the subtree above
 	// only catches paths WITH the slash).
 	mux.HandleFunc("/api/connectors/callback", connectorCallback)
+	// Near-miss fallback: /api/connectorsfoo, /api/CONNECTORS, and any
+	// other /api/* spelling no longer pattern claimed. Longest-match wins,
+	// so every registered route above (and every other domain's /api/*
+	// routes, registered elsewhere) still takes precedence — this only
+	// converts the default-mux text/plain 404 into the service envelope.
+	mux.HandleFunc("/api/", connectorsFallback)
+	mux.HandleFunc("/api", connectorsFallback)
 }
 
 // connectorsSlash dispatches under /api/connectors/: the callback (no

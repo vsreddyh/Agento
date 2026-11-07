@@ -31,6 +31,8 @@ func TestConnectorsListGuard(t *testing.T) {
 	listConnectors(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("post: got %d", w.Code)
+	} else if body := w.Body.String(); !strings.Contains(body, "/api/connectors accepts GET") {
+		t.Fatalf("list 405 must name the route like the gateway, got %s", body)
 	}
 }
 
@@ -102,11 +104,19 @@ func TestConnectorItemGuard(t *testing.T) {
 	} else if allow := w.Header().Get("Allow"); allow != http.MethodPost {
 		t.Fatalf("no verb Allow: got %q", allow)
 	}
-	// Wrong method on a known verb → 405 with Allow.
+	// Wrong method on a known verb → 405 with Allow, naming the route like
+	// the gateway's requireMethod so triage greps match.
 	if w := withAuth(http.MethodGet, "/api/connectors/gmail/disconnect"); w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("get on disconnect: got %d (%s)", w.Code, w.Body.String())
 	} else if allow := w.Header().Get("Allow"); allow != http.MethodPost {
 		t.Fatalf("disconnect Allow: got %q", allow)
+	} else if body := w.Body.String(); !strings.Contains(body, "/api/connectors/{id}/disconnect accepts POST") {
+		t.Fatalf("disconnect 405 must name the route, got %s", body)
+	}
+	if w := withAuth(http.MethodGet, "/api/connectors/gmail/connect"); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get on connect: got %d (%s)", w.Code, w.Body.String())
+	} else if body := w.Body.String(); !strings.Contains(body, "/api/connectors/{id}/connect accepts POST") {
+		t.Fatalf("connect 405 must name the route, got %s", body)
 	}
 	// List + item verbs answer no-store (the app polls this loop).
 	lreq := httptest.NewRequest(http.MethodGet, "/api/connectors", nil)
@@ -267,5 +277,41 @@ func TestConnectorsRouteRegistration(t *testing.T) {
 		if got := connectorCallbackPath(target); got != want {
 			t.Fatalf("connectorCallbackPath(%q) = %v, want %v", target, got, want)
 		}
+	}
+}
+
+// No-slash-boundary misses must answer the service JSON envelope, not
+// Go's default text/plain 404: /api/connectorsfoo, /api/CONNECTORS, and
+// any other /api/* spelling no domain claimed. Auth first (the gateway
+// 401s these before its unknown-path 404), then detail + no-store.
+func TestConnectorsFallbackEnvelope(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	mux := http.NewServeMux()
+	registerConnectors(mux)
+	for _, target := range []string{"/api/connectorsfoo", "/api/connectorsfoo/bar", "/api/CONNECTORS", "/api"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s: got %d (%s), want 404", target, w.Code, w.Body.String())
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, `"detail"`) || !strings.Contains(body, "unknown path") {
+			t.Fatalf("%s: want JSON detail unknown path, got %s", target, body)
+		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("%s: Cache-Control = %q, want no-store", target, cc)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+			t.Fatalf("%s: Content-Type = %q, want JSON", target, ct)
+		}
+	}
+	// Unauthenticated near-miss 401s before the 404, like every other verb.
+	req := httptest.NewRequest(http.MethodGet, "/api/connectorsfoo", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("no token near-miss: got %d (%s)", w.Code, w.Body.String())
 	}
 }
