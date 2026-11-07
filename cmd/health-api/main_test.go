@@ -346,3 +346,23 @@ func TestProjectFieldValidation(t *testing.T) {
 		}
 	}
 }
+
+// Sync answers POST only: a wrong method names the route with Allow,
+// like the neighbouring handlers — and auth runs first, like every
+// other authed verb in this binary.
+func TestSyncMethodGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	req := httptest.NewRequest(http.MethodGet, "/api/health/sync", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get: got %d (%s), want 405", w.Code, w.Body.String())
+	}
+	if allow := w.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow: got %q, want POST", allow)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "/api/health/sync accepts POST") {
+		t.Fatalf("405 must name the route, got %s", body)
+	}
+}

@@ -1039,22 +1039,26 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	if accessToken != "" && !tok.Expiry.IsZero() {
 		expiry = connectors.ClampAccessExpiry(tok.Expiry.UnixMilli(), time.Now())
 	}
-	// Fresh store budget, not the exchange's leftovers: Google slowness
-	// must not starve these writes into false store timeouts (and false
-	// demotion notes against a healthy Mongo).
-	storeCtx, storeCancel := context.WithTimeout(r.Context(), connectorGrantStoreBudget)
-	defer storeCancel()
-	if err := store.SetTokens(storeCtx, id, connectors.TokenRow{
+	// Fresh store budgets, not the exchange's leftovers and not shared
+	// with each other: Google slowness must not starve these writes into
+	// false store timeouts (and false demotion notes against a healthy
+	// Mongo) — and neither may a slow SetTokens starve SetStatus. Each
+	// write gets its own 10s ctx, so a DeadlineExceeded on it is
+	// attributable to THAT step (genuinely slow store, worth a demotion
+	// note), never to a sibling step eating a shared budget.
+	storeTokensCtx, storeTokensCancel := context.WithTimeout(r.Context(), connectorGrantStoreBudget)
+	defer storeTokensCancel()
+	if err := store.SetTokens(storeTokensCtx, id, connectors.TokenRow{
 		RefreshCipher:         refreshSealed,
 		AccessCipher:          accessSealed,
 		AccessExpiryUnixMilli: expiry,
 	}); err != nil {
-		if storeCtx.Err() == context.DeadlineExceeded {
+		if storeTokensCtx.Err() == context.DeadlineExceeded {
 			noteConnectorUpstream()
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
-		if connectorCallbackAborted(storeCtx, "callback tokens") {
+		if connectorCallbackAborted(storeTokensCtx, "callback tokens") {
 			return
 		}
 		noteConnectorUpstream()
@@ -1063,14 +1067,16 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 		return
 	}
-	c, err := store.SetStatus(storeCtx, id, connectors.StatusConnected, "")
+	storeStatusCtx, storeStatusCancel := context.WithTimeout(r.Context(), connectorGrantStoreBudget)
+	defer storeStatusCancel()
+	c, err := store.SetStatus(storeStatusCtx, id, connectors.StatusConnected, "")
 	if err != nil {
-		if storeCtx.Err() == context.DeadlineExceeded {
+		if storeStatusCtx.Err() == context.DeadlineExceeded {
 			noteConnectorUpstream()
 			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
-		if connectorCallbackAborted(storeCtx, "callback status") {
+		if connectorCallbackAborted(storeStatusCtx, "callback status") {
 			return
 		}
 		noteConnectorUpstream()
@@ -1153,6 +1159,10 @@ func connectorsFallback(w http.ResponseWriter, r *http.Request) {
 	// slicing on kilobytes. The callback check above already rejected it
 	// (false on oversized), so this only sees non-callback spellings.
 	if len(r.URL.Path) > connectors.MaxSegmentAllocLen {
+		// Length-only log (never the value), like every neighbouring
+		// dead branch: a flood-shaped hit and a genuine typo answer
+		// different bodies (400 vs 404) and both must leave a line.
+		log.Printf("connectors: fallback path oversized (%d bytes), answering oversized-400", len(r.URL.Path))
 		writeConnectorErr(w, r, connectors.NewStoreError("oversized path", false))
 		return
 	}

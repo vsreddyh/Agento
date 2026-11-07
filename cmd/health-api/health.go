@@ -93,12 +93,17 @@ func health(w http.ResponseWriter, r *http.Request) {
 // Override with EXPORTS_DIR; served read-only, subfolders allowed.
 
 func sync(w http.ResponseWriter, r *http.Request) {
+	// Auth first, like every other authed verb in this binary (list,
+	// item, fallback): an unauthenticated mistype 401s instead of
+	// leaking the method contract — the Allow below is for authed
+	// triage, matching the neighbouring handlers.
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "/api/health/sync accepts POST"})
 		return
 	}
 	var p HealthSyncPayload
