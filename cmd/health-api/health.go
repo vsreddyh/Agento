@@ -3,6 +3,7 @@ package main
 // Health sync + status: payload types, the /health probe and the sync endpoint (#171).
 
 import (
+	"agento/internal/approvals"
 	"agento/internal/mongo"
 	"context"
 	"encoding/json"
@@ -108,7 +109,10 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	}
 	var p HealthSyncPayload
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 5<<20)).Decode(&p); err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + err.Error()})
+		// Scrubbed + bounded like every connector surface: the decode
+		// error echoes client body bytes verbatim, and the app renders
+		// `detail` as-is.
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + connectorBounded(approvals.ScrubError(err.Error()))})
 		return
 	}
 	if len(p.Sleep) > 100 {
@@ -140,7 +144,9 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(update) > 1 {
 		if _, err := days.UpdateOne(ctx, bson.M{"date": statsDate}, bson.M{"$set": update}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": err.Error()})
+			// Scrubbed + bounded, never the raw driver text (topology/
+			// dial internals the app would render and triage would miss).
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
 			return
 		}
 	}
@@ -158,7 +164,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 			"$push": bson.M{"sleep_sessions": bson.M{"start": s.StartISO, "minutes": s.TotalMinutes}},
 			"$set":  bson.M{"updatedAt": now},
 		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": err.Error()})
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
 			return
 		}
 	}
@@ -186,7 +192,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 			"$push": bson.M{"workouts": wdoc},
 			"$set":  bson.M{"updatedAt": now},
 		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": err.Error()})
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
 			return
 		}
 	}

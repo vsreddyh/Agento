@@ -109,8 +109,15 @@ _existing() {
   value="${line#*=}"
   if [[ "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; value="${value//"$sq"/\'}"
   elif [[ "$value" == \"*\" ]]; then
+    # Strip the outer quotes and keep the inner bytes verbatim, exactly
+    # like load_root_env (scripts/lib/common.sh) — including `$`, `\`,
+    # and `"` (Google secrets commonly contain `$`). The old guard
+    # refused these as undecodable and reported MISSING for a present
+    # secret, while the stack loaded it fine; the value is never
+    # displayed (only offered as "keep current" and re-written
+    # single-quoted by write_env, which round-trips it), so liberal
+    # decoding here cannot leak or corrupt.
     value="${value:1:${#value}-2}"
-    [[ "$value" == *[\\\$\"]* ]] && return 1   # escapes, $ or ": can't decode safely; ask again
   fi
   printf '%s' "$value"
 }

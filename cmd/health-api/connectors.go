@@ -1153,6 +1153,11 @@ func connectorsFallback(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	if code, detail := authorize(r); code != 0 {
+		// Length-only log (never the value), like the branches below: a
+		// typo'd path without a bearer and a correct path with a bad
+		// token answer the same 401 shape, and without this line triage
+		// cannot tell "wrong path" from "wrong token" in the log.
+		log.Printf("connectors: unauthenticated unclaimed path (%d bytes), answering %d", len(r.URL.Path), code)
 		writeJSON(w, code, bson.M{"detail": detail})
 		return
 	}

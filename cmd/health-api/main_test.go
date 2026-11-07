@@ -366,3 +366,20 @@ func TestSyncMethodGuard(t *testing.T) {
 		t.Fatalf("405 must name the route, got %s", body)
 	}
 }
+
+// Sync client errors stay scrubbed + bounded, never raw driver/text:
+// the decode error echoes client bytes and the store errors carry
+// topology internals, while the app renders `detail` as-is.
+func TestSyncInvalidJSONScrubbed(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	req := httptest.NewRequest(http.MethodPost, "/api/health/sync", strings.NewReader("{oops"))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad json: got %d (%s)", w.Code, w.Body.String())
+	}
+	if body := w.Body.String(); !strings.Contains(body, "invalid JSON") {
+		t.Fatalf("422 must name invalid JSON, got %s", body)
+	}
+}
