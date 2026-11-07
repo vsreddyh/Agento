@@ -612,6 +612,10 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	// 501 below: the cap carries no config information, so a huge query
 	// answers the same 400 configured or not.
 	if len(r.URL.RawQuery) > 3*(3*connectors.MaxStateFieldLen)+256 {
+		// Length-only log (never the value): an oversized query and a
+		// genuinely expired state answer the identical dead-attempt body,
+		// and without this line triage cannot tell flood from expiry.
+		log.Printf("connectors: callback query oversized (%d bytes raw), answering dead-attempt", len(r.URL.RawQuery))
 		connectorCallbackDead(w, r)
 		return
 	}

@@ -141,6 +141,14 @@ func (l *limiter) sweepLocked(now time.Time) {
 
 // peerIsInternal reports whether the immediate TCP peer is on a private or
 // loopback network, i.e. plausibly our own nginx rather than the public internet.
+// "Plausibly" is doing real work here: a direct-LAN/tailnet client is ALSO a
+// private peer, and nothing distinguishes it from the proxy — so the header
+// is trusted for both, and a caller already on the private network CAN pick
+// its own bucket by rotating it. Accepted: reaching this path requires
+// LAN/tailnet presence (the public internet never looks private), and
+// authenticated callers are still separated per token whatever the header
+// says. The unauthenticated paths this affects are liveness-exempt /health
+// and the bounded callback verbs — not data writes.
 func peerIsInternal(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -166,7 +174,13 @@ func peerIsInternal(r *http.Request) bool {
 //
 // So the header is trusted only when the peer is internal, which is true for
 // traffic that came through the compose network and false for a public client
-// hitting the published port directly. Nginx overwrites X-Real-IP with $remote_addr
+// hitting the published port directly — with one known gap: a DIRECT client
+// on a private network (LAN, tailnet) is internal too, and can rotate the
+// header for a fresh bucket per request. That gap is accepted, not
+// overlooked: exploiting it requires private-network presence, and every
+// authenticated verb keys by token instead, so only bearer-less paths
+// (callback) share fate — and they share TOTAL load bounding regardless.
+// Nginx overwrites X-Real-IP with $remote_addr
 // rather than passing the client's value through, which is what makes this safe on
 // our side of the wire.
 func clientIP(r *http.Request) string {

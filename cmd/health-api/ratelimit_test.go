@@ -207,7 +207,8 @@ func TestSourceKeyDoesNotRetainTheToken(t *testing.T) {
 // WITHOUT nginx and can set X-Real-IP to anything. Trusting the header
 // unconditionally would let any caller defeat the limiter by rotating one header —
 // which is the difference between a rate limit and decoration. These pin the trust
-// boundary: the header is believed only from an internal peer.
+// boundary: the header is believed only from an internal peer (compose network
+// AND direct-LAN/tailnet — see peerIsInternal for the accepted gap there).
 func TestSourceKeyIgnoresForwardedHeadersFromAPublicPeer(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	r.RemoteAddr = "203.0.113.9:5555" // PUBLIC client, straight at the published port

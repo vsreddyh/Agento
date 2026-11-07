@@ -57,6 +57,9 @@ func tokens() map[string]bool {
 func authorize(r *http.Request) (int, string) {
 	toks := tokens()
 	if len(toks) == 0 {
+		// A green /health does NOT contradict this: liveness is exempt
+		// from auth and throttling by design, so probe an auth-bearing
+		// route (not /health) for serving readiness.
 		log.Print("PASSWORD not set — rejecting all requests")
 		return http.StatusServiceUnavailable, "server not configured with tokens"
 	}
