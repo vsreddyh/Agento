@@ -123,11 +123,18 @@ func run[Out any](ctx context.Context, server, tool, name string, redacted map[s
 func decide[Out any](ctx context.Context, server, tool, name string, redacted map[string]any, store approvals.Store, exec func() (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
 	var zero Out
 
+	// Audit columns are canonical (folded): ListAudit filters exact-match,
+	// so a mixed-case direct caller must land where the canonical filter
+	// looks. Denial messages keep the raw spelling (what arrived) for
+	// triage; `tool` below exists only for that message, `name` is what
+	// gets stored.
+	auditServer := strings.ToLower(strings.TrimSpace(server))
+
 	// Cancelled callers never execute: stop means stop, and the side
 	// effect must not win a race against it. Denied + audited, no hold
 	// to expire — the old teardown branch without the wait.
 	if ctx.Err() != nil {
-		audit(store, server, tool, redacted, approvals.DispositionDenied,
+		audit(store, auditServer, name, redacted, approvals.DispositionDenied,
 			"abandoned: calling context ended before execution", "")
 		return nil, zero, errors.New("not executing " + server + "/" + name + ": calling context ended; failing closed")
 	}
@@ -136,7 +143,7 @@ func decide[Out any](ctx context.Context, server, tool, name string, redacted ma
 	// connector send paths never reach a server, however permissive the
 	// harness permission is.
 	if connectors.IsDraftOnlySend(server, name) {
-		audit(store, server, tool, redacted, approvals.DispositionDenied,
+		audit(store, auditServer, name, redacted, approvals.DispositionDenied,
 			"connector_draft_only: "+connectors.RefusalMessage, "")
 		return nil, zero, errors.New(connectors.RefusalMessage)
 	}
@@ -146,9 +153,9 @@ func decide[Out any](ctx context.Context, server, tool, name string, redacted ma
 	// rejects unregistered tools before any handler runs — so this is the
 	// backstop for direct callers, pinned by TestUnknownToolDenied.
 	if !approvals.KnownServer(server) || !knownTool(server, name) {
-		audit(store, server, tool, redacted, approvals.DispositionDenied,
-			"unknown tool: no approval policy covers "+server+"/"+name, "")
-		return nil, zero, errors.New("unknown tool " + server + "/" + name + ": no approval policy covers it; failing closed")
+		audit(store, auditServer, name, redacted, approvals.DispositionDenied,
+			"unknown tool: no approval policy covers "+server+"/"+tool, "")
+		return nil, zero, errors.New("unknown tool " + server + "/" + tool + ": no approval policy covers it; failing closed")
 	}
 
 	// Known tool: run at once, then audit with the tool's own error if it
@@ -162,7 +169,7 @@ func decide[Out any](ctx context.Context, server, tool, name string, redacted ma
 	if err != nil {
 		msg = approvals.ScrubError(err.Error())
 	}
-	audit(store, server, tool, redacted, approvals.DispositionAllow, msg, "")
+	audit(store, auditServer, name, redacted, approvals.DispositionAllow, msg, "")
 	return res, out, err
 }
 

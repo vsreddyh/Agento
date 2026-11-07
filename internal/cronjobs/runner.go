@@ -57,7 +57,7 @@ type chatResponse struct {
 //
 // Production scheduler fires do NOT use this path anymore: they run as
 // chat-agent turns (see FireFunc and gateway's FireSchedulerJob), so they can
-// read notes and fetch live pages. BareClient serves skill test-fires (same
+// read notes and run list/query lookups. BareClient serves skill test-fires (same
 // key and model, no job store) and unit tests.
 type BareClient struct {
 	APIKey  string

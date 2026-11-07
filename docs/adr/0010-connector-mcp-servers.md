@@ -35,8 +35,8 @@ Gmail and Calendar APIs with the stored grant:
   same shape as gmail sends.
 
 Tool names match `approvals.gatedTools` and `connectors.IsDraftOnlySend`
-exactly: a renamed tool would miss the refusal and fall through to the
-gated backstop (fail-closed, but the wrong UX). The scope-correspondence
+exactly: a renamed tool would miss the refusal and fall through to at-once
+denial (fail-closed, but the wrong UX). The scope-correspondence
 obligation from #367 extends here — if a server needs a broader Google
 scope, the OAuth table, the tool policy, and this ADR move together.
 
@@ -66,6 +66,6 @@ works grant-less.
 - Reads stay ungated (`false`); sends refuse (`IsDraftOnlySend`); the
   gated `true` rows stay as the backstop for gate bypass.
 - Calendar writes still have no path: `create_event_draft` presents, the
-  agent does not create. Actual creation waits for the approval-gate
-  flow that covers calendar writes (still a follow-up, like the app
-  Connect screen and per-grant audit rows).
+  agent does not create. Actual creation has no tool path in v1 (sends
+  refuse outright), unlike the app Connect screen and per-grant audit rows
+  which remain follow-ups.

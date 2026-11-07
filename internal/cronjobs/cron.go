@@ -6,8 +6,8 @@
 //
 // Fires run as turns on the chat agent (#331), not as bare model calls: one
 // recurring scheduler conversation carries every job's fires (each prefixed
-// with its job name), so a fire can read notes and fetch live pages at fire
-// time. The bare client remains for skill test-fires and unit tests.
+// with its job name), so a fire can read notes and run list/query lookups
+// at fire time. The bare client remains for skill test-fires and unit tests.
 package cronjobs
 
 import (

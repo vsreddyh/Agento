@@ -50,8 +50,8 @@ var ErrBusy = errors.New("scheduler: chat agent is already answering a turn")
 // The policy is part of the prompt because a scheduler turn has no human
 // watching: sensitive writes cannot prompt (no decider is attached to an
 // unattended fire — pre-#487 they would have parked a 14-minute hold with
-// nobody to decide it), so the turn must not attempt them at all. Reads
-// (notes, fetches, queries) run free, which is exactly what the motivating
+// nobody to decide it), so the turn must not attempt them at all. Free
+// reads (notes reads, list/query lookups) are exactly what the motivating
 // use case needs: the daily scan reuses applied/inapplicable notes without
 // manual prompt edits.
 func SchedulerPrompt(jobName, prompt string) string {
@@ -68,7 +68,8 @@ func SchedulerPrompt(jobName, prompt string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "From Scheduler %s: %s", name, strings.TrimSpace(prompt))
 	b.WriteString("\n\nYou are firing unattended on a schedule: use read-only tools only " +
-		"(notes reads, fetches, queries). Do not perform any write, delete, publish, " +
+		"(notes reads, list/query lookups — never browser navigation: no one " +
+		"is attached to approve a domain). Do not perform any write, delete, publish, " +
 		"or approval-gated action; if one is needed, report it in the reply instead. " +
 		"Nobody is watching to approve it.")
 	return b.String()

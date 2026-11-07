@@ -213,6 +213,27 @@ func TestCancelledContextDenies(t *testing.T) {
 	}
 }
 
+func TestAuditColumnsCanonical(t *testing.T) {
+	// ListAudit filters exact-match, so the stored columns must be the
+	// folded pair even when the caller spells them mixed-case: otherwise
+	// the granted allow is unattributable under the canonical filter.
+	st := newStub(true)
+	_, _, err := decide(context.Background(), "Notes", "List_Notes", "list_notes",
+		map[string]any{}, st, okExec)
+	if err != nil {
+		t.Fatalf("mixed-case known tool errored: %v", err)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.audits) != 1 {
+		t.Fatalf("want 1 audit row, got %d", len(st.audits))
+	}
+	got := st.audits[0]
+	if got.Server != "notes" || got.Tool != "list_notes" {
+		t.Errorf("audit columns = %q/%q, want notes/list_notes", got.Server, got.Tool)
+	}
+}
+
 func TestUnknownToolDenied(t *testing.T) {
 	st := newStub(true)
 	// Unknown tool on a known server fails closed at once (#487: there is

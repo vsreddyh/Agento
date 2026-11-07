@@ -18,8 +18,8 @@ const schedulerProfileName = "chat"
 
 // FireSchedulerJob runs one job as a turn on the chat agent (#331): the fire
 // becomes a labelled conversation turn in the recurring scheduler thread,
-// with the agent's tools (notes, fetch) available, instead of a bare
-// one-prompt model call with no persona and no tools.
+// with the agent's free-read tools (notes, list/query lookups) available,
+// instead of a bare one-prompt model call with no persona and no tools.
 //
 // It returns the reply text and the agent run id. The run lives in the Runs
 // list under the scheduler conversation, and the worker stores the run id on
