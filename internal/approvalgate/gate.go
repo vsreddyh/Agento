@@ -33,7 +33,10 @@
 // exactly like the relay — but the relay additionally failed closed on its
 // hold write, which no longer exists. In practice the domain write fails
 // first on hard-requiring-Mongo servers: a down store errors the handler
-// before anything executes, and the failure is what gets audited. Four
+// before anything executes, and the failure is what gets attempted for
+// audit — on a full outage the audit write fails the same way and only
+// the log line survives (treat a missing row as an outage gap, never as
+// proof nothing was attempted). Four
 // boundaries on that claim, stated so they stick: browser is
 // Chromium-backed, not Mongo-backed, so its navigation CAN execute while
 // unaudited during an outage (it goes away with #495; until then a missing

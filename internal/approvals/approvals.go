@@ -126,6 +126,12 @@ func NeedsApproval(server, tool string, args map[string]any) bool {
 	// counting call changes nothing. Scoped to the two servers that have the
 	// tool: an unclassified "prune_old" elsewhere must not inherit a free
 	// pass from a name match.
+	// Pre-migration legacy in the enforcement path: the gate never
+	// consults args post-#487 and harness patterns cannot see them, so a
+	// counting prune prompts in T3 despite this false. Kept because the
+	// table is the sensitivity record (not the switch), and callers
+	// reading this function as a runtime predictor are wrong — see the
+	// package doc.
 	if tool == "prune_old" &&
 		(server == "miser-money" || server == "health-check") && isDryRun(args) {
 		return false
