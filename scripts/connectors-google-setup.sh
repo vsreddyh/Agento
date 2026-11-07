@@ -431,7 +431,7 @@ if [[ "${EUID:-$(id -u 2>/dev/null || true)}" -ne 0 ]]; then
 fi
 printf '\n'
 note "This host is the live stack. Writing .env is safe (inert until the"
-note "pi container is recreated — ./scripts/hermes.sh restart recreates it;"
+note "containers are recreated — ./scripts/hermes.sh restart recreates them;"
 note "a plain container restart without recreation will not pick up .env)."
 note "Nothing is restarted by this wizard."
 note "Dry-run knobs (all optional): TS_DNS presets skip discovery and the"
@@ -806,20 +806,20 @@ if (( _URI_FROM_PRESET )); then
 fi
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
-  if curl -fsS --max-time 10 "https://$_probe_host/p/healthz" >/dev/null 2>&1; then
+  if curl -fsS --max-time 10 "https://$_probe_host/health" >/dev/null 2>&1; then
     ok=1
   else
     note "not reachable from here right now (expected for a dry-run name)"
   fi
 else
   for ((__i = 1; __i <= 30; __i++)); do
-    if curl -fsS --max-time 10 "https://$_probe_host/p/healthz" >/dev/null 2>&1; then ok=1; break; fi
+    if curl -fsS --max-time 10 "https://$_probe_host/health" >/dev/null 2>&1; then ok=1; break; fi
     printf '%s' '.'; sleep 10
   done
 fi
 printf '\n'
 if (( ok )); then
-  printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$_probe_host"
+  printf '  %s✓%s public HTTPS reachable: https://%s/health\n' "$GREEN" "$RESET" "$_probe_host"
   # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
   # outlast the probe budget. timeout is coreutils-Linux-only (macOS ships
   # gtimeout at best), so use it when present and run bare otherwise —
@@ -1189,12 +1189,14 @@ note "render proof (cleared with the stage above): all four keys interpolated no
 
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"
-printf '  1. Restart now so the pi container picks up the new .env values:\n'
-printf '     ./scripts/hermes.sh restart recreates it (a plain container\n'
+printf '  1. Restart now so every container picks up the new .env values\n'
+printf '     (health-api reads all four OAuth vars too — a pi-only recreate\n'
+printf '     leaves connect 501ing on stale config):\n'
+printf '     ./scripts/hermes.sh restart recreates them (a plain container\n'
 printf '     restart without recreation will not pick up .env changes).\n'
-printf '  2. Compare the canonical string the gateway logs at boot:\n'
+printf '  2. Compare the canonical string health-api logs at boot:\n'
 printf -v _compose_file '%q' "$REPO_DIR/docker/docker-compose.yml"
-printf '       %s -f %s logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$_compose_file"
+printf '       %s -f %s logs health-api | grep "OAuth configured"\n' "${_compose[*]}" "$_compose_file"
 unset _compose_file
 printf '     (if the render step above used sudo, prefix sudo here too)\n'
 printf '     with what is registered in Google. They must match byte-for-byte;\n'

@@ -128,6 +128,34 @@ func ensureConnectorIndexes() {
 	}
 }
 
+// logConnectorOAuth prints the canonical callback URL at startup so the
+// operator can compare byte-for-byte against the Cloud console
+// registration — the same triage line pi-gateway prints, now from the
+// service that actually serves the callback. Storable values log whole;
+// compare against this line, never the input spelling.
+func logConnectorOAuth() {
+	store, err := connectors.FromEnv()
+	if err != nil {
+		return
+	}
+	if !store.Durable() {
+		return
+	}
+	cfg, err := connectors.OAuthConfigFromEnv()
+	if err != nil {
+		log.Printf("connectors: OAuth unavailable (%v); connect answers 501", err)
+		return
+	}
+	canonical, err := connectors.CanonicalRedirectURL(cfg.RedirectURL)
+	if err != nil {
+		log.Printf("connectors: OAuth redirect invalid (want %q): %v",
+			connectors.RedactURL(cfg.RedirectURL), err)
+		return
+	}
+	log.Printf("connectors: OAuth configured for %s (callback %q)",
+		strings.Join(connectors.ListIDs(), ", "), canonical)
+}
+
 // connectorWire renders one row the way the app reads it: status + scopes
 // only. Refresh tokens live server-side, sealed, and never appear here.
 func connectorWire(c connectors.Connector) bson.M {
@@ -293,6 +321,10 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	pinnedRedirect, err := connectors.CanonicalRedirectURL(oauth.RedirectURL)
 	if err != nil {
+		// Echo the attempted redirect (non-secret): triage compares it
+		// against the console registration without re-reading .env.
+		log.Printf("connectors: connect redirect invalid (want %q): %v",
+			connectors.RedactURL(oauth.RedirectURL), err)
 		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "connect is not configured correctly on this server"})
 		return
 	}
@@ -362,6 +394,19 @@ func connectorCallbackError(w http.ResponseWriter, r *http.Request, code int, de
 		return
 	}
 	connectorCallbackJSON(w, code, detail)
+}
+
+// connectorCallbackAborted logs a dead client and reports whether the
+// caller should return without writing a body: answering a domain error
+// on a dead connection buys only a second log line for a hangup. A fired
+// deadline is NOT gone — callers answer it with the timeout wording
+// instead, so check DeadlineExceeded first.
+func connectorCallbackAborted(ctx context.Context, verb string) bool {
+	if ctx.Err() == nil || ctx.Err() == context.DeadlineExceeded {
+		return false
+	}
+	log.Printf("connectors: %s aborted, request ended (client gone or server stopping): %v", verb, ctx.Err())
+	return true
 }
 
 // connectorMissingScopes reports requested scopes absent from a
@@ -468,9 +513,16 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	st, err := store.ConsumeState(ctx, state)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
+			return
+		}
+		if connectorCallbackAborted(ctx, "callback consume") {
+			return
+		}
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.Upstream {
-			connectorCallbackJSON(w, http.StatusBadGateway, "the connector store did not answer in time")
+			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
 			return
 		}
 		connectorCallbackDead(w, r)
@@ -524,12 +576,19 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, log.Printf)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			connectorCallbackError(w, r, http.StatusBadGateway, "the grant exchange did not answer in time")
+			return
+		}
+		if connectorCallbackAborted(ctx, "callback exchange") {
+			return
+		}
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.NotFound {
 			connectorCallbackDead(w, r)
 			return
 		}
-		connectorCallbackJSON(w, http.StatusBadGateway, "the grant exchange failed; start over from connect")
+		connectorCallbackError(w, r, http.StatusBadGateway, "the grant exchange failed; start over from connect")
 		return
 	}
 	// Trimmed copies are what get sealed: a padded value would seal with
@@ -539,7 +598,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	refreshSealed, err := connectors.EncryptToken(oauth.Key, refreshToken)
 	if err != nil {
 		log.Printf("connectors: token seal failed: %v", err)
-		connectorCallbackJSON(w, http.StatusBadGateway, "could not store the grant")
+		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 		return
 	}
 	var accessSealed string
@@ -547,7 +606,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		accessSealed, err = connectors.EncryptToken(oauth.Key, accessToken)
 		if err != nil {
 			log.Printf("connectors: token seal failed: %v", err)
-			connectorCallbackJSON(w, http.StatusBadGateway, "could not store the grant")
+			connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 			return
 		}
 	}
@@ -560,12 +619,26 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		AccessCipher:          accessSealed,
 		AccessExpiryUnixMilli: expiry,
 	}); err != nil {
-		connectorCallbackJSON(w, http.StatusBadGateway, "could not store the grant")
+		if ctx.Err() == context.DeadlineExceeded {
+			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
+			return
+		}
+		if connectorCallbackAborted(ctx, "callback tokens") {
+			return
+		}
+		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 		return
 	}
 	c, err := store.SetStatus(ctx, id, connectors.StatusConnected, "")
 	if err != nil {
-		connectorCallbackJSON(w, http.StatusBadGateway, "could not store the grant")
+		if ctx.Err() == context.DeadlineExceeded {
+			connectorCallbackError(w, r, http.StatusBadGateway, "the connector store did not answer in time")
+			return
+		}
+		if connectorCallbackAborted(ctx, "callback status") {
+			return
+		}
+		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 		return
 	}
 	// A browser tab gets the close-this-tab page; API clients get JSON.

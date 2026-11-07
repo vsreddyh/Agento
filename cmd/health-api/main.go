@@ -143,6 +143,7 @@ func main() {
 	}
 	log.Print("health-api listening on :8000")
 	ensureConnectorIndexes()
+	logConnectorOAuth()
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
