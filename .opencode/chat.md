@@ -35,7 +35,10 @@ instead of round-tripping one at a time.
   `delete_ingredient`, `delete_recipe`.
 - **health-check** (9): `log_meal` takes user-supplied macros only —
   `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, never estimate, ask
-  for whatever is missing. `log_weight` (never pruned), `log_sleep`,
+  for whatever is missing. At least one item, each with a non-blank name;
+  all five macros required on every item, numeric and >= 0 — the server
+  rejects missing/non-numeric/negative macros and empty/unnamed items.
+  `log_weight` (never pruned), `log_sleep`,
   `log_workout`, `daily_summary`, `query_meals`, `fix_last_meal`,
   `delete_meals`, `prune_old`.
 - **task-manager** (9): `create_task`, `list_tasks`, `get_task`,
@@ -72,8 +75,10 @@ for it.
 
 Reads (`list_*`, `get_*`, `query_*`, `summarize`, `daily_summary`,
 `get_balances`, `scale_recipe`) need no confirmation. `fix_last_*` updates
-the most recent row in place: do it when the user just asked for a
-correction, without re-asking.
+the most recently *recorded* row in place (insertion order, not date
+order — meals sort by `createdAt`, transactions by `_id` — so after a
+backfill the fix hits the backfilled row, not the date-latest one): do it
+when the user just asked for a correction, without re-asking.
 
 ## Delegation and questions
 
