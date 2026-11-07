@@ -426,11 +426,24 @@ _redirect_preset="${REDIRECT_URI:-}"
 
 banner "Google connectors over Tailscale Funnel"
 
+# Proxy host port follows APP_PORT (compose default 8080): every funnel
+# target, probe, and status match below must use it, or a custom-port
+# deploy funnels to a dead port while the wizard reports green. Shell env
+# wins over .env, matching compose precedence; numeric-only, else default.
+_proxy_port="${APP_PORT:-}"
+if [[ -z "$_proxy_port" ]]; then
+  _proxy_port=$(_existing APP_PORT 2>/dev/null || true)
+fi
+if [[ ! "$_proxy_port" =~ ^[0-9]+$ ]]; then
+  _proxy_port="8080"
+fi
+_proxy_target="http://127.0.0.1:$_proxy_port"
+
 # ── Stage 1: preflight ────────────────────────────────────────────────────
 stage "Preflight: what this will change"
 say "This sets up the OAuth callback for the Gmail/Calendar connectors."
 say "Plan: Tailscale Funnel terminates public TLS on 443 and forwards to the"
-say "      existing nginx proxy on http://127.0.0.1:8080. No ports are opened, no"
+say "      existing nginx proxy on $_proxy_target. No ports are opened, no"
 say "      domain is bought. The app keeps its current Server URL."
 say "      Note: the funnel publishes the whole proxy (chat + sync stay"
 say "      PASSWORD-gated); the OAuth callback is the only new unauthenticated"
@@ -443,10 +456,10 @@ for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_EN
 done
 unset v
 say "  tailscale: $(command -v tailscale >/dev/null 2>&1 && echo installed || echo 'not installed')"
-if curl -fsS --max-time 5 http://127.0.0.1:8080/ping >/dev/null 2>&1; then
-  note "  proxy :8080: listening"
+if curl -fsS --max-time 5 "$_proxy_target/ping" >/dev/null 2>&1; then
+  note "  proxy :$_proxy_port: listening"
 else
-  note "  proxy :8080: NOT answering (/ping)"
+  note "  proxy :$_proxy_port: NOT answering (/ping)"
   warn "the funnel forwards to this proxy — a stopped stack means minutes"
   warn "of stage-3/4 waits before anything fails. Start the stack first"
   warn "(./scripts/hermes.sh start) or continue anyway."
@@ -696,7 +709,7 @@ printf '  %s✓%s %s\n' "$GREEN" "$RESET" "https://$TS_DNS"
 # ── Stage 4: funnel + public verification ─────────────────────────────────
 stage "Publish the callback over HTTPS"
 say "Funnel will terminate TLS with a publicly-trusted certificate and forward"
-say "to the existing proxy on http://127.0.0.1:8080. Only ports 443/8443/10000 are"
+say "to the existing proxy on $_proxy_target. Only ports 443/8443/10000 are"
 say "allowed, so 443 it is."
 printf '\n'
 note "First run may prompt you to enable HTTPS certificates / MagicDNS for the"
@@ -712,26 +725,28 @@ FOUT=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — re-run wh
 # of erroring out of the wizard.
 _funnel_status=$(tailscale funnel status 2>/dev/null || true)
 # Real `funnel status` prints the public URL and the target on separate
-# lines (https://<host>… on one, "|-- / proxy http://127.0.0.1:8080" on
-# another — port 443 is implied by https://, never printed next to 8080),
-# so match across the whole output — but bind the port to the proxy word
-# on its own line, or hint text mentioning a URL and the port elsewhere
-# would take the fast path without the binding existing. Also require the
+# lines (https://<host>… on one, "|-- / proxy http://127.0.0.1:<port>" on
+# another — port 443 is implied by https://, never printed next to the
+# proxy port), so match across the whole output — but bind the port to the
+# proxy word on its own line, or hint text mentioning a URL and the port
+# elsewhere would take the fast path without the binding existing. Also require the
 # served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
 # keeps host A while the URI, comment, and probe all use host B.
 # Hostname first: most selective on the common mismatch path, so the two
 # broader greps are skipped unless it hits. The -n guard is load-bearing:
 # grep -qF "" matches every line, so without it an empty TS_DNS would
 # turn the fast path into always-keep (empty exits earlier today, but the
-# safety belongs on this line, not on ordering).
-if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF -- "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
+# safety belongs on this line, not on ordering). The port comes from
+# APP_PORT (validated numeric at the top), so a custom-port funnel that
+# already serves matches instead of starting a duplicate.
+if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF -- "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE "proxy.*${_proxy_port}|${_proxy_port}.*proxy" && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
   note "funnel already serving 443 → this proxy; keeping it"
   printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
   rm -f "$FOUT" || true; FOUT=""
 fi
 unset _funnel_status
 if [[ -n "$FOUT" ]]; then
-  if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1; then
+  if ! tailscale funnel --bg --https=443 "$_proxy_target" </dev/null >"$FOUT" 2>&1; then
     if grep -qiE -- "already|in use|exists" "$FOUT"; then
       note "funnel reports it is already serving; keeping the existing one"
       _check_kept_host
@@ -739,7 +754,7 @@ if [[ -n "$FOUT" ]]; then
       warn "funnel did not start:"
       sed 's/^/      /' "$FOUT" 2>/dev/null || true
       pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
-      tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1 || {
+      tailscale funnel --bg --https=443 "$_proxy_target" </dev/null >"$FOUT" 2>&1 || {
         if grep -qiE -- "already|in use|exists" "$FOUT"; then
           note "funnel reports it is already serving; keeping the existing one"
           _check_kept_host
@@ -950,13 +965,13 @@ issuer=""
 _probe_host="$_probe_hostport"
 _probe_host="${_probe_host:-$TS_DNS}"
 _probe_url="$REDIRECT_URI"
-# 400/501 are the two in-contract answers for a param-less callback hit
-# (missing params / unconfigured OAuth); both prove the route serves.
-# curl without -f: -f would fail all of them and prove nothing.
+# 400/501/429 are the in-contract answers for a param-less callback hit
+# (missing params / unconfigured OAuth / throttled) — all three prove the
+# route serves. curl without -f: -f would fail all of them and prove nothing.
 _probe_ok_code() {
   local code
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$_probe_url" 2>/dev/null || echo "000")
-  [[ "$code" == "400" || "$code" == "501" ]]
+  [[ "$code" == "400" || "$code" == "501" || "$code" == "429" ]]
 }
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
@@ -973,7 +988,7 @@ else
 fi
 printf '\n'
 if (( ok )); then
-  printf '  %s✓%s callback route answers: %s (400/501 both prove the route serves)\n' "$GREEN" "$RESET" "$_probe_url"
+  printf '  %s✓%s callback route answers: %s (400/501/429 all prove the route serves)\n' "$GREEN" "$RESET" "$_probe_url"
   # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
   # outlast the probe budget — https only (loopback http has no TLS), at
   # the probed port. timeout is coreutils-Linux-only (macOS ships

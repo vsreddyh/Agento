@@ -100,8 +100,10 @@ func recoverCrash(next http.Handler) http.Handler {
 				secrets = append(secrets, os.Getenv("MONGODB_URI"))
 				fmt.Fprintf(os.Stdout, "crash route=%s panic=%v\nstack:\n%s\n",
 					route, rec, crashlog.Redact(string(debug.Stack()), secrets...))
+				// `detail` like every other error in this binary (the app
+				// reads `detail`, never `error`, on this service).
 				writeJSON(w, http.StatusInternalServerError,
-					map[string]string{"error": "internal server error"})
+					map[string]string{"detail": "internal server error"})
 			}
 		}()
 		next.ServeHTTP(w, r)

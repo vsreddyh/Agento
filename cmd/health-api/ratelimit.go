@@ -279,6 +279,15 @@ func rateLimit(l *limiter, h http.Handler) http.Handler {
 				secs = 1
 			}
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			// Dual envelope on the OAuth callback: a Google-redirected
+			// browser tab landing mid-throttle gets the close-this-tab
+			// page like every other callback branch, not raw JSON.
+			// Everywhere else keeps the service `detail` envelope.
+			if (r.URL.Path == "/api/connectors/callback" || r.URL.Path == "/api/connectors/callback/") && connectorWantsHTML(r) {
+				connectorCallbackPage(w, http.StatusTooManyRequests, "Agento connect",
+					"Too many requests — slow down and return to the Agento app.")
+				return
+			}
 			writeJSON(w, http.StatusTooManyRequests, bson.M{
 				"detail": "too many requests — slow down and retry after " + strconv.Itoa(secs) + "s",
 			})
