@@ -47,16 +47,13 @@ var ErrBusy = errors.New("scheduler: chat agent is already answering a turn")
 // and the label caps at 80 runes — the prompt carries the name, not the
 // name's formatting.
 //
-// The policy is part of the prompt because the gateway cannot enforce it any
-// other way: tool calls are mediated by the in-process gate
-// (internal/approvalgate), which holds approval-gated writes up to 14 minutes
-// waiting for a human. A scheduler turn has no human watching, so it must not
-// attempt gated writes at all — the TurnTimeout bounds the stall when it does
-// anyway, but the instruction
-// is what keeps the common case from stalling. Reads (notes, fetches,
-// queries) run free, which is exactly what the motivating use case needs:
-// the daily scan reuses applied/inapplicable notes without manual prompt
-// edits.
+// The policy is part of the prompt because a scheduler turn has no human
+// watching: sensitive writes cannot prompt (no decider is attached to an
+// unattended fire — pre-#487 they would have parked a 14-minute hold with
+// nobody to decide it), so the turn must not attempt them at all. Reads
+// (notes, fetches, queries) run free, which is exactly what the motivating
+// use case needs: the daily scan reuses applied/inapplicable notes without
+// manual prompt edits.
 func SchedulerPrompt(jobName, prompt string) string {
 	name := strings.Join(strings.Fields(jobName), " ")
 	switch {

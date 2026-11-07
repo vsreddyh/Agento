@@ -66,7 +66,7 @@ not resolve, trust `describeNamespace()` over this file.
 Confirm first, stating scope: `delete_transactions`, `delete_meals`,
 `prune_old`, `archive_account`, `create_account`,
 `log_transaction`/`log_text`, `delete_recipe` (also removes its cook logs),
-`delete_ingredient`, `delete_task`, `delete_project`. There is no
+`delete_ingredient`, `delete_task`, `delete_project`, `delete_note`. There is no
 `delete_cook`; say so instead of reaching for it.
 
 Reads (`list_*`, `get_*`, `query_*`, `summarize`, `daily_summary`,

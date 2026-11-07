@@ -54,7 +54,10 @@ func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
 			t.Errorf("%s/%s should run free", tc[0], tc[1])
 		}
 	}
-	// A counting prune changes nothing.
+	// A counting prune changes nothing — in the policy record. Note the
+	// enforcement gap: the gate never consults args post-#487 and harness
+	// patterns cannot see them either, so a counting prune prompts in T3
+	// like a real one despite this false below.
 	if NeedsApproval("miser-money", "prune_old", map[string]any{"dry_run": true}) {
 		t.Error("dry-run prune should run free")
 	}
