@@ -523,6 +523,12 @@ if [[ -z "$_proxy_port" ]]; then
   _proxy_port=$(_existing APP_PORT 2>/dev/null || true)
   _proxy_port_src="root .env APP_PORT"
 fi
+if [[ -z "$_proxy_port" ]]; then
+  # Unset everywhere: compose defaults to 8080, so do we — quietly.
+  # Only an explicitly set but invalid value exits below.
+  _proxy_port="8080"
+  _proxy_port_src="compose default"
+fi
 if [[ ${#_proxy_port} -gt 5 ]] || [[ ! "$_proxy_port" =~ ^[0-9]+$ ]] || (( 10#$_proxy_port < 1 || 10#$_proxy_port > 65535 )); then
   warn "APP_PORT is not numeric 1-65535 (from $_proxy_port_src: '${_proxy_port:-<empty>}') — fix it, do not proceed on a default:"
   warn "funnelling to a silently-defaulted port serves a URL nothing answers."
@@ -1210,7 +1216,11 @@ if (( ok )); then
   # same portability line as the tmp-file prune below.
   _tls_host="$_probe_host"; _tls_port="443"; _tls_name="$_probe_host"
   if [[ "$_tls_host" == \[*\]* ]]; then
-    _tls_name="${_tls_host#[}"; _tls_name="${_tls_name%]}"
+    # Split on `]` first like the other bracket branches: stripping `[`
+    # then one trailing `]` turns `[::1]:8001` into `::1]:8001` (then
+    # re-bracketed to the un-diallable `[::1]:8001]`).
+    _tls_name="${_tls_host#[}"
+    _tls_name="${_tls_name%%\]*}"
     _tls_rest="${_tls_host#*]}"; _tls_rest="${_tls_rest#:}"
     [[ -n "$_tls_rest" ]] && _tls_port="$_tls_rest"
     # Keep brackets on the connect target (bare ::1:port is ambiguous),
