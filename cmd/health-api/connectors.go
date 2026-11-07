@@ -654,14 +654,6 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		connectorCallbackDead(w, r)
 		return
 	}
-	store := connectorStore()
-	oauth := connectorOAuth(store)
-	if oauth == nil {
-		log.Printf("connectors: callback attempted while OAuth is unconfigured (%s)", connectorOAuthDown(store))
-		connectorCallbackError(w, r, http.StatusNotImplemented,
-			"callback is not configured on this server yet — never paste a token in chat")
-		return
-	}
 	query := r.URL.Query()
 	code := connectors.TrimCredential(query.Get("code"))
 	state := connectors.TrimCredential(query.Get("state"))
@@ -672,6 +664,10 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("connectors: callback with duplicate params (code=%d, state=%d values), using first",
 			len(query["code"]), len(query["state"]))
 	}
+	// Missing and malformed params answer before the unconfigured 501
+	// below: both are stateless input verdicts that must not vary with
+	// server config, or an unauthenticated probe distinguishes
+	// configured-vs-not (and the app gets "re-tap" vs "fix server" mixed).
 	if code == "" || state == "" {
 		connectorCallbackError(w, r, http.StatusBadRequest,
 			"callback needs ?code= and ?state=; start over from connect")
@@ -688,6 +684,14 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("connectors: callback code/state failed shape gate (code=%d, state=%d bytes), answering dead-attempt",
 			len(code), len(state))
 		connectorCallbackDead(w, r)
+		return
+	}
+	store := connectorStore()
+	oauth := connectorOAuth(store)
+	if oauth == nil {
+		log.Printf("connectors: callback attempted while OAuth is unconfigured (%s)", connectorOAuthDown(store))
+		connectorCallbackError(w, r, http.StatusNotImplemented,
+			"callback is not configured on this server yet — never paste a token in chat")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), connectorCallbackBudget)
@@ -718,7 +722,8 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	// The burn already happened (single-use by design); the 400 names the
 	// recovery (re-tap connect), unlike a 502 store-failure message.
 	if !connectors.Known(id) {
-		log.Printf("connectors: callback consumed state for unknown connector (burned, answering dead-attempt)")
+		log.Printf("connectors: callback consumed state for unknown connector %q (burned, answering dead-attempt)",
+			connectorBounded(approvals.ScrubError(id)))
 		connectorCallbackDead(w, r)
 		return
 	}
@@ -728,8 +733,8 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) ||
 		connectors.HasWhitespace(st.Verifier) ||
 		len(st.Verifier) > connectors.MaxVerifierLen || len(st.Verifier) < connectors.MinVerifierLen {
-		log.Printf("connectors: callback verifier failed shape gate (len=%d, burned row), answering dead-attempt",
-			len(st.Verifier))
+		log.Printf("connectors: callback verifier failed shape gate for %q (len=%d, burned row), answering dead-attempt",
+			connectorBounded(approvals.ScrubError(id)), len(st.Verifier))
 		connectorCallbackDead(w, r)
 		return
 	}
@@ -809,6 +814,15 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		var se *connectors.StoreError
 		if errors.As(err, &se) && se.NotFound {
 			connectorCallbackDead(w, r)
+			return
+		}
+		if errors.As(err, &se) && !se.Upstream {
+			// Deterministic provider answer (no refresh token, invalid
+			// or oversized token): misconfigured consent, not an outage
+			// — 400 with the scrubbed reason so re-tap (not retry) is
+			// the signal. Upstream failures stay 502 below.
+			connectorCallbackError(w, r, http.StatusBadRequest,
+				connectorBounded(approvals.ScrubError(se.Msg)))
 			return
 		}
 		connectorCallbackError(w, r, http.StatusBadGateway, "the grant exchange failed; start over from connect")

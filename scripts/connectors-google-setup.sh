@@ -1027,6 +1027,40 @@ if [[ -n "$_final_port_from_uri" ]]; then
   fi
 fi
 unset _final_port_from_uri
+# Funnel serves 443 only: a funnel-host URI carrying any other explicit
+# port registers a string the funnel never delivers (Google redirects to
+# :8443 while only :443 answers). Custom hosts need their own serving
+# regardless — this gate is strictly about the funnel host + wrong port.
+_funnel_hp="${REDIRECT_URI#*://}"
+_funnel_hp="${_funnel_hp%%/*}"
+if [[ "$_funnel_hp" == \[*\]* ]]; then
+  _funnel_hp="${_funnel_hp#[}"
+  _funnel_hp="${_funnel_hp%%\]*}"
+else
+  _funnel_hp="${_funnel_hp%%:*}"
+fi
+_funnel_hp="$(printf '%s' "$_funnel_hp" | tr '[:upper:]' '[:lower:]')"
+_funnel_ts="$(printf '%s' "$TS_DNS" | tr '[:upper:]' '[:lower:]')"
+if [[ -n "$_funnel_hp" && "$_funnel_hp" == "$_funnel_ts" ]]; then
+  _funnel_ep="${REDIRECT_URI#*://}"
+  _funnel_ep="${_funnel_ep%%/*}"
+  if [[ "$_funnel_ep" == \[*\]* ]]; then
+    _funnel_ep="${_funnel_ep#*]}"
+    _funnel_ep="${_funnel_ep#:}"
+  elif [[ "$_funnel_ep" == *:* ]]; then
+    _funnel_ep="${_funnel_ep##*:}"
+  else
+    _funnel_ep=""
+  fi
+  if [[ -n "$_funnel_ep" && "$_funnel_ep" != "443" ]]; then
+    warn "REDIRECT_URI names the funnel host with explicit port :$_funnel_ep — the funnel serves 443 only:"
+    warn "  value: $REDIRECT_URI"
+    warn "Register the bare :443-stripped spelling instead."
+    if ! confirm "Keep it anyway?"; then exit 1; fi
+  fi
+  unset _funnel_ep
+fi
+unset _funnel_hp _funnel_ts
 
 # Host/scheme gate the final value: the server fails closed on http
 # non-loopback, non-loopback IPs, and non-FQDN hosts — a value passing the
@@ -1277,11 +1311,17 @@ _probe_ok_code() {
   [[ "$code" == "400" || "$code" == "501" || "$code" == "429" ]]
 }
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
-  note "preset hostname — skipping the public-reachability wait"
+  if (( _DNS_FROM_PRESET )); then
+    note "preset hostname — skipping the public-reachability wait"
+  else
+    note "SKIP_PROBE=1 — skipping the public-reachability wait on a discovered hostname"
+  fi
   if _probe_ok_code; then
     ok=1
-  else
+  elif (( _DNS_FROM_PRESET )); then
     note "not reachable from here right now (expected for a dry-run name)"
+  else
+    note "not reachable from here right now (stack stopped or still starting?)"
   fi
 else
   for ((__i = 1; __i <= 30; __i++)); do
@@ -1326,9 +1366,14 @@ if (( ok )); then
     note "Google accepts Let's Encrypt-issued certs."
   fi
 elif (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
-  # Preset/dry-run names were already reassured above — a fake name never
+  # Preset names were already reassured above — a fake name never
   # propagates, so the DNS-wait message below would misdirect those users.
-  note "continuing to the .env write without public reachability"
+  # An explicit skip on a discovered name gets no such reassurance.
+  if (( _DNS_FROM_PRESET )); then
+    note "continuing to the .env write without public reachability"
+  else
+    note "continuing to the .env write without public reachability (probe skipped by SKIP_PROBE=1 — verify serving separately)"
+  fi
 else
   warn "not reachable yet (DNS can take up to 10 min to propagate)."
   warn "You can continue — the URI below is still correct; re-run the probe later if needed."

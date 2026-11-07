@@ -143,13 +143,13 @@ func TestConnectorConnectUnconfigured(t *testing.T) {
 }
 
 func TestConnectorCallbackGuards(t *testing.T) {
-	// No OAuth env in tests (and no durable store): the config check runs
-	// before param parsing, so a bare callback 501s instead of naming
-	// params — same ordering as the gateway.
+	// Param gates run before the config check, so input verdicts never
+	// vary with server config: a bare callback 400s naming params whether
+	// OAuth is configured or not (no config oracle, right signal).
 	req := httptest.NewRequest(http.MethodGet, "/api/connectors/callback?code=abc", nil)
 	w := httptest.NewRecorder()
 	connectorCallback(w, req)
-	if w.Code != http.StatusNotImplemented {
+	if w.Code != http.StatusBadRequest {
 		t.Fatalf("unconfigured: got %d (%s)", w.Code, w.Body.String())
 	}
 	// Wrong method → 405 before anything else.
@@ -177,13 +177,13 @@ func TestConnectorsRouteRegistration(t *testing.T) {
 	mux := http.NewServeMux()
 	registerConnectors(mux)
 	t.Setenv("PASSWORD", "test-secret-12345678")
-	// Exact callback spelling reaches the callback (501 here: OAuth is
-	// unconfigured in tests), proving the mux picked the connector
-	// handler.
+	// Exact callback spelling reaches the callback (400 missing params —
+	// input verdicts precede the config check), proving the mux picked
+	// the connector handler.
 	req := httptest.NewRequest(http.MethodGet, "/api/connectors/callback", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	if w.Code != http.StatusNotImplemented {
+	if w.Code != http.StatusBadRequest {
 		t.Fatalf("callback route: got %d (%s)", w.Code, w.Body.String())
 	}
 	// Trailing-slash collection reaches the list guard (POST → 405).
@@ -199,7 +199,7 @@ func TestConnectorsRouteRegistration(t *testing.T) {
 	req.Header.Set("Accept", "text/html")
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	if w.Code != http.StatusNotImplemented || !strings.Contains(w.Body.String(), "<html>") {
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "<html>") {
 		t.Fatalf("html callback: got %d (%s)", w.Code, w.Body.String())
 	}
 	// Wrong method answers the page envelope too, with Allow: GET.
