@@ -159,7 +159,7 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		// (Failing the old holds fast lived in approvalgate; this flag is
 		// what let the app tell "empty" from "undecidable".)
 		if !s.approvals.Shared() {
-			resp["degraded"] = "approval store is not shared across processes; gated calls cannot be decided"
+			resp["degraded"] = "approval store is not shared across processes; pre-migration approvals cannot be decided here"
 		}
 		writeJSONResponse(w, http.StatusOK, resp)
 		return

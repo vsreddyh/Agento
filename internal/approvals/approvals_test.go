@@ -76,7 +76,7 @@ func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
 // renames a tool updates `known` HERE in the same change, exactly as it
 // updates gatedTools. Without both, the test only checks the two hardcoded
 // copies against each other. Runtime stays safe regardless (an unknown tool on
-// a known server holds), so forgetting yields a test that under-reports, never
+// a known server is denied at once), so forgetting yields a test that under-reports, never
 // an ungated write.
 func TestPolicyTableIsComplete(t *testing.T) {
 	known := map[string][]string{
@@ -448,7 +448,7 @@ func TestNeedsApprovalCaseInsensitive(t *testing.T) {
 		t.Error("Gmail/Search_Gmail should run free like gmail/search_gmail")
 	}
 	if !NeedsApproval("GMAIL", "SEND_MESSAGE", nil) {
-		t.Error("GMAIL/SEND_MESSAGE should hold like gmail/send_message")
+		t.Error("GMAIL/SEND_MESSAGE should stay sensitive like gmail/send_message")
 	}
 	if !KnownServer("Gmail") {
 		t.Error("KnownServer(Gmail) should be true")

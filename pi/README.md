@@ -231,8 +231,8 @@ through nginx — not `pi` itself.
 | `POST /api/runs/{id}/steer` | yes — queues an instruction into the running turn | Pi RPC `steer` |
 | `POST /api/runs/{id}/cancel` | yes — aborts, keeps partial output | Pi RPC `abort` |
 | `GET /api/approvals` (+ `/{profile}/api/approvals`) | yes — filters `status`, `limit` | `approvals` (Mongo), memory fallback |
-| `POST /api/approvals/{id}/approve` | yes — releases the held call, exactly once | approval store |
-| `POST /api/approvals/{id}/deny` | yes — refuses it, Pi gets a tool error | approval store |
+| `POST /api/approvals/{id}/approve` | yes — releases a pre-migration held call, exactly once (nothing new parks) | approval store |
+| `POST /api/approvals/{id}/deny` | yes — refuses it, the harness gets a tool error | approval store |
 | `GET /api/audit` (+ `/{profile}/api/audit`) | yes — filters `server`, `tool`, `limit` | `audit_log` (Mongo, 90-day TTL) |
 | `GET /api/memory` (+ `/{profile}/api/memory`) | yes — items, paused topics, topic list | `memory_items` (Mongo), memory fallback |
 | `POST /api/memory` | yes — create a confirmed, user-written item | memory store |
