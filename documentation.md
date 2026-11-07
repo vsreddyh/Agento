@@ -377,18 +377,21 @@ register) a dotted name or loopback address: use a nip.io-style wildcard,
 Tailscale funnel, or reverse proxy for a public name — or an SSH tunnel to
 localhost for direct-only access. Bare `*.local`/LAN names are out of scope
 by intent, not by omission. Health-api serves the exact path, case-insensitive
-on the last segment (`/CALLBACK` serves like `/callback` — unauthenticated
-callers are not distinguished by casing), plus slash-collapsed variants
-(`//` collapses, so a double-slash paste serves — WAF/proxy rules must
-match on the collapsed form too) and percent-encoded spellings (Go decodes
+on the whole callback spelling (`/API/CONNECTORS/CALLBACK` serves like
+`/callback` — the gateway bypass folds the same way, so unauthenticated
+callers are not distinguished by casing), plus slash-collapsed spellings
+(unclean paths 301-redirect to the collapsed form when it matches a route —
+follow redirects; POST callers must use the clean spelling since most
+clients re-issue a 301 follow as GET — and WAF/proxy rules must match the
+post-redirect form too) and percent-encoded spellings (Go decodes
 before matching, so `/%63allback` serves like `/callback` — match on the
 decoded form too), plus the trailing-slash alias (`/callback/` serves like
 `/callback` — the dispatcher trims slashes, so match the trimmed form
 too) — but no profile-tolerant prefixes (the
 pi-gateway `/p/` spellings retire with it in #494 — until then both serve).
-The `/api` prefix itself is case-sensitive: `/API/...` answers the service
-JSON `unknown path` 404 behind auth (like the gateway), never the
-callback — WAF/proxy exact-matches must cover the uppercase spelling too.
+Non-callback other-cased prefixes (`/API/connectorsfoo`) answer the service
+JSON `unknown path` 404 behind auth (like the gateway) — WAF/proxy
+exact-matches must cover the uppercase spelling too.
 Anything else unclaimed (including `/` itself) answers the same auth-gated
 JSON `unknown path` 404, never the default-mux text page: like the gateway,
 unknown paths sit behind the bearer gate on this service.

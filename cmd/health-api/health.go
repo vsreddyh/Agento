@@ -76,7 +76,16 @@ func minutesBetween(startISO, endISO string) (dur int, ok bool) {
 	return m, true
 }
 
-func health(w http.ResponseWriter, _ *http.Request) {
+func health(w http.ResponseWriter, r *http.Request) {
+	// Liveness answers GET and HEAD only, like the gateway's handleHealth:
+	// a 200 to POST would misstate the contract when compared across
+	// services, and the limiter exempt below stays narrow to the static
+	// reply. HEAD carries headers only; net/http suppresses the body.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "GET or HEAD only"})
+		return
+	}
 	writeJSON(w, http.StatusOK, bson.M{"status": "ok"})
 }
 

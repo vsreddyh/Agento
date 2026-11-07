@@ -33,6 +33,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	syncpkg "sync"
 	"time"
@@ -1069,29 +1070,38 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // connectorCallbackPath reports whether p reaches the OAuth callback
-// after the same trim/fold the dispatcher applies (case-insensitive last
-// segment, slash-collapsed). One predicate for both the dispatcher and
-// the rate limiter, so a spelling serving in one is enveloped in the
-// other.
+// after the same clean/fold the dispatcher applies. Cleaned first like
+// splitProfile (collapsed slashes verdict like their canonical form),
+// then case-insensitive on the whole suffix like the gateway bypass —
+// an uppercase prefix is still the callback, never an unknown path, so
+// no branch can gate it behind auth while the gateway serves it open.
+// One predicate for the dispatcher, the fallback, and the rate limiter,
+// so a spelling serving in one is enveloped in the others.
 func connectorCallbackPath(p string) bool {
-	if !strings.HasPrefix(p, "/api/connectors/") {
+	cleaned := path.Clean("/" + strings.TrimPrefix(p, "/"))
+	trimmed := strings.TrimPrefix(cleaned, "/")
+	lower := strings.ToLower(trimmed)
+	const prefix = "api/connectors/"
+	if !strings.HasPrefix(lower, prefix) {
 		return false
 	}
-	rest := strings.Trim(strings.TrimPrefix(p, "/api/connectors/"), "/")
+	// Same byte length: a matched ASCII prefix folds to itself in place.
+	rest := strings.Trim(trimmed[len(prefix):], "/")
 	return strings.EqualFold(rest, "callback")
 }
 
 // connectorsFallback answers every path no domain claimed — including
 // the no-slash-boundary misses (/api/connectorsfoo, /api/CONNECTORS)
-// that share the connectors prefix without the trailing-slash subtree,
-// and any other-cased prefix (/API/...) Go's case-sensitive mux never
-// matches. Without it Go's default mux answers text/plain 404 with no
-// envelope and no auth gate, while the gateway answers the same
-// spellings as JSON unknown-path behind auth. Auth first like every
-// other verb here (the gateway 401s unknown paths before its 404 —
-// including the uppercase spellings, which skip the auth gate entirely
-// without this catch), then the service `detail` envelope with no-store
-// so triage greps and the app's detail branch keep working.
+// that share the connectors prefix without the trailing-slash subtree.
+// Without it Go's default mux answers text/plain 404 with no envelope
+// and no auth gate, while the gateway answers the same spellings as
+// JSON unknown-path behind auth. The callback spelling itself is NOT
+// unknown: like the gateway bypass it serves open (no bearer — the state
+// is the capability) whatever the prefix case, so it dispatches before
+// the auth gate below. Everything else auths first like every other verb
+// here (the gateway 401s unknown paths before its 404), then the service
+// `detail` envelope with no-store so triage greps and the app's detail
+// branch keep working.
 // Registered as the mux catch-all so it only sees what longer patterns
 // missed: it also answers other domains' typos (/api/task missing-s,
 // /api/health/sync/ trailing slash — health and files register exacts
@@ -1101,6 +1111,12 @@ func connectorCallbackPath(p string) bool {
 // The log line below names which unclaimed spelling landed here
 // (length only, never the value) like every other dead branch.
 func connectorsFallback(w http.ResponseWriter, r *http.Request) {
+	// Callback first, before auth: an uppercase-prefix callback is still
+	// the callback (gateway serves it open), never an unknown path.
+	if connectorCallbackPath(r.URL.Path) {
+		connectorCallback(w, r)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})

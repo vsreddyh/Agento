@@ -17,6 +17,16 @@ func TestHealth(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"status":"ok"`) {
 		t.Fatalf("got %s", w.Body.String())
 	}
+	// Liveness answers GET and HEAD only, like the gateway's handleHealth.
+	req = httptest.NewRequest(http.MethodPost, "/health", nil)
+	w = httptest.NewRecorder()
+	health(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post: got %d, want 405", w.Code)
+	}
+	if allow := w.Header().Get("Allow"); allow != "GET, HEAD" {
+		t.Fatalf("post Allow: got %q", allow)
+	}
 }
 
 // The trailing-slash spelling serves the same static reply through the

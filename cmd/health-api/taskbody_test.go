@@ -333,6 +333,21 @@ func TestHealthProbeIsNeverThrottled(t *testing.T) {
 	if limited == 0 {
 		t.Errorf("/api/health/sync was never throttled — the exemption is too broad (%d/%d limited)", limited, 5)
 	}
+	// And scoped to the static-reply methods: POST /health 405s in the
+	// handler, so it must not ride the liveness exempt past the limiter.
+	limited = 0
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/health", nil)
+		req.RemoteAddr = "203.0.113.9:5555"
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited == 0 {
+		t.Errorf("POST /health was never throttled — the exemption covers non-GET (%d/%d limited)", limited, 5)
+	}
 }
 
 // The digest's trim list must agree with what the store ACTUALLY does, in both

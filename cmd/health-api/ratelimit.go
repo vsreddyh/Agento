@@ -276,7 +276,10 @@ func shortHash(s string) string {
 // a prefix rule here would exempt the wrong thing. Bare and
 // trailing-slash both skip: they serve the same static reply
 // (registerHealth), so throttling /health/ while exempting /health would
-// fail the probe for a slash.
+// fail the probe for a slash. Scoped to the static-reply methods: the
+// handler 405s anything else, and an exempt-all-methods rule would let
+// an unauthenticated POST flood (arbitrary unread body) bypass the
+// limiter the exemption is justified by.
 var exemptPaths = map[string]bool{"/health": true, "/health/": true}
 
 func rateLimit(l *limiter, h http.Handler) http.Handler {
@@ -291,7 +294,7 @@ func rateLimit(l *limiter, h http.Handler) http.Handler {
 		// touches no database, so it adds no load to the thing the limiter exists to
 		// protect. Being unreachable under flood is the one property a liveness probe
 		// must never have.
-		if exemptPaths[r.URL.Path] {
+		if exemptPaths[r.URL.Path] && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			h.ServeHTTP(w, r)
 			return
 		}

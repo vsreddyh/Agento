@@ -272,8 +272,10 @@ func TestConnectorsRouteRegistration(t *testing.T) {
 	for _, target := range []string{
 		"/api/connectors//callback", "/api/connectors/callback//",
 		"/api/connectors", "/api/connectors/gmail/connect",
+		"/API/connectors/callback", "/API/connectors/callback/",
+		"/API/connectors//CALLBACK", "/API/connectorsfoo",
 	} {
-		want := strings.Contains(target, "callback")
+		want := strings.Contains(strings.ToLower(target), "callback")
 		if got := connectorCallbackPath(target); got != want {
 			t.Fatalf("connectorCallbackPath(%q) = %v, want %v", target, got, want)
 		}
@@ -324,7 +326,7 @@ func TestConnectorsFallbackEnvelope(t *testing.T) {
 	t.Setenv("PASSWORD", "test-secret-12345678")
 	mux := http.NewServeMux()
 	registerConnectors(mux)
-	for _, target := range []string{"/api/connectorsfoo", "/api/connectorsfoo/bar", "/api/CONNECTORS", "/api", "/API/connectorsfoo", "/API/", "/API/connectors/callback", "/", "/favicon.ico"} {
+	for _, target := range []string{"/api/connectorsfoo", "/api/connectorsfoo/bar", "/api/CONNECTORS", "/api", "/API/connectorsfoo", "/API/", "/", "/favicon.ico"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		req.Header.Set("Authorization", "Bearer test-secret-12345678")
 		w := httptest.NewRecorder()
@@ -354,6 +356,24 @@ func TestConnectorsFallbackEnvelope(t *testing.T) {
 		}
 		if got := w.Header().Get("WWW-Authenticate"); got == "" {
 			t.Fatalf("%s: 401 without WWW-Authenticate challenge", target)
+		}
+	}
+	// The callback spelling serves open whatever the prefix case — the
+	// gateway bypass folds the same way, so no branch gates it behind
+	// auth. Both spellings answer the input verdict, never 401/404.
+	for _, target := range []string{"/API/connectors/callback", "/API/connectors/callback/"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s no token: got %d (%s), want open-callback 400", target, w.Code, w.Body.String())
+		}
+		req = httptest.NewRequest(http.MethodPost, target, nil)
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s post: got %d (%s), want callback 405", target, w.Code, w.Body.String())
 		}
 	}
 }
