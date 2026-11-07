@@ -87,7 +87,8 @@ Deny-by-default for money and deletes, exactly as the issue scopes it:
 Gating every write would make the agent ask permission to take notes —
 approval fatigue, not safety. The table is complete by contract
 (`TestPolicyTableIsComplete` fails when a server gains an unclassified
-tool), and reads never gate. Unknown servers hold; unknown tools are
+tool), and reads never gate. Pre-#487 unknown servers held; post-#487
+they deny at once. Unknown tools are
 rejected by the SDK before the gate ever runs (see ADR-0011 Stage 2).
 
 A gated `tools/call` **notification** (no `id`) was denied inline instead of

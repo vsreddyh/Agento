@@ -421,7 +421,8 @@ func run() error {
 	// model but no job store, so a Mongo-less stack still answers "no runner"
 	// honestly instead of failing open. Scheduler fires do NOT use this path:
 	// they run as chat-agent turns (wired above), so they can read notes and
-	// fetch live pages at fire time.
+	// run list/query lookups at fire time (never browser navigation — no one
+	// is attached to approve a domain).
 	var teachRunner gateway.TeachRunner
 	if key := strings.TrimSpace(os.Getenv("OPENCODE_API_KEY")); key != "" {
 		runner := &cronjobs.BareClient{

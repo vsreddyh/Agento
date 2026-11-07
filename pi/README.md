@@ -231,7 +231,7 @@ through nginx — not `pi` itself.
 | `GET /api/runs/{id}/events` | yes — SSE snapshot, then live frames | run subscription |
 | `POST /api/runs/{id}/steer` | yes — queues an instruction into the running turn | Pi RPC `steer` |
 | `POST /api/runs/{id}/cancel` | yes — aborts, keeps partial output | Pi RPC `abort` |
-| `GET /api/approvals` (+ `/{profile}/api/approvals`) | yes — filters `status`, `limit` | `approvals` (Mongo), memory fallback |
+| `GET /api/approvals` (+ `/{profile}/api/approvals`) | yes — filters `status`, `limit` (pre-migration rows only; nothing new parks) | `approvals` (Mongo), memory fallback |
 | `POST /api/approvals/{id}/approve` | yes — releases a pre-migration held call, exactly once (nothing new parks) | approval store |
 | `POST /api/approvals/{id}/deny` | yes — refuses a pre-migration held call (nothing new parks) | approval store |
 | `GET /api/audit` (+ `/{profile}/api/audit`) | yes — filters `server`, `tool`, `limit` | `audit_log` (Mongo, 90-day TTL) |

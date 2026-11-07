@@ -215,7 +215,7 @@ func (s *MongoStore) DecideApproval(ctx context.Context, id string, approved boo
 }
 
 // TimeoutApproval flips a still-pending approval expired; decided rows keep
-// their human verdict.
+// their human verdict. Pre-migration only: no live caller remains post-#487.
 func (s *MongoStore) TimeoutApproval(ctx context.Context, id string, at time.Time) error {
 	_, err := s.approvals.UpdateOne(ctx,
 		bson.M{"_id": id, "status": string(StatusPending)},
