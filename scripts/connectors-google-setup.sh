@@ -1083,8 +1083,10 @@ fi
 # Loopback-port cross-check: a loopback REDIRECT_URI is served direct by
 # health-api on the mapped host port (HEALTH_HOST_PORT, compose default
 # 8001) — not through the proxy — so any other port probes dead air and
-# registers a URL nothing answers.
-if [[ "$_final_scheme" == "http" ]]; then
+# registers a URL nothing answers. http AND https loopback alike: an
+# https://localhost:<wrong-port> URL would otherwise skip this check and
+# die later as DNS-unreachable when the TLS probe dials plain HTTP.
+if [[ "$_final_scheme" == "http" || "$_final_scheme" == "https" ]]; then
   case "$_final_host" in
     localhost|127.0.0.1|::1)
       _loop_port="${REDIRECT_URI#*://}"

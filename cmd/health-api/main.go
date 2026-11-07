@@ -20,10 +20,15 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	syncpkg "sync"
 	"time"
 
 	"agento/internal/crashlog"
 )
+
+// passwordWarnOnce keeps the empty-PASSWORD line to one emission: without
+// it the app's poll loop turns a config error into steady log spam.
+var passwordWarnOnce syncpkg.Once
 
 // IST is the user timezone (UTC+5:30, no DST) as a fixed offset.
 var IST = time.FixedZone("IST", 5*3600+30*60)
@@ -57,11 +62,16 @@ func tokens() map[string]bool {
 func authorize(r *http.Request) (int, string) {
 	toks := tokens()
 	if len(toks) == 0 {
-		// A green /health does NOT contradict this: liveness is exempt
-		// from auth and throttling by design, and the OAuth callback
-		// bypasses auth (the state is the capability) — both still serve.
-		// Probe an auth-bearing route (not /health) for serving readiness.
-		log.Print("PASSWORD not set — rejecting auth-bearing requests (/health and the OAuth callback still serve)")
+		// Once, not per request: an empty PASSWORD plus the app's poll
+		// loop would otherwise fill the log with one identical line per
+		// allowed poll, burying the single boot-time signal. A green
+		// /health does NOT contradict this: liveness is exempt from auth
+		// and throttling by design, and the OAuth callback bypasses auth
+		// (the state is the capability) — both still serve. Probe an
+		// auth-bearing route (not /health) for serving readiness.
+		passwordWarnOnce.Do(func() {
+			log.Print("PASSWORD not set — rejecting auth-bearing requests (/health and the OAuth callback still serve)")
+		})
 		return http.StatusServiceUnavailable, "server not configured with tokens"
 	}
 	// Deliberate divergences from the gateway's authenticate, both
