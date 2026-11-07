@@ -304,12 +304,16 @@ _uri_host() {
 
 # canonical_redirect_uri prints the canonical form of a redirect URI the
 # way the server sends it: lowercased host, no trailing dot, no default
-# port (:443 for https, :80 for http), non-default ports kept. Google
+# port (numeric compare, so :080/:0443 strip like :80/:443), non-default
+# ports kept, one trailing slash trimmed. Google
 # exact-matches the sent bytes, so registering this string (or comparing
 # the startup-log line against it) is the only correct comparison — the
 # input spelling may differ while sending identically. Bracketed IPv6
 # hosts survive intact; a malformed value prints unchanged (validated
-# by the caller, never here).
+# by the caller, never here). Deliberately NOT full server parity: query,
+# fragment, userinfo, encodings, and path case are refused outright by the
+# server, so the final block rejects those shapes instead of normalising
+# them.
 canonical_redirect_uri() {
   local u="$1" scheme rest path hostport host port
   [[ "$u" == *://* ]] || { printf '%s' "$u"; return 0; }
@@ -322,6 +326,9 @@ canonical_redirect_uri() {
     path="/"
     hostport="$rest"
   fi
+  # One trailing slash trimmed (server path.Clean semantics for our shape);
+  # root stays root.
+  [[ "$path" != "/" ]] && path="${path%/}"
   if [[ "$hostport" == \[*\]* ]]; then
     host="${hostport%%\]*}]"
     port="${hostport#*]}"
@@ -336,9 +343,14 @@ canonical_redirect_uri() {
   fi
   host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
   host="${host%.}"
-  if { [[ "$scheme" == "https" && "$port" == "443" ]]; } || \
-     { [[ "$scheme" == "http" && "$port" == "80" ]]; }; then
-    port=""
+  if [[ "$port" =~ ^[0-9]+$ ]]; then
+    # Numeric compare AND normalization: :080 sends as :80, so the
+    # canonical form strips the padding but keeps a non-default port.
+    port="$((10#$port))"
+    if { [[ "$scheme" == "https" ]] && (( port == 443 )); } || \
+       { [[ "$scheme" == "http" ]] && (( port == 80 )); }; then
+      port=""
+    fi
   fi
   if [[ -n "$port" ]]; then
     host="$host:$port"
@@ -840,6 +852,24 @@ if [[ "$_canon_uri" != "$REDIRECT_URI" ]]; then
   REDIRECT_URI="$_canon_uri"
 fi
 unset _canon_uri
+# Exactness the canonicaliser deliberately does not provide: query,
+# fragment, userinfo, percent-encodings, and path case are refused
+# outright by the server (501), so they must fail here with a pointer —
+# never sail into .env and die as redirect_uri_mismatch.
+_canonical_path="/${REDIRECT_URI#*://}"
+_canonical_path="/${_canonical_path#*/}"
+if [[ "$REDIRECT_URI" == *\?* || "$REDIRECT_URI" == *\#* || "$REDIRECT_URI" == *@* || "$REDIRECT_URI" == *%* ]]; then
+  warn "REDIRECT_URI carries a query, fragment, userinfo, or percent-encoding — the server refuses all four (501)."
+  warn "  value: $REDIRECT_URI"
+  warn "Re-run with a clean https://<host>/api/connectors/callback value, or keep knowingly:"
+  if ! confirm "Keep it anyway (registration will mismatch)?"; then exit 1; fi
+elif [[ "$_canonical_path" != "/api/connectors/callback" ]]; then
+  warn "REDIRECT_URI path is not exactly /api/connectors/callback (case-sensitive, no trailing slash — canonicalisation already trimmed one):"
+  warn "  value: $REDIRECT_URI"
+  warn "Re-run with the exact path, or keep knowingly:"
+  if ! confirm "Keep it anyway (registration will mismatch)?"; then exit 1; fi
+fi
+unset _canonical_path
 # Probe target follows the registered URI exactly — scheme and explicit
 # port included — so a green probe proves the registered host:port
 # answers, not just :443.
@@ -866,30 +896,42 @@ say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # probe still reports status without the wait.
 ok=0
 issuer=""
-# Probe the registered URI exactly — scheme and explicit port included —
-# so a green probe proves the registered host:port answers, not just :443.
+# Probe the registered callback route exactly — not liveness: only an
+# /api/ hit proves the serving path (a green /health with a broken /api/
+# location registers a URL that 404s at callback time). The callback needs
+# no bearer; without params it answers 400 (missing code/state) or 501
+# (OAuth unconfigured) — either proves routing + handler. Anything else
+# (404/502/000) is a real failure to fix before registering.
 # _probe_hostport was derived from the final canonical REDIRECT_URI above;
 # TS_DNS is the fallback only if that derivation yielded nothing probabe
 # (loopback http included — the probe speaks the URI's own scheme).
 _probe_host="$_probe_hostport"
 _probe_host="${_probe_host:-$TS_DNS}"
-_probe_url="$_probe_scheme://$_probe_host/health"
+_probe_url="$_probe_scheme://$_probe_host/api/connectors/callback"
+# 400/501 are the two in-contract answers for a param-less callback hit
+# (missing params / unconfigured OAuth); both prove the route serves.
+# curl without -f: -f would fail all of them and prove nothing.
+_probe_ok_code() {
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$_probe_url" 2>/dev/null || echo "000")
+  [[ "$code" == "400" || "$code" == "501" ]]
+}
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
-  if curl -fsS --max-time 10 "$_probe_url" >/dev/null 2>&1; then
+  if _probe_ok_code; then
     ok=1
   else
     note "not reachable from here right now (expected for a dry-run name)"
   fi
 else
   for ((__i = 1; __i <= 30; __i++)); do
-    if curl -fsS --max-time 10 "$_probe_url" >/dev/null 2>&1; then ok=1; break; fi
+    if _probe_ok_code; then ok=1; break; fi
     printf '%s' '.'; sleep 10
   done
 fi
 printf '\n'
 if (( ok )); then
-  printf '  %s✓%s public HTTPS reachable: %s\n' "$GREEN" "$RESET" "$_probe_url"
+  printf '  %s✓%s callback route answers: %s (400/501 both prove the route serves)\n' "$GREEN" "$RESET" "$_probe_url"
   # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
   # outlast the probe budget — https only (loopback http has no TLS), at
   # the probed port. timeout is coreutils-Linux-only (macOS ships
@@ -1277,10 +1319,12 @@ printf '     ./scripts/hermes.sh restart recreates them (a plain container\n'
 printf '     restart without recreation will not pick up .env changes).\n'
 printf '  2. Compare the canonical string health-api logs at boot:\n'
 printf -v _compose_file '%q' "$REPO_DIR/docker/docker-compose.yml"
-printf '       %s -f %s logs health-api | grep "OAuth configured"\n' "${_compose[*]}" "$_compose_file"
+printf '       %s -f %s logs health-api | grep "OAuth"\n' "${_compose[*]}" "$_compose_file"
 unset _compose_file
 printf '     (if the render step above used sudo, prefix sudo here too)\n'
-printf '     with what is registered in Google. They must match byte-for-byte;\n'
+printf '     Expect the configured line; an unavailable line names the\n'
+printf '     reason (fix that first) — with what is registered in Google.\n'
+printf '     They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
 printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
 printf '     "app isn'"'"'t verified" warning (Testing mode) → Advanced → proceed.\n'

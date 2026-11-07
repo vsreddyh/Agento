@@ -358,8 +358,9 @@ Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 app to open in a browser; Google redirects to the single registered
 `GET /api/connectors/callback?code=&state=` — one registered string, one
 spelling: the bare `/api/connectors/callback` path on whichever host:port
-the browser reaches (direct `:8001`, or `:8080` through the proxy, which
-routes `/api/*` to health-api). Non-default ports are variants of that
+the browser reaches (direct `:8001`; the `:8080` proxy publish is plain
+HTTP, so only loopback `http://localhost:8080/...` registers — public
+funnel traffic arrives on `:443`, stripped, never `:8080`). Non-default ports are variants of that
 path (default ports are not: `:443`
 and `:80` are stripped by canonicalisation, so register the stripped form
 — see `.env.example`). Product constraint, not just validation:

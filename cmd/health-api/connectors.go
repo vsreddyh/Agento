@@ -119,6 +119,9 @@ func connectorOAuth(store connectors.Store) *connectors.OAuthConfig {
 func ensureConnectorIndexes() {
 	store, err := connectors.FromEnv()
 	if err != nil {
+		// Loud, not silent: without Mongo there is no states TTL, and an
+		// operator grepping boot logs must see why.
+		log.Printf("connectors: no database, skipping index setup (oauth states will not reap): %v", err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -136,9 +139,11 @@ func ensureConnectorIndexes() {
 func logConnectorOAuth() {
 	store, err := connectors.FromEnv()
 	if err != nil {
+		log.Printf("connectors: OAuth unavailable (no database: %v); connect answers 501", err)
 		return
 	}
 	if !store.Durable() {
+		log.Printf("connectors: OAuth unavailable (no durable store); connect answers 501")
 		return
 	}
 	cfg, err := connectors.OAuthConfigFromEnv()
