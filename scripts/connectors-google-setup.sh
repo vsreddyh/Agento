@@ -459,7 +459,8 @@ say "      existing nginx proxy on $_proxy_target. No ports are opened, no"
 say "      domain is bought. The app keeps its current Server URL."
 say "      Note: the funnel publishes the whole proxy (chat + sync stay"
 say "      PASSWORD-gated); the OAuth callback is the only new unauthenticated"
-say "      surface. Do not share the *.ts.net URL."
+say "      API surface (static liveness /health and /ping ride along)."
+say "      Do not share the *.ts.net URL."
 printf '\n'
 say "What is on disk right now:"
 for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
@@ -787,8 +788,12 @@ if [[ -n "$_redirect_preset" ]]; then
   # into .env. read-based input can't contain one — only presets can.
   # Host part validated label by label, like TS_DNS above. Scheme folded
   # for matching (server lowercases it); the canonical form is stored.
+  # Accepts https tailnet/FQDN presets AND the documented http-loopback
+  # testing shape (.env.example) — both of which the final gate passes,
+  # so rejecting either here would contradict it.
   _preset_fold="$(printf '%s' "${_redirect_preset%%://*}" | tr '[:upper:]' '[:lower:]')://${_redirect_preset#*://}"
   _uri_host=""
+  _preset_ok=0
   if [[ "$_preset_fold" == https://*/api/connectors/callback ]]; then
     # Canonicalise before validating: an explicit :443, uppercase host,
     # or trailing dot sends identically but must not fail validation —
@@ -801,12 +806,25 @@ if [[ -n "$_redirect_preset" ]]; then
     _uri_host="${_redirect_preset#https://}"
     _uri_host="${_uri_host%/api/connectors/callback}"
     _uri_host="${_uri_host%%:*}"
+    if _valid_tsdns "$_uri_host" 2>/dev/null || _valid_fqdn "$_uri_host" 2>/dev/null; then
+      _preset_ok=1
+    fi
+  elif [[ "$_preset_fold" == http://*/api/connectors/callback ]]; then
+    _redirect_preset="$(canonical_redirect_uri "$_redirect_preset")"
+    _uri_host="${_redirect_preset#http://}"
+    _uri_host="${_uri_host%/api/connectors/callback}"
+    if [[ "$_uri_host" == \[* ]]; then
+      _uri_host="${_uri_host#[}"; _uri_host="${_uri_host%%\]*}"
+    else
+      _uri_host="${_uri_host%%:*}"
+    fi
+    case "$_uri_host" in localhost|127.0.0.1|::1) _preset_ok=1;; esac
   fi
-  if [[ -z "$_uri_host" ]] || ! _valid_tsdns "$_uri_host"; then
-    warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/api/connectors/callback URL; unset it to derive from TS_DNS"
+  if (( ! _preset_ok )); then
+    warn "preset REDIRECT_URI is not a registrable https tailnet/FQDN or http loopback .../api/connectors/callback URL; unset it to derive from TS_DNS"
     exit 1
   fi
-  unset _uri_host _preset_fold
+  unset _uri_host _preset_fold _preset_ok
   REDIRECT_URI="$_redirect_preset"
   _URI_FROM_PRESET=1
   note "using preset REDIRECT_URI (skipping derivation from TS_DNS)"
@@ -858,9 +876,27 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
     fi
     unset _bare
   elif [[ "$_rec_fold" == https://*/api/connectors/callback ]]; then
-    # Same _uri_host derivation as probe/comment: scheme- and port-agnostic,
+    # Same host derivation as probe/comment: scheme- and port-agnostic,
     # so an explicit `:443` spelling (same canonical form) passes here too.
+    # Tailnet OR any valid FQDN (custom domains, nip.io) — the final gate
+    # enforces the same pair, so a recorded custom-domain URL strict-passes
+    # here instead of falling into the typo branch.
     _rec_host=$(_uri_host "$_recorded_uri" || true)
+    if [[ -z "$_rec_host" ]]; then
+      _rec_host_bare="${_recorded_uri#*://}"
+      _rec_host_bare="${_rec_host_bare%%/*}"
+      if [[ "$_rec_host_bare" == \[*\]* ]]; then
+        _rec_host_bare="${_rec_host_bare#[}"
+        _rec_host_bare="${_rec_host_bare%%\]*}"
+      else
+        _rec_host_bare="${_rec_host_bare%%:*}"
+      fi
+      # Lowercased for the check only: the final canonicalisation folds
+      # case, so an uppercase host must not fail here.
+      _rec_host_bare="$(printf '%s' "$_rec_host_bare" | tr '[:upper:]' '[:lower:]')"
+      _valid_fqdn "$_rec_host_bare" 2>/dev/null && _rec_host="$_rec_host_bare"
+      unset _rec_host_bare
+    fi
   fi
   if [[ -n "${_converted:-}" ]]; then
     : # converted above; nothing left to keep or question.
@@ -1035,13 +1071,31 @@ if [[ -z "$_probe_hostport" ]]; then
   _probe_hostport="$TS_DNS"
 fi
 unset _recorded_uri
-# Compare the *final* URI (after any keep) against the funnel host. A
-# non-tailnet kept URL yields no host — probe/comment fall back to TS_DNS,
-# so there is no funnel-vs-registration split to report there.
-_uri_check=$(_uri_host "$REDIRECT_URI" || true)
+# Compare the *final* URI (after any keep) against the funnel host. Any
+# registered host other than TS_DNS — custom domain, loopback, or typo —
+# is a funnel-vs-registration split: the funnel below serves TS_DNS only,
+# so a custom host needs its own serving (reverse proxy/DNS), and a
+# loopback host is reached directly, never through the funnel.
+_uri_check="${REDIRECT_URI#*://}"
+_uri_check="${_uri_check%%/*}"
+if [[ "$_uri_check" == \[*\]* ]]; then
+  _uri_check="${_uri_check#[}"
+  _uri_check="${_uri_check%%\]*}"
+else
+  _uri_check="${_uri_check%%:*}"
+fi
+_uri_check="$(printf '%s' "$_uri_check" | tr '[:upper:]' '[:lower:]')"
 if [[ -n "$_uri_check" && "$_uri_check" != "$TS_DNS" ]]; then
-  warn "REDIRECT_URI host ($_uri_check) differs from TS_DNS ($TS_DNS):"
-  warn "the funnel serves TS_DNS while Google registers the URI host."
+  case "$_uri_check" in
+    localhost|127.0.0.1|::1)
+      note "REDIRECT_URI is loopback ($_uri_check): reached directly, the funnel below does not apply."
+      ;;
+    *)
+      warn "REDIRECT_URI host ($_uri_check) differs from TS_DNS ($TS_DNS):"
+      warn "the funnel below serves TS_DNS only — serve the custom host separately,"
+      warn "or Google registers a URL this funnel never delivers to."
+      ;;
+  esac
 fi
 unset _uri_check
 say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
@@ -1342,16 +1396,21 @@ unset v
 
 # A comment block once, refreshed on re-runs (the tailnet name can change);
 # write_env only replaces key lines, so this survives re-runs either way.
-# The recorded host follows the redirect URL: on the preset path that host
-# can differ from the daemon-derived TS_DNS.
-_comment_host="$TS_DNS"
-if (( _URI_FROM_PRESET )); then
-  # Same _uri_host derivation as the probe host: the comment records the
-  # funnel host, so a kept non-tailnet URL must not write "https://http:"
-  # or claim a funnel serves something it doesn't.
-  _comment_host=$(_uri_host "$REDIRECT_URI" || true)
-  _comment_host="${_comment_host:-$TS_DNS}"
+# The recorded host always follows the redirect URL: on a custom-domain,
+# preset, or recorded-keep path that host can differ from the
+# daemon-derived TS_DNS, and the comment must name the registered host —
+# not the funnel host that does not serve it.
+_comment_host="${REDIRECT_URI#*://}"
+_comment_host="${_comment_host%%/*}"
+if [[ "$_comment_host" == \[*\]* ]]; then
+  # Bracket/port aware (unlike _uri_host, which is tailnet-only): a custom
+  # host must survive here, not fall back to TS_DNS silently.
+  _comment_host="${_comment_host#[}"
+  _comment_host="${_comment_host%%\]*}"
+else
+  _comment_host="${_comment_host%%:*}"
 fi
+_comment_host="${_comment_host:-$TS_DNS}"
 # ASCII sentinel in one variable: non-ASCII dashes would silently fork the
 # block if an editor normalized them, and two spellings would drift.
 _marker='# -- Google connectors'
@@ -1369,11 +1428,19 @@ else
     exit 1
   fi
 fi
+# The serving line matches the setup: funnel host → funnel sentence,
+# anything else → registered-host sentence (a stale funnel sentence on a
+# custom host is exactly the misdirection being removed).
+if [[ "$_comment_host" == "$TS_DNS" ]]; then
+  _cb_line="# Callback is served over Tailscale Funnel: https://$_comment_host"
+else
+  _cb_line="# Callback host: $_comment_host (registered here — served separately, NOT by the funnel below)"
+fi
 if (( _marker_present == 0 )); then
   {
     printf '\n'
     printf '# -- Google connectors (#316) -- added by setup wizard --\n'
-    printf '# Callback is served over Tailscale Funnel: https://%s\n' "$_comment_host"
+    printf '%s\n' "$_cb_line"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
   } >> "$ENV_FILE" || { warn "comment block append failed — restore with: $_restore_cmd"; exit 1; }
 else
@@ -1383,14 +1450,15 @@ else
   _cb_tmp=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — restore with: $_restore_cmd"; exit 1; }
   # No `--` after the script: BSD/macOS sed treats it as an operand, while
   # ENV_FILE is absolute here (canonicalized in stage 1), so not needed.
-  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" "$ENV_FILE" > "$_cb_tmp" || {
+  # Matches either serving sentence shape from prior runs.
+  sed "s|^# Callback \(is served over Tailscale Funnel: https://.*\|host: .*\)|$_cb_line|" "$ENV_FILE" > "$_cb_tmp" || {
     warn "hostname comment refresh failed — restore with: $_restore_cmd"
     exit 1
   }
   cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: $_restore_cmd"; exit 1; }
   rm -f "$_cb_tmp" || true; _cb_tmp=""
 fi
-unset _comment_host _marker _marker_present _grep_rc
+unset _comment_host _marker _marker_present _grep_rc _cb_line
 
 write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: $_restore_cmd"; exit 1; }
 write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: $_restore_cmd"; exit 1; }

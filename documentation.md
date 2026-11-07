@@ -457,7 +457,8 @@ default — the same proxy the wizard funnels), because Google accepts only
 register neither (loopback IPs like `127.0.0.1`/`::1` do register, over
 plain `http`).
 Note the funnel publishes the whole proxy (chat + sync stay PASSWORD-gated);
-the callback is the only new unauthenticated surface, so do not share the
+the callback is the only new unauthenticated API surface (static liveness
+`/health` and `/ping` ride along), so do not share the
 `*.ts.net` URL.
 It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URL`, and `CONNECTORS_ENCRYPTION_KEY` into the root
