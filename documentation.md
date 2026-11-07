@@ -499,7 +499,8 @@ on `:443`); for direct loopback testing it is
 distinct registrations: `http://localhost:<HEALTH_HOST_PORT>` (compose
 default `:8001`) reaches health-api direct, `http://localhost:<APP_PORT>`
 (compose default `:8080`) reaches it through the proxy. Register the one
-the browser actually reaches (`:8001` is the plain-HTTP direct-host
+the browser actually reaches (the mapped direct-host port, compose
+default `:8001` via `HEALTH_HOST_PORT`, is the plain-HTTP direct-host
 mapping, never a funnel spelling).
 
 Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.

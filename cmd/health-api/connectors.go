@@ -82,7 +82,9 @@ var (
 	connectorStoreMu syncpkg.Mutex
 	connectorCache   connectors.Store
 	// connectorCacheAt stamps the last Mongo attempt behind a cached
-	// memory fallback. Zero when the cache is durable.
+	// memory fallback (both branches stamp it, durable or not — the
+	// durable freshness check keys on connectorLastProbe, not this).
+	// Only the non-durable branch reads it (retry-budget throttle).
 	connectorCacheAt time.Time
 	// connectorDialing + connectorDialCh single-flight the slow path
 	// (cold-start dial and blip-recovery re-dial): exactly one caller

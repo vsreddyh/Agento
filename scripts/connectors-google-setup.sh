@@ -97,10 +97,15 @@ confirm() {
 }
 
 # _existing KEY: current value of KEY in ENV_FILE, if any, with write_env's single
-# quotes or a plain dotenv double-quoted value undone.
+# quotes or a plain dotenv double-quoted value undone. Matches the same
+# line shapes load_root_env (scripts/lib/common.sh) accepts — optional
+# leading whitespace and optional `export ` — so a stack-loaded
+# `export KEY=...` or `  KEY=...` line is found here too instead of
+# misreported MISSING (which would aim the wizard at default ports while
+# the stack answers on the file's mapped ones).
 _existing() {
   [[ -f "$ENV_FILE" ]] || return 1
-  local line value sq="'\\''"; line=$(grep -E "^${1}=" "$ENV_FILE" | tail -n1) || return 1
+  local line value sq="'\\''"; line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${1}=" "$ENV_FILE" | tail -n1) || return 1
   value="${line#*=}"
   if [[ "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; value="${value//"$sq"/\'}"
   elif [[ "$value" == \"*\" ]]; then
@@ -143,12 +148,14 @@ ask_secret() {
 
 # write_env KEY VALUE upserts KEY='VALUE' into ENV_FILE (replaces any existing
 # line) and sets $KEY. Idempotent. Creates ENV_FILE at mode 0600; writes through
-# a symlink and keeps an existing file's mode.
+# a symlink and keeps an existing file's mode. The remove matches the same
+# line shapes _existing/load_root_env accept (optional whitespace, optional
+# `export `) so an export/spaced line is replaced, never doubled.
 write_env() {
   local key="$1" value="$2" tmp sq="'\\''"
   [[ -e "$ENV_FILE" ]] || (umask 077 && : > "$ENV_FILE")
   tmp=$(mktemp)
-  grep -vE "^${key}=" "$ENV_FILE" > "$tmp" || true
+  grep -vE "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" > "$tmp" || true
   printf "%s='%s'\n" "$key" "${value//\'/$sq}" >> "$tmp"
   cat "$tmp" > "$ENV_FILE"
   rm -f "$tmp"
