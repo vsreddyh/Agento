@@ -1,0 +1,496 @@
+package main
+
+// Connector routes: the Gmail/Calendar OAuth surface over the shared
+// connectors collection (#488).
+//
+// The app used to reach these verbs on pi-gateway (:8643); they live here
+// now so connect/list/disconnect keep working with the pi container
+// stopped. Same contract, same Mongo rows (internal/connectors owns the
+// store and the OAuth helpers — this file is only the HTTP envelope):
+//
+//	GET  /api/connectors                 list the two v1 rows
+//	POST /api/connectors/{id}/connect    mint state+verifier, return the
+//	                                     Google consent auth_url (501 when
+//	                                     OAuth is unconfigured)
+//	POST /api/connectors/{id}/disconnect stop future access
+//	GET  /api/connectors/callback        single registered redirect;
+//	                                     consumes the state once, exchanges
+//	                                     server-side, seals tokens, flips
+//	                                     to connected
+//
+// Everything except the callback sits behind the bearer token like every
+// other non-health route. The callback skips it: a Google-redirected
+// browser carries no Authorization header, and the state is the
+// capability. An expired row is the reconnect prompt: the app banners it
+// and offers the connect flow, never a password field.
+
+import (
+	"context"
+	"errors"
+	"log"
+	"net/http"
+	"strings"
+	syncpkg "sync"
+	"time"
+	"unicode/utf8"
+
+	"agento/internal/connectors"
+
+	"go.mongodb.org/mongo-driver/bson"
+)
+
+// connectorVerbBudget bounds the fast verbs (list/disconnect/connect
+// validation). The callback gets its own longer budget below: it binds a
+// state consume plus a live Google exchange.
+const connectorVerbBudget = 5 * time.Second
+
+// connectorCallbackBudget bounds one full OAuth callback: state consume +
+// Google exchange + sealed writes + status flip, all sequential against
+// live Google.
+const connectorCallbackBudget = 30 * time.Second
+
+// connectorDeadAttempt is the single answer for every dead OAuth attempt —
+// unknown, consumed, expired, or oversized state. One string so no branch
+// can drift into an oracle that distinguishes them.
+const connectorDeadAttempt = "that connect attempt expired or was already used; start over from connect"
+
+// connectorStore opens the shared connectors collection (the same rows the
+// gmail/calendar MCP servers read grants from). Cached process-wide like
+// the other stores; failures are not cached, so a bad env recovers without
+// a restart. Without MongoDB it falls back to memory that cannot meet a
+// restart — same contract as the gateway: the list still answers, but
+// connect answers 501 (nothing durable to store a grant in).
+var (
+	connectorStoreMu syncpkg.Mutex
+	connectorCache   connectors.Store
+)
+
+func connectorStore() connectors.Store {
+	connectorStoreMu.Lock()
+	defer connectorStoreMu.Unlock()
+	if connectorCache != nil {
+		return connectorCache
+	}
+	store, err := connectors.FromEnv()
+	if err != nil {
+		log.Printf("connectors: falling back to in-process (statuses do not survive restart): %v", err)
+		return connectors.NewMemoryStore()
+	}
+	connectorCache = store
+	return store
+}
+
+// connectorOAuth resolves the Google OAuth config when it can serve one:
+// all four values present AND a durable store behind them. Anything less
+// is unconfigured and connect/callback answer 501 — a half-open flow
+// would strand the user mid-consent.
+func connectorOAuth(store connectors.Store) *connectors.OAuthConfig {
+	if !store.Durable() {
+		return nil
+	}
+	cfg, err := connectors.OAuthConfigFromEnv()
+	if err != nil {
+		return nil
+	}
+	return cfg
+}
+
+// ensureConnectorIndexes creates the states TTL (pending OAuth attempts
+// reap themselves) best-effort at startup. Without it abandoned states
+// linger until superseded — harmless, but the index is what reaps them.
+func ensureConnectorIndexes() {
+	store, err := connectors.FromEnv()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := store.EnsureIndexes(ctx); err != nil {
+		log.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
+	}
+}
+
+// connectorWire renders one row the way the app reads it: status + scopes
+// only. Refresh tokens live server-side, sealed, and never appear here.
+func connectorWire(c connectors.Connector) bson.M {
+	scopes := c.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	out := bson.M{
+		"id":           c.ID,
+		"display_name": c.DisplayName,
+		"scopes":       scopes,
+		"status":       string(c.Status),
+	}
+	// The stored stamp is first-connected-at, retained across
+	// disconnect/expire: emitting it on an off-state row would read as
+	// "connected since X". A zero stamp on a connected row (corrupt)
+	// omits too — fail closed rather than stamping now.
+	if c.Status == connectors.StatusConnected && c.ConnectedAt != 0 {
+		out["connected_at"] = c.ConnectedAt
+	}
+	if c.UpdatedAt != 0 {
+		out["updated_at"] = c.UpdatedAt
+	}
+	// Reconnect hint: expired rows banner, nothing else does.
+	if c.Status == connectors.StatusExpired {
+		out["reconnect"] = "this session expired; reconnect in Settings — never paste a password or token in chat"
+	}
+	return out
+}
+
+// writeConnectorErr maps store domain errors: unknown ids 404, transport
+// failures 502, anything else 400. The id echo is safe: callers only reach
+// it with a normalized known id or the fixed "unknown connector" string.
+func writeConnectorErr(w http.ResponseWriter, err error) {
+	var se *connectors.StoreError
+	if errors.As(err, &se) {
+		switch {
+		case se.NotFound:
+			writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown connector"})
+			return
+		case se.Upstream:
+			writeJSON(w, http.StatusBadGateway, bson.M{"detail": "the connector store did not answer in time"})
+			return
+		}
+	}
+	writeJSON(w, http.StatusBadRequest, bson.M{"detail": "invalid connector request"})
+}
+
+// listConnectors serves GET /api/connectors: the two v1 rows, disconnected
+// synthesised on fresh deploys.
+func listConnectors(w http.ResponseWriter, r *http.Request) {
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+		return
+	}
+	store := connectorStore()
+	ctx, cancel := context.WithTimeout(r.Context(), connectorVerbBudget)
+	defer cancel()
+	list, err := store.List(ctx)
+	if err != nil {
+		writeConnectorErr(w, err)
+		return
+	}
+	out := make([]any, 0, len(list))
+	for _, c := range list {
+		out = append(out, connectorWire(c))
+	}
+	writeJSON(w, http.StatusOK, bson.M{"connectors": out})
+}
+
+// connectorItem dispatches POST /api/connectors/{id}/connect and
+// POST /api/connectors/{id}/disconnect. Auth first; unknown ids and verbs
+// 404 without touching OAuth config (disconnect never reads it).
+func connectorItem(w http.ResponseWriter, r *http.Request) {
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/connectors/"), "/")
+	id, action, _ := strings.Cut(rest, "/")
+	id = connectors.NormalizedID(id)
+	action = strings.ToLower(connectors.TrimCredential(action))
+	if !connectors.Known(id) {
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown connector"})
+		return
+	}
+	switch action {
+	case "disconnect":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+			return
+		}
+		store := connectorStore()
+		ctx, cancel := context.WithTimeout(r.Context(), connectorVerbBudget)
+		defer cancel()
+		c, err := store.Disconnect(ctx, id)
+		if err != nil {
+			writeConnectorErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, bson.M{"ok": true, "connector": connectorWire(c)})
+	case "connect":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+			return
+		}
+		connectorConnect(w, r, id)
+	default:
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+	}
+}
+
+// connectorConnect starts one OAuth attempt: mints state+verifier, records
+// the pending attempt, and returns the Google consent URL the app opens in
+// a browser. The app never sees the verifier, the code, or any token.
+func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
+	w.Header().Set("Cache-Control", "no-store")
+	store := connectorStore()
+	oauth := connectorOAuth(store)
+	if oauth == nil {
+		log.Print("connectors: connect attempted while OAuth is unconfigured (missing values or no durable store)")
+		writeJSON(w, http.StatusNotImplemented,
+			bson.M{"detail": "connect is not configured on this server yet — never paste a token in chat"})
+		return
+	}
+	pinnedRedirect, err := connectors.CanonicalRedirectURL(oauth.RedirectURL)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "connect is not configured correctly on this server"})
+		return
+	}
+	state, verifier, err := connectors.NewState()
+	if err != nil {
+		log.Print("connectors: could not mint connect state")
+		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "could not start the connect flow"})
+		return
+	}
+	// Persist first, build the URL second: a down store fails fast with no
+	// dead attempt minted. The pinned redirect travels with the row so a
+	// config rotation mid-consent cannot strand it with a mismatch.
+	if err := store.CreateState(r.Context(), connectors.OAuthState{
+		State:       state,
+		Connector:   id,
+		Verifier:    verifier,
+		RedirectURI: pinnedRedirect,
+	}); err != nil {
+		writeConnectorErr(w, err)
+		return
+	}
+	authURL := connectors.AuthURL(oauth, id, state, verifier, log.Printf)
+	if authURL == "" {
+		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "connect is not configured correctly on this server"})
+		return
+	}
+	writeJSON(w, http.StatusOK, bson.M{"ok": true, "auth_url": authURL})
+}
+
+// connectorCallbackPage answers a browser tab with the close-this-tab
+// page. Callers pass display-safe text (static guidance or a fixed domain
+// string); titles and bodies are fixed literals, never caller input.
+func connectorCallbackPage(w http.ResponseWriter, code int, title, body string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	_, _ = w.Write([]byte(`<!doctype html><html><head><title>` + title +
+		`</title></head><body><p>` + body + `</p></body></html>`))
+}
+
+// connectorCallbackJSON answers API clients (the app polls
+// GET /api/connectors instead of reading error bodies).
+func connectorCallbackJSON(w http.ResponseWriter, code int, detail string) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, code, bson.M{"detail": detail})
+}
+
+// connectorCallbackDead answers a dead OAuth attempt (unknown, consumed,
+// or expired state) with the same 400 meaning in both envelopes.
+func connectorCallbackDead(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if connectorWantsHTML(r) {
+		connectorCallbackPage(w, http.StatusBadRequest, "Agento connect expired",
+			"This connect attempt expired or was already used. Close this tab and tap connect again in the Agento app.")
+		return
+	}
+	connectorCallbackJSON(w, http.StatusBadRequest, connectorDeadAttempt)
+}
+
+// connectorWantsHTML reports text/html negotiation without lowercasing an
+// unbounded header: anything past 512 bytes answers JSON (legit browser
+// values are ~100 chars).
+func connectorWantsHTML(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	if len(accept) > 512 {
+		return false
+	}
+	lower := strings.ToLower(accept)
+	for i := 0; i+len("text/html") <= len(lower); {
+		j := strings.Index(lower[i:], "text/html")
+		if j < 0 {
+			return false
+		}
+		i += j
+		after := i + len("text/html")
+		if after == len(lower) || lower[after] == ' ' || lower[after] == ',' || lower[after] == ';' || lower[after] == '\t' {
+			return true
+		}
+		i = after
+	}
+	return false
+}
+
+// connectorCallback finishes one OAuth attempt: the browser lands here
+// from Google with ?code=&state=. No bearer check — the state is the
+// capability. The state is consumed single-use, the code is exchanged
+// server-side, the tokens are sealed with the envelope key, and the
+// connector flips to connected. Tokens land BEFORE the status flips, so a
+// connected-with-no-tokens row is never servable.
+func connectorCallback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		connectorCallbackJSON(w, http.StatusMethodNotAllowed, "/api/connectors/callback accepts GET")
+		return
+	}
+	// Bound the raw query before anything else, including the unconfigured
+	// 501 below: the cap carries no config information, so a huge query
+	// answers the same 400 configured or not.
+	if len(r.URL.RawQuery) > 3*(3*connectors.MaxStateFieldLen)+256 {
+		connectorCallbackDead(w, r)
+		return
+	}
+	store := connectorStore()
+	oauth := connectorOAuth(store)
+	if oauth == nil {
+		// Same status, same message, two envelopes: a browser tab that
+		// just consented gets the close-this-tab page, API clients get
+		// JSON — like every other branch on this path.
+		msg := "callback is not configured on this server yet — never paste a token in chat"
+		if connectorWantsHTML(r) {
+			connectorCallbackPage(w, http.StatusNotImplemented, "Agento connect",
+				msg+" Close this tab and return to the Agento app.")
+			return
+		}
+		connectorCallbackJSON(w, http.StatusNotImplemented, msg)
+		return
+	}
+	query := r.URL.Query()
+	code := connectors.TrimCredential(query.Get("code"))
+	state := connectors.TrimCredential(query.Get("state"))
+	if code == "" || state == "" {
+		connectorCallbackJSON(w, http.StatusBadRequest,
+			"callback needs ?code= and ?state=; start over from connect")
+		return
+	}
+	if len(code) > connectors.MaxStateFieldLen || len(state) > connectors.MaxStateFieldLen ||
+		len(state) < connectors.MinStateLen ||
+		connectors.HasControl(code) || connectors.HasControl(state) ||
+		connectors.HasWhitespace(code) || connectors.HasWhitespace(state) ||
+		!utf8.ValidString(code) || !utf8.ValidString(state) {
+		connectorCallbackDead(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), connectorCallbackBudget)
+	defer cancel()
+	st, err := store.ConsumeState(ctx, state)
+	if err != nil {
+		var se *connectors.StoreError
+		if errors.As(err, &se) && se.Upstream {
+			connectorCallbackJSON(w, http.StatusBadGateway, "the connector store did not answer in time")
+			return
+		}
+		connectorCallbackDead(w, r)
+		return
+	}
+	id := connectors.NormalizedID(st.Connector)
+	// The verifier lives inside the consumed row, so it can only be
+	// checked after the read — burning a hand-inserted bad row is
+	// intended; minted rows always pass.
+	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) ||
+		connectors.HasWhitespace(st.Verifier) ||
+		len(st.Verifier) > connectors.MaxVerifierLen || len(st.Verifier) < connectors.MinVerifierLen {
+		connectorCallbackDead(w, r)
+		return
+	}
+	// Send the pinned redirect from mint time, not the live config, so a
+	// rotation mid-consent cannot exact-mismatch Google. Pre-column rows
+	// (no stored redirect) fall back to the live config.
+	exCfg := oauth
+	if st.RedirectURI != "" {
+		redirect, rerr := connectors.CanonicalRedirectURL(st.RedirectURI)
+		if rerr != nil {
+			connectorCallbackDead(w, r)
+			return
+		}
+		pinned := *oauth
+		pinned.RedirectURL = redirect
+		exCfg = &pinned
+	}
+	tok, err := connectors.Exchange(ctx, exCfg, id, code, st.Verifier, log.Printf)
+	if err != nil {
+		var se *connectors.StoreError
+		if errors.As(err, &se) && se.NotFound {
+			connectorCallbackDead(w, r)
+			return
+		}
+		connectorCallbackJSON(w, http.StatusBadGateway, "the grant exchange failed; start over from connect")
+		return
+	}
+	// Trimmed copies are what get sealed: a padded value would seal with
+	// padding the refresher cannot use.
+	refreshToken := connectors.TrimCredential(tok.RefreshToken)
+	accessToken := connectors.TrimCredential(tok.AccessToken)
+	refreshSealed, err := connectors.EncryptToken(oauth.Key, refreshToken)
+	if err != nil {
+		log.Printf("connectors: token seal failed: %v", err)
+		connectorCallbackJSON(w, http.StatusBadGateway, "could not store the grant")
+		return
+	}
+	var accessSealed string
+	if accessToken != "" {
+		accessSealed, err = connectors.EncryptToken(oauth.Key, accessToken)
+		if err != nil {
+			log.Printf("connectors: token seal failed: %v", err)
+			connectorCallbackJSON(w, http.StatusBadGateway, "could not store the grant")
+			return
+		}
+	}
+	var expiry int64
+	if accessToken != "" && !tok.Expiry.IsZero() {
+		expiry = connectors.ClampAccessExpiry(tok.Expiry.UnixMilli(), time.Now())
+	}
+	if err := store.SetTokens(ctx, id, connectors.TokenRow{
+		RefreshCipher:         refreshSealed,
+		AccessCipher:          accessSealed,
+		AccessExpiryUnixMilli: expiry,
+	}); err != nil {
+		connectorCallbackJSON(w, http.StatusBadGateway, "could not store the grant")
+		return
+	}
+	c, err := store.SetStatus(ctx, id, connectors.StatusConnected, "")
+	if err != nil {
+		connectorCallbackJSON(w, http.StatusBadGateway, "could not store the grant")
+		return
+	}
+	// A browser tab gets the close-this-tab page; API clients get JSON.
+	// The app polls GET /api/connectors instead of reading this body.
+	if connectorWantsHTML(r) {
+		connectorCallbackPage(w, http.StatusOK, "Agento connected",
+			"Connected. You can close this tab and return to the Agento app.")
+		return
+	}
+	writeJSON(w, http.StatusOK, bson.M{"ok": true, "connector": connectorWire(c)})
+}
+
+// registerConnectors wires this domain's routes. One function per file so
+// main stays a list of domains, not a list of paths.
+func registerConnectors(mux *http.ServeMux) {
+	mux.HandleFunc("/api/connectors", listConnectors)
+	mux.HandleFunc("/api/connectors/", connectorsSlash)
+	// Exact callback spelling: the registered Google redirect URI has no
+	// trailing slash, and without this it would 404 (the subtree above
+	// only catches paths WITH the slash).
+	mux.HandleFunc("/api/connectors/callback", connectorCallback)
+}
+
+// connectorsSlash dispatches under /api/connectors/: the callback (no
+// bearer — the state is the capability), the collection with a trailing
+// slash, and per-connector verbs. Anything deeper 404s.
+func connectorsSlash(w http.ResponseWriter, r *http.Request) {
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/connectors/"), "/")
+	if rest == "" {
+		listConnectors(w, r)
+		return
+	}
+	if strings.EqualFold(rest, "callback") {
+		connectorCallback(w, r)
+		return
+	}
+	connectorItem(w, r)
+}
