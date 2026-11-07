@@ -349,10 +349,15 @@ canonical_redirect_uri() {
       port=""
     else
       port="${hostport##*:}"
+      # Dangling colon (host: with no port) is preserved verbatim for the
+      # final gate to reject: dropping it would print a different URL than
+      # pasted, and the server 501s it ("port must be numeric").
+      if [[ -z "$port" ]]; then printf '%s' "$u"; return 0; fi
     fi
   fi
   host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
-  host="${host%.}"
+  # Loop-strip like the server TrimRight: h.ts.net.. sends dot-less.
+  while [[ "$host" == *. ]]; do host="${host%.}"; done
   if [[ "$port" =~ ^[0-9]+$ ]]; then
     # Numeric compare AND normalization: :080 sends as :80, so the
     # canonical form strips the padding but keeps a non-default port.
@@ -931,11 +936,48 @@ if [[ -n "$_final_port_from_uri" ]]; then
   fi
 fi
 unset _final_port_from_uri
+# _valid_fqdn mirrors the server's validRedirectHost for https: dotted
+# FQDN, lowercase alnum/hyphen labels, no leading/trailing hyphen, TLD of
+# 2+ letters (custom domains, nip.io — not just tailnet). The input must
+# already be lowercased (canonical form); this checks shape, not case.
+_valid_fqdn() {
+  local host="$1" label tld
+  local -a labels
+  [[ -n "$host" ]] || return 1
+  (( ${#host} <= 253 )) || return 1
+  [[ "$host" == "localhost" ]] && return 0
+  [[ "$host" == *.* ]] || return 1
+  IFS=. read -ra labels <<< "$host" || return 1
+  for label in "${labels[@]}"; do
+    (( ${#label} >= 1 && ${#label} <= 63 )) || return 1
+    [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
+  tld="${labels[${#labels[@]}-1]}"
+  [[ "$tld" =~ ^[a-z][a-z]+$ ]] || return 1
+  return 0
+}
 # Host/scheme gate the final value: the server fails closed on http
 # non-loopback, non-loopback IPs, and non-FQDN hosts — a value passing the
 # shape checks above can still be unregistrable (LAN IP, single label,
-# underscore, *.localhost). https passes for tailnet FQDNs (and loopback);
-# http passes for loopback only.
+# underscore, *.localhost). https passes for tailnet FQDNs, any dotted
+# FQDN with a lettered multi-char TLD (custom domains, nip.io), and
+# loopback; http passes for loopback only. A dangling colon (host: with
+# no port digits) fails outright like the server instead of offering a
+# keep: no registration can hold it.
+_final_hp="${REDIRECT_URI#*://}"
+_final_hp="${_final_hp%%/*}"
+_final_dangling=0
+if [[ "$_final_hp" == \[*\]* ]]; then
+  [[ "$_final_hp" == *"]:" ]] && _final_dangling=1
+elif [[ "$_final_hp" == *:* ]]; then
+  [[ -z "${_final_hp##*:}" ]] && _final_dangling=1
+fi
+if (( _final_dangling )); then
+  warn "REDIRECT_URI has a dangling colon with no port — the server fails it closed:"
+  warn "  value: $REDIRECT_URI"
+  exit 1
+fi
+unset _final_hp _final_dangling
 _final_hostport="${REDIRECT_URI#*://}"
 _final_hostport="${_final_hostport%%/*}"
 _final_scheme="${REDIRECT_URI%%://*}"
@@ -948,7 +990,11 @@ else
 fi
 _final_ok=0
 if [[ "$_final_scheme" == "https" ]]; then
-  if _valid_tsdns "$_final_host" 2>/dev/null; then
+  # Tailnet names first (the common case), then any dotted FQDN with a
+  # lettered multi-char TLD — custom domains and nip.io register exactly
+  # like tailnet names (server validRedirectHost). Loopback also passes:
+  # direct-serve https on loopback is unusual but not unregistrable.
+  if _valid_tsdns "$_final_host" 2>/dev/null || _valid_fqdn "$_final_host" 2>/dev/null; then
     _final_ok=1
   else
     case "$_final_host" in localhost|127.0.0.1|::1) _final_ok=1;; esac
@@ -957,7 +1003,7 @@ elif [[ "$_final_scheme" == "http" ]]; then
   case "$_final_host" in localhost|127.0.0.1|::1) _final_ok=1;; esac
 fi
 if (( ! _final_ok )); then
-  warn "REDIRECT_URI host/scheme is not registrable (https needs a tailnet FQDN, http needs loopback):"
+  warn "REDIRECT_URI host/scheme is not registrable (https needs a dotted FQDN, http needs loopback):"
   warn "  value: $REDIRECT_URI"
   warn "The server fails these closed — Google would never call back."
   if ! confirm "Keep it anyway?"; then exit 1; fi

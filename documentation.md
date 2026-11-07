@@ -72,20 +72,25 @@ All container management is orchestrated through [`scripts/hermes.sh`](scripts/h
 
 ### `start`
 1. Cleans up any stale native PIDs in `run/bots/*.pid`.
-2. Starts the compose stack in detached mode: `podman-compose -f docker/docker-compose.yml up -d --build`.
+2. Starts the compose stack in detached mode, rebuilding changed layers and
+   recreating containers: `podman-compose -f docker/docker-compose.yml up -d --build --force-recreate`
+   (skipped build with `PI_NO_BUILD=1`, plain `up -d`). Without
+   `--force-recreate` a rebuild silently keeps the OLD container running.
 3. Runs an initial retention check using [`scripts/retention.sh`](scripts/retention.sh).
 
 ### `stop`
 Gracefully halts running containers: `podman-compose -f docker/docker-compose.yml down`.
 
 ### `restart`
-Executes a stop followed by a full start sequence.
+Rebuilds changed layers and recreates containers in place (`up -d --build
+--force-recreate`) — not a stop-then-start (no `down`; containers are never
+removed, just recreated).
 
 ### `status`
 Displays container states and published ports via `podman-compose -f docker/docker-compose.yml ps`.
 
 ### `clean` (Destructive)
-Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered configs and per-profile `.env` files, and removes the retention crontab entry. **Never touches remote MongoDB.**
+Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered configs, and removes the retention crontab entry. **Never touches remote MongoDB.** (There are no per-profile `.env` files — the single root `.env` is the only one, and clean never touches it either.)
 
 ---
 

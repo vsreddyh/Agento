@@ -114,6 +114,15 @@ func recoverCrash(next http.Handler) http.Handler {
 					}
 				}
 				secrets = append(secrets, os.Getenv("MONGODB_URI"))
+				// OAuth values live in this binary too (connect/exchange/
+				// seal paths): a panic carrying one must not land verbatim
+				// in `logs health-api`. Redaction is pattern-based — see
+				// crashlog.Redact — so append raw and let it scrub.
+				for _, k := range []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URL", "CONNECTORS_ENCRYPTION_KEY"} {
+					if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+						secrets = append(secrets, v)
+					}
+				}
 				fmt.Fprintf(os.Stdout, "crash route=%s panic=%v\nstack:\n%s\n",
 					route, rec, crashlog.Redact(string(debug.Stack()), secrets...))
 				// `detail` like every other error in this binary (the app
