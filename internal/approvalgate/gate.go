@@ -92,9 +92,11 @@ var warned sync.Map
 // AddTool registers h on s with the tool wrapper in front. server is the
 // lowercase code literal each binary registers with (what the KnownServer
 // warning and the cmd policy tests pin); store carries the audit trail.
-// The wrapper never blocks: confirmation is owned by T3/opencode
-// (opencode.json permission rules), so every known tool executes once the
-// harness has permitted the call.
+// The wrapper never blocks: on attended turns confirmation is owned by
+// T3/opencode (opencode.json permission rules), so every known tool
+// executes once the harness has permitted the call. Unattended callers
+// (scheduler fires) have no decider attached and execute with no prompt
+// at all — see the scheduler files for that fail-open.
 func AddTool[In, Out any](s *mcp.Server, server string, store approvals.Store, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	// Unknown server denies every call fail-closed, so say so once at
 	// startup: without this a typo in the server literal is silent until

@@ -247,7 +247,9 @@ Approval gates (#313) prompt for sensitive tool calls through the harness
 (T3/opencode permission prompts per `opencode.json`): money writes, account
 create/archive, browser navigation (per-task, URL shown), deletes,
 rewrites and real prunes ask first (counting prunes included — patterns
-cannot see arguments); pre-migration rows used to wait up to
+cannot see arguments); connector sends (`send_message`/`send_gmail`,
+`create_event`/`send_invite`) refuse outright and never prompt, even if
+approved; pre-migration rows used to wait up to
 14 minutes for an in-app decision here. See `docs/adr/0002-approval-gates.md`
 (pre-migration design).
 

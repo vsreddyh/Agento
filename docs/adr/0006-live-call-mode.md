@@ -1,6 +1,10 @@
 # 0006 — Live mode as a call
 
-Status: accepted (#317, call-mode half)
+Status: accepted (#317, call-mode half). T3-era note (#487, 2026-11):
+nothing ever stalls on approval anymore — no hold parks, no watch to
+cancel, no held call survives anything. Read "approval-stalled" /
+"approval watch" / "held calls survive" below as pre-migration record.
+Do not run the hold flow as a live runbook.
 
 ## Context
 
