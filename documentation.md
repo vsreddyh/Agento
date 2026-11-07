@@ -30,16 +30,16 @@ The stack runs one chat profile, a health sync API, and a scheduled retention jo
   chat ───  ONE pi host   │  agent dir   ▼   OpenCode Go Direct
           1 pi process    │   /opt/pi     │  (https://opencode.ai/zen/go/v1)
                           └─ API :8643 ─┤
-Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► pi ──► MongoDB
+Agento (Android) ──► proxy (:8080 compose default) ──┬──► /p/* ──► pi ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
-- **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
+- **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001` (compose default, `HEALTH_HOST_PORT` remaps the host side), writing Health Connect metrics to MongoDB.
 - **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any MCP server in `pi/mcp.json` fails to connect.
-- **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync (except `/api/model/options` → pi, the provider picker). The app's one Server URL points here.
-- **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
+- **proxy**: nginx single entrypoint (`:8080` compose default, `APP_PORT` remaps; `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync (except `/api/model/options` → pi, the provider picker). The app's one Server URL points here.
+- **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` (compose default, `PI_HOST_PORT` remaps) — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Read-only web tasks via a headless-Chromium MCP server
   (`browser_goto` gated per domain, `browser_read`, `browser_screenshot`,
   `browser_save_evidence`); evidence lands in `exports/browser/`. No click/type
@@ -186,7 +186,7 @@ obvious default that the device can apply itself.
 ## Health Connect Pipeline
 
 ```
-Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► health-api (:8000 container; :8001 direct-host)
+Agento Android App ──POST /api/health/sync──► proxy (:8080 compose default) ──► health-api (:8000 container; :8001 direct-host default)
                                                         │
                                                         ▼
                                        MongoDB: hc_days (one doc per date)
@@ -204,7 +204,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, sidebar: Chat + Tasks + Files + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8000` container, `:8001` direct-host). There is no Hermes gateway any more — `:8642` is neither published nor proxied:
+The custom Android app (`android/agento/`, sidebar: Chat + Tasks + Files + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080` compose default, `APP_PORT` remaps) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8000` container, `:8001` direct-host default). Ports below are compose defaults; `APP_PORT`/`HEALTH_HOST_PORT`/`PI_HOST_PORT` remap the host side. There is no Hermes gateway any more — `:8642` is neither published nor proxied:
 
 ```bash
 curl http://<host>:8080/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"

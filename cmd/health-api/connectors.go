@@ -671,6 +671,11 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		connectors.HasControl(code) || connectors.HasControl(state) ||
 		connectors.HasWhitespace(code) || connectors.HasWhitespace(state) ||
 		!utf8.ValidString(code) || !utf8.ValidString(state) {
+		// Lengths only, never values: an oversized/hand-minted code or
+		// state answers the identical dead-attempt body as an expired
+		// one, and without this line triage cannot tell flood from expiry.
+		log.Printf("connectors: callback code/state failed shape gate (code=%d, state=%d bytes), answering dead-attempt",
+			len(code), len(state))
 		connectorCallbackDead(w, r)
 		return
 	}
@@ -696,12 +701,24 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := connectors.NormalizedID(st.Connector)
+	// Unknown connector in a consumed row (hand-inserted or typo'd state)
+	// dead-attempts like every other dead state — before Exchange, so a
+	// bad row never pays a Google round-trip only to 502 at SetTokens.
+	// The burn already happened (single-use by design); the 400 names the
+	// recovery (re-tap connect), unlike a 502 store-failure message.
+	if !connectors.Known(id) {
+		log.Printf("connectors: callback consumed state for unknown connector (burned, answering dead-attempt)")
+		connectorCallbackDead(w, r)
+		return
+	}
 	// The verifier lives inside the consumed row, so it can only be
 	// checked after the read — burning a hand-inserted bad row is
 	// intended; minted rows always pass.
 	if connectors.HasControl(st.Verifier) || !utf8.ValidString(st.Verifier) ||
 		connectors.HasWhitespace(st.Verifier) ||
 		len(st.Verifier) > connectors.MaxVerifierLen || len(st.Verifier) < connectors.MinVerifierLen {
+		log.Printf("connectors: callback verifier failed shape gate (len=%d, burned row), answering dead-attempt",
+			len(st.Verifier))
 		connectorCallbackDead(w, r)
 		return
 	}

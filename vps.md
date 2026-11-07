@@ -170,7 +170,7 @@ Measured (`podman system df` + image sizes), not guessed:
 
 ## Access
 
-- `proxy` (:8080) is the app's single URL and the only port that needs to be reachable
+- `proxy` (`:8080` compose default, `APP_PORT` remaps) is the app's single URL and the only port that needs to be reachable
   from a phone.
 - `:8643` (pi) and `:8001` (health-api) stay published for direct access and debugging —
   restrict them with a firewall or reverse proxy if the host is public (compose defaults;
