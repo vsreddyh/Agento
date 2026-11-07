@@ -167,9 +167,9 @@ Two additions beside it:
 
   "Per-source" means the real client address, taken from `X-Real-IP` **only when the
   immediate peer is on a private network** — otherwise every request through the
-  nginx proxy on `:8080` would share the proxy's single bucket, which is most of them.
+  nginx proxy on `:8080` (compose default — `APP_PORT` remaps the host side) would share the proxy's single bucket, which is most of them.
   The trust condition is load-bearing rather than cautious: compose publishes
-  health-api directly as `8001:8000`, so a client can reach it bypassing nginx and
+  health-api directly as `8001:8000` (compose default — `HEALTH_HOST_PORT` remaps the host side), so a client can reach it bypassing nginx and
   set `X-Real-IP` freely. Believing the header unconditionally would let anyone
   disable the limiter by rotating one header. `X-Forwarded-For` is a fallback and only
   its **last** hop is read, since nginx uses `$proxy_add_x_forwarded_for`, which

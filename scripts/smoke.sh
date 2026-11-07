@@ -31,7 +31,7 @@ PROFILE="${SMOKE_PROFILE:-chat}"
 # Overridable because the app lets a tab pick any model, and a model the provider has
 # retired would otherwise fail this check for the wrong reason.
 MODEL="${SMOKE_MODEL:-mimo-v2.6-flash}"
-BASE="${SMOKE_BASE:-http://127.0.0.1:8080}"
+BASE="${SMOKE_BASE:-http://127.0.0.1:${APP_PORT:-8080}}"
 MARKER="SMOKE-OK"
 TIMEOUT="${SMOKE_TIMEOUT:-180}"
 # pi needs time to boot: the entrypoint proves every MCP server connects before the gateway
