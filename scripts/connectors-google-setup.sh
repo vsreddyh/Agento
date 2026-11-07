@@ -1308,28 +1308,45 @@ RENDER_ERR=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — sto
 if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >"$RENDER_OUT" 2>"$RENDER_ERR"; then
   # Empty vars render as KEY: '' — the quote alone must not satisfy the
   # check, or a missing var reads as "reaches the pi service".
+  # Scoped per service: the same four keys are mapped into both pi and
+  # health-api, and a whole-config grep would pass while one mapping is
+  # missing (the health-api mapping is what connect/callback actually
+  # read — a green proof with it missing 501s at runtime).
+  _service_block() {
+    awk -v svc="$1" '
+      $0 ~ "^  " svc ":$" { inblock=1; next }
+      inblock && /^  [a-zA-Z0-9_-]+:$/ { exit }
+      inblock { print }
+    ' "$RENDER_OUT"
+  }
   _render_missing=""
-  for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
-    if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[[:space:]]*[^\"'[:space:]]" "$RENDER_OUT"; then
-      printf '  %s✓%s %s present in rendered compose config\n' "$GREEN" "$RESET" "$k"
-    else
-      # Same rc discipline as the comment-block grep: rc=1 is a genuine
-      # empty render, rc≥2 is a read failure that must not masquerade as
-      # "renders EMPTY" (the message would send the reader to the wrong fix).
-      _render_rc=$?
-      if (( _render_rc != 1 )); then
-        warn "could not read the rendered config (grep exit $_render_rc) — the .env writes stand, but nothing is verified"
-        exit 1
+  for _svc in health-api pi; do
+    _block_out=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — stopping before the render"; exit 1; }
+    _service_block "$_svc" >"$_block_out"
+    for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
+      if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[[:space:]]*[^\"'[:space:]]" "$_block_out"; then
+        printf '  %s✓%s %s present for %s in rendered compose config\n' "$GREEN" "$RESET" "$k" "$_svc"
+      else
+        # Same rc discipline as the comment-block grep: rc=1 is a genuine
+        # empty render, rc≥2 is a read failure that must not masquerade as
+        # "renders EMPTY" (the message would send the reader to the wrong fix).
+        _render_rc=$?
+        if (( _render_rc != 1 )); then
+          warn "could not read the rendered config (grep exit $_render_rc) — the .env writes stand, but nothing is verified"
+          rm -f "$_block_out" || true
+          exit 1
+        fi
+        printf '  %s✗%s %s renders EMPTY for %s — fix it before restarting\n' "$YELLOW" "$RESET" "$k" "$_svc"
+        _render_missing="${_render_missing:+$_render_missing }${_svc}/${k}"
       fi
-      printf '  %s✗%s %s renders EMPTY — fix it before restarting\n' "$YELLOW" "$RESET" "$k"
-      _render_missing="${_render_missing:+$_render_missing }$k"
-    fi
+    done
+    rm -f "$_block_out" || true
   done
   if [[ -n "$_render_missing" ]]; then
     warn "empty render for: ${_render_missing} — an empty value is the misconfiguration this step exists to catch"
     exit 1
   fi
-  unset _render_missing _render_rc
+  unset _render_missing _render_rc _block_out _svc
 else
   # The subshell's cd can only fail on a tree deleted mid-run (REPO_DIR is
   # fail-loud guarded above), but attributing that to compose would send the
@@ -1352,7 +1369,7 @@ finish
 
 # finish clears the screen, wiping the render ✓ lines just earned; restate
 # the proof beside the comparison step that now leans on it.
-note "render proof (cleared with the stage above): all four keys interpolated non-empty"
+note "render proof (cleared with the stage above): all four keys interpolated non-empty for health-api and pi"
 
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"

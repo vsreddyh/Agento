@@ -77,9 +77,13 @@ func connectorStore() connectors.Store {
 	if connectorCache != nil {
 		return connectorCache
 	}
+	// If/else, not a typed-nil assignment: a failed FromEnv yields a nil
+	// *MongoStore, which as an interface value is non-nil and would cache
+	// a panic. The else branch only ever holds a live store.
 	var backend connectors.Store
 	if ms, err := connectors.FromEnv(); err != nil {
-		log.Printf("connectors: falling back to in-process (statuses do not survive restart): %v", err)
+		log.Printf("connectors: falling back to in-process (statuses do not survive restart): %s",
+			connectorBounded(approvals.ScrubError(err.Error())))
 		backend = connectors.NewMemoryStore()
 	} else {
 		backend = ms
@@ -130,19 +134,19 @@ func connectorOAuth(store connectors.Store) *connectors.OAuthConfig {
 }
 
 // initConnectors opens the store ONCE at boot and shares the snapshot
-// between index setup, the OAuth boot log, and serving: three separate
-// FromEnv calls during an Atlas blip could disagree with each other (and
-// with the store that actually serves the first request), leaving a
-// `configured` boot line next to live 501s or vice versa. The cached
-// store serves every verb; the live connectorOAuthDown reason on a 501
-// stays authoritative over this point-in-time line.
+// between index setup and the OAuth boot log, so the two lines cannot
+// disagree with each other. Serving joins the same cache once populated
+// (or falls back lazily per verb until then — a blip exactly at boot can
+// still serve a different snapshot than the boot lines, and the live
+// connectorOAuthDown reason on a 501 stays authoritative over both).
 func initConnectors() {
 	store := connectorStore()
 	if ms, ok := store.(*connectors.MongoStore); ok {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := ms.EnsureIndexes(ctx); err != nil {
-			log.Printf("connectors: WARNING index setup failed, oauth states will not reap: %v", err)
+			log.Printf("connectors: WARNING index setup failed, oauth states will not reap: %s",
+				connectorBounded(approvals.ScrubError(err.Error())))
 		}
 	} else {
 		// Loud, not silent: without Mongo there is no states TTL, and an
@@ -155,7 +159,8 @@ func initConnectors() {
 	}
 	cfg, err := connectors.OAuthConfigFromEnv()
 	if err != nil {
-		log.Printf("connectors: OAuth unavailable (%v); connect answers 501", err)
+		log.Printf("connectors: OAuth unavailable (%s); connect answers 501",
+			connectorBounded(approvals.ScrubError(err.Error())))
 		return
 	}
 	canonical, err := connectors.CanonicalRedirectURL(cfg.RedirectURL)

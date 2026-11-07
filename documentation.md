@@ -461,7 +461,9 @@ restart without recreation will not pick up .env changes). It is safe
 to re-run: existing values stay defaults, and an existing
 envelope key is kept, since rotating it invalidates every stored grant.
 Register the bare spelling it prints (health-api serves it direct on
-`:8001` and through the proxy on `:8080`).
+`:8001`; the `:8080` proxy publish is plain HTTP, so only loopback
+`http://localhost:8080/...` registers — never a public `https://...:8080`
+spelling).
 
 Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 
