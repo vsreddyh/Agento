@@ -455,7 +455,7 @@ func connectorConnect(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	state, verifier, err := connectors.NewState()
 	if err != nil {
-		log.Print("connectors: could not mint connect state")
+		log.Printf("connectors: could not mint connect state for %q", id)
 		writeJSON(w, http.StatusBadGateway, bson.M{"detail": "could not start the connect flow"})
 		return
 	}

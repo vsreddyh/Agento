@@ -782,7 +782,11 @@ if [[ -n "$_redirect_preset" ]]; then
     # or trailing dot sends identically but must not fail validation —
     # and the canonical form is what gets stored and registered.
     _redirect_preset="$(canonical_redirect_uri "$_redirect_preset")"
-    _uri_host="${_preset_fold#https://}"
+    # Derive the host from the canonicalised value (not the scheme-only
+    # fold): uppercase hosts and trailing dots canonicalise to a valid
+    # tailnet name, and validating the raw spelling would exit 1 on a URL
+    # that sends identically.
+    _uri_host="${_redirect_preset#https://}"
     _uri_host="${_uri_host%/api/connectors/callback}"
     _uri_host="${_uri_host%%:*}"
   fi
