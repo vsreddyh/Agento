@@ -127,8 +127,10 @@ type Config struct {
 	// (log.Fatalf without it, and the entrypoint pi mcp list gate then
 	// refuses boot), so a gateway-side fallback only serves pre-migration
 	// reads and sweeps — memory's and browser's own fallbacks run with an
-	// ephemeral audit trail, and the outage reads as degraded backlog, not
-	// silently increased throughput.
+	// ephemeral audit trail. Note the visibility gap: only the approvals
+	// list carries a degraded marker, so an outage reads as missing audit
+	// rows on /api/audit, not as a flag — treat absence there as missing,
+	// never as proof nothing ran.
 	ApprovalStore approvals.Store
 
 	// MemoryStore is the per-profile memory store (#315). Nil means an

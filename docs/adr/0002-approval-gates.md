@@ -145,6 +145,7 @@ The pending poll must pass `?status=pending`: without it the route returns all
 live rows, and both expired-but-not-yet-TTL-swept and already-decided rows stay
 live for the rest of their 15-minute window (expiry is lazy; the audit trail is
 the history). An unfiltered list is therefore a window, never a live queue.
+Post-#487 the list only ever shows pre-migration rows.
 
 Expiry is evaluated at one instant per operation. Reads and lists use the
 store's own clock; a **decision** uses the caller's decision instant (`at`),
@@ -169,10 +170,12 @@ A server that restarts expires its **own server's** pending rows at startup
 (`MarkServerInterrupted`, called in each `main` before serving): it owns
 that server's queue, so those rows belonged to the process that died, and
 leaving them pending would show the app a card whose approval could never
-forward. The gateway's global `MarkInterrupted` still runs at its own
+forward (pre-#487; post-#487 only pre-migration rows can be pending, so no
+live hold is ever at risk). The gateway's global `MarkInterrupted` still runs at its own
 startup for the whole collection. There is no teardown join anymore: the
-hold blocks the handler goroutine, and `ctx.Done` expires it with audit;
-the sweep covers what a SIGKILL left behind.
+hold blocked the handler goroutine, and `ctx.Done` expired it with audit;
+post-#487 a dead context denies before anything executes instead. The
+sweep covers what a SIGKILL left behind.
 
 The sweep writes no per-row audit entry (the count log is the record),
 because the rows it finds were owned by a process that died before it could
@@ -180,8 +183,8 @@ record anything.
 
 The sweep assumes this deployment's one-profile contract (one server
 process per id). If two profiles ever shared a server name, a restarting
-server would expire the other's live hold — an approve that forwards
-nowhere. Supporting that would need a per-process instance token on each
+server would expire the other's rows — pre-#487, a live hold killed and
+an approve that forwards nowhere. Supporting that would need a per-process instance token on each
 row and a liveness check, not a broader server-scoped sweep.
 
 A `gate_`-prefixed error marked a decision the gate made itself, not one a

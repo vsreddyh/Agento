@@ -136,7 +136,7 @@ func decide[Out any](ctx context.Context, server, tool, name string, redacted ma
 	if ctx.Err() != nil {
 		audit(store, auditServer, name, redacted, approvals.DispositionDenied,
 			"abandoned: calling context ended before execution", "")
-		return nil, zero, errors.New("not executing " + server + "/" + name + ": calling context ended; failing closed")
+		return nil, zero, errors.New("not executing " + server + "/" + tool + ": calling context ended; failing closed")
 	}
 
 	// Draft-only refusal, before anything else (same order as the relay):
