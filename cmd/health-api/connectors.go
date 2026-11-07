@@ -221,6 +221,7 @@ func listConnectors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
 		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
 		return
 	}
@@ -255,7 +256,10 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 	id = connectors.NormalizedID(id)
 	action = strings.ToLower(connectors.TrimCredential(action))
 	if !connectors.Known(id) {
-		writeJSON(w, http.StatusNotFound, bson.M{"detail": "unknown connector"})
+		// Echo the normalised id (what the store would see), scrubbed +
+		// bounded — triage greps the spelling the store saw.
+		writeJSON(w, http.StatusNotFound, bson.M{
+			"detail": "unknown connector " + connectorBounded(approvals.ScrubError(id))})
 		return
 	}
 	switch action {
@@ -286,7 +290,10 @@ func connectorItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed,
 			bson.M{"detail": "no verb on /api/connectors/{id}; use /disconnect or /connect"})
 	default:
-		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+		// Echo the normalised action (what the switch saw), scrubbed +
+		// bounded — triage greps the spelling the store would have seen.
+		writeJSON(w, http.StatusNotFound, bson.M{
+			"detail": "unknown path " + connectorBounded(approvals.ScrubError(action))})
 	}
 }
 
@@ -496,6 +503,13 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	code := connectors.TrimCredential(query.Get("code"))
 	state := connectors.TrimCredential(query.Get("state"))
+	// Duplicates first-win by design (single-use state burns either way),
+	// but a junk-suffixed duplicate leaves no trace of the second value —
+	// log lengths only (never values).
+	if len(query["code"]) > 1 || len(query["state"]) > 1 {
+		log.Printf("connectors: callback with duplicate params (code=%d, state=%d values), using first",
+			len(query["code"]), len(query["state"]))
+	}
 	if code == "" || state == "" {
 		connectorCallbackError(w, r, http.StatusBadRequest,
 			"callback needs ?code= and ?state=; start over from connect")
@@ -551,6 +565,20 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 		pinned := *oauth
 		pinned.RedirectURL = redirect
 		exCfg = &pinned
+		// Log the divergence when pinned != live: an operator rotation
+		// gets confirmation which string was sent, and a hand-inserted
+		// row carrying a foreign redirect is visible here instead of
+		// silently sent. Redacted (non-secret) like every logged URL.
+		if st.RedirectURI != oauth.RedirectURL {
+			log.Printf("connectors: callback uses pinned redirect %q (live config differs; rotation or hand-inserted row)",
+				connectors.RedactURL(st.RedirectURI))
+		}
+	} else {
+		// Pre-column rows carry no pinned redirect: the live config is
+		// the only candidate. Auditable — after a rotation this sends the
+		// NEW string for a row minted under the OLD one, so a mismatch
+		// here reads as rotation fallout, not a helper bug.
+		log.Printf("connectors: callback uses live redirect (no pinned value; pre-column row — rotation suspected if recently rotated)")
 	}
 	// Granted-scope subset warns, not fails: granular consent can return
 	// fewer scopes than requested, and the grant still stores. A later
@@ -597,7 +625,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	accessToken := connectors.TrimCredential(tok.AccessToken)
 	refreshSealed, err := connectors.EncryptToken(oauth.Key, refreshToken)
 	if err != nil {
-		log.Printf("connectors: token seal failed: %v", err)
+		log.Printf("connectors: token seal failed for %q: %q", id, connectorBounded(approvals.ScrubError(err.Error())))
 		connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 		return
 	}
@@ -605,7 +633,7 @@ func connectorCallback(w http.ResponseWriter, r *http.Request) {
 	if accessToken != "" {
 		accessSealed, err = connectors.EncryptToken(oauth.Key, accessToken)
 		if err != nil {
-			log.Printf("connectors: token seal failed: %v", err)
+			log.Printf("connectors: token seal failed for %q: %q", id, connectorBounded(approvals.ScrubError(err.Error())))
 			connectorCallbackError(w, r, http.StatusBadGateway, "could not store the grant")
 			return
 		}

@@ -302,6 +302,50 @@ _uri_host() {
   printf '%s' "$u"
 }
 
+# canonical_redirect_uri prints the canonical form of a redirect URI the
+# way the server sends it: lowercased host, no trailing dot, no default
+# port (:443 for https, :80 for http), non-default ports kept. Google
+# exact-matches the sent bytes, so registering this string (or comparing
+# the startup-log line against it) is the only correct comparison — the
+# input spelling may differ while sending identically. Bracketed IPv6
+# hosts survive intact; a malformed value prints unchanged (validated
+# by the caller, never here).
+canonical_redirect_uri() {
+  local u="$1" scheme rest path hostport host port
+  [[ "$u" == *://* ]] || { printf '%s' "$u"; return 0; }
+  scheme="${u%%://*}"
+  rest="${u#*://}"
+  if [[ "$rest" == */* ]]; then
+    path="/${rest#*/}"
+    hostport="${rest%%/*}"
+  else
+    path="/"
+    hostport="$rest"
+  fi
+  if [[ "$hostport" == \[*\]* ]]; then
+    host="${hostport%%\]*}]"
+    port="${hostport#*]}"
+    port="${port#:}"
+  else
+    host="${hostport%%:*}"
+    if [[ "$host" == "$hostport" ]]; then
+      port=""
+    else
+      port="${hostport##*:}"
+    fi
+  fi
+  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+  host="${host%.}"
+  if { [[ "$scheme" == "https" && "$port" == "443" ]]; } || \
+     { [[ "$scheme" == "http" && "$port" == "80" ]]; }; then
+    port=""
+  fi
+  if [[ -n "$port" ]]; then
+    host="$host:$port"
+  fi
+  printf '%s://%s%s' "$scheme" "$host" "$path"
+}
+
 REPO_DIR="${REPO_DIR:-}"
 if [[ -z "$REPO_DIR" ]]; then
   # Follow symlinks first: an `ln -s …/connectors-google-setup.sh` on PATH
@@ -702,8 +746,13 @@ if [[ -n "$_redirect_preset" ]]; then
   # Host part validated label by label, like TS_DNS above.
   _uri_host=""
   if [[ "$_redirect_preset" == https://*/api/connectors/callback ]]; then
+    # Canonicalise before validating: an explicit :443, uppercase host,
+    # or trailing dot sends identically but must not fail validation —
+    # and the canonical form is what gets stored and registered.
+    _redirect_preset="$(canonical_redirect_uri "$_redirect_preset")"
     _uri_host="${_redirect_preset#https://}"
     _uri_host="${_uri_host%/api/connectors/callback}"
+    _uri_host="${_uri_host%%:*}"
   fi
   if [[ -z "$_uri_host" ]] || ! _valid_tsdns "$_uri_host"; then
     warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/api/connectors/callback URL; unset it to derive from TS_DNS"
@@ -736,11 +785,9 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   # first, then tailor the question. Strict-pass keeps quietly offerable;
   # strict-fail keeps only via an explicit knowingly-keep.
   _rec_host=""
-  if [[ "$_recorded_uri" == https://*/api/connectors/callback ]]; then
-    # Same _uri_host derivation as probe/comment: scheme- and port-agnostic,
-    # so an explicit `:443` spelling (same canonical form) passes here too.
-    _rec_host=$(_uri_host "$_recorded_uri" || true)
-  elif [[ "$_recorded_uri" == https://*/p/api/connectors/callback ]]; then
+  # The /p/ spelling is checked FIRST: glob `*` spans `/`, so it would
+  # also match the bare pattern below and skip conversion entirely.
+  if [[ "$_recorded_uri" == https://*/p/api/connectors/callback ]]; then
     # Pre-#488 spelling pointed at pi-gateway, which no longer serves it:
     # offer the same host bare. Declining falls through to the typo path
     # below, which names the mismatch and offers a knowingly-keep.
@@ -757,6 +804,10 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
       _rec_host=""
     fi
     unset _bare
+  elif [[ "$_recorded_uri" == https://*/api/connectors/callback ]]; then
+    # Same _uri_host derivation as probe/comment: scheme- and port-agnostic,
+    # so an explicit `:443` spelling (same canonical form) passes here too.
+    _rec_host=$(_uri_host "$_recorded_uri" || true)
   fi
   if [[ -n "${_converted:-}" ]]; then
     : # converted above; nothing left to keep or question.
@@ -777,6 +828,28 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   fi
   unset _rec_host _converted
 fi
+# Canonicalise the final value before probing, printing, and writing:
+# Google exact-matches the sent bytes, and the server sends the canonical
+# form — so the .env value, the printed string, and the probe target must
+# all be canonical, or the wizard recommends a URL that mismatches.
+_canon_uri="$(canonical_redirect_uri "$REDIRECT_URI")"
+if [[ "$_canon_uri" != "$REDIRECT_URI" ]]; then
+  note "canonicalised REDIRECT_URI for registration (this is the sent bytes):"
+  note "  was: $REDIRECT_URI"
+  note "  now: $_canon_uri"
+  REDIRECT_URI="$_canon_uri"
+fi
+unset _canon_uri
+# Probe target follows the registered URI exactly — scheme and explicit
+# port included — so a green probe proves the registered host:port
+# answers, not just :443.
+_probe_scheme="${REDIRECT_URI%%://*}"
+_probe_rest="${REDIRECT_URI#*://}"
+_probe_hostport="${_probe_rest%%/*}"
+case "$_probe_scheme" in http|https) ;; *) _probe_scheme="https";; esac
+if [[ -z "$_probe_hostport" ]]; then
+  _probe_hostport="$TS_DNS"
+fi
 unset _recorded_uri
 # Compare the *final* URI (after any keep) against the funnel host. A
 # non-tailnet kept URL yields no host — probe/comment fall back to TS_DNS,
@@ -793,42 +866,50 @@ say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # probe still reports status without the wait.
 ok=0
 issuer=""
-# Probe the host being registered, not unconditionally TS_DNS: a lone
-# REDIRECT_URI preset against a daemon-derived TS_DNS would otherwise
-# verify host B while registering host A.
-_probe_host="$TS_DNS"
-if (( _URI_FROM_PRESET )); then
-  # _uri_host strips scheme/port and returns empty for a kept non-standard
-  # URL (loopback http) — fall back to the funnel host rather than probing
-  # "https://http:" as if that were a hostname.
-  _probe_host=$(_uri_host "$REDIRECT_URI" || true)
-  _probe_host="${_probe_host:-$TS_DNS}"
-fi
+# Probe the registered URI exactly — scheme and explicit port included —
+# so a green probe proves the registered host:port answers, not just :443.
+# _probe_hostport was derived from the final canonical REDIRECT_URI above;
+# TS_DNS is the fallback only if that derivation yielded nothing probabe
+# (loopback http included — the probe speaks the URI's own scheme).
+_probe_host="$_probe_hostport"
+_probe_host="${_probe_host:-$TS_DNS}"
+_probe_url="$_probe_scheme://$_probe_host/health"
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
   note "preset hostname — skipping the public-reachability wait"
-  if curl -fsS --max-time 10 "https://$_probe_host/health" >/dev/null 2>&1; then
+  if curl -fsS --max-time 10 "$_probe_url" >/dev/null 2>&1; then
     ok=1
   else
     note "not reachable from here right now (expected for a dry-run name)"
   fi
 else
   for ((__i = 1; __i <= 30; __i++)); do
-    if curl -fsS --max-time 10 "https://$_probe_host/health" >/dev/null 2>&1; then ok=1; break; fi
+    if curl -fsS --max-time 10 "$_probe_url" >/dev/null 2>&1; then ok=1; break; fi
     printf '%s' '.'; sleep 10
   done
 fi
 printf '\n'
 if (( ok )); then
-  printf '  %s✓%s public HTTPS reachable: https://%s/health\n' "$GREEN" "$RESET" "$_probe_host"
+  printf '  %s✓%s public HTTPS reachable: %s\n' "$GREEN" "$RESET" "$_probe_url"
   # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
-  # outlast the probe budget. timeout is coreutils-Linux-only (macOS ships
+  # outlast the probe budget — https only (loopback http has no TLS), at
+  # the probed port. timeout is coreutils-Linux-only (macOS ships
   # gtimeout at best), so use it when present and run bare otherwise —
   # same portability line as the tmp-file prune below.
-  if command -v timeout >/dev/null 2>&1; then
-    issuer=$(timeout 10 openssl s_client -connect "$_probe_host:443" -servername "$_probe_host" </dev/null 2>/dev/null \
+  _tls_host="$_probe_host"; _tls_port="443"; _tls_name="$_probe_host"
+  if [[ "$_tls_host" == \[*\]* ]]; then
+    _tls_name="${_tls_host#[}"; _tls_name="${_tls_name%]}"
+    _tls_rest="${_tls_host#*]}"; _tls_rest="${_tls_rest#:}"
+    [[ -n "$_tls_rest" ]] && _tls_port="$_tls_rest"
+  elif [[ "$_tls_host" == *:* ]]; then
+    _tls_port="${_tls_host##*:}"
+    _tls_name="${_tls_host%%:*}"
+    _tls_host="$_tls_name"
+  fi
+  if [[ "$_probe_scheme" == "https" ]] && command -v timeout >/dev/null 2>&1; then
+    issuer=$(timeout 10 openssl s_client -connect "$_tls_host:$_tls_port" -servername "$_tls_name" </dev/null 2>/dev/null \
              | openssl x509 -noout -issuer 2>/dev/null || true)
-  else
-    issuer=$(openssl s_client -connect "$_probe_host:443" -servername "$_probe_host" </dev/null 2>/dev/null \
+  elif [[ "$_probe_scheme" == "https" ]]; then
+    issuer=$(openssl s_client -connect "$_tls_host:$_tls_port" -servername "$_tls_name" </dev/null 2>/dev/null \
              | openssl x509 -noout -issuer 2>/dev/null || true)
   fi
   if [[ -n "$issuer" ]]; then
@@ -843,7 +924,7 @@ else
   warn "not reachable yet (DNS can take up to 10 min to propagate)."
   warn "You can continue — the URI below is still correct; re-run the probe later if needed."
 fi
-unset ok issuer _probe_host
+unset ok issuer _probe_host _probe_url _probe_scheme _probe_hostport _tls_host _tls_port _tls_name _tls_rest _canon_uri
 printf '\n'
 say "This is the exact string to register in Google (copy it verbatim):"
 printf '\n  %s%s%s\n\n' "$BOLD" "$REDIRECT_URI" "$RESET"
