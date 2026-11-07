@@ -954,7 +954,21 @@ _valid_fqdn() {
     [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
   done
   tld="${labels[${#labels[@]}-1]}"
-  [[ "$tld" =~ ^[a-z][a-z]+$ ]] || return 1
+  if [[ "$tld" == xn--* ]]; then
+    # Punycode carve-out like the server: the suffix is encoded Unicode,
+    # validated by the label rules above — except a bare `xn--` prefix.
+    [[ "$tld" == "xn--" ]] && return 1
+  else
+    [[ "$tld" =~ ^[a-z][a-z]+$ ]] || return 1
+  fi
+  # Reserved + private-use TLDs can never hold a public registration
+  # (RFC-2606, mDNS, unqualified-LAN, special-use — server parity list).
+  case "$tld" in
+    test|example|invalid|local|internal|lan|home|corp|localdomain|intranet|onion|arpa) return 1;;
+  esac
+  # `*.localhost` / `localhost.*`: unregistrable both directions (only
+  # bare `localhost` passes, handled by the caller).
+  case "$host" in *.localhost|localhost.*) return 1;; esac
   return 0
 }
 # Host/scheme gate the final value: the server fails closed on http

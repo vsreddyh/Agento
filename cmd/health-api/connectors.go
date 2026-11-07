@@ -30,6 +30,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	syncpkg "sync"
 	"time"
@@ -155,6 +156,14 @@ func connectorOAuthDown(store connectors.Store) string {
 		}
 		return "no durable store"
 	}
+	// Redirect typos need unpicking: OAuthConfigFromEnv already runs
+	// CanonicalRedirectURL, so its error surfaces as "missing values"
+	// below — validate the raw value directly so a typo reads as one.
+	if raw := strings.TrimSpace(os.Getenv("GOOGLE_REDIRECT_URL")); raw != "" {
+		if _, cerr := connectors.CanonicalRedirectURL(raw); cerr != nil {
+			return "redirect invalid (" + connectorBounded(approvals.ScrubError(cerr.Error())) + ")"
+		}
+	}
 	if _, err := connectors.OAuthConfigFromEnv(); err != nil {
 		return "missing values (" + connectorBounded(approvals.ScrubError(err.Error())) + ")"
 	}
@@ -198,6 +207,16 @@ func initConnectors() {
 	if !store.Durable() {
 		log.Print("connectors: OAuth unavailable (no durable store); connect answers 501")
 		return
+	}
+	// Redirect typos need unpicking here too: the loader below already
+	// canonicalises, so without this a typo would log as "missing values"
+	// instead of the `redirect invalid` line the runbook greps for.
+	if raw := strings.TrimSpace(os.Getenv("GOOGLE_REDIRECT_URL")); raw != "" {
+		if _, cerr := connectors.CanonicalRedirectURL(raw); cerr != nil {
+			log.Printf("connectors: OAuth redirect invalid (want %q): %q",
+				connectors.RedactURL(raw), connectorBounded(approvals.ScrubError(cerr.Error())))
+			return
+		}
 	}
 	cfg, err := connectors.OAuthConfigFromEnv()
 	if err != nil {
