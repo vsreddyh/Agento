@@ -58,9 +58,10 @@ func authorize(r *http.Request) (int, string) {
 	toks := tokens()
 	if len(toks) == 0 {
 		// A green /health does NOT contradict this: liveness is exempt
-		// from auth and throttling by design, so probe an auth-bearing
-		// route (not /health) for serving readiness.
-		log.Print("PASSWORD not set — rejecting all requests")
+		// from auth and throttling by design, and the OAuth callback
+		// bypasses auth (the state is the capability) — both still serve.
+		// Probe an auth-bearing route (not /health) for serving readiness.
+		log.Print("PASSWORD not set — rejecting auth-bearing requests (/health and the OAuth callback still serve)")
 		return http.StatusServiceUnavailable, "server not configured with tokens"
 	}
 	// Deliberate divergences from the gateway's authenticate, both
