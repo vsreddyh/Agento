@@ -178,13 +178,19 @@ func connectorStore(ctx context.Context) connectors.Store {
 	// promise memory + 501s.
 	pingOK := err == nil && ms != nil && connectorPing(ms)
 	connectorStoreMu.Lock()
-	defer connectorStoreMu.Unlock()
 	connectorDialing = false
 	close(connectorDialCh)
 	// If/else, not a typed-nil assignment: a failed FromEnv yields a nil
 	// *MongoStore, which as an interface value is non-nil and would cache
 	// a panic. The else branch only ever holds a live store.
 	var backend connectors.Store
+	// A ping-failed client disconnects AFTER the unlock below: Disconnect
+	// can block up to the ping budget, and every verb (list/disconnect/
+	// connect/callback) blocks on this mutex for the store — holding it
+	// through cleanup would stall serving for up to 5s per probe on top
+	// of the 5s ping, once a minute for the whole outage. Only the swap
+	// is a critical section.
+	var stale *connectors.MongoStore
 	if err != nil || !pingOK {
 		if err != nil {
 			log.Printf("connectors: falling back to in-process (statuses do not survive restart): %s",
@@ -194,12 +200,9 @@ func connectorStore(ctx context.Context) connectors.Store {
 			log.Print("connectors: MongoDB unreachable (dial ok, ping failed) — falling back to in-process")
 			connectorLastErr = "unreachable (ping failed)"
 			// The failed client holds pool goroutines and a monitor:
-			// disconnect it or every probe leaks one for the outage.
-			func() {
-				dctx, dcancel := context.WithTimeout(context.Background(), connectorPingBudget)
-				defer dcancel()
-				_ = ms.DB().Client().Disconnect(dctx)
-			}()
+			// disconnect it or every probe leaks one for the outage
+			// (done below, outside the lock).
+			stale = ms
 		}
 		backend, connectorCacheAt = connectors.NewMemoryStore(), time.Now()
 	} else {
@@ -228,6 +231,14 @@ func connectorStore(ctx context.Context) connectors.Store {
 	// the durable freshness throttle keys on it, so a failed probe
 	// (demote) still buys a full budget before the next one.
 	connectorLastProbe = time.Now()
+	connectorStoreMu.Unlock()
+	if stale != nil {
+		func() {
+			dctx, dcancel := context.WithTimeout(context.Background(), connectorPingBudget)
+			defer dcancel()
+			_ = stale.DB().Client().Disconnect(dctx)
+		}()
+	}
 	return backend
 }
 
@@ -1086,7 +1097,10 @@ func connectorCallbackPath(p string) bool {
 // Registered as the mux catch-all so it only sees what longer patterns
 // missed: it also answers other domains' typos (/api/task missing-s,
 // /api/health/sync/ trailing slash — health and files register exacts
-// only). The log line below names which unclaimed spelling landed here
+// only) and top-level probes (`/`, `/favicon.ico`, direct `:8001/ping`).
+// Like the gateway, unknown paths sit behind the bearer gate here — an
+// unauthenticated `curl /` answers 401, never the old text/plain 404.
+// The log line below names which unclaimed spelling landed here
 // (length only, never the value) like every other dead branch.
 func connectorsFallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

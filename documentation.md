@@ -382,11 +382,16 @@ callers are not distinguished by casing), plus slash-collapsed variants
 (`//` collapses, so a double-slash paste serves — WAF/proxy rules must
 match on the collapsed form too) and percent-encoded spellings (Go decodes
 before matching, so `/%63allback` serves like `/callback` — match on the
-decoded form too) — but no profile-tolerant prefixes (the
+decoded form too), plus the trailing-slash alias (`/callback/` serves like
+`/callback` — the dispatcher trims slashes, so match the trimmed form
+too) — but no profile-tolerant prefixes (the
 pi-gateway `/p/` spellings retire with it in #494 — until then both serve).
 The `/api` prefix itself is case-sensitive: `/API/...` answers the service
 JSON `unknown path` 404 behind auth (like the gateway), never the
 callback — WAF/proxy exact-matches must cover the uppercase spelling too.
+Anything else unclaimed (including `/` itself) answers the same auth-gated
+JSON `unknown path` 404, never the default-mux text page: like the gateway,
+unknown paths sit behind the bearer gate on this service.
 The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope
 key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to

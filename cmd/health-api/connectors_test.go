@@ -324,7 +324,7 @@ func TestConnectorsFallbackEnvelope(t *testing.T) {
 	t.Setenv("PASSWORD", "test-secret-12345678")
 	mux := http.NewServeMux()
 	registerConnectors(mux)
-	for _, target := range []string{"/api/connectorsfoo", "/api/connectorsfoo/bar", "/api/CONNECTORS", "/api", "/API/connectorsfoo", "/API/", "/API/connectors/callback"} {
+	for _, target := range []string{"/api/connectorsfoo", "/api/connectorsfoo/bar", "/api/CONNECTORS", "/api", "/API/connectorsfoo", "/API/", "/API/connectors/callback", "/", "/favicon.ico"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		req.Header.Set("Authorization", "Bearer test-secret-12345678")
 		w := httptest.NewRecorder()
