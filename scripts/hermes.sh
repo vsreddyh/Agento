@@ -52,7 +52,7 @@ Commands:
   init       Build images, seed the root .env (all env vars), report the skills found, set up host tools (curl, podman, python, cron), install retention cron
   start      Start the whole container stack (health-api, pi (chat profile), proxy, retention)
   stop       Stop the container stack
-  restart    Stop then start
+  restart    Recreate containers in place (up --build --force-recreate)
   status     Show all service states
   clean      Wipe everything (profiles state, container volumes, cron). Destructive.
 EOF

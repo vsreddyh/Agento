@@ -380,7 +380,8 @@ on the last segment (`/CALLBACK` serves like `/callback` — unauthenticated
 callers are not distinguished by casing), plus slash-collapsed variants
 (`//` collapses, so a double-slash paste serves — WAF/proxy rules must
 match on the collapsed form too) — but no profile-tolerant prefixes (the
-pi-gateway `/p/` spellings are gone with it). The server consumes the
+pi-gateway `/p/` spellings retire with it in #494 — until then both serve).
+The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope
 key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to
 connected. Tokens land before the status flips — a connected-with-no-tokens

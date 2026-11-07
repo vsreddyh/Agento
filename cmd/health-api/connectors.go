@@ -525,12 +525,15 @@ func connectorCallbackError(w http.ResponseWriter, r *http.Request, code int, de
 // caller should return without writing a body: answering a domain error
 // on a dead connection buys only a second log line for a hangup. A fired
 // deadline is NOT gone — callers answer it with the timeout wording
-// instead, so check DeadlineExceeded first.
+// instead, so check DeadlineExceeded first. Scrubbed + bounded like every
+// other interpolated value on this surface (ctx.Err is safe today, but
+// the next edit must not inherit a raw-%v pattern here).
 func connectorCallbackAborted(ctx context.Context, verb string) bool {
 	if ctx.Err() == nil || ctx.Err() == context.DeadlineExceeded {
 		return false
 	}
-	log.Printf("connectors: %s aborted, request ended (client gone or server stopping): %v", verb, ctx.Err())
+	log.Printf("connectors: %s aborted, request ended (client gone or server stopping): %s",
+		verb, connectorBounded(approvals.ScrubError(ctx.Err().Error())))
 	return true
 }
 

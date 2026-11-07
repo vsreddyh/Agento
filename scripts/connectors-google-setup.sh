@@ -840,11 +840,12 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   # The /p/ spelling is checked FIRST: glob `*` spans `/`, so it would
   # also match the bare pattern below and skip conversion entirely.
   if [[ "$_rec_fold" == https://*/p/api/connectors/callback ]]; then
-    # Pre-#488 spelling pointed at pi-gateway, which no longer serves it:
-    # offer the same host bare. Declining falls through to the typo path
+    # Pre-#488 spelling pointed at pi-gateway, which still serves it until
+    # the #494 teardown — but health-api (the future) does not, so offer
+    # the same host bare. Declining falls through to the typo path
     # below, which names the mismatch and offers a knowingly-keep.
     _bare="${_recorded_uri%/p/api/connectors/callback}/api/connectors/callback"
-    warn "recorded URL uses the retired /p/ spelling (pi-gateway is gone):"
+    warn "recorded URL uses the retired /p/ spelling (pi-gateway still serves it until the #494 teardown; health-api does not):"
     warn "  recorded: $_recorded_uri"
     warn "  bare:     $_bare"
     if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
@@ -1051,9 +1052,12 @@ _probe_url="$REDIRECT_URI"
 # 400/501/429 are the in-contract answers for a param-less callback hit
 # (missing params / unconfigured OAuth / throttled) — all three prove the
 # route serves. curl without -f: -f would fail all of them and prove nothing.
+# -L follows the mux clean-path redirect: a knowingly-kept double-slash URL
+# 301s to the collapsed form before any handler runs, and the follow-up
+# code is what proves the route (capped at 2 hops — this must terminate).
 _probe_ok_code() {
   local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$_probe_url" 2>/dev/null || echo "000")
+  code=$(curl -sL --max-redirs 2 -o /dev/null -w '%{http_code}' --max-time 10 "$_probe_url" 2>/dev/null || echo "000")
   [[ "$code" == "400" || "$code" == "501" || "$code" == "429" ]]
 }
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
