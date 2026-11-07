@@ -905,6 +905,32 @@ elif [[ "$_canonical_path" != "/api/connectors/callback" ]]; then
   if ! confirm "Keep it anyway (registration will mismatch)?"; then exit 1; fi
 fi
 unset _canonical_path _canonical_rest
+# Port gate: the server requires digits-only 1-65535 (parsePort) — a
+# non-numeric or out-of-range port 501s, so it must fail here with a
+# pointer at the startup-log line, not print as registrable. Empty
+# (default port) passes; brackets handled like the TLS branch.
+_final_port_from_uri="${REDIRECT_URI#*://}"
+_final_port_from_uri="${_final_port_from_uri%%/*}"
+if [[ "$_final_port_from_uri" == \[*\]* ]]; then
+  _final_port_from_uri="${_final_port_from_uri#*]}"
+  _final_port_from_uri="${_final_port_from_uri#:}"
+else
+  case "$_final_port_from_uri" in
+    *:* ) _final_port_from_uri="${_final_port_from_uri##*:}" ;;
+    * ) _final_port_from_uri="" ;;
+  esac
+fi
+if [[ -n "$_final_port_from_uri" ]]; then
+  # Length gate first: arithmetic on a 100-digit string wraps, so cap at
+  # 5 digits (65535 max) before the numeric compare.
+  if [[ ${#_final_port_from_uri} -gt 5 ]] || [[ ! "$_final_port_from_uri" =~ ^[0-9]+$ ]] || (( 10#$_final_port_from_uri < 1 || 10#$_final_port_from_uri > 65535 )); then
+    warn "REDIRECT_URI port is not numeric 1-65535 (server fails it closed):"
+    warn "  value: $REDIRECT_URI"
+    warn "Re-run with a valid port, or keep knowingly:"
+    if ! confirm "Keep it anyway (registration will mismatch)?"; then exit 1; fi
+  fi
+fi
+unset _final_port_from_uri
 # Host/scheme gate the final value: the server fails closed on http
 # non-loopback, non-loopback IPs, and non-FQDN hosts — a value passing the
 # shape checks above can still be unregistrable (LAN IP, single label,
@@ -1432,13 +1458,15 @@ printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n
 printf '     "app isn'"'"'t verified" warning (Testing mode) → Advanced → proceed.\n'
 printf '  4. Re-add gmail/calendar inside the "mcpServers" object in pi/mcp.json\n'
 printf '     by hand (unwired until OAuth is configured; OAuth alone does not\n'
-printf '     bring the agent tools back). The "browser" entry is currently last\n'
+printf '     bring the agent tools back). The "reports" entry is currently last\n'
 printf '     and has no trailing comma — add one after it, then paste (commas\n'
-printf '     after browser and gmail, none after calendar):\n'
+printf '     after reports and gmail, none after calendar):\n'
 printf '       "gmail": {"command": "/usr/local/bin/gmail"},\n'
 printf '       "calendar": {"command": "/usr/local/bin/calendar"}\n'
 printf '     then ./scripts/hermes.sh restart again so the pi container picks\n'
 printf '     them up (entrypoint refuses to start if a server fails to connect).\n'
+printf '     Verify with: python3 -m json.tool pi/mcp.json (invalid JSON\n'
+printf '     crash-loops the container — the lint is the step, not optional).\n'
 printf '\n'
 printf '  Re-running this wizard is safe: it keeps existing values as defaults.\n'
 printf '  Envelope key: BACKUP FIRST — rotating it invalidates every stored grant.\n\n'

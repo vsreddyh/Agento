@@ -421,13 +421,15 @@ safe since #421 (connectors tolerate missing credentials); keeping them
 unwired until OAuth lands (`internal/connectors` fails its tests if the wiring
 and the credentials ever disagree). Re-adding is manual, not automatic: once
 OAuth is configured, add both entries back inside the `mcpServers` object in
-`pi/mcp.json` by hand (the `browser` entry is currently last with no trailing
+`pi/mcp.json` by hand (the `reports` entry is currently last with no trailing
 comma — add one after it first), then `./scripts/hermes.sh restart` so the pi
 container picks them up:
 
 "gmail": {"command": "/usr/local/bin/gmail"},
 "calendar": {"command": "/usr/local/bin/calendar"}
-(no trailing comma on the last line; commas after `browser` and `gmail`)
+(no trailing comma on the last line; commas after `reports` and `gmail`).
+Verify with `python3 -m json.tool pi/mcp.json` — invalid JSON crash-loops
+the container, so the lint is part of the step.
 
 Once wired they
 call the official Google APIs with the stored grant: decrypt, refresh on
