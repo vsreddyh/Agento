@@ -306,6 +306,19 @@ func TestHealthProbeIsNeverThrottled(t *testing.T) {
 		}
 		probed++
 	}
+	// The trailing-slash spelling is the same static reply, so it shares
+	// the exemption — throttling /health/ while exempting /health would
+	// fail the probe for a slash.
+	for i := 0; i < 25; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/health/", nil)
+		req.RemoteAddr = "203.0.113.9:5555"
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("slash probe %d was throttled with %d; the container would flap under load", i+1, rec.Code)
+		}
+		probed++
+	}
 	// And the exemption is narrow: a path that merely STARTS with /health must still be
 	// limited, or the wrong route would be exempt.
 	for i := 0; i < 5; i++ {
@@ -319,6 +332,21 @@ func TestHealthProbeIsNeverThrottled(t *testing.T) {
 	}
 	if limited == 0 {
 		t.Errorf("/api/health/sync was never throttled — the exemption is too broad (%d/%d limited)", limited, 5)
+	}
+	// And scoped to the static-reply methods: POST /health 405s in the
+	// handler, so it must not ride the liveness exempt past the limiter.
+	limited = 0
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/health", nil)
+		req.RemoteAddr = "203.0.113.9:5555"
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited == 0 {
+		t.Errorf("POST /health was never throttled — the exemption covers non-GET (%d/%d limited)", limited, 5)
 	}
 }
 

@@ -69,8 +69,10 @@ stages, each independently shippable and measurable.
 ### Stage 2 — approval gate as a library, delete the relay
 
 Replace `cmd/mcp-gate` with a shared wrapper applied where each server registers
-its tools (the same `approvals.NeedsApproval` / audit / hold-poll logic, minus
-the JSON-RPC re-parsing). `pi/mcp.json` points straight at each server.
+its tools (the same `approvals.NeedsApproval` / audit logic, minus the
+JSON-RPC re-parsing and minus the hold-poll wait — T3-era #487 removed
+holds entirely, so read "hold" below as the relay-era mechanism, not a
+live path). `pi/mcp.json` points straight at each server.
 
 Removes the 8 remaining relays: 8 processes, 8 approvals clients, minus the
 1 client the browser gate dials (no domain store to share — net −7 clients:
@@ -113,9 +115,11 @@ design with its own isolation trade-offs and is out of scope here.)
 ## Consequences
 
 - Enforcement moves from a process boundary to a shared library. ADR-0002's
-  claim to "enforce in a relay" is superseded in substance; the audit and
-  approval *behaviour* is unchanged, the isolation is gone. This ADR should be
-  cited where that guarantee is described.
+  claim to "enforce in a relay" is superseded in substance; the isolation
+  is gone. T3-era (#487): the hold flow is gone too — confirmation is a
+  harness prompt, audit covers every known call including reads, and
+  `allowed` means executed under a grant. This ADR should be cited where
+  that guarantee is described.
 - The `README.md:49` / `vps.md:154` memory figures must be corrected to the
   measured numbers, as its own change, so the correction does not ride on
   Stage 2 and get lost if Stage 2 slips.
@@ -131,7 +135,8 @@ Two edits belong to accepting this ADR, not to implementing it, and must not be
 forgotten if implementation stalls:
 
 1. Flip ADR-0002's status line to `superseded in substance by ADR-0011` for the
-   process-isolation claim, leaving its approval/audit behaviour intact.
+   process-isolation claim (T3-era #487 went further and removed the hold
+   flow itself — see the banner there; behaviour is NOT intact anymore).
 2. File the `README.md:49` / `vps.md:154` memory correction as a tracked issue,
    per the consequence above.
 

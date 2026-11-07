@@ -1,9 +1,14 @@
 # ADR-0002: Approval gates via an MCP relay, audit in Mongo
 
 - Status: superseded in substance by ADR-0011 (2026-11) for the
-  process-isolation claim; the approval/audit behaviour stands unchanged.
-  Enforcement moved from the `mcp-gate` relay process into an in-process
-  library inside each server (`internal/approvalgate`).
+  process-isolation claim, and by the T3 migration (#487, 2026-11) for the
+  hold flow itself: holds are gone entirely — no park, no poll, no wait.
+  Confirmation lives in T3/opencode permission prompts; the wrapper
+  executes known tools at once with an audit row (reads included) and
+  refuses draft-only sends plus unknown tools outright. `allowed`
+  post-migration means executed under a harness grant, not ran-without-
+  asking. The sections below describe the relay and the hold flow as
+  built; do not run them as a live runbook.
 - Issue: #313
 
 ## Context
@@ -19,11 +24,11 @@ not enforcement.
 ## Decision
 
 > Relay-era record: ADR-0011 Stage 2 deleted the `mcp-gate` relay — enforcement
-> is now an in-process library inside each server (`internal/approvalgate`).
+> became an in-process library inside each server (`internal/approvalgate`).
 > The pump / framing / batch / teardown-join mechanics below describe the
-> relay as built; the hold → approve/deny/expire behaviour and the audit
-> contract are unchanged, only the process boundary is gone. Read
-> `internal/approvalgate/gate.go` for the live path.
+> relay as built. T3-era (#487) then removed the hold flow the relay had
+> established: no park, no poll, audit every known call including reads.
+> Read `internal/approvalgate/gate.go` for the live path.
 
 ### Enforce in a relay, not in Pi or the gateway
 
@@ -74,14 +79,16 @@ Deny-by-default for money and deletes, exactly as the issue scopes it:
 
 - gate: all `miser-money` writes, every `delete_*`/`archive_*`, destructive
   rewrites (`fix_*`), and prunes that actually delete (`prune_old` with
-  `dry_run=false`; a counting dry run runs free);
+  `dry_run=false`; pre-#487 a counting dry run ran free — post-#487 it
+  prompts in T3 like a real one, since patterns cannot see arguments);
 - free: reads and routine creates/updates (`log_meal`, `create_task`,
   `add_recipe`, `log_cook`, ...).
 
 Gating every write would make the agent ask permission to take notes —
 approval fatigue, not safety. The table is complete by contract
 (`TestPolicyTableIsComplete` fails when a server gains an unclassified
-tool), and reads never gate. Unknown servers hold; unknown tools are
+tool), and reads never gate. Pre-#487 unknown servers held; post-#487
+they deny at once. Unknown tools are
 rejected by the SDK before the gate ever runs (see ADR-0011 Stage 2).
 
 A gated `tools/call` **notification** (no `id`) was denied inline instead of
@@ -101,9 +108,11 @@ collections from their own processes. That sharing has one hard edge worth
 stating plainly: a *decision* needs a store both processes see. Without Mongo
 every server except memory and browser exits (log.Fatalf) and the entrypoint
 `pi mcp list` gate refuses boot — memory and browser fall back to unshared
-in-process stores whose gated calls deny immediately (`gate_unavailable`,
-error-level log naming the server, denied audit row) instead of burning the
-full hold. Same verdict as expiry, minutes earlier. The cross-restart record
+in-process stores. Pre-#487 their gated calls denied immediately
+(`gate_unavailable`, error-level log naming the server, denied audit row)
+instead of burning the full hold — same verdict as expiry, minutes earlier.
+Post-#487 calls run with an ephemeral audit trail that dies with the
+process. The cross-restart record
 is the convenience; the cross-process record is the requirement. A server
 restart expires its own pending rows (`MarkServerInterrupted`, scoped by
 server) and the gateway's global `MarkInterrupted` deletes expired ones.
@@ -114,8 +123,11 @@ timed out can never be shown as pending and then 409 on decide. Because
 `TimeoutApproval` marks `status=expired` without extending `expiresAt`,
 `?status=expired` is only observable for the rest of that original 15-minute
 window. That is deliberate: the approvals collection is the live queue, and
-the **audit log is the durable history** — every expiry writes an `expired`
-audit row, retained for 90 days, and that is the record to query.
+the **audit log is the durable history** — relay-era, every expiry wrote an
+`expired` audit row, retained for 90 days, and that was the record to query.
+Post-#487 there are no live holds to expire: every expiry is a startup
+sweep (status flip only, no per-row audit — the count log is the record),
+so sweep-expired rows leave no audit row behind.
 
 ### The app decides, never with secrets
 
@@ -138,6 +150,7 @@ The pending poll must pass `?status=pending`: without it the route returns all
 live rows, and both expired-but-not-yet-TTL-swept and already-decided rows stay
 live for the rest of their 15-minute window (expiry is lazy; the audit trail is
 the history). An unfiltered list is therefore a window, never a live queue.
+Post-#487 the list only ever shows pre-migration rows.
 
 Expiry is evaluated at one instant per operation. Reads and lists use the
 store's own clock; a **decision** uses the caller's decision instant (`at`),
@@ -162,10 +175,12 @@ A server that restarts expires its **own server's** pending rows at startup
 (`MarkServerInterrupted`, called in each `main` before serving): it owns
 that server's queue, so those rows belonged to the process that died, and
 leaving them pending would show the app a card whose approval could never
-forward. The gateway's global `MarkInterrupted` still runs at its own
+forward (pre-#487; post-#487 only pre-migration rows can be pending, so no
+live hold is ever at risk). The gateway's global `MarkInterrupted` still runs at its own
 startup for the whole collection. There is no teardown join anymore: the
-hold blocks the handler goroutine, and `ctx.Done` expires it with audit;
-the sweep covers what a SIGKILL left behind.
+hold blocked the handler goroutine, and `ctx.Done` expired it with audit;
+post-#487 a dead context denies before anything executes instead. The
+sweep covers what a SIGKILL left behind.
 
 The sweep writes no per-row audit entry (the count log is the record),
 because the rows it finds were owned by a process that died before it could
@@ -173,18 +188,20 @@ record anything.
 
 The sweep assumes this deployment's one-profile contract (one server
 process per id). If two profiles ever shared a server name, a restarting
-server would expire the other's live hold — an approve that forwards
-nowhere. Supporting that would need a per-process instance token on each
+server would expire the other's rows — pre-#487, a live hold killed and
+an approve that forwards nowhere. Supporting that would need a per-process instance token on each
 row and a liveness check, not a broader server-scoped sweep.
 
-A `gate_`-prefixed error marks a decision the gate made itself, not one a
+A `gate_`-prefixed error marked a decision the gate made itself, not one a
 tool or a human made: `gate_unavailable` (unshared store) and `gate_store`
-(store unavailable). The relay-era `relay_protocol` / `relay_notification` /
+(store unavailable) — both pre-#487 strings with no producer anymore. The relay-era `relay_protocol` / `relay_notification` /
 `relay_store` / `relay_closing` / `relay_evicted` errors — and the synthetic
 `(malformed)` tool for unparseable frames — no longer exist: without the
 relay there is no framing to fault, no notification path (the SDK never
-routes notifications to handlers), and no pending table to evict from. A
-`denied` **without** a prefix means a human said no.
+routes notifications to handlers), and no pending table to evict from. Pre-#487
+a `denied` **without** a prefix meant a human said no; post-#487 `denied`
+is overwhelmingly gate refusals (draft-only, unknown tool, cancelled
+context), and a human tap survives only in pre-migration rows.
 
 Error scrubbing is pattern-based, not exhaustive: `args` are redacted by key,
 while `error` is free text and is only masked where it matches a
@@ -204,9 +221,14 @@ belongs to #312.
 
 ### Threat note (what this does and does not fix)
 
-- Fixed: unattended money writes, deletes, prunes and rewrites now need an
-  explicit human decision; every gated call is attributable in the audit
-  log for 90 days; deny leaves state unchanged (Pi gets a tool error and
+- Fixed: attended money writes, deletes, prunes and rewrites now need an
+  explicit human decision (pre-#487: in-app tap; post-#487: T3 permission
+  prompt — attended turns only; unattended scheduler fires have no
+  prompter, see `internal/gateway/scheduler.go` and
+  `internal/cronjobs/scheduler.go` for their prompt-only enforcement); every executed
+  call is attributable in the audit
+  log for 90 days short of an audit-write outage; deny leaves state
+  unchanged (the turn's harness gets a tool error and
   the turn continues).
 - NOT fixed: Pi built-in tools (`bash` file writes, `read`/`write`/`edit`
   via codemode) never traverse MCP, so they are observed (tool frames) but
@@ -214,8 +236,9 @@ belongs to #312.
   still runs as root in the container, and the single bearer token still
   authenticates every route. Full sandboxing and per-connector OAuth vaults
   are out of scope (connectors issue owns the vault).
-- Residual: a 14-minute held call occupies its turn until expiry; approvals
-  show tool + args + time but not which conversation asked.
+- Residual: pre-#487 a 14-minute held call occupied its turn until expiry;
+  post-#487 nothing parks, so a stuck sensitive write is a harness prompt,
+  never a hold. Approvals show tool + args + time but not which conversation asked.
 
 ## Consequences
 

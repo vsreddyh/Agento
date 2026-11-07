@@ -1,6 +1,9 @@
 # ADR-0009: First connectors (Gmail, Calendar)
 
-- Status: accepted (2026-10, v1 foundation)
+- Status: accepted (2026-10, v1 foundation). T3-era note (#487, 2026-11):
+  confirmation is a harness permission prompt, not an in-process hold —
+  nothing ever parks. Read "gate"/"gated" below as prompt-or-refuse, not
+  as a waiting room. Do not run the hold flow as a live runbook.
 - Issue: #316
 
 ## Context
@@ -18,17 +21,17 @@ per-connector OAuth and no read vs write scopes.
 - Calendar: list/upcoming + draft event. Creates/invites refused outright.
 
 Draft-only is a refusal, not a gate: the gate (`internal/approvalgate` since
-ADR-0011 Stage 2; the `cmd/mcp-gate` relay before it) answers Pi
+ADR-0011 Stage 2; the `cmd/mcp-gate` relay before it) answers the harness
 with `connectors.RefusalMessage` ("create a draft instead") and audits a
 `connector_draft_only` deny. No approval card is parked for a refused send.
 The `approvals.gatedTools` rows for the same tools are `true` as a backstop
 for any caller that bypasses the gate check: a send must never run free.
 
-Reads are intentionally ungated (`false`): reads never gate
+Reads are intentionally unprompted (`false`): reads never prompt
 anywhere in this stack (ADR-0002 — gating search would make the agent ask
 permission to look, which is approval fatigue, not safety).
 The dangerous directions — sends, invites, deletes — refuse
-or gate. If exfiltration-via-read becomes a concern, it belongs to a
+or prompt. If exfiltration-via-read becomes a concern, it belongs to a
 scoping/per-connector-approval pass, not to gating search in v1.
 
 `Disconnect` upserts rather than no-ops on never-connected ids: List
@@ -68,7 +71,7 @@ divergence — worth stating so triage doesn't read it as one.
 
 Anonymous callback load is accepted, not overlooked: the unauthenticated `GET /api/connectors/callback` lets any bearer-less caller spend one indexed `FindOneAndDelete` on an attacker-chosen id. 128-bit single-use states make exchange-on-guess infeasible, so this is DB-load-only, never a grant risk — and a per-IP throttle would add more unauthenticated surface than it removes at this cardinality. Revisit if callback traffic ever stops looking like taps.
 
-Disconnect stops future access (token columns `$unset`) with no audit row: the 90-day audit trail covers gated tool calls, not connector lifecycle, so `updated_at` + container logs (`disconnected (tokens cleared)`, transition-only) are the intended "who turned it off and when" trail in v1. This PR (the OAuth follow-up named above) lands the grants on these same verbs; per-grant audit rows are explicitly deferred to a stacked follow-up (see the PR body), so until then the interim trail is `updated_at` + the transition-only container logs — a tracked gap, not a regression. Already-fetched
+Disconnect stops future access (token columns `$unset`) with no audit row: the 90-day audit trail covers executed tool calls, not connector lifecycle, so `updated_at` + container logs (`disconnected (tokens cleared)`, transition-only) are the intended "who turned it off and when" trail in v1. This PR (the OAuth follow-up named above) lands the grants on these same verbs; per-grant audit rows are explicitly deferred to a stacked follow-up (see the PR body), so until then the interim trail is `updated_at` + the transition-only container logs — a tracked gap, not a regression. Already-fetched
 data — chat history — is NOT wiped: disconnect stops the tap,
 it does not rewrite the past (cf. Dots delete-the-Dot semantics, explicitly
 not adopted for history).
@@ -145,7 +148,7 @@ retention pass must not add a TTL to this collection.
 - `internal/gateway` serves the four routes (list, disconnect, connect,
   callback); `cmd/pi-gateway` wires the store with the same memory
   fallback + index pattern as the siblings.
-- The in-process gate refuses draft-only sends before the approval check
+- The in-process gate refuses draft-only sends instead of any prompt
   (`cmd/mcp-gate` did this when the relay existed).
 - App Connect UI and `mcp.json` wiring arrive stacked on top — this PR is
   the shape they fill in. Remaining follow-ups are the stacked set named

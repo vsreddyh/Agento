@@ -125,10 +125,12 @@ type Config struct {
 	// collections from its own process via the shared MONGODB_URI/MONGODB_DB
 	// pair; every MCP server except memory and browser hard-requires Mongo
 	// (log.Fatalf without it, and the entrypoint pi mcp list gate then
-	// refuses boot), so a gateway-side fallback only meets memory's and
-	// browser's ephemeral gates: anything else is down together, and the
-	// outage reads as degraded backlog plus gate_unavailable denies — not
-	// silently increased throughput.
+	// refuses boot), so a gateway-side fallback only serves pre-migration
+	// reads and sweeps — memory's and browser's own fallbacks run with an
+	// ephemeral audit trail. Note the visibility gap: only the approvals
+	// list carries a degraded marker, so an outage reads as missing audit
+	// rows on /api/audit, not as a flag — treat absence there as missing,
+	// never as proof nothing ran.
 	ApprovalStore approvals.Store
 
 	// MemoryStore is the per-profile memory store (#315). Nil means an
@@ -628,8 +630,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Approval gates + audit trail (#313). A sibling of the above: the servers
-	// hold sensitive tool calls, the app decides them here.
+	// Approval gates + audit trail (#313, pre-migration record). A sibling
+	// of the above: before #487 the servers held sensitive tool calls and
+	// the app decided them here. Nothing new parks — this surface only
+	// touches pre-migration rows now.
 	if rest == "api/approvals" || strings.HasPrefix(rest, "api/approvals/") {
 		s.handleApprovals(w, r, rest)
 		return

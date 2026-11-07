@@ -174,7 +174,7 @@ func main() {
 		})
 
 	approvalgate.AddTool(s, "calendar", gate, &mcp.Tool{Name: "create_event_draft",
-		Description: "Build a draft event (validated, sent nowhere — the grant is readonly). Attendees are single bare ASCII addresses (count uncapped in v1); summary caps at 200 runes, location at 500 (refused, not truncated); description is trimmed and capped at 5000 with a truncated flag. The agent presents the draft to the user; actual creation waits for the approval-gate flow that covers calendar writes. Start/end are RFC3339 date-times or YYYY-MM-DD dates (both ends must match in kind); end must be after start."},
+		Description: "Build a draft event (validated, sent nowhere — the grant is readonly). Attendees are single bare ASCII addresses (count uncapped in v1); summary caps at 200 runes, location at 500 (refused, not truncated); description is trimmed and capped at 5000 with a truncated flag. The agent presents the draft to the user; actual creation never happens through tools in v1 (create_event/send_invite are refused — the user confirms in their own calendar). Start/end are RFC3339 date-times or YYYY-MM-DD dates (both ends must match in kind); end must be after start."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in createEventDraftInput) (*mcp.CallToolResult, map[string]any, error) {
 			d, err := cal.Draft(in.Summary, in.Description, in.Location, in.Start, in.End, in.Attendees)
 			if err != nil {
@@ -197,9 +197,10 @@ func main() {
 			return fail(errors.New(connectors.RefusalMessage))
 		})
 
-	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
-	// between CreateApproval and decision leaves a pending row no live
-	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	// Sweep pre-migration orphaned holds (ADR-0011 Stage 2): before #487 a crash
+	// between CreateApproval and decision left a pending row no live holder
+	// polled. Nothing new parks, so this only expires rows predating the
+	// migration. Scoped by server, like the old relay sweep; best-effort.
 	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if _, serr := gate.MarkServerInterrupted(sweepCtx, "calendar", time.Now()); serr != nil {
 		log.Printf("calendar: startup sweep failed: %v", serr)

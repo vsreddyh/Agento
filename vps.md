@@ -108,6 +108,7 @@ these against the running stack and you should land within a few MiB of the tabl
 podman stats --no-stream --format '{{.Name}}\t{{.MemUsage}}' 
 
 # One turn in flight: stream a completion and sample while it is open.
+# (Compose default :8080 — APP_PORT remaps the host side; use your mapped port.)
 curl -sN http://127.0.0.1:8080/p/chat/v1/chat/completions \
   -H "Authorization: Bearer $PASSWORD" -H 'Content-Type: application/json' \
   -d '{"provider":"opencode-go","model":"mimo-v2.6-flash",
@@ -170,8 +171,9 @@ Measured (`podman system df` + image sizes), not guessed:
 
 ## Access
 
-- `proxy` (:8080) is the app's single URL and the only port that needs to be reachable
+- `proxy` (`:8080` compose default, `APP_PORT` remaps) is the app's single URL and the only port that needs to be reachable
   from a phone.
 - `:8643` (pi) and `:8001` (health-api) stay published for direct access and debugging —
-  restrict them with a firewall or reverse proxy if the host is public.
+  restrict them with a firewall or reverse proxy if the host is public (compose defaults;
+  `PI_HOST_PORT` / `HEALTH_HOST_PORT` remap the host side).
 - SSH on 22 (restrict source IPs / use key auth).

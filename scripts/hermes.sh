@@ -52,7 +52,7 @@ Commands:
   init       Build images, seed the root .env (all env vars), report the skills found, set up host tools (curl, podman, python, cron), install retention cron
   start      Start the whole container stack (health-api, pi (chat profile), proxy, retention)
   stop       Stop the container stack
-  restart    Stop then start
+  restart    Recreate containers in place (up --build --force-recreate)
   status     Show all service states
   clean      Wipe everything (profiles state, container volumes, cron). Destructive.
 EOF
@@ -316,9 +316,9 @@ install_retention_cron
     echo
     info "Initialization complete."
     echo "  Next: edit .env with real keys (OPENCODE_API_KEY, PASSWORD, Mongo URI), then ./scripts/hermes.sh start"
-    echo "  Access: Agento app (single URL: chat + sync) at http://<host>:8080  (APP_PORT in .env)"
-    echo "  Access: agent API at http://<host>:8643  (bearer PASSWORD)"
-    echo "  Access: health-api at http://<host>:8001"
+    echo "  Access: Agento app (single URL: chat + sync) at http://<host>:${APP_PORT:-8080}  (APP_PORT in .env)"
+    echo "  Access: agent API at http://<host>:${PI_HOST_PORT:-8643}  (PI_HOST_PORT in .env, bearer PASSWORD)"
+    echo "  Access: health-api at http://<host>:${HEALTH_HOST_PORT:-8001}  (HEALTH_HOST_PORT in .env)"
 }
 
 # ────────────────────────────────────────────────────────────

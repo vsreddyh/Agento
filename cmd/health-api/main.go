@@ -20,21 +20,38 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	syncpkg "sync"
 	"time"
 
 	"agento/internal/crashlog"
 )
+
+// passwordWarnOnce keeps the empty-PASSWORD line to one emission: without
+// it the app's poll loop turns a config error into steady log spam.
+var passwordWarnOnce syncpkg.Once
 
 // IST is the user timezone (UTC+5:30, no DST) as a fixed offset.
 var IST = time.FixedZone("IST", 5*3600+30*60)
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	// nosniff on every JSON body: error text is scrubbed + bounded, but a
+	// sniffed content-type on an error page is still a MIME-confusion
+	// vector for browser-parsed responses.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Challenge on every 401: generic clients key off it, and authorize
+	// below is the only 401 producer in this binary.
+	if status == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="agento"`)
+	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// tokens reads accepted tokens fresh (env may rotate without a restart).
+// tokens reads accepted tokens fresh (env may rotate without a restart
+// in-process — under compose the root .env is baked at container creation,
+// so a PASSWORD edit needs `./scripts/hermes.sh restart` to recreate;
+// without it the app keeps 401ing on the old value).
 func tokens() map[string]bool {
 	out := map[string]bool{}
 	for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {
@@ -48,14 +65,34 @@ func tokens() map[string]bool {
 func authorize(r *http.Request) (int, string) {
 	toks := tokens()
 	if len(toks) == 0 {
-		log.Print("PASSWORD not set — rejecting all requests")
+		// Once, not per request: an empty PASSWORD plus the app's poll
+		// loop would otherwise fill the log with one identical line per
+		// allowed poll, burying the single boot-time signal. A green
+		// /health does NOT contradict this: liveness is exempt from auth
+		// and throttling by design, and the OAuth callback bypasses auth
+		// (the state is the capability) — both still serve. Probe an
+		// auth-bearing route (not /health) for serving readiness.
+		passwordWarnOnce.Do(func() {
+			log.Print("PASSWORD not set — rejecting auth-bearing requests (/health and the OAuth callback still serve)")
+		})
 		return http.StatusServiceUnavailable, "server not configured with tokens"
 	}
+	// Deliberate divergences from the gateway's authenticate, both
+	// health-api-wins and both predating the connector move: an empty
+	// PASSWORD fails closed here (503) instead of opening up, and
+	// comma-separated rotation tokens all work here instead of one.
+	// Both retire with the gateway in #494 — until then the two surfaces
+	// answer differently on empty/multi-token setups, and this side is
+	// the safe one.
 	h := r.Header.Get("Authorization")
-	if h == "" || !strings.HasPrefix(h, "Bearer ") {
+	const bearerPrefix = "Bearer "
+	// Scheme case-insensitive per RFC 7235 (and like the gateway): a
+	// lowercase `bearer` authorizes the same token instead of 401ing a
+	// working credential on hand-tests and generic clients.
+	if len(h) <= len(bearerPrefix) || !strings.EqualFold(h[:len(bearerPrefix)], bearerPrefix) {
 		return http.StatusUnauthorized, "missing bearer token"
 	}
-	got := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	got := strings.TrimSpace(h[len(bearerPrefix):])
 	// Constant-time bearer comparison (#416): map lookup short-circuits
 	// on the first differing byte (timing oracle), so compare against
 	// every accepted token with subtle.ConstantTimeCompare and accumulate
@@ -86,7 +123,11 @@ func recoverCrash(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				route := r.Method + " " + r.URL.EscapedPath()
+				// Decoded Path, not EscapedPath: dispatch, rate limiting,
+				// and every serving log key on it, so triage greps match.
+				// (An encoded spelling lands here exactly as the router
+				// saw it.)
+				route := r.Method + " " + r.URL.Path
 				secrets := []string{}
 				for _, t := range strings.Split(os.Getenv("PASSWORD"), ",") {
 					if t = strings.TrimSpace(t); t != "" {
@@ -94,10 +135,24 @@ func recoverCrash(next http.Handler) http.Handler {
 					}
 				}
 				secrets = append(secrets, os.Getenv("MONGODB_URI"))
+				// OAuth values live in this binary too (connect/exchange/
+				// seal paths): a panic carrying one must not land verbatim
+				// in `logs health-api`. Redaction is pattern-based — see
+				// crashlog.Redact — so append raw and let it scrub.
+				for _, k := range []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URL", "CONNECTORS_ENCRYPTION_KEY"} {
+					if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+						secrets = append(secrets, v)
+					}
+				}
+				// Both halves redacted: the stack goes through Redact, and
+				// so must the panic value — a config echo or exchange error
+				// in `rec` would otherwise bypass the list just built.
 				fmt.Fprintf(os.Stdout, "crash route=%s panic=%v\nstack:\n%s\n",
-					route, rec, crashlog.Redact(string(debug.Stack()), secrets...))
+					route, crashlog.Redact(fmt.Sprintf("%v", rec), secrets...), crashlog.Redact(string(debug.Stack()), secrets...))
+				// `detail` like every other error in this binary (the app
+				// reads `detail`, never `error`, on this service).
 				writeJSON(w, http.StatusInternalServerError,
-					map[string]string{"error": "internal server error"})
+					map[string]string{"detail": "internal server error"})
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -111,6 +166,7 @@ func main() {
 	registerTasks(mux)
 	registerProjects(mux)
 	registerReports(mux)
+	registerConnectors(mux)
 	// Rate limiting wraps everything, and lives here because main is the only place
 	// that knows the whole handler set (#176). The API is network-reachable and
 	// authed by shared password(s), so without a counter a stuck client retrying in
@@ -140,6 +196,15 @@ func main() {
 		// it. The per-handler read budget above covers the abuse case (a stalled
 		// request body) without touching the response.
 	}
+	// Connector boot work is detached: initConnectors() runs in the
+	// background so boot (and /health) never waits on Mongo — a 10s index
+	// budget during an Atlas blip must not hold readiness. Serving uses
+	// the same cached store every verb (lazy per-verb fallback until the
+	// cache lands, then a 60s-budgeted Mongo retry while non-durable),
+	// and the boot lines below may lag "listening" by seconds — poll the
+	// log, don't grep it once.
+	go initConnectors()
+	log.Print("connectors: boot check started (OAuth status line follows)")
 	log.Print("health-api listening on :8000")
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)

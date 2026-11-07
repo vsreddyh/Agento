@@ -141,6 +141,14 @@ func (l *limiter) sweepLocked(now time.Time) {
 
 // peerIsInternal reports whether the immediate TCP peer is on a private or
 // loopback network, i.e. plausibly our own nginx rather than the public internet.
+// "Plausibly" is doing real work here: a direct-LAN/tailnet client is ALSO a
+// private peer, and nothing distinguishes it from the proxy — so the header
+// is trusted for both, and a caller already on the private network CAN pick
+// its own bucket by rotating it. Accepted: reaching this path requires
+// LAN/tailnet presence (the public internet never looks private), and
+// authenticated callers are still separated per token whatever the header
+// says. The unauthenticated paths this affects are liveness-exempt /health
+// and the bounded callback verbs — not data writes.
 func peerIsInternal(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -166,7 +174,13 @@ func peerIsInternal(r *http.Request) bool {
 //
 // So the header is trusted only when the peer is internal, which is true for
 // traffic that came through the compose network and false for a public client
-// hitting the published port directly. Nginx overwrites X-Real-IP with $remote_addr
+// hitting the published port directly — with one known gap: a DIRECT client
+// on a private network (LAN, tailnet) is internal too, and can rotate the
+// header for a fresh bucket per request. That gap is accepted, not
+// overlooked: exploiting it requires private-network presence, and every
+// authenticated verb keys by token instead, so only bearer-less paths
+// (callback) share fate — and they share TOTAL load bounding regardless.
+// Nginx overwrites X-Real-IP with $remote_addr
 // rather than passing the client's value through, which is what makes this safe on
 // our side of the wire.
 func clientIP(r *http.Request) string {
@@ -234,10 +248,15 @@ func sourceKey(r *http.Request) string {
 
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
-	if !strings.HasPrefix(h, "Bearer ") {
+	// Scheme folds like authorize (RFC 7235): the same credential must
+	// land in the same bucket whatever case the client used, or one
+	// spelling shares the unauthenticated bucket while the other gets
+	// its own.
+	const bearerPrefix = "Bearer "
+	if len(h) <= len(bearerPrefix) || !strings.EqualFold(h[:len(bearerPrefix)], bearerPrefix) {
 		return ""
 	}
-	return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	return strings.TrimSpace(h[len(bearerPrefix):])
 }
 
 // shortHash is a stable, non-cryptographic digest. The limiter only needs buckets
@@ -252,10 +271,16 @@ func shortHash(s string) string {
 // rateLimit wraps h with the limiter. Exported-for-test seam: newLimiter takes
 // burst/refill and a clock, so the bucket's behaviour can be asserted without
 // sleeping.
-// exemptPath is the one route the limiter does not touch. EXACT match on purpose:
-// /api/health/sync is a different path and does write data, so a prefix rule here
-// would exempt the wrong thing.
-const exemptPath = "/health"
+// The liveness spellings the limiter does not touch. Exact keys on
+// purpose: /api/health/sync is a different path and does write data, so
+// a prefix rule here would exempt the wrong thing. Bare and
+// trailing-slash both skip: they serve the same static reply
+// (registerHealth), so throttling /health/ while exempting /health would
+// fail the probe for a slash. Scoped to the static-reply methods: the
+// handler 405s anything else, and an exempt-all-methods rule would let
+// an unauthenticated POST flood (arbitrary unread body) bypass the
+// limiter the exemption is justified by.
+var exemptPaths = map[string]bool{"/health": true, "/health/": true}
 
 func rateLimit(l *limiter, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -269,7 +294,7 @@ func rateLimit(l *limiter, h http.Handler) http.Handler {
 		// touches no database, so it adds no load to the thing the limiter exists to
 		// protect. Being unreachable under flood is the one property a liveness probe
 		// must never have.
-		if r.URL.Path == exemptPath {
+		if exemptPaths[r.URL.Path] && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -279,6 +304,17 @@ func rateLimit(l *limiter, h http.Handler) http.Handler {
 				secs = 1
 			}
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			// Dual envelope on the OAuth callback: a Google-redirected
+			// browser tab landing mid-throttle gets the close-this-tab
+			// page like every other callback branch, not raw JSON.
+			// Same trim/fold predicate as the dispatcher, so every
+			// spelling that serves is enveloped.
+			// Everywhere else keeps the service `detail` envelope.
+			if connectorCallbackPath(r.URL.Path) && connectorWantsHTML(r) {
+				connectorCallbackPage(w, http.StatusTooManyRequests, "Agento connect",
+					"Too many requests — slow down and return to the Agento app.")
+				return
+			}
 			writeJSON(w, http.StatusTooManyRequests, bson.M{
 				"detail": "too many requests — slow down and retry after " + strconv.Itoa(secs) + "s",
 			})

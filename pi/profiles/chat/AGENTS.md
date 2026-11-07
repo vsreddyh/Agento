@@ -24,7 +24,7 @@ Batch with `Promise.allSettled()`.
   `summarize`, `fix_last_transaction`, `delete_transactions`, `prune_old`.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),
-  `update_recipe` (only on approval), `scale_recipe` (pure arithmetic),
+  `update_recipe`, `scale_recipe` (pure arithmetic),
   `list_ingredients`, `list_recipes`, `get_recipe`, `list_cooks`,
   `delete_ingredient`, `delete_recipe`.
 - **health-check** (9): `log_meal` takes user-supplied macros only —
@@ -40,19 +40,20 @@ Batch with `Promise.allSettled()`.
 - **project-manager** (5): `create_project`, `list_projects`, `get_project`,
   `update_project`, `delete_project`.
 - **notes** (6): `create_note`, `get_note`, `list_notes`, `search_notes`,
-  `update_note`, `delete_note` (the only gated one).
+  `update_note`, `delete_note` (deletes prompt for confirmation).
 - **reports** (3): `create_report`, `get_report`, `list_reports`. Files the
   ∃-Mail inbox the user reads in the app — markdown with `$..$`/`$$..$$`
   LaTeX, stored verbatim, compiled server-side on read. No update/delete
   tools: those verbs belong to the app, not the filing path.
 - **memory** (2): `save_memory`, `list_memory`. Saves are per-profile facts
-  that start **pending**: the user confirms them on the app's Memory screen
-  before they are injected into a turn, so say what you saved rather than
+  that start **pending** when a database is configured: the user confirms them
+  on the app's Memory screen before they are injected into a turn (ephemeral
+  saves never reach the screen), so say what you saved rather than
   assuming it is remembered. You cannot confirm, edit or delete memory — those
   are the user's verbs; point them at the screen instead of claiming a change.
 - **browser** (4): `browser_goto`, `browser_read`, `browser_screenshot`,
   `browser_save_evidence`. Read-only web tasks with cited evidence: goto
-  holds for approval with the URL shown (every domain is an explicit human
+  prompts for confirmation with the URL shown (every domain is an explicit human
   decision), then read, screenshot and save run free. Save evidence bundles
   PNG + markdown + sources into `exports/browser/` for the Files tab —
   cite those paths and URLs in the answer. No forms, no logins, no passwords
@@ -64,14 +65,16 @@ not resolve, trust `describeNamespace()` over this file.
 ## Destructive operations
 
 Confirm first, stating scope: `delete_transactions`, `delete_meals`,
-`prune_old`, `archive_account`, `delete_recipe` (also removes its cook logs),
-`delete_ingredient`, `delete_task`, `delete_project`. There is no
+`prune_old`, `archive_account`, `create_account`,
+`log_transaction`/`log_text`, `delete_recipe` (also removes its cook logs),
+`delete_ingredient`, `delete_task`, `delete_project`, `delete_note`. There is no
 `delete_cook`; say so instead of reaching for it.
 
 Reads (`list_*`, `get_*`, `query_*`, `summarize`, `daily_summary`,
 `get_balances`, `scale_recipe`) need no confirmation. `fix_last_*` updates
-the most recent row in place: do it when the user just asked for a
-correction, without re-asking.
+the most recent row in place: the harness prompts first (opencode.json
+`*fix_last*: ask`), so state the correction when it asks instead of
+claiming none is needed.
 
 ## Interaction
 

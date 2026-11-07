@@ -13,8 +13,10 @@ import (
 )
 
 // requestIdentity hashes the request's network + client markers for the
-// audit log: enough to tell two devices apart across the 90-day trail,
-// not enough to recover either value from the log.
+// gateway log line: enough to tell two devices apart in container logs,
+// not enough to recover either value. Log-only — it is never persisted
+// to the audit row (AuditEntry has no device field), so per-device triage
+// over the 90-day trail is impossible; read gateway logs instead.
 func requestIdentity(r *http.Request) string {
 	h := sha256.Sum256([]byte(r.RemoteAddr + "\x00" + r.UserAgent()))
 	return hex.EncodeToString(h[:])[:16]
@@ -26,13 +28,15 @@ func requestIdentity(r *http.Request) string {
 // and changing one must not silently change the other's 404 contract.
 const maxApprovalIDLen = 64
 
-// This file is the approval-gate half of the chat surface (#313).
+// This file is the approval-gate half of the chat surface (#313,
+// pre-migration record).
 //
-// The in-process gate (internal/approvalgate, ADR-0011 Stage 2) holds
-// sensitive tool calls as pending approvals; this API is how the app lists
-// them, decides them, and reads the audit trail. The gateway keeps no live
-// state here — decisions are store writes the servers poll for, so any
-// gateway process serves them identically.
+// Before #487 the in-process gate (internal/approvalgate, ADR-0011 Stage 2)
+// held sensitive tool calls as pending approvals; this API is how the app
+// listed them, decided them, and read the audit trail. Nothing new parks
+// anymore — the list below only ever shows pre-migration rows, and the
+// approve/deny verbs only touch those. The gateway keeps no live state
+// here.
 //
 //	GET  /api/approvals            list, filterable by status
 //	POST /api/approvals/{id}/approve | deny
@@ -149,14 +153,15 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 			out = append(out, approvalWire(a))
 		}
 		resp := map[string]any{"approvals": out}
-		// Split-brain signal: when the gateway and the servers hold different
-		// in-process stores, no decision made here can ever reach a held
-		// call — the turn would hang the full hold and fail closed. The app
-		// banners this instead of showing a queue that can never decide.
-		// (Failing the holds fast lives in approvalgate; this flag is what lets
-		// the app tell "empty" from "undecidable".)
+		// Split-brain signal, pre-migration meaning only: when the gateway
+		// and the servers held different in-process stores, no decision
+		// made here could ever reach a held call. Post-#487 nothing parks,
+		// so this flag only ever describes pre-migration rows — a live
+		// sensitive call is decided via the harness prompt, never here.
+		// (Failing the old holds fast lived in approvalgate; this flag is
+		// what let the app tell "empty" from "undecidable".)
 		if !s.approvals.Shared() {
-			resp["degraded"] = "approval store is not shared across processes; gated calls cannot be decided"
+			resp["degraded"] = "approval store is not shared across processes; pre-migration approvals cannot be decided here"
 		}
 		writeJSONResponse(w, http.StatusOK, resp)
 		return
@@ -183,10 +188,10 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		// decided_by stays "app" (single-PASSWORD deployment: one principal),
-		// but the 90-day audit row should still say which device decided. A
-		// hash of IP + User-Agent distinguishes devices without storing
-		// either verbatim in the log.
+		// decided_by stays "app" (single-PASSWORD deployment: one principal).
+		// The hash below is log-only triage (AuditEntry has no device
+		// field): it distinguishes devices in container logs without
+		// storing either value verbatim anywhere.
 		s.cfg.Logf("approvals: %s %s decided by client %s", action, id, requestIdentity(r))
 		a, err := s.approvals.DecideApproval(ctx, id, action == "approve", "app", time.Now())
 		if err != nil {
@@ -209,7 +214,8 @@ func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request, rest st
 		"unknown path "+bounded(r.URL.Path))
 }
 
-// handleAudit serves /api/audit: the read-only trail of every gated call.
+// handleAudit serves /api/audit: the read-only trail of every executed
+// call, reads included.
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, rest string) {
 	path := strings.TrimPrefix(rest, "api/audit")
 	path = strings.TrimPrefix(path, "/")

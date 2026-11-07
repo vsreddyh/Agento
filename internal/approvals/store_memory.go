@@ -119,7 +119,8 @@ func (m *MemoryStore) DecideApproval(_ context.Context, id string, approved bool
 }
 
 // TimeoutApproval flips a still-pending approval expired; decided rows are
-// left alone so a human decision always wins over the timer.
+// left alone so a human decision always wins over the timer. Pre-migration
+// only: no live caller remains post-#487.
 func (m *MemoryStore) TimeoutApproval(_ context.Context, id string, at time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

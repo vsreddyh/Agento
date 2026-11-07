@@ -21,7 +21,7 @@ crash-loop, usually `MONGODB_URI` unset.
 
 ## Host-side (repo root on the VPS)
 
-Services: `pi` (8643) · `health-api` (8001) · `proxy` (8080, app URL) ·
+Services: `pi` (8643 compose default — `PI_HOST_PORT` remaps) · `health-api` (8001 compose default — `HEALTH_HOST_PORT` remaps) · `proxy` (8080 compose default — `APP_PORT` remaps, app URL) ·
 `retention` (one-shot). No `gateway` service.
 
 ```bash
@@ -45,7 +45,9 @@ there is no `.env` in-container.
 
 - Inspection safe, mutation not: `start|stop|restart|init|clean`, recreating
   containers, editing live `.env` — ask first, every time.
-- After compose changes, `up -d` alone does not recreate: `ps`, `podman rm -f
-  <container-name>`, `up -d pi`. Keep the explicit `-f`.
+- After compose changes, `up -d` alone does not recreate (a rebuild silently
+  keeps the OLD container — the no-op-deploy trap): `up -d --build
+  --force-recreate` (plain `up -d` only with `PI_NO_BUILD=1`), or just
+  `scripts/hermes.sh restart`. Keep the explicit `-f`.
 - `podman-compose` cannot parse `condition:` in `depends_on` — short list form only.
 - Never `cat`/`echo` `PASSWORD` or `OPENCODE_API_KEY`, never commit them.

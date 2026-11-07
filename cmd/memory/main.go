@@ -9,10 +9,12 @@
 // actually said. A memory the model invented is worse than no memory, because
 // it is invisible and wrong.
 //
-// Every item written here starts pending. The gateway only injects confirmed
-// items, so a proposal is visible in the app for the user to confirm, edit or
-// delete before it can steer an answer. The agent cannot confirm its own
-// proposals, and it cannot delete items: deletion is the user's verb.
+// Every item written here starts pending when a database is configured.
+// The gateway only injects confirmed items, so a proposal is visible in
+// the app for the user to confirm, edit or delete before it can steer an
+// answer (ephemeral saves never reach the screen — see the note below).
+// The agent cannot confirm its own proposals, and it cannot delete items:
+// deletion is the user's verb.
 package main
 
 import (
@@ -171,7 +173,9 @@ func main() {
 
 	// Gate shares the domain store's client when there is one
 	// (ADR-0011 Stage 2). Ephemeral (no Mongo): the gate is unshared, so
-	// gated tools deny fail-closed (gate_unavailable audit).
+	// calls run with an in-memory audit trail that dies with the
+	// process — the server stays up instead of taking the entrypoint
+	// gate down with it.
 	var gate approvals.Store = approvals.NewMemoryStore()
 	if ms, ok := store.(*memory.MongoStore); ok {
 		gate = approvals.NewOn(ms.DB())
@@ -181,7 +185,7 @@ func main() {
 
 	approvalgate.AddTool(s, "memory", gate, &mcp.Tool{Name: "save_memory",
 		Description: "Remember ONE durable thing the user explicitly told you: a preference, a format rule, a correction, a fact about their life or work. Write it in their terms (" +
-			"\"wants weekly reports as a table\", not \"likes tables\"). The item is saved as PENDING and shown in the app; the user confirms it before it affects answers. " +
+			"\"wants weekly reports as a table\", not \"likes tables\"). With a database configured the item is saved as PENDING and shown in the app; the user confirms it before it affects answers (ephemeral saves never reach the screen). " +
 			"Call this when they correct you or state a lasting preference, not for passing context or anything they have not said. Do not save secrets, credentials or one-off details."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in saveMemoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			item, truncated, errMsg := prepareSave(profile, in)
@@ -229,9 +233,10 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(items), "items": items, "persistent": !ephemeral})
 		})
 
-	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
-	// between CreateApproval and decision leaves a pending row no live
-	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	// Sweep pre-migration orphaned holds (ADR-0011 Stage 2): before #487 a crash
+	// between CreateApproval and decision left a pending row no live holder
+	// polled. Nothing new parks, so this only expires rows predating the
+	// migration. Scoped by server, like the old relay sweep; best-effort.
 	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if _, serr := gate.MarkServerInterrupted(sweepCtx, "memory", time.Now()); serr != nil {
 		log.Printf("memory: startup sweep failed: %v", serr)

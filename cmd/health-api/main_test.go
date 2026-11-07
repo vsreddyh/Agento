@@ -17,6 +17,35 @@ func TestHealth(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"status":"ok"`) {
 		t.Fatalf("got %s", w.Body.String())
 	}
+	// Liveness answers GET and HEAD only, like the gateway's handleHealth.
+	req = httptest.NewRequest(http.MethodPost, "/health", nil)
+	w = httptest.NewRecorder()
+	health(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post: got %d, want 405", w.Code)
+	}
+	if allow := w.Header().Get("Allow"); allow != "GET, HEAD" {
+		t.Fatalf("post Allow: got %q", allow)
+	}
+}
+
+// The trailing-slash spelling serves the same static reply through the
+// mux — an exact-only registration would answer Go's text/plain 404 with
+// no detail envelope for a natural copy-paste probe.
+func TestHealthTrailingSlashRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	registerHealth(mux)
+	for _, target := range []string{"/health", "/health/"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: got %d (%s), want 200", target, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), `"status":"ok"`) {
+			t.Fatalf("%s: got %s", target, w.Body.String())
+		}
+	}
 }
 
 func TestAuthorize(t *testing.T) {
@@ -37,6 +66,17 @@ func TestAuthorize(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-secret-12345679")
 	if code, _ := authorize(req); code != http.StatusUnauthorized {
 		t.Fatalf("same-length wrong token: got %d", code)
+	}
+	// Scheme folds like the gateway: a lowercase bearer authorizes.
+	req.Header.Set("Authorization", "bearer test-secret-12345678")
+	if code, _ := authorize(req); code != 0 {
+		t.Fatalf("lowercase bearer: got %d", code)
+	}
+	// 401s carry the challenge for generic clients.
+	w := httptest.NewRecorder()
+	writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "x"})
+	if got := w.Header().Get("WWW-Authenticate"); got != `Bearer realm="agento"` {
+		t.Fatalf("challenge: got %q", got)
 	}
 }
 
@@ -304,5 +344,42 @@ func TestProjectFieldValidation(t *testing.T) {
 		if w := post("/api/projects", body); w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%s: got %d (%s)", body, w.Code, w.Body.String())
 		}
+	}
+}
+
+// Sync answers POST only: a wrong method names the route with Allow,
+// like the neighbouring handlers — and auth runs first, like every
+// other authed verb in this binary.
+func TestSyncMethodGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	req := httptest.NewRequest(http.MethodGet, "/api/health/sync", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get: got %d (%s), want 405", w.Code, w.Body.String())
+	}
+	if allow := w.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow: got %q, want POST", allow)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "/api/health/sync accepts POST") {
+		t.Fatalf("405 must name the route, got %s", body)
+	}
+}
+
+// Sync client errors stay scrubbed + bounded, never raw driver/text:
+// the decode error echoes client bytes and the store errors carry
+// topology internals, while the app renders `detail` as-is.
+func TestSyncInvalidJSONScrubbed(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	req := httptest.NewRequest(http.MethodPost, "/api/health/sync", strings.NewReader("{oops"))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad json: got %d (%s)", w.Code, w.Body.String())
+	}
+	if body := w.Body.String(); !strings.Contains(body, "invalid JSON") {
+		t.Fatalf("422 must name invalid JSON, got %s", body)
 	}
 }

@@ -207,7 +207,8 @@ func TestSourceKeyDoesNotRetainTheToken(t *testing.T) {
 // WITHOUT nginx and can set X-Real-IP to anything. Trusting the header
 // unconditionally would let any caller defeat the limiter by rotating one header —
 // which is the difference between a rate limit and decoration. These pin the trust
-// boundary: the header is believed only from an internal peer.
+// boundary: the header is believed only from an internal peer (compose network
+// AND direct-LAN/tailnet — see peerIsInternal for the accepted gap there).
 func TestSourceKeyIgnoresForwardedHeadersFromAPublicPeer(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	r.RemoteAddr = "203.0.113.9:5555" // PUBLIC client, straight at the published port
@@ -390,5 +391,25 @@ func TestValidTokensStillGetSeparateBudgets(t *testing.T) {
 	// And the key must not retain the secret itself.
 	if strings.Contains(app, "app-password") {
 		t.Errorf("the bucket key holds the password verbatim: %q", app)
+	}
+}
+
+// Scheme case must not split one credential across buckets: `bearer`
+// authorizes like `Bearer` (RFC 7235, like authorize), so the limiter
+// must fold it the same way instead of dropping it to the host bucket.
+func TestBearerSchemeCaseFoldsIntoBucket(t *testing.T) {
+	t.Setenv("PASSWORD", "app-password")
+	mk := func(scheme, token string) string {
+		r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		r.RemoteAddr = "203.0.113.9:5555"
+		r.Header.Set("Authorization", scheme+" "+token)
+		return sourceKey(r)
+	}
+	upper, lower := mk("Bearer", "app-password"), mk("bearer", "app-password")
+	if upper != lower {
+		t.Errorf("scheme case split one credential across buckets: %q vs %q", upper, lower)
+	}
+	if lower == "203.0.113.9" {
+		t.Error("lowercase bearer fell to the host-only bucket")
 	}
 }

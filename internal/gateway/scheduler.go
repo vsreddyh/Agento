@@ -18,8 +18,8 @@ const schedulerProfileName = "chat"
 
 // FireSchedulerJob runs one job as a turn on the chat agent (#331): the fire
 // becomes a labelled conversation turn in the recurring scheduler thread,
-// with the agent's tools (notes, fetch) available, instead of a bare
-// one-prompt model call with no persona and no tools.
+// with the agent's free-read tools (notes, list/query lookups) available,
+// instead of a bare one-prompt model call with no persona and no tools.
 //
 // It returns the reply text and the agent run id. The run lives in the Runs
 // list under the scheduler conversation, and the worker stores the run id on
@@ -36,10 +36,13 @@ const schedulerProfileName = "chat"
 // fire must not repoint the profile's running model behind the user's back.
 // It runs whatever the profile already runs, at its current level.
 //
-// Unattended tool policy is prompt-level (see cronjobs.SchedulerPrompt): the
-// gateway cannot enforce read-only any other way — gated calls are held by
-// the in-process gate, which waits on a human that is not there. The TurnTimeout still
-// bounds a turn that attempts one anyway.
+// Unattended tool policy is prompt-level (see cronjobs.SchedulerPrompt):
+// a scheduler fire has no human watching, so sensitive writes cannot
+// prompt — the instruction is the only enforcement, and it must keep
+// fires to reads. Pre-#487 the backstop was a 14-minute hold with nobody
+// to decide it; post-#487 a fire that attempts a sensitive write executes
+// at once after no prompt at all. TurnTimeout bounds the model turn, never
+// a gate wait.
 //
 // The context is intentionally unread (named _): the turn detaches like the
 // chat path — a scheduler fire must outlive the tick that started it — and

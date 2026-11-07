@@ -1,6 +1,11 @@
 # 0005 — Browser tasks
 
-Status: accepted (#312, server half)
+Status: accepted (#312, server half). T3-era note (#487, 2026-11):
+confirmation is a harness permission prompt per navigation, not an
+in-process hold — nothing ever parks. Read "holds for approval" /
+"human-approved" / "approval-gated" below as the prompt with the URL
+shown, and "fail fast without it" as ephemeral-unaudited operation. Do
+not run the hold flow as a live runbook.
 
 ## Context
 
@@ -96,10 +101,12 @@ diverge from it; retention's pruning covers the same collections.
 ### Fallback honesty
 
 Without Mongo nothing here changes: the browser server keeps no database
-state (sessions are files, evidence is files), and approvals still gate
-through the shared store or fail fast without it. Chromium missing fails
-the first tool call loudly rather than parking an approval for a browser
-that can never start.
+state (sessions are files, evidence is files). Pre-#487 approvals gated
+through the shared store or failed fast without it; post-#487 navigation
+runs with an ephemeral audit trail that dies with the process, never
+blocked. Chromium missing fails
+the first tool call loudly rather than prompting for a navigation that can
+never start.
 
 ## Non-goals
 

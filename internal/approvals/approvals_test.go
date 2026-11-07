@@ -54,7 +54,10 @@ func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
 			t.Errorf("%s/%s should run free", tc[0], tc[1])
 		}
 	}
-	// A counting prune changes nothing.
+	// A counting prune changes nothing — in the policy record. Note the
+	// enforcement gap: the gate never consults args post-#487 and harness
+	// patterns cannot see them either, so a counting prune prompts in T3
+	// like a real one despite this false below.
 	if NeedsApproval("miser-money", "prune_old", map[string]any{"dry_run": true}) {
 		t.Error("dry-run prune should run free")
 	}
@@ -73,7 +76,7 @@ func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
 // renames a tool updates `known` HERE in the same change, exactly as it
 // updates gatedTools. Without both, the test only checks the two hardcoded
 // copies against each other. Runtime stays safe regardless (an unknown tool on
-// a known server holds), so forgetting yields a test that under-reports, never
+// a known server is denied at once), so forgetting yields a test that under-reports, never
 // an ungated write.
 func TestPolicyTableIsComplete(t *testing.T) {
 	known := map[string][]string{
@@ -414,7 +417,9 @@ func TestStoresRedactOnWrite(t *testing.T) {
 }
 
 // A server restart expires only its own server's queue: all servers share one
-// collection, and one restarting must not kill another's live hold.
+// collection, and one restarting must not touch another's rows (pre-#487:
+// must not kill another's live hold; post-#487 only pre-migration rows can
+// be pending at all).
 func TestMarkServerInterruptedIsScoped(t *testing.T) {
 	ctx := context.Background()
 	m := NewMemoryStore()
@@ -445,7 +450,7 @@ func TestNeedsApprovalCaseInsensitive(t *testing.T) {
 		t.Error("Gmail/Search_Gmail should run free like gmail/search_gmail")
 	}
 	if !NeedsApproval("GMAIL", "SEND_MESSAGE", nil) {
-		t.Error("GMAIL/SEND_MESSAGE should hold like gmail/send_message")
+		t.Error("GMAIL/SEND_MESSAGE should stay sensitive like gmail/send_message")
 	}
 	if !KnownServer("Gmail") {
 		t.Error("KnownServer(Gmail) should be true")

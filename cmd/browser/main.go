@@ -10,9 +10,10 @@
 // be pasted — a login wall stops the task with a report instead), buying
 // things, or fetching from non-public addresses (fail closed, see checkURL).
 //
-// Every navigation holds for approval (the policy table gates browser_goto):
-// the human approves each domain with the URL in front of them. Reads,
-// screenshots and evidence saves run free once the page is approved.
+// Every navigation is sensitive (the policy table marks browser_goto):
+// the human approves each domain with the URL in front of them, via the
+// harness permission prompt. Reads, screenshots and evidence saves run
+// free once the navigation was approved.
 package main
 
 import (
@@ -106,11 +107,11 @@ func checkURL(raw string) (*url.URL, error) {
 	if scheme != "http" && scheme != "https" {
 		return nil, fmt.Errorf("only http and https urls are allowed, not %q", u.Scheme)
 	}
-	// Normalize in place: what the gate approved matches what Chromium
-	// dials and what the audit log records, modulo URL case (the audit keeps
-	// the raw arg, Chromium gets the lowercased scheme).
+	// Normalize in place: what the harness-prompted URL approved matches
+	// what Chromium dials and what the audit log records, modulo URL case
+	// (the audit keeps the raw arg, Chromium gets the lowercased scheme).
 	u.Scheme = scheme
-	// Web ports only: the approval gate is per-domain, not per-port, and a
+	// Web ports only: prompts are per-domain, not per-port, and a
 	// https://host:22/ URL would otherwise buy a raw TCP tunnel the human
 	// never approved as anything but a web page.
 	if port := u.Port(); port != "" && port != "80" && port != "443" {
@@ -491,7 +492,7 @@ func launchBrowser(dir, chrome string) (bctx context.Context, btabCancel context
 	browser, browserCancel := chromedp.NewContext(alloc)
 	// Prove launch now, not on the first approved navigation: a missing
 	// chromium binary must fail the tool call that needs it, loudly, rather
-	// than parking an approval for a browser that can never start.
+	// than prompting for a navigation that can never start.
 	if err := chromedp.Do(browser, chromedp.Navigate("about:blank")); err != nil {
 		cancel()
 		ln.Close()
@@ -510,8 +511,8 @@ func (s *session) shotPath() string {
 }
 
 type gotoInput struct {
-	// Full http(s) URL. Holds for approval with this URL in front of the
-	// human; public addresses only (see checkURL).
+	// Full http(s) URL. Sensitive with this URL in front of the
+	// human at prompt time; public addresses only (see checkURL).
 	URL string `json:"url"`
 }
 
@@ -563,14 +564,16 @@ func main() {
 	store = &sessions{byProfile: map[string]*session{}, agentDir: agentDir, chrome: chrome}
 
 	// Browser holds no domain store, so the gate gets the process's one
-	// Mongo client (ADR-0011 Stage 2): approvals + audit need a shared
+	// Mongo client (ADR-0011 Stage 2): the audit trail needs a shared
 	// store, and this is the only dial in the process. Without Mongo the
-	// gate is unshared, like memory's ephemeral mode: reads run, goto
-	// denies fail-closed with audit — the server stays up instead of
-	// taking the entrypoint gate down with it.
+	// gate is unshared, like memory's ephemeral mode: everything runs
+	// with an in-memory audit trail that dies with the process — the
+	// server stays up instead of taking the entrypoint gate down with
+	// it. (This server goes away with #495; until then, treat a missing
+	// database as unaudited navigation, not blocked navigation.)
 	var gate approvals.Store = approvals.NewMemoryStore()
 	if _, db, err := mongostore.Open(mongostore.Env()); err != nil {
-		log.Printf("browser: no database, gated tools will deny: %v", err)
+		log.Printf("browser: no database, audit trail is ephemeral (unaudited on restart): %v", err)
 	} else {
 		gate = approvals.NewOn(db)
 	}
@@ -578,7 +581,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "browser", Version: "1.0.0"}, nil)
 
 	approvalgate.AddTool(s, "browser", gate, &mcp.Tool{Name: "browser_goto",
-		Description: "Open a page in the profile's persistent browser. Public http(s) only; login walls stop the call with a report (v1 cannot fill forms, so no password is ever pasted). Holds for approval with the URL shown."},
+		Description: "Open a page in the profile's persistent browser. Public http(s) only; login walls stop the call with a report (v1 cannot fill forms, so no password is ever pasted). Sensitive: the harness prompts with the URL shown."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in gotoInput) (*mcp.CallToolResult, map[string]any, error) {
 			u, err := checkURL(in.URL)
 			if err != nil {
@@ -789,9 +792,10 @@ func main() {
 			return result(map[string]any{"ok": true, "dir": dir, "files": files})
 		})
 
-	// Sweep this server's orphaned holds (ADR-0011 Stage 2): a crash
-	// between CreateApproval and decision leaves a pending row no live
-	// holder polls. Scoped by server, like the old relay sweep; best-effort.
+	// Sweep pre-migration orphaned holds (ADR-0011 Stage 2): before #487 a crash
+	// between CreateApproval and decision left a pending row no live holder
+	// polled. Nothing new parks, so this only expires rows predating the
+	// migration. Scoped by server, like the old relay sweep; best-effort.
 	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if _, serr := gate.MarkServerInterrupted(sweepCtx, "browser", time.Now()); serr != nil {
 		log.Printf("browser: startup sweep failed: %v", serr)

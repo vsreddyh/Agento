@@ -3,6 +3,7 @@ package main
 // Health sync + status: payload types, the /health probe and the sync endpoint (#171).
 
 import (
+	"agento/internal/approvals"
 	"agento/internal/mongo"
 	"context"
 	"encoding/json"
@@ -76,7 +77,16 @@ func minutesBetween(startISO, endISO string) (dur int, ok bool) {
 	return m, true
 }
 
-func health(w http.ResponseWriter, _ *http.Request) {
+func health(w http.ResponseWriter, r *http.Request) {
+	// Liveness answers GET and HEAD only, like the gateway's handleHealth:
+	// a 200 to POST would misstate the contract when compared across
+	// services, and the limiter exempt below stays narrow to the static
+	// reply. HEAD carries headers only; net/http suppresses the body.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "GET or HEAD only"})
+		return
+	}
 	writeJSON(w, http.StatusOK, bson.M{"status": "ok"})
 }
 
@@ -84,17 +94,25 @@ func health(w http.ResponseWriter, _ *http.Request) {
 // Override with EXPORTS_DIR; served read-only, subfolders allowed.
 
 func sync(w http.ResponseWriter, r *http.Request) {
+	// Auth first, like every other authed verb in this binary (list,
+	// item, fallback): an unauthenticated mistype 401s instead of
+	// leaking the method contract — the Allow below is for authed
+	// triage, matching the neighbouring handlers.
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "method not allowed"})
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "/api/health/sync accepts POST"})
 		return
 	}
 	var p HealthSyncPayload
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 5<<20)).Decode(&p); err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + err.Error()})
+		// Scrubbed + bounded like every connector surface: the decode
+		// error echoes client body bytes verbatim, and the app renders
+		// `detail` as-is.
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + connectorBounded(approvals.ScrubError(err.Error()))})
 		return
 	}
 	if len(p.Sleep) > 100 {
@@ -126,7 +144,9 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(update) > 1 {
 		if _, err := days.UpdateOne(ctx, bson.M{"date": statsDate}, bson.M{"$set": update}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": err.Error()})
+			// Scrubbed + bounded, never the raw driver text (topology/
+			// dial internals the app would render and triage would miss).
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
 			return
 		}
 	}
@@ -144,7 +164,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 			"$push": bson.M{"sleep_sessions": bson.M{"start": s.StartISO, "minutes": s.TotalMinutes}},
 			"$set":  bson.M{"updatedAt": now},
 		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": err.Error()})
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
 			return
 		}
 	}
@@ -172,7 +192,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 			"$push": bson.M{"workouts": wdoc},
 			"$set":  bson.M{"updatedAt": now},
 		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": err.Error()})
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
 			return
 		}
 	}
@@ -196,6 +216,11 @@ func upsert() *options.UpdateOptions {
 // registerHealth wires this domain's routes. One function per file so main stays a
 // list of domains, not a list of paths (#171).
 func registerHealth(mux *http.ServeMux) {
+	// Both spellings: the probe is hand-curled with and without the
+	// slash, and an exact-only registration answers the other with Go's
+	// text/plain 404 (no detail envelope). The handler ignores the
+	// request, so the alias serves identically.
 	mux.HandleFunc("/health", health)
+	mux.HandleFunc("/health/", health)
 	mux.HandleFunc("/api/health/sync", sync)
 }

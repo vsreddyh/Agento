@@ -209,8 +209,9 @@ func (c *Client) Get(ctx context.Context, calendarID, id string) (*Event, error)
 }
 
 // DraftEvent is an agent-side draft: validated and normalised, sent
-// nowhere. The agent presents it to the user; actual creation waits for the
-// approval-gate flow that covers calendar writes.
+// nowhere. The agent presents it to the user; actual creation never
+// happens through tools in v1 (create_event/send_invite are refused
+// outright) — the user confirms in their own calendar.
 type DraftEvent struct {
 	Summary     string   `json:"summary"`
 	Description string   `json:"description,omitempty"`

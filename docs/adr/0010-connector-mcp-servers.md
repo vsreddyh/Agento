@@ -1,6 +1,11 @@
 # ADR-0010: Connector MCP servers (Gmail, Calendar)
 
-- Status: accepted (2026-10, first connectors)
+- Status: accepted (2026-10, first connectors). T3-era note (#487,
+  2026-11): the "approval-gate flow" passages below describe a release
+  path that never arrived — sends refuse outright, permanently for v1,
+  and confirmation is a harness prompt, not a hold. Read "waits for the
+  approval-gate flow" as "has no tool path" and "gated backstop" as
+  at-once denial. Do not run the hold flow as a live runbook.
 - Issue: #316 (follow-up to ADR-0009, stacked on #367)
 
 ## Context
@@ -30,8 +35,8 @@ Gmail and Calendar APIs with the stored grant:
   same shape as gmail sends.
 
 Tool names match `approvals.gatedTools` and `connectors.IsDraftOnlySend`
-exactly: a renamed tool would miss the refusal and fall through to the
-gated backstop (fail-closed, but the wrong UX). The scope-correspondence
+exactly: a renamed tool would miss the refusal and fall through to at-once
+denial (fail-closed, but the wrong UX). The scope-correspondence
 obligation from #367 extends here — if a server needs a broader Google
 scope, the OAuth table, the tool policy, and this ADR move together.
 
@@ -61,6 +66,6 @@ works grant-less.
 - Reads stay ungated (`false`); sends refuse (`IsDraftOnlySend`); the
   gated `true` rows stay as the backstop for gate bypass.
 - Calendar writes still have no path: `create_event_draft` presents, the
-  agent does not create. Actual creation waits for the approval-gate
-  flow that covers calendar writes (still a follow-up, like the app
-  Connect screen and per-grant audit rows).
+  agent does not create. Actual creation has no tool path in v1 (sends
+  refuse outright), unlike the app Connect screen and per-grant audit rows
+  which remain follow-ups.

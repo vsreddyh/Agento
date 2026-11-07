@@ -14,8 +14,9 @@
 // back to memory that cannot meet — same contract as approvals: the list
 // still answers, but nothing survives a restart.
 //
-// Draft-only (v1): Gmail/Calendar send paths stay refused until the
-// approval-gate flow covers them. An attempted send is refused with a clear
+// Draft-only (v1): Gmail/Calendar send paths stay refused, permanently
+// for v1 — there is no approval flow left that could release them (a T3
+// `ask` approval still refuses). An attempted send is refused with a clear
 // message naming drafts as the supported path, not silently gated.
 package connectors
 
@@ -232,8 +233,8 @@ func TrimCredential(s string) string {
 }
 
 // IsDraftOnlySend reports whether (server, tool) is a send path that v1
-// refuses outright. Draft tools run (free or gated); send tools
-// never reach the server — the gate answers Pi with RefusalMessage.
+// refuses outright. Draft tools run (free or sensitive); send tools
+// never reach the server — the gate answers the harness with RefusalMessage.
 //
 // Case-insensitive on both parts: the server id is the code literal each
 // binary registers with, and an exact-case match would let a "Gmail"
@@ -243,8 +244,8 @@ func TrimCredential(s string) string {
 // Follow-up obligation: keep this list in sync with the wired servers'
 // real tool names. Pinned by TestIsDraftOnlySendMatchesServers alongside
 // the scope test — a renamed tool fails loudly instead of silently
-// missing the refusal and falling through to the gated backstop
-// (fail-closed: holds for approval instead of refusing with the draft
+// missing the refusal and falling through to the policy backstop
+// (fail-closed: denied at once instead of refusing with the draft
 // message). Safe, but a UX divergence worth a sync check when the
 // connector MCP servers land.
 func IsDraftOnlySend(server, tool string) bool {
@@ -257,20 +258,21 @@ func IsDraftOnlySend(server, tool string) bool {
 	if len(server) > MaxConnectorIDLen {
 		// Unknown by construction: Known length-checks first, so an
 		// oversized server can never be a known id — fall through to the
-		// gated backstop like any other unknown name. No Known() call
-		// here: it could never return true, and calling it would imply
-		// the branch is live for some input.
+		// policy backstop like any other unknown name (at-once denial).
+		// No Known() call here: it could never return true, and calling
+		// it would imply the branch is live for some input.
 		return false
 	}
 	if len(tool) > maxToolNameLen {
 		// Oversized tools fall through like oversized servers: a garbage
-		// tool name can never be a real send path, and the gated backstop
-		// (approval hold) is the honest answer — not a refusal text naming
+		// tool name can never be a real send path, and the policy backstop
+		// (at-once denial) is the honest answer — not a refusal text naming
 		// a draft workflow for a tool that cannot exist. Unknown by
 		// construction, like servers: length fails before identity, so no
 		// Known() call here either. A future legit upstream tool longer
-		// than this cap flips from gated to gated (not gated to refused),
-		// so widening the cap stays a UX change, never a security one.
+		// than this cap flips from draft-refusal to unknown-denial (both
+		// deny with different messages), so widening the cap stays a UX
+		// change, never a security one.
 		return false
 	}
 	server = NormalizedID(server)
@@ -283,7 +285,7 @@ func IsDraftOnlySend(server, tool string) bool {
 	// against renames. NormalizedID already trimmed the edges, so any
 	// separator folded here is interior by construction. Covered set:
 	// "-", ".", " ", "/", ":", "+", "\\" — any other separator falls to
-	// the gated backstop by design. Runs collapse: "send--message" folds
+	// the policy backstop by design. Runs collapse: "send--message" folds
 	// to the same single-underscore form instead of a "send__message"
 	// that matches nothing — punctuation repetition never changes identity.
 	for _, sep := range []string{"-", ".", " ", "/", ":", "+", "\\"} {
@@ -307,9 +309,9 @@ func IsDraftOnlySend(server, tool string) bool {
 	return false
 }
 
-// RefusalMessage is what Pi sees when a draft-only connector is asked to
-// send. It names the supported path (drafts) so the turn continues usefully
-// instead of dying on a bare denial.
+// RefusalMessage is what the harness sees when a draft-only connector is
+// asked to send. It names the supported path (drafts) so the turn continues
+// usefully instead of dying on a bare denial.
 const RefusalMessage = "sending is disabled for this connector in v1; create a draft instead and let the user send it"
 
 // StoreError is the domain error the HTTP layer maps onto status codes.

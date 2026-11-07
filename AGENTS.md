@@ -39,7 +39,7 @@ Atlas. No host agent install, no native processes.
 chat
    └─► ONE `pi` container (PI_CODING_AGENT_DIR=/opt/pi = pi/, one pi process for the profile)
         └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.6-flash)
-proxy (:8080, single app URL: /p/* → pi chat, /api/* → health sync)  •  health-api (:8001)
+proxy (:8080 compose default — `APP_PORT` remaps the host side, single app URL: /p/* → pi chat, /api/* → health sync)  •  health-api (:8001 compose default — `HEALTH_HOST_PORT` remaps)
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired story/resumes checkouts, unmanaged)
 ```
@@ -55,7 +55,7 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   a thin Podman orchestrator over `docker/docker-compose.yml`. No host installs.
   `init` self-installs the host tools it needs: **podman + compose, curl,
   python3, cron** (only git + sudo must pre-exist). Container harness only —
-  `init` never installs the opencode CLI. health-api (:8001) binds `0.0.0.0` inside its container.
+  `init` never installs the opencode CLI. health-api (:8001 compose default — `HEALTH_HOST_PORT` remaps) binds `0.0.0.0` inside its container.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`podman-compose run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;
@@ -81,7 +81,7 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
    silently falls back empty/default).
 - LLM: direct to OpenCode (`https://opencode.ai/zen/go/v1`, model `mimo-v2.6-flash`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` goes to OpenCode Go.
 - App API: `pi-gateway` (`cmd/pi-gateway`), the OpenAI-compatible server in the pi
-  container (`:8643`, single-password `PASSWORD`); one port, the app's Chat tab uses
+  container (`:8643` compose default — `PI_HOST_PORT` remaps the host side, single-password `PASSWORD`); one port, the app's Chat tab uses
   profile path (`/p/chat`) and sends per-request provider `opencode-go` +
   model from app Settings, plus `model_options.reasoning_effort` (required — Pi
   accepts an unrecognised level silently). Provider key lives only in the VPS

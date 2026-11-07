@@ -10,7 +10,7 @@ import (
 
 // The AddTool server literal must be this binary's id and known to the
 // policy table: a typo fails closed silently (every tool on this server
-// holds), so pin it here rather than relying on the startup warning
+// is denied at once), so pin it here rather than relying on the startup warning
 // alone. Same pin as the other servers' policy tests.
 func TestGateServerLiteralPinned(t *testing.T) {
 	raw, err := os.ReadFile("main.go")
@@ -39,7 +39,7 @@ func TestGateServerLiteralPinned(t *testing.T) {
 		t.Fatalf("startup sweep literal = %v, want exactly one for \"reports\"", sweeps)
 	}
 	// Registration set must equal the policy-table keys: a registered
-	// tool with no rule holds fail-closed 14m in prod, and a rule
+	// tool with no rule is denied fail-closed in prod, and a rule
 	// with no registration is a dead row.
 	want := map[string]bool{}
 	for _, tool := range approvals.ToolsFor("reports") {

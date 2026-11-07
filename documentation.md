@@ -30,16 +30,16 @@ The stack runs one chat profile, a health sync API, and a scheduled retention jo
   chat ───  ONE pi host   │  agent dir   ▼   OpenCode Go Direct
           1 pi process    │   /opt/pi     │  (https://opencode.ai/zen/go/v1)
                           └─ API :8643 ─┤
-Agento (Android) ──► proxy (:8080) ──┬──► /p/* ──► pi ──► MongoDB
+Agento (Android) ──► proxy (:8080 compose default) ──┬──► /p/* ──► pi ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
 ```
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
-- **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on port `:8001`, writing Health Connect metrics to MongoDB.
+- **health-api**: Go sync endpoint (`cmd/health-api/main.go`, net/http) on container port `:8000` (compose default host publish `:8001`, `HEALTH_HOST_PORT` remaps the host side), writing Health Connect metrics to MongoDB.
 - **pi**: The agent host (`docker/pi/Dockerfile`, entrypoint `docker/pi/entrypoint.sh`). One `pi` process for the single chat profile with that profile's directory as its working directory, which is how it loads its own `AGENTS.md`; `pi-gateway` serves the OpenAI-compatible surface in front of it. The entrypoint refuses to start if any MCP server in `pi/mcp.json` fails to connect.
-- **proxy**: nginx single entrypoint (`:8080`, `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync. The app's one Server URL points here.
-- **app API**: `pi-gateway` (`cmd/pi-gateway`) on `:8643` — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
+- **proxy**: nginx single entrypoint (`:8080` compose default, `APP_PORT` remaps; `docker/proxy/nginx.conf`) — routes `/p/*` → pi chat, `/api/*` + `/health` → health sync (except `/api/model/options` → pi, the provider picker). The app's one Server URL points here.
+- **app API**: `pi-gateway` (`cmd/pi-gateway`) on container port `:8643` (compose default host publish `:8643`, `PI_HOST_PORT` remaps) — the chat backend for the custom Android app (Chat tab, SSE streaming, `PASSWORD` single-password bearer auth). Direct port stays published; the app goes through the proxy.
 - **browser**: Read-only web tasks via a headless-Chromium MCP server
   (`browser_goto` gated per domain, `browser_read`, `browser_screenshot`,
   `browser_save_evidence`); evidence lands in `exports/browser/`. No click/type
@@ -72,20 +72,25 @@ All container management is orchestrated through [`scripts/hermes.sh`](scripts/h
 
 ### `start`
 1. Cleans up any stale native PIDs in `run/bots/*.pid`.
-2. Starts the compose stack in detached mode: `podman-compose -f docker/docker-compose.yml up -d --build`.
+2. Starts the compose stack in detached mode, rebuilding changed layers and
+   recreating containers: `podman-compose -f docker/docker-compose.yml up -d --build --force-recreate`
+   (skipped build with `PI_NO_BUILD=1`, plain `up -d`). Without
+   `--force-recreate` a rebuild silently keeps the OLD container running.
 3. Runs an initial retention check using [`scripts/retention.sh`](scripts/retention.sh).
 
 ### `stop`
 Gracefully halts running containers: `podman-compose -f docker/docker-compose.yml down`.
 
 ### `restart`
-Executes a stop followed by a full start sequence.
+Rebuilds changed layers and recreates containers in place (`up -d --build
+--force-recreate`) — not a stop-then-start (no `down`; containers are never
+removed, just recreated).
 
 ### `status`
 Displays container states and published ports via `podman-compose -f docker/docker-compose.yml ps`.
 
 ### `clean` (Destructive)
-Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered configs and per-profile `.env` files, and removes the retention crontab entry. **Never touches remote MongoDB.**
+Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered configs, and removes the retention crontab entry. **Never touches remote MongoDB.** (There are no per-profile `.env` files — the single root `.env` is the only one, and clean never touches it either.)
 
 ---
 
@@ -181,14 +186,14 @@ obvious default that the device can apply itself.
 ## Health Connect Pipeline
 
 ```
-Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► health-api (:8001)
+Agento Android App ──POST /api/health/sync──► proxy (:8080 compose default) ──► health-api (:8000 container; :8001 direct-host default)
                                                         │
                                                         ▼
                                        MongoDB: hc_days (one doc per date)
 ```
 
 1. **Agento** (`android/agento/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
-2. **`health-api` Endpoint** (`:8001`): Authenticates requests via `Authorization: Bearer <PASSWORD>` and upserts metrics into MongoDB.
+2. **`health-api` Endpoint** (compose default `:8001`, `HEALTH_HOST_PORT` remaps the host side): Authenticates requests via `Authorization: Bearer <PASSWORD>` and upserts metrics into MongoDB.
 
 > **Upgrading from Health Gateway?** Agento ships under a new `applicationId` (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway app — settings do not transfer automatically.
 > 1. Install Agento → re-enter the sync server URL/token and chat-backend Settings manually.
@@ -199,7 +204,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080) ──► 
 
 ## Android App API (Chat)
 
-The custom Android app (`android/agento/`, sidebar: Chat + Tasks + Files + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080`) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8001`). There is no Hermes gateway any more — `:8642` is neither published nor proxied:
+The custom Android app (`android/agento/`, sidebar: Chat + Tasks + Files + Reminders + Settings) uses ONE Server URL + Password — the proxy (`:8080` compose default, `APP_PORT` remaps) — which routes chat to the pi-gateway (`/p/* → pi :8643`, `PASSWORD` bearer auth) and sync to health-api (`/api/* → :8000` container, `:8001` direct-host default). Ports below are compose defaults; `APP_PORT`/`HEALTH_HOST_PORT`/`PI_HOST_PORT` remap the host side. There is no Hermes gateway any more — `:8642` is neither published nor proxied:
 
 ```bash
 curl http://<host>:8080/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
@@ -208,8 +213,8 @@ curl http://<host>:8080/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
 Direct (bypassing the proxy):
 
 ```bash
-curl http://<host>:8643/p/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
-curl http://<host>:8643/p/chat/v1/chat/completions \
+curl http://<host>:8643/chat/v1/models -H "Authorization: Bearer <PASSWORD>"
+curl http://<host>:8643/chat/v1/chat/completions \
   -H "Authorization: Bearer <PASSWORD>" -H "Content-Type: application/json" \
   -d '{"provider": "opencode-go", "model": "mimo-v2.6-flash", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
@@ -283,49 +288,64 @@ All settings are configured in the single root `.env` file:
 
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
 - **Container Isolation**: the `pi` container mounts only what it needs (`pi/`, `workspace/`, three read-only SSH files) with no host container-socket access (Podman is daemonless — there is no shared socket). The agent runs as root inside it, because the bind-mounted workspace is owned by the host uid.
-- **Single credential, one principal**: the same `PASSWORD` bearer authenticates chat (`pi-gateway`) and health sync, so every approval decision is attributed as `decided_by: "app"` — read it as "decided from the app", not a per-user id. The 90-day audit row records only a hash of IP + User-Agent per deciding device, never the values themselves. Per-user auth (and per-user attribution) arrives with per-user auth, not before.
+- **Single credential, one principal**: the same `PASSWORD` bearer authenticates chat (`pi-gateway`) and health sync, so every pre-migration approval decision is attributed as `decided_by: "app"` — read it as "decided from the app", not a per-user id. Post-migration harness prompt decisions leave no row at all (the audit entry carries no decider field), so `decided_by` only ever answers the pre-migration world. The gateway log line records a hash of IP + User-Agent per deciding device (never the values themselves) — log-only, not in the 90-day audit row, so per-device triage reads container logs, not Mongo. Per-user auth (and per-user attribution) arrives with per-user auth, not before.
 
 ### Approval gates + audit log (#313)
 
-Sensitive tool calls pause for an explicit in-app approve/deny before they
-execute. Enforcement lives in an in-process gate inside each server
-(`internal/approvalgate`, ADR-0011 Stage 2): reads and routine writes forward
-untouched, while money
-writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`) and
-prunes that actually delete (`prune_old` with `dry_run=false`) hold up to 14
-minutes for a decision, then run on approve or fail closed on deny/expiry —
-Pi gets a tool error and the turn continues. Unknown servers hold too
-(deny-by-default; unknown *tools* are rejected by the SDK before the gate
-ever sees them). Every `tools/call` through the gate writes one
-audit row with tool, redacted args, disposition (`allowed`/`approved`/
-`denied`/`expired`), result and decider; arg keys are redacted by substring
-and error text is pattern-scrubbed (300-rune cap), so treat `error` as
-untrusted display text. Pending queue: `GET /api/approvals` (pass
-`?status=pending`), decide with `POST /api/approvals/{id}/approve|deny`
-(exactly once — races after expiry 409); history: `GET /api/audit`
-(`?server=&tool=`). State is in Mongo (`approvals`, 15-minute TTL;
+Sensitive tool calls on attended turns prompt for an explicit human decision
+before they execute. Confirmation lives in T3/opencode (permission prompts per
+`opencode.json`, mirrored from the sensitivity table in
+`internal/approvals`), not in an in-process wait: every known, non-refused,
+non-cancelled `tools/call` through the wrapper (`internal/approvalgate`) runs
+at once and attempts one
+audit row with tool, redacted args, disposition and result — no decider:
+harness prompt decisions are not recorded (the join stops at pre-migration
+`Approval.DecidedBy`); best-effort, so treat a missing
+row as an outage gap, not as proof nothing ran. Money
+writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`),
+prunes that actually delete (`prune_old`, counting prunes included —
+patterns cannot see arguments), account create/archive, and browser
+navigation (`browser_goto`, per-task with the URL shown) prompt first;
+reads and routine writes run
+free. Connector send paths are refused outright (draft instead); unknown
+servers/tools deny fail-closed (unknown *tools* are rejected by the SDK
+before the wrapper ever sees them); a dead calling context refuses before
+anything executes (stop means stop). Disposition `allowed` means executed
+(free, or under a harness grant — not "ran without asking");
+`approved`/`expired` rows are pre-migration only. Arg keys are redacted by
+substring and error text is pattern-scrubbed (300-rune cap), so treat
+`error` as untrusted display text. History: `GET /api/audit`
+(`?server=&tool=`). The pending queue (`GET /api/approvals`,
+`POST /api/approvals/{id}/approve|deny`) only ever shows pre-migration
+rows now — a "stuck" post-migration write is a T3 prompt, never a queued
+row. State is in Mongo (`approvals`, 15-minute TTL;
 `audit_log`, 90-day TTL) and survives restarts; without Mongo every server
-except memory and browser exits (log.Fatalf) and the entrypoint gate
-refuses boot — the gateway's in-memory fallback then meets only memory's
-and browser's ephemeral gates, whose gated calls deny immediately
-(`gate_unavailable`) while the app banners the queue as degraded
-instead of showing an undecidable list. The app surface (since 5.7.0) is the
-**Approvals** sheet: pending cards with redacted args + approve/deny, a
-badged entry with an in-turn banner while streaming, and the recent audit
-trail below. Full design: `docs/adr/0002-approval-gates.md`.
+except memory and browser exits (log.Fatalf) — those two run with an
+ephemeral in-memory audit trail that dies with the process. The approvals
+list marks that store degraded instead of showing an undecidable list (the
+audit path carries no marker — treat an empty trail during ephemeral
+operation as missing, not complete). The app surface (since 5.7.0) is the
+**Approvals** sheet: the recent audit trail below stays live, but pending
+cards with redacted args + approve/deny are pre-migration only — post-migration
+nothing new parks, so a "stuck" write is a T3 prompt, never a card to tap. Full design: `docs/adr/0002-approval-gates.md` (pre-migration
+design; the T3 re-ownership is recorded in the migration issues).
 
 Threat note — what this does and does not fix:
 
-- Fixed: unattended money writes, deletes, prunes and rewrites now need a
-  human; every gated call is attributable for 90 days; deny leaves state
-  unchanged (Pi gets a tool error, the turn continues).
+- Fixed: attended money writes, deletes, prunes and rewrites now need a
+  human via the T3 permission prompt (unattended scheduler fires have no
+  prompter — prompt text is their only enforcement, see
+  `internal/gateway/scheduler.go` and `internal/cronjobs/scheduler.go`); every executed call is attributable for
+  90 days short of an audit-write outage (see above); deny leaves state
+  unchanged (the harness gets a tool error,
+  the turn continues).
 - NOT fixed: Pi built-in tools (`bash` file writes, `read`/`write`/`edit`
   via codemode) never traverse MCP, so they are observed but not gated — a
   model told to `rm -rf` via bash is unimpeded. The agent still runs as root
   in the container, and the single bearer token still authenticates every
   route. Full sandboxing and per-connector OAuth vaults are out of scope
   (connectors own the vault).
-- Residual: a held call occupies its turn until expiry; an approval shows
+- Residual: a refused call occupies only its own turn; an audit row shows
   tool + args + time but not which conversation asked.
 
 ### First connectors — Gmail, Calendar (#316, OAuth grants + MCP servers)
@@ -341,9 +361,13 @@ connecting/disconnecting independently from the app:
 Connect flow: `POST /api/connectors/{id}/connect` returns an `auth_url`
 (PKCE S256 + offline access + per-connector least-privilege scopes) for the
 app to open in a browser; Google redirects to the single registered
-`GET /api/connectors/callback?code=&state=` — one registered string with
-two path shapes (bare direct, `/p/` via proxy); non-default ports are
-variants of whichever path they attach to (default ports are not: `:443`
+`GET /api/connectors/callback?code=&state=` — one registered string, one
+spelling: the bare `/api/connectors/callback` path on whichever host:port
+the browser reaches (direct loopback on the mapped host port, compose
+default `:8001` via `HEALTH_HOST_PORT`; the `:8080` proxy publish is plain
+HTTP, so only loopback `http://localhost:8080/...` registers — public
+funnel traffic arrives on `:443`, stripped, never `:8080`). Non-default ports are variants of that
+path (default ports are not: `:443`
 and `:80` are stripped by canonicalisation, so register the stripped form
 — see `.env.example`). Product constraint, not just validation:
 registrations must be public spellings (dotted FQDN or loopback) — LAN,
@@ -352,20 +376,34 @@ public Google console entry can hold them. Homelab setups must serve (and
 register) a dotted name or loopback address: use a nip.io-style wildcard,
 Tailscale funnel, or reverse proxy for a public name — or an SSH tunnel to
 localhost for direct-only access. Bare `*.local`/LAN names are out of scope
-by intent, not by omission. The bare spelling works direct on the pi
-port and the `/p/` spelling through nginx, which strips `/p` before
-forwarding (port included in the match — the `:8443` spelling and the
-no-port spelling are different registrations). The callback bypasses
-profile routing entirely, so any first segment serves — bare, `/p/`, or
-`/p/<anything>/` — direct or proxied, while every other verb 404s a
-miscased or cross-profile path. The server consumes the
+by intent, not by omission. Health-api serves the exact path, case-insensitive
+on the whole callback spelling (`/API/CONNECTORS/CALLBACK` serves like
+`/callback` — the gateway bypass folds the same way, so unauthenticated
+callers are not distinguished by casing), plus slash-collapsed spellings
+(unclean paths 301-redirect to the collapsed form when it matches a route —
+follow redirects; POST callers must use the clean spelling since most
+clients re-issue a 301 follow as GET — and WAF/proxy rules must match the
+post-redirect form too) and percent-encoded spellings (Go decodes
+before matching, so `/%63allback` serves like `/callback` — match on the
+decoded form too), plus the trailing-slash alias (`/callback/` serves like
+`/callback` — the dispatcher trims slashes, so match the trimmed form
+too) — but no profile-tolerant prefixes (the
+pi-gateway `/p/` spellings retire with it in #494 — until then both serve).
+Non-callback other-cased prefixes (`/API/connectorsfoo`) answer the service
+JSON `unknown path` 404 behind auth (like the gateway) — WAF/proxy
+exact-matches must cover the uppercase spelling too.
+Anything else unclaimed (including `/` itself) answers the same auth-gated
+JSON `unknown path` 404, never the default-mux text page: like the gateway,
+unknown paths sit behind the bearer gate on this service.
+The server consumes the
 single-use state, exchanges the code, seals both tokens with the envelope
 key (AES-256-GCM, `CONNECTORS_ENCRYPTION_KEY`), and flips the row to
 connected. Tokens land before the status flips — a connected-with-no-tokens
 row is never servable. Without full OAuth config (client id/secret,
 redirect URL, envelope key, durable store) connect answers 501.
 
-The refusal is enforced in the gate before the approval check, audited as
+The refusal is enforced in the gate first of all — before the
+unknown-tool check, instead of any prompt — audited as
 `connector_draft_only`, and parks no approval card. Token placement: OAuth
 refresh tokens live **server-side in Mongo** (`connectors` collection,
 envelope-encrypted), never in the app and never pasted in chat — the API
@@ -374,7 +412,12 @@ of the token columns on Mongo, whole-row delete on memory).
 Already-fetched data (chat history) is not wiped on
 disconnect; disconnect stops future access. Without Mongo the list still
 answers from memory but nothing survives a restart and no token can be
-stored. An expired row carries a `reconnect` hint instead of asking for a
+stored. The fallback is not instant on a post-boot drop: the first few
+taps 502 while the demotion counter trips (3 upstream failures inside a
+minute AND more than a minute since the last probe — boot and recovery
+both stamp it, so a drop right after either 502s until that minute
+expires, not just 3 taps), then it flips to memory + 501 — a 502 right
+after an Atlas loss means Mongo, not Google. An expired row carries a `reconnect` hint instead of asking for a
 secret.
 Wire shape note: a row with no `updated_at` was never touched; an explicit
 disconnect sets it. Same status, different shape — the difference is the
@@ -403,13 +446,15 @@ safe since #421 (connectors tolerate missing credentials); keeping them
 unwired until OAuth lands (`internal/connectors` fails its tests if the wiring
 and the credentials ever disagree). Re-adding is manual, not automatic: once
 OAuth is configured, add both entries back inside the `mcpServers` object in
-`pi/mcp.json` by hand (the `browser` entry is currently last with no trailing
+`pi/mcp.json` by hand (the `reports` entry is currently last with no trailing
 comma — add one after it first), then `./scripts/hermes.sh restart` so the pi
 container picks them up:
 
 "gmail": {"command": "/usr/local/bin/gmail"},
 "calendar": {"command": "/usr/local/bin/calendar"}
-(no trailing comma on the last line; commas after `browser` and `gmail`)
+(no trailing comma on the last line; commas after `reports` and `gmail`).
+Verify with `python3 -m json.tool pi/mcp.json` — invalid JSON crash-loops
+the container, so the lint is part of the step.
 
 Once wired they
 call the official Google APIs with the stored grant: decrypt, refresh on
@@ -418,16 +463,21 @@ worker). No grant means every tool that calls Google answers reconnect
 guidance, never a secrets prompt. `create_event_draft` is the exception:
 purely local, so it works grant-less — the draft is exactly what the
 user needs while disconnected. It builds a validated draft the agent
-presents to the user — actual creation waits for the approval-gate flow
-that covers calendar writes.
+presents to the user — actual creation never happens through tools in v1
+(`create_event`/`send_invite` are refused outright); the user confirms in
+their own calendar.
 Operator setup on a host with no domain: `scripts/connectors-google-setup.sh`
 is an interactive wizard that walks the two things only a human can do —
 joining a tailnet and creating the Google client — and derives the rest.
 It publishes the callback over Tailscale Funnel (public TLS on 443 →
-`http://127.0.0.1:8080`, the same nginx proxy), because Google accepts only
-`https://` or a loopback `http://` and a bare-IP host can register neither.
+the nginx proxy at the compose `APP_PORT`, `http://127.0.0.1:8080` by
+default — the same proxy the wizard funnels), because Google accepts only
+`https://` or a loopback `http://` and a non-loopback bare-IP host can
+register neither (loopback IPs like `127.0.0.1`/`::1` do register, over
+plain `http`).
 Note the funnel publishes the whole proxy (chat + sync stay PASSWORD-gated);
-the callback is the only new unauthenticated surface, so do not share the
+the callback is the only new unauthenticated API surface (static liveness
+`/health[/]` and `/ping`, plus pi liveness `/p/healthz[/]`, ride along), so do not share the
 `*.ts.net` URL.
 It then writes `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URL`, and `CONNECTORS_ENCRYPTION_KEY` into the root
@@ -437,14 +487,21 @@ compose to prove they land in the rendered compose config. Its closing checklist
 then has the operator re-add the gmail/calendar entries inside `mcpServers`
 in `pi/mcp.json` by hand (unwired until OAuth is configured; OAuth alone
 does not restore the agent tools) and restart again. It never
-restarts the stack — the values are inert until the pi container is
-recreated (`./scripts/hermes.sh restart` recreates it; a plain container
+restarts the stack — the values are inert until the containers are
+recreated (`./scripts/hermes.sh restart` recreates them; a plain container
 restart without recreation will not pick up .env changes). It is safe
 to re-run: existing values stay defaults, and an existing
 envelope key is kept, since rotating it invalidates every stored grant.
-Register the `/p/` spelling it prints (through the proxy `/p` is stripped
-before pi sees it); the bare `https://<host>/api/...` form routes to
-health-api instead.
+Register the bare spelling it prints: on a funnel run that is
+`https://<tailnet-host>/api/connectors/callback` (served via public TLS
+on `:443`); for direct loopback testing it is
+`http://localhost:<mapped-port>/api/connectors/callback` instead — two
+distinct registrations: `http://localhost:<HEALTH_HOST_PORT>` (compose
+default `:8001`) reaches health-api direct, `http://localhost:<APP_PORT>`
+(compose default `:8080`) reaches it through the proxy. Register the one
+the browser actually reaches (the mapped direct-host port, compose
+default `:8001` via `HEALTH_HOST_PORT`, is the plain-HTTP direct-host
+mapping, never a funnel spelling).
 
 Full design: `docs/adr/0009-connectors.md`, servers: `docs/adr/0010-connector-mcp-servers.md`.
 

@@ -97,15 +97,27 @@ confirm() {
 }
 
 # _existing KEY: current value of KEY in ENV_FILE, if any, with write_env's single
-# quotes or a plain dotenv double-quoted value undone.
+# quotes or a plain dotenv double-quoted value undone. Matches the same
+# line shapes load_root_env (scripts/lib/common.sh) accepts — optional
+# leading whitespace and optional `export ` — so a stack-loaded
+# `export KEY=...` or `  KEY=...` line is found here too instead of
+# misreported MISSING (which would aim the wizard at default ports while
+# the stack answers on the file's mapped ones).
 _existing() {
   [[ -f "$ENV_FILE" ]] || return 1
-  local line value sq="'\\''"; line=$(grep -E "^${1}=" "$ENV_FILE" | tail -n1) || return 1
+  local line value sq="'\\''"; line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${1}=" "$ENV_FILE" | tail -n1) || return 1
   value="${line#*=}"
   if [[ "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; value="${value//"$sq"/\'}"
   elif [[ "$value" == \"*\" ]]; then
+    # Strip the outer quotes and keep the inner bytes verbatim, exactly
+    # like load_root_env (scripts/lib/common.sh) — including `$`, `\`,
+    # and `"` (Google secrets commonly contain `$`). The old guard
+    # refused these as undecodable and reported MISSING for a present
+    # secret, while the stack loaded it fine; the value is never
+    # displayed (only offered as "keep current" and re-written
+    # single-quoted by write_env, which round-trips it), so liberal
+    # decoding here cannot leak or corrupt.
     value="${value:1:${#value}-2}"
-    [[ "$value" == *[\\\$\"]* ]] && return 1   # escapes, $ or ": can't decode safely; ask again
   fi
   printf '%s' "$value"
 }
@@ -143,12 +155,14 @@ ask_secret() {
 
 # write_env KEY VALUE upserts KEY='VALUE' into ENV_FILE (replaces any existing
 # line) and sets $KEY. Idempotent. Creates ENV_FILE at mode 0600; writes through
-# a symlink and keeps an existing file's mode.
+# a symlink and keeps an existing file's mode. The remove matches the same
+# line shapes _existing/load_root_env accept (optional whitespace, optional
+# `export `) so an export/spaced line is replaced, never doubled.
 write_env() {
   local key="$1" value="$2" tmp sq="'\\''"
   [[ -e "$ENV_FILE" ]] || (umask 077 && : > "$ENV_FILE")
   tmp=$(mktemp)
-  grep -vE "^${key}=" "$ENV_FILE" > "$tmp" || true
+  grep -vE "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" > "$tmp" || true
   printf "%s='%s'\n" "$key" "${value//\'/$sq}" >> "$tmp"
   cat "$tmp" > "$ENV_FILE"
   rm -f "$tmp"
@@ -297,9 +311,153 @@ _valid_tsdns() {
 # loopback URL can never be mistaken for the funnel host.
 _uri_host() {
   local u="${1#*://}"
-  u="${u%%/*}"; u="${u%%:*}"
+  u="${u%%/*}"
+  # Bracketed IPv6 first: a bare `%%:*` would truncate `[::1]:8001` to `[`.
+  if [[ "$u" == \[* ]]; then
+    u="${u#[}"
+    u="${u%%\]*}"
+  else
+    u="${u%%:*}"
+  fi
   _valid_tsdns "$u" || return 1
   printf '%s' "$u"
+}
+
+# _valid_fqdn mirrors the server's validRedirectHost for https: dotted
+# FQDN, lowercase alnum/hyphen labels, no leading/trailing hyphen, TLD of
+# 2+ letters (custom domains, nip.io — not just tailnet). The input must
+# already be lowercased (canonical form); this checks shape, not case.
+_valid_fqdn() {
+  local host="$1" label tld
+  local -a labels
+  [[ -n "$host" ]] || return 1
+  (( ${#host} <= 253 )) || return 1
+  [[ "$host" == "localhost" ]] && return 0
+  [[ "$host" == *.* ]] || return 1
+  IFS=. read -ra labels <<< "$host" || return 1
+  for label in "${labels[@]}"; do
+    (( ${#label} >= 1 && ${#label} <= 63 )) || return 1
+    [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
+  tld="${labels[${#labels[@]}-1]}"
+  if [[ "$tld" == xn--* ]]; then
+    # Punycode carve-out like the server: the suffix is encoded Unicode,
+    # validated by the label rules above — except a bare `xn--` prefix.
+    [[ "$tld" == "xn--" ]] && return 1
+  else
+    [[ "$tld" =~ ^[a-z][a-z]+$ ]] || return 1
+  fi
+  # Reserved + private-use TLDs can never hold a public registration
+  # (RFC-2606, mDNS, unqualified-LAN, special-use — server parity list).
+  case "$tld" in
+    test|example|invalid|local|internal|lan|home|corp|localdomain|intranet|onion|arpa) return 1;;
+  esac
+  # `*.localhost` / `localhost.*`: unregistrable both directions (only
+  # bare `localhost` passes, handled by the caller).
+  case "$host" in *.localhost|localhost.*) return 1;; esac
+  return 0
+}
+
+# _clean_path prints the path.Clean equivalent of an absolute path:
+# collapse // runs, resolve /./ and /x/../ (leading /.. stays at root,
+# like Clean). The server Cleans before comparing/sending, so printing
+# anything else as "exact string to register" mismatches its bytes.
+_clean_path() {
+  local p="$1" seg
+  local -a out=()
+  while [[ "$p" == *//* ]]; do p="${p//\/\//\/}"; done
+  local IFS=/
+  local -a segs=()
+  read -ra segs <<< "$p" || true
+  for seg in "${segs[@]}"; do
+    case "$seg" in
+      ""|.) continue ;;
+      ..)
+        if (( ${#out[@]} > 0 )); then
+          unset 'out[${#out[@]}-1]'
+        fi
+        ;;
+      *) out+=("$seg") ;;
+    esac
+  done
+  if (( ${#out[@]} == 0 )); then
+    printf '/'
+  elif (( ${#out[@]} == 1 )); then
+    # Single segment: the second printf below would emit a bare `/`
+    # (missing %s arg prints the literal), so skip it — `/b` stays `/b`.
+    printf '/%s' "${out[0]}"
+  else
+    printf '/%s' "${out[0]}"
+    printf '/%s' "${out[@]:1}"
+  fi
+}
+
+# canonical_redirect_uri prints the canonical form of a redirect URI the
+# way the server sends it: lowercased host, no trailing dot, no default
+# port (numeric compare, so :080/:0443 strip like :80/:443), non-default
+# ports kept, one trailing slash trimmed. Google
+# exact-matches the sent bytes, so registering this string (or comparing
+# the startup-log line against it) is the only correct comparison — the
+# input spelling may differ while sending identically. Bracketed IPv6
+# hosts survive intact; a malformed value prints unchanged (validated
+# by the caller, never here). Deliberately NOT full server parity: query,
+# fragment, userinfo, encodings, and path case are refused outright by the
+# server, so the final block rejects those shapes instead of normalising
+# them.
+canonical_redirect_uri() {
+  local u="$1" scheme rest path hostport host port
+  [[ "$u" == *://* ]] || { printf '%s' "$u"; return 0; }
+  scheme="${u%%://*}"
+  # Lowercased like the server (url.Parse folds it): an uppercase scheme
+  # sends lowercase, so registering the input spelling mismatches.
+  scheme=$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')
+  rest="${u#*://}"
+  if [[ "$rest" == */* ]]; then
+    path="/${rest#*/}"
+    hostport="${rest%%/*}"
+  else
+    path="/"
+    hostport="$rest"
+  fi
+  # Server path.Clean parity (interior //, /./, /x/../): the server sends
+  # the cleaned form, so the printed string must be cleaned too — a dirty
+  # path kept verbatim would mismatch its bytes. Deliberately NOT covered:
+  # query, fragment, userinfo, encodings, and path case are refused
+  # outright by the server, so the final block rejects those shapes instead
+  # of normalising them.
+  path="$(_clean_path "$path")"
+  if [[ "$hostport" == \[*\]* ]]; then
+    host="${hostport%%\]*}]"
+    port="${hostport#*]}"
+    port="${port#:}"
+  else
+    host="${hostport%%:*}"
+    if [[ "$host" == "$hostport" ]]; then
+      port=""
+    else
+      port="${hostport##*:}"
+      # Dangling colon (host: with no port) is preserved verbatim for the
+      # final gate to reject: dropping it would print a different URL than
+      # pasted, and the server 501s it ("port must be numeric").
+      if [[ -z "$port" ]]; then printf '%s' "$u"; return 0; fi
+    fi
+  fi
+  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+  # Loop-strip like the server TrimRight: h.ts.net.. sends dot-less.
+  while [[ "$host" == *. ]]; do host="${host%.}"; done
+  if [[ "$port" =~ ^[0-9]+$ ]]; then
+    # Numeric compare AND normalization: :080 sends as :80, so the
+    # canonical form strips the padding but keeps a non-default port.
+    port="$((10#$port))"
+    if { [[ "$scheme" == "https" ]] && (( port == 443 )); } || \
+       { [[ "$scheme" == "http" ]] && (( port == 80 )); }; then
+      port=""
+    fi
+  fi
+  if [[ -n "$port" ]]; then
+    host="$host:$port"
+  fi
+  printf '%s://%s%s' "$scheme" "$host" "$path"
 }
 
 REPO_DIR="${REPO_DIR:-}"
@@ -367,15 +525,60 @@ _redirect_preset="${REDIRECT_URI:-}"
 
 banner "Google connectors over Tailscale Funnel"
 
+# Proxy host port follows APP_PORT (compose default 8080): every funnel
+# target, probe, and status match below must use it, or a custom-port
+# deploy funnels to a dead port while the wizard reports green. Shell env
+# wins over .env, matching compose precedence. Non-numeric or out-of-range
+# values fail loudly with the winning source named — a silent default here
+# would funnel to a port compose does not serve. Same treatment for the
+# health-api direct mapping below (HEALTH_HOST_PORT, compose default 8001):
+# a loopback REDIRECT_URI on any other port must warn, not probe dead air.
+_proxy_port="${APP_PORT:-}"
+_proxy_port_src="shell APP_PORT"
+if [[ -z "$_proxy_port" ]]; then
+  _proxy_port=$(_existing APP_PORT 2>/dev/null || true)
+  _proxy_port_src="root .env APP_PORT"
+fi
+if [[ -z "$_proxy_port" ]]; then
+  # Unset everywhere: compose defaults to 8080, so do we — quietly.
+  # Only an explicitly set but invalid value exits below.
+  _proxy_port="8080"
+  _proxy_port_src="compose default"
+fi
+if [[ ${#_proxy_port} -gt 5 ]] || [[ ! "$_proxy_port" =~ ^[0-9]+$ ]] || (( 10#$_proxy_port < 1 || 10#$_proxy_port > 65535 )); then
+  warn "APP_PORT is not numeric 1-65535 (from $_proxy_port_src: '${_proxy_port:-<empty>}') — fix it, do not proceed on a default:"
+  warn "funnelling to a silently-defaulted port serves a URL nothing answers."
+  exit 1
+fi
+_proxy_target="http://127.0.0.1:$_proxy_port"
+# Direct-loopback health-api port, same precedence (shell → .env →
+# compose-default 8001). A loopback REDIRECT_URI naming any other port
+# fails the loopback-host/port cross-check below with a pointer here.
+_health_port="${HEALTH_HOST_PORT:-}"
+_health_port_src="shell HEALTH_HOST_PORT"
+if [[ -z "$_health_port" ]]; then
+  _health_port=$(_existing HEALTH_HOST_PORT 2>/dev/null || true)
+  _health_port_src="root .env HEALTH_HOST_PORT"
+fi
+if [[ -z "$_health_port" ]]; then
+  _health_port="8001"
+  _health_port_src="compose default"
+fi
+if [[ ${#_health_port} -gt 5 ]] || [[ ! "$_health_port" =~ ^[0-9]+$ ]] || (( 10#$_health_port < 1 || 10#$_health_port > 65535 )); then
+  warn "HEALTH_HOST_PORT is not numeric 1-65535 (from $_health_port_src: '${_health_port:-<empty>}') — fix it, do not proceed on a default."
+  exit 1
+fi
+
 # ── Stage 1: preflight ────────────────────────────────────────────────────
 stage "Preflight: what this will change"
 say "This sets up the OAuth callback for the Gmail/Calendar connectors."
 say "Plan: Tailscale Funnel terminates public TLS on 443 and forwards to the"
-say "      existing nginx proxy on http://127.0.0.1:8080. No ports are opened, no"
+say "      existing nginx proxy on $_proxy_target. No ports are opened, no"
 say "      domain is bought. The app keeps its current Server URL."
 say "      Note: the funnel publishes the whole proxy (chat + sync stay"
 say "      PASSWORD-gated); the OAuth callback is the only new unauthenticated"
-say "      surface. Do not share the *.ts.net URL."
+say "      API surface (static liveness /health[/] and /ping, plus pi liveness"
+say "      /p/healthz[/], ride along). Do not share the *.ts.net URL."
 printf '\n'
 say "What is on disk right now:"
 for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
@@ -384,10 +587,10 @@ for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_EN
 done
 unset v
 say "  tailscale: $(command -v tailscale >/dev/null 2>&1 && echo installed || echo 'not installed')"
-if curl -fsS --max-time 5 http://127.0.0.1:8080/ping >/dev/null 2>&1; then
-  note "  proxy :8080: listening"
+if curl -fsS --max-time 5 "$_proxy_target/ping" >/dev/null 2>&1; then
+  note "  proxy :$_proxy_port: listening"
 else
-  note "  proxy :8080: NOT answering (/ping)"
+  note "  proxy :$_proxy_port: NOT answering (/ping)"
   warn "the funnel forwards to this proxy — a stopped stack means minutes"
   warn "of stage-3/4 waits before anything fails. Start the stack first"
   warn "(./scripts/hermes.sh start) or continue anyway."
@@ -431,7 +634,7 @@ if [[ "${EUID:-$(id -u 2>/dev/null || true)}" -ne 0 ]]; then
 fi
 printf '\n'
 note "This host is the live stack. Writing .env is safe (inert until the"
-note "pi container is recreated — ./scripts/hermes.sh restart recreates it;"
+note "containers are recreated — ./scripts/hermes.sh restart recreates them;"
 note "a plain container restart without recreation will not pick up .env)."
 note "Nothing is restarted by this wizard."
 note "Dry-run knobs (all optional): TS_DNS presets skip discovery and the"
@@ -634,87 +837,84 @@ fi
 printf '\n'
 printf '  %s✓%s %s\n' "$GREEN" "$RESET" "https://$TS_DNS"
 
-# ── Stage 4: funnel + public verification ─────────────────────────────────
-stage "Publish the callback over HTTPS"
-say "Funnel will terminate TLS with a publicly-trusted certificate and forward"
-say "to the existing proxy on http://127.0.0.1:8080. Only ports 443/8443/10000 are"
-say "allowed, so 443 it is."
-printf '\n'
-note "First run may prompt you to enable HTTPS certificates / MagicDNS for the"
-note "tailnet, plus the 'funnel' node attribute in the tailnet policy file."
-note "If it complains, enable them and re-run this stage:"
-note "  DNS:     https://console.tailscale.com/admin/dns"
-note "  Funnel attribute (Access controls → Add Funnel to policy):"
-note "  https://console.tailscale.com/admin/acls"
-printf '\n'
-
-FOUT=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — re-run when /tmp is writable"; exit 1; }
-# Re-runs are safe: if 443 already forwards to this proxy, keep it instead
-# of erroring out of the wizard.
-_funnel_status=$(tailscale funnel status 2>/dev/null || true)
-# Real `funnel status` prints the public URL and the target on separate
-# lines (https://<host>… on one, "|-- / proxy http://127.0.0.1:8080" on
-# another — port 443 is implied by https://, never printed next to 8080),
-# so match across the whole output — but bind the port to the proxy word
-# on its own line, or hint text mentioning a URL and the port elsewhere
-# would take the fast path without the binding existing. Also require the
-# served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
-# keeps host A while the URI, comment, and probe all use host B.
-# Hostname first: most selective on the common mismatch path, so the two
-# broader greps are skipped unless it hits. The -n guard is load-bearing:
-# grep -qF "" matches every line, so without it an empty TS_DNS would
-# turn the fast path into always-keep (empty exits earlier today, but the
-# safety belongs on this line, not on ordering).
-if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qF -- "$TS_DNS" && printf '%s\n' "$_funnel_status" | grep -qiE 'proxy.*8080|8080.*proxy' && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
-  note "funnel already serving 443 → this proxy; keeping it"
-  printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
-  rm -f "$FOUT" || true; FOUT=""
-fi
-unset _funnel_status
-if [[ -n "$FOUT" ]]; then
-  if ! tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1; then
-    if grep -qiE -- "already|in use|exists" "$FOUT"; then
-      note "funnel reports it is already serving; keeping the existing one"
-      _check_kept_host
-    else
-      warn "funnel did not start:"
-      sed 's/^/      /' "$FOUT" 2>/dev/null || true
-      pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
-      tailscale funnel --bg --https=443 http://127.0.0.1:8080 </dev/null >"$FOUT" 2>&1 || {
-        if grep -qiE -- "already|in use|exists" "$FOUT"; then
-          note "funnel reports it is already serving; keeping the existing one"
-          _check_kept_host
-        else
-          warn "still failing:"; sed 's/^/      /' "$FOUT" 2>/dev/null || true; exit 1
-        fi
-      }
-    fi
-  fi
-  sed 's/^/      /' "$FOUT" 2>/dev/null || true
-  rm -f "$FOUT" || true; FOUT=""
-fi
-printf '\n'
-
 if [[ -n "$_redirect_preset" ]]; then
   # Same treatment as the TS_DNS preset: write_env single-quote-escapes but
   # does not stop newlines, so a multiline preset would write a second line
   # into .env. read-based input can't contain one — only presets can.
-  # Host part validated label by label, like TS_DNS above.
+  # Host part validated label by label, like TS_DNS above. Folded whole
+  # for matching (server lowercases scheme AND host; path case is
+  # significant but shape-matching it case-insensitively just defers an
+  # uppercase path to the final exact-path gate, which offers the same
+  # keep prompt a recorded value gets — instead of a hard exit here for
+  # the identical spelling). The canonical form is stored.
+  _preset_fold="$(printf '%s' "$_redirect_preset" | tr '[:upper:]' '[:lower:]')"
+  # Accepts https tailnet/FQDN presets AND the documented http-loopback
+  # testing shape (.env.example) — both of which the final gate passes,
+  # so rejecting either here would contradict it.
   _uri_host=""
-  if [[ "$_redirect_preset" == https://*/p/api/connectors/callback ]]; then
-    _uri_host="${_redirect_preset#https://}"
-    _uri_host="${_uri_host%/p/api/connectors/callback}"
+  _preset_ok=0
+  # Retired /p/ spelling first: glob `*` spans `/`, so the bare patterns
+  # below also match `https://host/p/api/...` — canonicalising that keeps
+  # the `/p/` in the path, the host strip yields `host/p`, and CI exits 1
+  # where an interactive recorded value gets a bare-URL conversion offer
+  # for the identical string. Detect /p/ up front (either scheme) and
+  # offer the same conversion instead.
+  if [[ "$_preset_fold" == */p/api/connectors/callback ]]; then
+    _bare="$(printf '%s' "$_redirect_preset" | sed 's|/[Pp]/[Aa][Pp][Ii]/[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Oo][Rr][Ss]/[Cc][Aa][Ll][Ll][Bb][Aa][Cc][Kk]$|/api/connectors/callback|')"
+    warn "preset REDIRECT_URI uses the retired /p/ spelling (pre-#488 pointed at pi-gateway; health-api serves the bare path):"
+    warn "  preset: $_redirect_preset"
+    warn "  bare:   $_bare"
+    if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
+      _redirect_preset="$_bare"
+      _preset_fold="$(printf '%s' "$_redirect_preset" | tr '[:upper:]' '[:lower:]')"
+      note "keeping converted preset REDIRECT_URI (re-check the Google console registration)"
+    else
+      warn "preset REDIRECT_URI is not a registrable https tailnet/FQDN or http loopback .../api/connectors/callback URL; unset it to derive from TS_DNS"
+      exit 1
+    fi
+    unset _bare
   fi
-  if [[ -z "$_uri_host" ]] || ! _valid_tsdns "$_uri_host"; then
-    warn "preset REDIRECT_URI is not an https://<name>.<tailnet>.ts.net/p/api/connectors/callback URL; unset it to derive from TS_DNS"
+  if [[ "$_preset_fold" == https://*/api/connectors/callback ]]; then
+    # Canonicalise before validating: an explicit :443, uppercase host,
+    # or trailing dot sends identically but must not fail validation —
+    # and the canonical form is what gets stored and registered.
+    _redirect_preset="$(canonical_redirect_uri "$_redirect_preset")"
+    # Derive the host from the canonicalised FOLD, not the stored value:
+    # an uppercase PATH would defeat the case-sensitive strip below and
+    # exit 1 on a spelling the final exact-path gate handles with a keep
+    # prompt — while explicit :443, trailing dots, and uppercase hosts
+    # still canonicalise away before validation, as before. (The fold
+    # lowercases the path too, but it is shape-only: the stored value
+    # keeps its case for the final gate.)
+    _fold_canon="$(canonical_redirect_uri "$_preset_fold")"
+    _uri_host="${_fold_canon#https://}"
+    _uri_host="${_uri_host%/api/connectors/callback}"
+    _uri_host="${_uri_host%%:*}"
+    unset _fold_canon
+    if _valid_tsdns "$_uri_host" 2>/dev/null || _valid_fqdn "$_uri_host" 2>/dev/null; then
+      _preset_ok=1
+    fi
+  elif [[ "$_preset_fold" == http://*/api/connectors/callback ]]; then
+    _redirect_preset="$(canonical_redirect_uri "$_redirect_preset")"
+    _uri_host="${_preset_fold#http://}"
+    _uri_host="${_uri_host%/api/connectors/callback}"
+    if [[ "$_uri_host" == \[* ]]; then
+      _uri_host="${_uri_host#[}"; _uri_host="${_uri_host%%\]*}"
+    else
+      _uri_host="${_uri_host%%:*}"
+    fi
+    case "$_uri_host" in localhost|127.0.0.1|::1) _preset_ok=1;; esac
+  fi
+  if (( ! _preset_ok )); then
+    warn "preset REDIRECT_URI is not a registrable https tailnet/FQDN or http loopback .../api/connectors/callback URL; unset it to derive from TS_DNS"
     exit 1
   fi
-  unset _uri_host
+  unset _uri_host _preset_fold _preset_ok
   REDIRECT_URI="$_redirect_preset"
   _URI_FROM_PRESET=1
   note "using preset REDIRECT_URI (skipping derivation from TS_DNS)"
 else
-  REDIRECT_URI="https://$TS_DNS/p/api/connectors/callback"
+  REDIRECT_URI="https://$TS_DNS/api/connectors/callback"
   _URI_FROM_PRESET=0
 fi
 unset _redirect_preset
@@ -736,36 +936,428 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   # first, then tailor the question. Strict-pass keeps quietly offerable;
   # strict-fail keeps only via an explicit knowingly-keep.
   _rec_host=""
-  if [[ "$_recorded_uri" == https://*/p/api/connectors/callback ]]; then
-    # Same _uri_host derivation as probe/comment: scheme- and port-agnostic,
+  # Match on a scheme-folded copy (the server lowercases the scheme, so an
+  # uppercase-scheme recorded value is the same URL); convert/store from
+  # the original, and the final canonicalisation normalizes the case.
+  _rec_fold="$(printf '%s' "${_recorded_uri%%://*}" | tr '[:upper:]' '[:lower:]')://${_recorded_uri#*://}"
+  # The /p/ spelling is checked FIRST: glob `*` spans `/`, so it would
+  # also match the bare pattern below and skip conversion entirely.
+  if [[ "$_rec_fold" == https://*/p/api/connectors/callback ]]; then
+    # Pre-#488 spelling pointed at pi-gateway, which still serves it until
+    # the #494 teardown — but health-api (the future) does not, so offer
+    # the same host bare. Declining falls through to the typo path
+    # below, which names the mismatch and offers a knowingly-keep.
+    _bare="${_recorded_uri%/p/api/connectors/callback}/api/connectors/callback"
+    warn "recorded URL uses the retired /p/ spelling (pi-gateway still serves it until the #494 teardown; health-api does not):"
+    warn "  recorded: $_recorded_uri"
+    warn "  bare:     $_bare"
+    if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
+      REDIRECT_URI="$_bare"
+      note "keeping converted REDIRECT_URI (tailnet rename? re-check the Google console registration)"
+      _rec_host=$(_uri_host "$_bare" || true)
+      _converted=1
+    else
+      _rec_host=""
+    fi
+    unset _bare
+  elif [[ "$_rec_fold" == https://*/api/connectors/callback ]]; then
+    # Same host derivation as probe/comment: scheme- and port-agnostic,
     # so an explicit `:443` spelling (same canonical form) passes here too.
+    # Tailnet OR any valid FQDN (custom domains, nip.io) — the final gate
+    # enforces the same pair, so a recorded custom-domain URL strict-passes
+    # here instead of falling into the typo branch.
     _rec_host=$(_uri_host "$_recorded_uri" || true)
+    if [[ -z "$_rec_host" ]]; then
+      _rec_host_bare="${_recorded_uri#*://}"
+      _rec_host_bare="${_rec_host_bare%%/*}"
+      if [[ "$_rec_host_bare" == \[*\]* ]]; then
+        _rec_host_bare="${_rec_host_bare#[}"
+        _rec_host_bare="${_rec_host_bare%%\]*}"
+      else
+        _rec_host_bare="${_rec_host_bare%%:*}"
+      fi
+      # Lowercased for the check only: the final canonicalisation folds
+      # case, so an uppercase host must not fail here.
+      _rec_host_bare="$(printf '%s' "$_rec_host_bare" | tr '[:upper:]' '[:lower:]')"
+      _valid_fqdn "$_rec_host_bare" 2>/dev/null && _rec_host="$_rec_host_bare"
+      unset _rec_host_bare
+    fi
+  elif [[ "$_rec_fold" == http://*/p/api/connectors/callback ]]; then
+    # Same retired-/p/ conversion as the https branch above, checked
+    # BEFORE the bare http pattern for the same `*`-spans-`/` reason: the
+    # bare branch would strict-pass `http://loopback:port/p/api/...` as a
+    # valid registration, but health-api serves no /p/ prefix direct (and
+    # the proxy /p/ goes to pi) — so the probe 404s and misreports
+    # DNS-unreachability for a path-shape bug. Offer the bare URL instead;
+    # declining falls to the typo path with a knowingly-keep like https.
+    _bare="${_recorded_uri%/p/api/connectors/callback}/api/connectors/callback"
+    warn "recorded URL uses the retired /p/ spelling (pi-gateway still serves it until the #494 teardown; health-api does not):"
+    warn "  recorded: $_recorded_uri"
+    warn "  bare:     $_bare"
+    if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
+      REDIRECT_URI="$_bare"
+      note "keeping converted REDIRECT_URI (tailnet rename? re-check the Google console registration)"
+      _rec_host=$(_uri_host "$_bare" || true)
+      _converted=1
+    else
+      _rec_host=""
+    fi
+    unset _bare
+  elif [[ "$_rec_fold" == http://*/api/connectors/callback ]]; then
+    # Documented loopback testing shape: like the preset gate, http passes
+    # for loopback hosts only — anything else falls to the typo branch.
+    _rec_host_bare="${_recorded_uri#*://}"
+    _rec_host_bare="${_rec_host_bare%%/*}"
+    if [[ "$_rec_host_bare" == \[*\]* ]]; then
+      _rec_host_bare="${_rec_host_bare#[}"
+      _rec_host_bare="${_rec_host_bare%%\]*}"
+    else
+      _rec_host_bare="${_rec_host_bare%%:*}"
+    fi
+    _rec_host_bare="$(printf '%s' "$_rec_host_bare" | tr '[:upper:]' '[:lower:]')"
+    case "$_rec_host_bare" in localhost|127.0.0.1|::1) _rec_host="$_rec_host_bare";; esac
+    unset _rec_host_bare
   fi
-  if [[ -n "$_rec_host" ]]; then
+  if [[ -n "${_converted:-}" ]]; then
+    : # converted above; nothing left to keep or question.
+  elif [[ -n "$_rec_host" ]]; then
     if confirm "Keep the recorded URL?"; then
       REDIRECT_URI="$_recorded_uri"
       note "keeping recorded REDIRECT_URI (tailnet rename? re-check the Google console registration)"
     fi
   else
-    warn "recorded URL fails the expected shape (https://<host>.<tailnet>.ts.net/p/api/connectors/callback)"
+    warn "recorded URL fails the expected shape (https://<host>.<tailnet>.ts.net/api/connectors/callback)"
     warn "typo? keeping it registers a URL Google will never call back to."
     if confirm "Keep it anyway (only for deliberate non-standard setups)?"; then
       REDIRECT_URI="$_recorded_uri"
       note "keeping non-standard recorded REDIRECT_URI as chosen"
-      warn "registered host is not a tailnet name; the funnel still serves $TS_DNS,"
-      warn "so the probe and the .env comment use ($TS_DNS), not the kept URL"
+      note "the probe below hits this kept URL verbatim, and the .env comment records its host"
     fi
   fi
-  unset _rec_host
+  unset _rec_host _converted _rec_fold
+fi
+# Canonicalise the final value before probing, printing, and writing:
+# Google exact-matches the sent bytes, and the server sends the canonical
+# form — so the .env value, the printed string, and the probe target must
+# all be canonical, or the wizard recommends a URL that mismatches.
+_canon_uri="$(canonical_redirect_uri "$REDIRECT_URI")"
+if [[ "$_canon_uri" != "$REDIRECT_URI" ]]; then
+  note "canonicalised REDIRECT_URI for registration (this is the sent bytes):"
+  note "  was: $REDIRECT_URI"
+  note "  now: $_canon_uri"
+  REDIRECT_URI="$_canon_uri"
+fi
+unset _canon_uri
+# Exactness the canonicaliser deliberately does not provide: query,
+# fragment, userinfo, percent-encodings, and path case are refused
+# outright by the server (501), so they must fail here with a pointer —
+# never sail into .env and die as redirect_uri_mismatch.
+_canonical_rest="${REDIRECT_URI#*://}"
+_canonical_path="/${_canonical_rest#*/}"
+if [[ "$REDIRECT_URI" == *\?* || "$REDIRECT_URI" == *\#* || "$REDIRECT_URI" == *@* || "$REDIRECT_URI" == *%* ]]; then
+  warn "REDIRECT_URI carries a query, fragment, userinfo, or percent-encoding — the server refuses all four (501)."
+  warn "  value: $REDIRECT_URI"
+  warn "Re-run with a clean https://<host>/api/connectors/callback value, or keep knowingly:"
+  if ! confirm "Keep it anyway (registration will mismatch)?"; then exit 1; fi
+elif [[ "$_canonical_path" != "/api/connectors/callback" ]]; then
+  warn "REDIRECT_URI path is not exactly /api/connectors/callback (case-sensitive, no trailing slash — canonicalisation already trimmed one):"
+  warn "  value: $REDIRECT_URI"
+  warn "Re-run with the exact path, or keep knowingly:"
+  if ! confirm "Keep it anyway (registration will mismatch)?"; then exit 1; fi
+fi
+unset _canonical_path _canonical_rest
+# Port gate: the server requires digits-only 1-65535 (parsePort) — a
+# non-numeric or out-of-range port 501s, so it must fail here with a
+# pointer at the startup-log line, not print as registrable. Empty
+# (default port) passes; brackets handled like the TLS branch.
+_final_port_from_uri="${REDIRECT_URI#*://}"
+_final_port_from_uri="${_final_port_from_uri%%/*}"
+if [[ "$_final_port_from_uri" == \[*\]* ]]; then
+  _final_port_from_uri="${_final_port_from_uri#*]}"
+  _final_port_from_uri="${_final_port_from_uri#:}"
+else
+  case "$_final_port_from_uri" in
+    *:* ) _final_port_from_uri="${_final_port_from_uri##*:}" ;;
+    * ) _final_port_from_uri="" ;;
+  esac
+fi
+if [[ -n "$_final_port_from_uri" ]]; then
+  # Length gate first: arithmetic on a 100-digit string wraps, so cap at
+  # 5 digits (65535 max) before the numeric compare.
+  if [[ ${#_final_port_from_uri} -gt 5 ]] || [[ ! "$_final_port_from_uri" =~ ^[0-9]+$ ]] || (( 10#$_final_port_from_uri < 1 || 10#$_final_port_from_uri > 65535 )); then
+    warn "REDIRECT_URI port is not numeric 1-65535 (server fails it closed):"
+    warn "  value: $REDIRECT_URI"
+    warn "Re-run with a valid port, or keep knowingly:"
+    if ! confirm "Keep it anyway (registration will mismatch)?"; then exit 1; fi
+  fi
+fi
+unset _final_port_from_uri
+# Funnel serves 443 only: a funnel-host URI carrying any other explicit
+# port registers a string the funnel never delivers (Google redirects to
+# :8443 while only :443 answers). Custom hosts need their own serving
+# regardless — this gate is strictly about the funnel host + wrong port.
+_funnel_hp="${REDIRECT_URI#*://}"
+_funnel_hp="${_funnel_hp%%/*}"
+if [[ "$_funnel_hp" == \[*\]* ]]; then
+  _funnel_hp="${_funnel_hp#[}"
+  _funnel_hp="${_funnel_hp%%\]*}"
+else
+  _funnel_hp="${_funnel_hp%%:*}"
+fi
+_funnel_hp="$(printf '%s' "$_funnel_hp" | tr '[:upper:]' '[:lower:]')"
+_funnel_ts="$(printf '%s' "$TS_DNS" | tr '[:upper:]' '[:lower:]')"
+if [[ -n "$_funnel_hp" && "$_funnel_hp" == "$_funnel_ts" ]]; then
+  _funnel_ep="${REDIRECT_URI#*://}"
+  _funnel_ep="${_funnel_ep%%/*}"
+  if [[ "$_funnel_ep" == \[*\]* ]]; then
+    _funnel_ep="${_funnel_ep#*]}"
+    _funnel_ep="${_funnel_ep#:}"
+  elif [[ "$_funnel_ep" == *:* ]]; then
+    _funnel_ep="${_funnel_ep##*:}"
+  else
+    _funnel_ep=""
+  fi
+  if [[ -n "$_funnel_ep" && "$_funnel_ep" != "443" ]]; then
+    warn "REDIRECT_URI names the funnel host with explicit port :$_funnel_ep — the funnel serves 443 only:"
+    warn "  value: $REDIRECT_URI"
+    warn "Register the bare :443-stripped spelling instead."
+    if ! confirm "Keep it anyway?"; then exit 1; fi
+  fi
+  unset _funnel_ep
+fi
+unset _funnel_hp _funnel_ts
+
+# Host/scheme gate the final value: the server fails closed on http
+# non-loopback, non-loopback IPs, and non-FQDN hosts — a value passing the
+# shape checks above can still be unregistrable (LAN IP, single label,
+# underscore, *.localhost). https passes for tailnet FQDNs, any dotted
+# FQDN with a lettered multi-char TLD (custom domains, nip.io), and
+# loopback; http passes for loopback only. A dangling colon (host: with
+# no port digits) fails outright like the server instead of offering a
+# keep: no registration can hold it.
+_final_hp="${REDIRECT_URI#*://}"
+_final_hp="${_final_hp%%/*}"
+_final_dangling=0
+if [[ "$_final_hp" == \[*\]* ]]; then
+  [[ "$_final_hp" == *"]:" ]] && _final_dangling=1
+elif [[ "$_final_hp" == *:* ]]; then
+  [[ -z "${_final_hp##*:}" ]] && _final_dangling=1
+fi
+if (( _final_dangling )); then
+  warn "REDIRECT_URI has a dangling colon with no port — the server fails it closed:"
+  warn "  value: $REDIRECT_URI"
+  exit 1
+fi
+unset _final_hp _final_dangling
+_final_hostport="${REDIRECT_URI#*://}"
+_final_hostport="${_final_hostport%%/*}"
+_final_scheme="${REDIRECT_URI%%://*}"
+_final_host="$_final_hostport"
+if [[ "$_final_host" == \[* ]]; then
+  _final_host="${_final_host#[}"
+  _final_host="${_final_host%%\]*}"
+else
+  _final_host="${_final_host%%:*}"
+fi
+_final_ok=0
+if [[ "$_final_scheme" == "https" ]]; then
+  # Tailnet names first (the common case), then any dotted FQDN with a
+  # lettered multi-char TLD — custom domains and nip.io register exactly
+  # like tailnet names (server validRedirectHost).
+  if _valid_tsdns "$_final_host" 2>/dev/null || _valid_fqdn "$_final_host" 2>/dev/null; then
+    _final_ok=1
+  fi
+elif [[ "$_final_scheme" == "http" ]]; then
+  case "$_final_host" in localhost|127.0.0.1|::1) _final_ok=1;; esac
+fi
+# https loopback can never serve: direct host ports are plain HTTP and the
+# funnel only publishes tailnet names — use plain `http` for direct
+# loopback instead. Refused outright (no keep path): keeping it would
+# register a URL nothing can deliver to.
+if [[ "$_final_scheme" == "https" ]]; then
+  case "$_final_host" in
+    localhost|127.0.0.1|::1)
+      warn "REDIRECT_URI is https loopback — nothing serves TLS on a direct host port:"
+      warn "  value: $REDIRECT_URI"
+      warn "Re-run with plain http for direct loopback (or a tailnet/FQDN name for funnel)."
+      exit 1
+      ;;
+  esac
+fi
+if (( ! _final_ok )); then
+  warn "REDIRECT_URI host/scheme is not registrable (https needs a dotted FQDN, http needs loopback):"
+  warn "  value: $REDIRECT_URI"
+  warn "The server fails these closed — Google would never call back."
+  if ! confirm "Keep it anyway?"; then exit 1; fi
+fi
+# Loopback-port cross-check: a loopback REDIRECT_URI is served either
+# direct by health-api on the mapped host port (HEALTH_HOST_PORT, compose
+# default 8001) or through the proxy on APP_PORT (compose default 8080) —
+# two distinct registrations, so either mapped port passes but anything
+# else probes dead air and registers a URL nothing answers. http loopback
+# only here — https loopback exits outright above.
+if [[ "$_final_scheme" == "http" ]]; then
+  case "$_final_host" in
+    localhost|127.0.0.1|::1)
+      _loop_port="${REDIRECT_URI#*://}"
+      _loop_port="${_loop_port%%/*}"
+      if [[ "$_loop_port" == \[*\]* ]]; then
+        _loop_port="${_loop_port#*]}"
+        _loop_port="${_loop_port#:}"
+      elif [[ "$_loop_port" == *:* ]]; then
+        _loop_port="${_loop_port##*:}"
+      elif [[ "$_final_scheme" == "https" ]]; then
+        _loop_port="443"
+      else
+        _loop_port="80"
+      fi
+      # Empty (dangling colon) was already rejected above; default ports
+      # with nothing serving them (http:80, https:443 on loopback) fail
+      # the same way.
+      if [[ "$_loop_port" != "$_health_port" && "$_loop_port" != "$_proxy_port" ]]; then
+        warn "loopback REDIRECT_URI port ($_loop_port) matches neither the health-api host port ($_health_port from $_health_port_src) nor the proxy port ($_proxy_port):"
+        warn "  value: $REDIRECT_URI"
+        warn "Direct loopback is served on the mapped health port, proxy loopback on the proxy port — fix the port or the vars. Either spelling registers, but only the one the browser reaches."
+        if ! confirm "Keep it anyway?"; then exit 1; fi
+      else
+        note "loopback REDIRECT_URI port ($_loop_port): served — direct-health vs proxy are distinct registrations, this one matches."
+      fi
+      unset _loop_port
+      ;;
+  esac
+fi
+unset _final_hostport _final_scheme _final_host _final_ok
+# ── Stage 4: funnel + public verification ─────────────────────────────────
+# Position is load-bearing: this stage runs AFTER the final-URI gates, so
+# REDIRECT_URI is final (preset/recorded/derived/kept resolved). A stage-4
+# position before them would funnel for a URI later replaced.
+stage "Publish the callback over HTTPS"
+# Early exit before any funnel words: loopback http needs no public publish.
+_funnel_final_host="${REDIRECT_URI#*://}"
+_funnel_final_host="${_funnel_final_host%%/*}"
+if [[ "$_funnel_final_host" == \[*\]* ]]; then
+  _funnel_final_host="${_funnel_final_host#[}"
+  _funnel_final_host="${_funnel_final_host%%\]*}"
+else
+  _funnel_final_host="${_funnel_final_host%%:*}"
+fi
+_funnel_final_host="$(printf '%s' "$_funnel_final_host" | tr '[:upper:]' '[:lower:]')"
+_funnel_final_scheme="$(printf '%s' "${REDIRECT_URI%%://*}" | tr '[:upper:]' '[:lower:]')"
+_funnel_skip=0
+if [[ "$_funnel_final_scheme" == "http" ]]; then
+  case "$_funnel_final_host" in
+    localhost|127.0.0.1|::1)
+      note "loopback REDIRECT_URI ($REDIRECT_URI): reached directly — skipping the public funnel."
+      _funnel_skip=1
+      ;;
+  esac
+fi
+unset _funnel_final_host _funnel_final_scheme
+if (( ! _funnel_skip )); then
+say "Funnel will terminate TLS with a publicly-trusted certificate and forward"
+say "to the existing proxy on $_proxy_target. Only ports 443/8443/10000 are"
+say "allowed, so 443 it is."
+printf '\n'
+note "First run may prompt you to enable HTTPS certificates / MagicDNS for the"
+note "tailnet, plus the 'funnel' node attribute in the tailnet policy file."
+note "If it complains, enable them and re-run this stage:"
+note "  DNS:     https://console.tailscale.com/admin/dns"
+note "  Funnel attribute (Access controls → Add Funnel to policy):"
+note "  https://console.tailscale.com/admin/acls"
+printf '\n'
+
+FOUT=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — re-run when /tmp is writable"; exit 1; }
+# Re-runs are safe: if 443 already forwards to this proxy, keep it instead
+# of erroring out of the wizard.
+_funnel_status=$(tailscale funnel status 2>/dev/null || true)
+# Real `funnel status` prints the public URL and the target on separate
+# lines (https://<host>… on one, "|-- / proxy http://127.0.0.1:<port>" on
+# another — port 443 is implied by https://, never printed next to the
+# proxy port), so match across the whole output — but bind the port to the
+# proxy word on its own line, or hint text mentioning a URL and the port
+# elsewhere would take the fast path without the binding existing. Also require the
+# served hostname itself: a preset/dry-run (or a tailnet rename) otherwise
+# keeps host A while the URI, comment, and probe all use host B.
+# Hostname first: most selective on the common mismatch path, so the two
+# broader greps are skipped unless it hits. Boundary-anchored, not
+# substring: a bare `grep -qF "$TS_DNS"` would also match
+# `https://<TS_DNS>.evil.com` and take the fast path for a funnel that
+# never serves this host (same class `_check_kept_host` guards with its
+# trailing `([^a-z0-9.-]|$)`). Dots escaped — in ERE an unescaped dot
+# matches any char, which would re-open the same hole one char wider.
+# The -n guard is load-bearing:
+# grep -qF "" matches every line, so without it an empty TS_DNS would
+# turn the fast path into always-keep (empty exits earlier today, but the
+# safety belongs on this line, not on ordering). The port comes from
+# APP_PORT (validated numeric at the top), so a custom-port funnel that
+# already serves matches instead of starting a duplicate.
+if [[ -n "$TS_DNS" ]] && printf '%s\n' "$_funnel_status" | grep -qiE "https://${TS_DNS//./\\.}([^a-zA-Z0-9.-]|\$)" && printf '%s\n' "$_funnel_status" | grep -qiE "proxy.*${_proxy_port}|${_proxy_port}.*proxy" && printf '%s\n' "$_funnel_status" | grep -qiE 'https://|443'; then
+  note "funnel already serving 443 → this proxy; keeping it"
+  printf '%s\n' "$_funnel_status" | sed 's/^/      /' 2>/dev/null || true
+  rm -f "$FOUT" || true; FOUT=""
+fi
+unset _funnel_status
+if [[ -n "$FOUT" ]]; then
+  if ! tailscale funnel --bg --https=443 "$_proxy_target" </dev/null >"$FOUT" 2>&1; then
+    if grep -qiE -- "already|in use|exists" "$FOUT"; then
+      note "funnel reports it is already serving; keeping the existing one"
+      _check_kept_host
+    else
+      warn "funnel did not start:"
+      sed 's/^/      /' "$FOUT" 2>/dev/null || true
+      pause "Fix the above (usually MagicDNS/HTTPS in the admin console), then press Enter to retry."
+      tailscale funnel --bg --https=443 "$_proxy_target" </dev/null >"$FOUT" 2>&1 || {
+        if grep -qiE -- "already|in use|exists" "$FOUT"; then
+          note "funnel reports it is already serving; keeping the existing one"
+          _check_kept_host
+        else
+          warn "still failing:"; sed 's/^/      /' "$FOUT" 2>/dev/null || true; exit 1
+        fi
+      }
+    fi
+  fi
+  sed 's/^/      /' "$FOUT" 2>/dev/null || true
+  rm -f "$FOUT" || true; FOUT=""
+fi
+fi
+unset _funnel_skip
+printf '\n'
+# Probe-target parts follow the registered URI — scheme and explicit port
+# included — so fallback logic below answers for the right host:port.
+# The URL itself is probed verbatim a few lines down.
+_probe_scheme="${REDIRECT_URI%%://*}"
+_probe_rest="${REDIRECT_URI#*://}"
+_probe_hostport="${_probe_rest%%/*}"
+case "$_probe_scheme" in http|https) ;; *) _probe_scheme="https";; esac
+if [[ -z "$_probe_hostport" ]]; then
+  _probe_hostport="$TS_DNS"
 fi
 unset _recorded_uri
-# Compare the *final* URI (after any keep) against the funnel host. A
-# non-tailnet kept URL yields no host — probe/comment fall back to TS_DNS,
-# so there is no funnel-vs-registration split to report there.
-_uri_check=$(_uri_host "$REDIRECT_URI" || true)
+# Compare the *final* URI (after any keep) against the funnel host. Any
+# registered host other than TS_DNS — custom domain, loopback, or typo —
+# is a funnel-vs-registration split: the funnel above serves TS_DNS only,
+# so a custom host needs its own serving (reverse proxy/DNS), and a
+# loopback host is reached directly, never through the funnel.
+_uri_check="${REDIRECT_URI#*://}"
+_uri_check="${_uri_check%%/*}"
+if [[ "$_uri_check" == \[*\]* ]]; then
+  _uri_check="${_uri_check#[}"
+  _uri_check="${_uri_check%%\]*}"
+else
+  _uri_check="${_uri_check%%:*}"
+fi
+_uri_check="$(printf '%s' "$_uri_check" | tr '[:upper:]' '[:lower:]')"
 if [[ -n "$_uri_check" && "$_uri_check" != "$TS_DNS" ]]; then
-  warn "REDIRECT_URI host ($_uri_check) differs from TS_DNS ($TS_DNS):"
-  warn "the funnel serves TS_DNS while Google registers the URI host."
+  case "$_uri_check" in
+    localhost|127.0.0.1|::1)
+      note "REDIRECT_URI is loopback ($_uri_check): reached directly, the funnel above does not apply."
+      ;;
+    *)
+      warn "REDIRECT_URI host ($_uri_check) differs from TS_DNS ($TS_DNS):"
+      warn "the funnel above serves TS_DNS only — serve the custom host separately,"
+      warn "or Google registers a URL this funnel never delivers to."
+      ;;
+  esac
 fi
 unset _uri_check
 say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
@@ -774,42 +1366,79 @@ say "Waiting for public DNS + certificate (up to ~10 minutes worst case)…"
 # probe still reports status without the wait.
 ok=0
 issuer=""
-# Probe the host being registered, not unconditionally TS_DNS: a lone
-# REDIRECT_URI preset against a daemon-derived TS_DNS would otherwise
-# verify host B while registering host A.
-_probe_host="$TS_DNS"
-if (( _URI_FROM_PRESET )); then
-  # _uri_host strips scheme/port and returns empty for a kept non-standard
-  # URL (loopback http) — fall back to the funnel host rather than probing
-  # "https://http:" as if that were a hostname.
-  _probe_host=$(_uri_host "$REDIRECT_URI" || true)
-  _probe_host="${_probe_host:-$TS_DNS}"
-fi
+# Probe the registered URI itself — path, case, query and all — not a
+# reconstructed scheme+host: a knowingly-kept non-canonical value must
+# prove (or fail) on its own bytes, or the probe greens a clean path while
+# the registered string 404s/501s. The callback needs no bearer; without
+# params a clean URL answers 400 (missing code/state) — that alone proves
+# routing + handler (the 400 precedes the config check by design, so a
+# param-less hit never 501s). Anything else (404/502/000) is a real
+# failure to fix before registering.
+# _probe_hostport was derived from the final canonical REDIRECT_URI above;
+# TS_DNS is the fallback only if that derivation yielded nothing probabe
+# (loopback http included — the probe speaks the URI's own scheme).
+_probe_host="$_probe_hostport"
+_probe_host="${_probe_host:-$TS_DNS}"
+_probe_url="$REDIRECT_URI"
+# 400/429 are the in-contract answers for a param-less callback hit
+# (missing params / throttled) — both prove the route serves. curl without -f: -f would fail all of them and prove nothing.
+# -L follows the mux clean-path redirect: a knowingly-kept double-slash URL
+# 301s to the collapsed form before any handler runs, and the follow-up
+# code is what proves the route (capped at 2 hops — this must terminate).
+_probe_ok_code() {
+  local code
+  code=$(curl -sL --max-redirs 2 -o /dev/null -w '%{http_code}' --max-time 10 "$_probe_url" 2>/dev/null || echo "000")
+  [[ "$code" == "400" || "$code" == "429" ]]
+}
 if (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
-  note "preset hostname — skipping the public-reachability wait"
-  if curl -fsS --max-time 10 "https://$_probe_host/p/healthz" >/dev/null 2>&1; then
-    ok=1
+  if (( _DNS_FROM_PRESET )); then
+    note "preset hostname — skipping the public-reachability wait"
   else
+    note "SKIP_PROBE=1 — skipping the public-reachability wait on a discovered hostname"
+  fi
+  if _probe_ok_code; then
+    ok=1
+  elif (( _DNS_FROM_PRESET )); then
     note "not reachable from here right now (expected for a dry-run name)"
+  else
+    note "not reachable from here right now (stack stopped or still starting?)"
   fi
 else
   for ((__i = 1; __i <= 30; __i++)); do
-    if curl -fsS --max-time 10 "https://$_probe_host/p/healthz" >/dev/null 2>&1; then ok=1; break; fi
+    if _probe_ok_code; then ok=1; break; fi
     printf '%s' '.'; sleep 10
   done
 fi
 printf '\n'
 if (( ok )); then
-  printf '  %s✓%s public HTTPS reachable: https://%s/p/healthz\n' "$GREEN" "$RESET" "$_probe_host"
+  printf '  %s✓%s callback route answers: %s (400/429 both prove the route serves)\n' "$GREEN" "$RESET" "$_probe_url"
   # curl just proved TCP; bound the TLS handshake too so a TLS stall can't
-  # outlast the probe budget. timeout is coreutils-Linux-only (macOS ships
+  # outlast the probe budget — https only (loopback http has no TLS), at
+  # the probed port. timeout is coreutils-Linux-only (macOS ships
   # gtimeout at best), so use it when present and run bare otherwise —
   # same portability line as the tmp-file prune below.
-  if command -v timeout >/dev/null 2>&1; then
-    issuer=$(timeout 10 openssl s_client -connect "$_probe_host:443" -servername "$_probe_host" </dev/null 2>/dev/null \
+  _tls_host="$_probe_host"; _tls_port="443"; _tls_name="$_probe_host"
+  if [[ "$_tls_host" == \[*\]* ]]; then
+    # Split on `]` first like the other bracket branches: stripping `[`
+    # then one trailing `]` turns `[::1]:8001` into `::1]:8001` (then
+    # re-bracketed to the un-diallable `[::1]:8001]`).
+    _tls_name="${_tls_host#[}"
+    _tls_name="${_tls_name%%\]*}"
+    _tls_rest="${_tls_host#*]}"; _tls_rest="${_tls_rest#:}"
+    [[ -n "$_tls_rest" ]] && _tls_port="$_tls_rest"
+    # Keep brackets on the connect target (bare ::1:port is ambiguous),
+    # bare name on SNI — mirroring the IPv4 branch below.
+    _tls_host="[$_tls_name]"
+  elif [[ "$_tls_host" == *:* ]]; then
+    _tls_port="${_tls_host##*:}"
+    _tls_name="${_tls_host%%:*}"
+    _tls_host="$_tls_name"
+  fi
+  if [[ "$_probe_scheme" == "https" ]] && command -v timeout >/dev/null 2>&1; then
+    issuer=$(timeout 10 openssl s_client -connect "$_tls_host:$_tls_port" -servername "$_tls_name" </dev/null 2>/dev/null \
              | openssl x509 -noout -issuer 2>/dev/null || true)
-  else
-    issuer=$(openssl s_client -connect "$_probe_host:443" -servername "$_probe_host" </dev/null 2>/dev/null \
+  elif [[ "$_probe_scheme" == "https" ]]; then
+    issuer=$(openssl s_client -connect "$_tls_host:$_tls_port" -servername "$_tls_name" </dev/null 2>/dev/null \
              | openssl x509 -noout -issuer 2>/dev/null || true)
   fi
   if [[ -n "$issuer" ]]; then
@@ -817,21 +1446,24 @@ if (( ok )); then
     note "Google accepts Let's Encrypt-issued certs."
   fi
 elif (( _DNS_FROM_PRESET )) || [[ "${SKIP_PROBE:-0}" == "1" ]]; then
-  # Preset/dry-run names were already reassured above — a fake name never
+  # Preset names were already reassured above — a fake name never
   # propagates, so the DNS-wait message below would misdirect those users.
-  note "continuing to the .env write without public reachability"
+  # An explicit skip on a discovered name gets no such reassurance.
+  if (( _DNS_FROM_PRESET )); then
+    note "continuing to the .env write without public reachability"
+  else
+    note "continuing to the .env write without public reachability (probe skipped by SKIP_PROBE=1 — verify serving separately)"
+  fi
 else
   warn "not reachable yet (DNS can take up to 10 min to propagate)."
   warn "You can continue — the URI below is still correct; re-run the probe later if needed."
 fi
-unset ok issuer _probe_host
+unset ok issuer _probe_host _probe_url _probe_scheme _probe_hostport _tls_host _tls_port _tls_name _tls_rest _canon_uri
 printf '\n'
 say "This is the exact string to register in Google (copy it verbatim):"
 printf '\n  %s%s%s\n\n' "$BOLD" "$REDIRECT_URI" "$RESET"
-note "Through the proxy, /p/ is stripped before pi sees it, so this lands on"
+note "Through the proxy, /api/ goes straight to health-api, which serves"
 note "/api/connectors/callback — the one route that needs no bearer."
-note "Do NOT register the bare https://$TS_DNS/api/... form: on this proxy that"
-note "path goes to health-api, not to pi-gateway."
 pause "Press Enter once you've copied it."
 
 # ── Stage 5: GCP project + APIs ───────────────────────────────────────────
@@ -1041,16 +1673,33 @@ unset v
 
 # A comment block once, refreshed on re-runs (the tailnet name can change);
 # write_env only replaces key lines, so this survives re-runs either way.
-# The recorded host follows the redirect URL: on the preset path that host
-# can differ from the daemon-derived TS_DNS.
-_comment_host="$TS_DNS"
-if (( _URI_FROM_PRESET )); then
-  # Same _uri_host derivation as the probe host: the comment records the
-  # funnel host, so a kept non-tailnet URL must not write "https://http:"
-  # or claim a funnel serves something it doesn't.
-  _comment_host=$(_uri_host "$REDIRECT_URI" || true)
-  _comment_host="${_comment_host:-$TS_DNS}"
+# The recorded host always follows the redirect URL: on a custom-domain,
+# preset, or recorded-keep path that host can differ from the
+# daemon-derived TS_DNS, and the comment must name the registered host —
+# not the funnel host that does not serve it.
+_comment_host="${REDIRECT_URI#*://}"
+_comment_host="${_comment_host%%/*}"
+_comment_hostport="$_comment_host"
+if [[ "$_comment_host" == \[*\]* ]]; then
+  # Bracket/port aware (unlike _uri_host, which is tailnet-only): a custom
+  # host must survive here, not fall back to TS_DNS silently.
+  _comment_host="${_comment_host#[}"
+  _comment_host="${_comment_host%%\]*}"
+else
+  _comment_host="${_comment_host%%:*}"
 fi
+# Port-aware like the funnel-vs-registration split check: the funnel serves
+# 443 only, so a knowingly-kept funnel-host URL with an explicit non-443
+# port must not be labeled funnel-served — the bare host strip above hides
+# the port the funnel never delivers to.
+_comment_port=""
+if [[ "$_comment_hostport" == \[*\]* ]]; then
+  _comment_after="${_comment_hostport#*]}"
+  [[ "$_comment_after" == :* ]] && _comment_port="${_comment_after#:}"
+else
+  case "$_comment_hostport" in *:*) _comment_port="${_comment_hostport##*:}";; esac
+fi
+_comment_host="${_comment_host:-$TS_DNS}"
 # ASCII sentinel in one variable: non-ASCII dashes would silently fork the
 # block if an editor normalized them, and two spellings would drift.
 _marker='# -- Google connectors'
@@ -1068,11 +1717,26 @@ else
     exit 1
   fi
 fi
+# The serving line matches the setup: funnel host with no explicit port
+# (443 is the funnel's only port; canonicalisation strips an explicit
+# :443) → funnel sentence; a funnel host with any other explicit port, or
+# any other host → registered-host sentence naming the full hostport (a
+# stale funnel sentence on a custom host is exactly the misdirection being
+# removed, and a port-stripped funnel sentence on :8443 hides the port the
+# funnel never delivers to).
+if [[ "$_comment_host" == "$TS_DNS" && ( -z "$_comment_port" || "$_comment_port" == "443" ) ]]; then
+  _cb_line="# Callback is served over Tailscale Funnel: https://$_comment_host"
+elif [[ "$_comment_host" == "$TS_DNS" ]]; then
+  _cb_line="# Callback host: $_comment_hostport (registered here — the funnel serves 443 only, NOT :$_comment_port)"
+else
+  _cb_line="# Callback host: $_comment_hostport (registered here — served separately, NOT by the funnel above)"
+fi
+unset _comment_port _comment_hostport _comment_after
 if (( _marker_present == 0 )); then
   {
     printf '\n'
     printf '# -- Google connectors (#316) -- added by setup wizard --\n'
-    printf '# Callback is served over Tailscale Funnel: https://%s\n' "$_comment_host"
+    printf '%s\n' "$_cb_line"
     printf '# all-four-or-nothing: any missing piece leaves OAuth unconfigured (connect → 501).\n'
   } >> "$ENV_FILE" || { warn "comment block append failed — restore with: $_restore_cmd"; exit 1; }
 else
@@ -1082,14 +1746,15 @@ else
   _cb_tmp=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — restore with: $_restore_cmd"; exit 1; }
   # No `--` after the script: BSD/macOS sed treats it as an operand, while
   # ENV_FILE is absolute here (canonicalized in stage 1), so not needed.
-  sed "s|^# Callback is served over Tailscale Funnel:.*|# Callback is served over Tailscale Funnel: https://$_comment_host|" "$ENV_FILE" > "$_cb_tmp" || {
+  # Matches either serving sentence shape from prior runs.
+  sed "s|^# Callback \(is served over Tailscale Funnel: https://.*\|host: .*\)|$_cb_line|" "$ENV_FILE" > "$_cb_tmp" || {
     warn "hostname comment refresh failed — restore with: $_restore_cmd"
     exit 1
   }
   cat "$_cb_tmp" > "$ENV_FILE" || { warn "comment refresh write failed — restore with: $_restore_cmd"; exit 1; }
   rm -f "$_cb_tmp" || true; _cb_tmp=""
 fi
-unset _comment_host _marker _marker_present _grep_rc
+unset _comment_host _marker _marker_present _grep_rc _cb_line
 
 write_env GOOGLE_CLIENT_ID "$GOOGLE_CLIENT_ID" || { warn "write failed (disk full?) — restore with: $_restore_cmd"; exit 1; }
 write_env GOOGLE_CLIENT_SECRET "$GOOGLE_CLIENT_SECRET" || { warn "write failed (disk full?) — restore with: $_restore_cmd"; exit 1; }
@@ -1124,28 +1789,55 @@ RENDER_ERR=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — sto
 if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >"$RENDER_OUT" 2>"$RENDER_ERR"; then
   # Empty vars render as KEY: '' — the quote alone must not satisfy the
   # check, or a missing var reads as "reaches the pi service".
+  # Scoped per service: the same four keys are mapped into both pi and
+  # health-api, and a whole-config grep would pass while one mapping is
+  # missing (the health-api mapping is what connect/callback actually
+  # read — a green proof with it missing 501s at runtime).
+  _service_block() {
+    awk -v svc="$1" '
+      $0 ~ "^  " svc ":$" { inblock=1; next }
+      inblock && /^  [a-zA-Z0-9_-]+:$/ { exit }
+      inblock { print }
+    ' "$RENDER_OUT"
+  }
   _render_missing=""
-  for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
-    if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[[:space:]]*[^\"'[:space:]]" "$RENDER_OUT"; then
-      printf '  %s✓%s %s present in rendered compose config\n' "$GREEN" "$RESET" "$k"
-    else
-      # Same rc discipline as the comment-block grep: rc=1 is a genuine
-      # empty render, rc≥2 is a read failure that must not masquerade as
-      # "renders EMPTY" (the message would send the reader to the wrong fix).
-      _render_rc=$?
-      if (( _render_rc != 1 )); then
-        warn "could not read the rendered config (grep exit $_render_rc) — the .env writes stand, but nothing is verified"
-        exit 1
+  # Health-api is REQUIRED (it serves connect/callback); pi is warn-only
+  # (its verbs die with the #494 teardown, after which a required check
+  # here would block setup on a correct tree).
+  for _svc in health-api pi; do
+    _block_out=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — stopping before the render"; exit 1; }
+    _service_block "$_svc" >"$_block_out"
+    for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
+      if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[[:space:]]*[^\"'[:space:]]" "$_block_out"; then
+        printf '  %s✓%s %s present for %s in rendered compose config\n' "$GREEN" "$RESET" "$k" "$_svc"
+      else
+        # Same rc discipline as the comment-block grep: rc=1 is a genuine
+        # empty render, rc≥2 is a read failure that must not masquerade as
+        # "renders EMPTY" (the message would send the reader to the wrong fix).
+        _render_rc=$?
+        if (( _render_rc != 1 )); then
+          warn "could not read the rendered config (grep exit $_render_rc) — the .env writes stand, but nothing is verified"
+          rm -f "$_block_out" || true
+          exit 1
+        fi
+        if [[ "$_svc" == "pi" ]]; then
+          # Warn-only: the pi verbs (and their env mapping) die with the
+          # #494 teardown — a required check here would block setup on a
+          # correct tree the moment they land.
+          printf '  %s!%s %s missing for %s (serving copy is health-api; pi mapping dies with #494)\n' "$YELLOW" "$RESET" "$k" "$_svc"
+        else
+          printf '  %s✗%s %s renders EMPTY for %s — fix it before restarting\n' "$YELLOW" "$RESET" "$k" "$_svc"
+          _render_missing="${_render_missing:+$_render_missing }${_svc}/${k}"
+        fi
       fi
-      printf '  %s✗%s %s renders EMPTY — fix it before restarting\n' "$YELLOW" "$RESET" "$k"
-      _render_missing="${_render_missing:+$_render_missing }$k"
-    fi
+    done
+    rm -f "$_block_out" || true
   done
   if [[ -n "$_render_missing" ]]; then
     warn "empty render for: ${_render_missing} — an empty value is the misconfiguration this step exists to catch"
     exit 1
   fi
-  unset _render_missing _render_rc
+  unset _render_missing _render_rc _block_out _svc
 else
   # The subshell's cd can only fail on a tree deleted mid-run (REPO_DIR is
   # fail-loud guarded above), but attributing that to compose would send the
@@ -1168,31 +1860,41 @@ finish
 
 # finish clears the screen, wiping the render ✓ lines just earned; restate
 # the proof beside the comparison step that now leans on it.
-note "render proof (cleared with the stage above): all four keys interpolated non-empty"
+note "render proof (cleared with the stage above): all four keys interpolated non-empty for health-api (any pi lines above are warn-only, not proof)"
 
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"
-printf '  1. Restart now so the pi container picks up the new .env values:\n'
-printf '     ./scripts/hermes.sh restart recreates it (a plain container\n'
+printf '  1. Restart now so every container picks up the new .env values\n'
+printf '     (health-api reads all four OAuth vars too — a pi-only recreate\n'
+printf '     leaves connect 501ing on stale config):\n'
+printf '     ./scripts/hermes.sh restart recreates them (a plain container\n'
 printf '     restart without recreation will not pick up .env changes).\n'
-printf '  2. Compare the canonical string the gateway logs at boot:\n'
+printf '  2. Compare the canonical string health-api logs at boot:\n'
 printf -v _compose_file '%q' "$REPO_DIR/docker/docker-compose.yml"
-printf '       %s -f %s logs pi | grep "OAuth configured"\n' "${_compose[*]}" "$_compose_file"
+printf '       %s -f %s logs health-api | grep -E "OAuth (configured|unavailable|redirect invalid)"\n' "${_compose[*]}" "$_compose_file"
 unset _compose_file
 printf '     (if the render step above used sudo, prefix sudo here too)\n'
-printf '     with what is registered in Google. They must match byte-for-byte;\n'
+printf '     The narrowed pattern skips the "boot check started" starter\n'
+printf '     line on purpose: init runs detached, so poll until a status\n'
+printf '     line lands (repeat the grep a few seconds apart) — an empty\n'
+printf '     result means "not printed yet", not "misconfigured".\n'
+printf '     Expect the configured line; an unavailable line names the\n'
+printf '     reason (fix that first) — with what is registered in Google.\n'
+printf '     They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
 printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
 printf '     "app isn'"'"'t verified" warning (Testing mode) → Advanced → proceed.\n'
 printf '  4. Re-add gmail/calendar inside the "mcpServers" object in pi/mcp.json\n'
 printf '     by hand (unwired until OAuth is configured; OAuth alone does not\n'
-printf '     bring the agent tools back). The "browser" entry is currently last\n'
+printf '     bring the agent tools back). The "reports" entry is currently last\n'
 printf '     and has no trailing comma — add one after it, then paste (commas\n'
-printf '     after browser and gmail, none after calendar):\n'
+printf '     after reports and gmail, none after calendar):\n'
 printf '       "gmail": {"command": "/usr/local/bin/gmail"},\n'
 printf '       "calendar": {"command": "/usr/local/bin/calendar"}\n'
 printf '     then ./scripts/hermes.sh restart again so the pi container picks\n'
 printf '     them up (entrypoint refuses to start if a server fails to connect).\n'
+printf '     Verify with: python3 -m json.tool pi/mcp.json (invalid JSON\n'
+printf '     crash-loops the container — the lint is the step, not optional).\n'
 printf '\n'
 printf '  Re-running this wizard is safe: it keeps existing values as defaults.\n'
 printf '  Envelope key: BACKUP FIRST — rotating it invalidates every stored grant.\n\n'

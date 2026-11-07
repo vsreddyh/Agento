@@ -20,8 +20,8 @@ func errBoom() error { return errors.New("boom") }
 
 // TestConnectorPolicySync pins the rename-sync obligation: the tool names
 // the servers publish must match the gate refusal and the approval policy
-// exactly. A renamed server tool that misses either table holds for
-// approval (safe) instead of refusing with the draft message (wrong UX) —
+// exactly. A renamed server tool that misses either table denies at once
+// (safe) instead of refusing with the draft message (wrong UX) —
 // or worse, runs free. The exposed lists live in ExposedTools (single
 // source of truth); this test fails loudly on drift instead of review
 // catching it.
@@ -29,16 +29,16 @@ func TestConnectorPolicySync(t *testing.T) {
 	for _, server := range []string{Gmail, Calendar} {
 		for _, tool := range ExposedTools(server) {
 			refused := IsDraftOnlySend(server, tool)
-			holds := approvals.NeedsApproval(server, tool, nil)
+			sensitive := approvals.NeedsApproval(server, tool, nil)
 			switch {
-			case refused && holds:
-				// Refused write with gated-true backstop: correct.
-			case !refused && !holds:
+			case refused && sensitive:
+				// Refused write with sensitive-true backstop: correct.
+			case !refused && !sensitive:
 				// Free read/draft: correct.
-			case refused && !holds:
-				t.Errorf("%s/%s refused by gate but not gated: bypass runs it free", server, tool)
+			case refused && !sensitive:
+				t.Errorf("%s/%s refused by gate but not sensitive: bypass runs it free", server, tool)
 			default:
-				t.Errorf("%s/%s holds for approval but is not a refused write: rename sync gap", server, tool)
+				t.Errorf("%s/%s is sensitive but is not a refused write: rename sync gap", server, tool)
 			}
 		}
 	}
@@ -1535,9 +1535,9 @@ func TestDecryptTokenRejectsEmpty(t *testing.T) {
 }
 
 // Refusal/policy sync: IsDraftOnlySend must name exactly the send paths,
-// and the same tools must gate (not refuse-or-run-free) in the gate
-// policy. A renamed tool misses the refusal and falls through to the
-// gated backstop — safe, but the agent stalls on an approval for the
+// and the same tools must be sensitive (not refuse-or-run-free) in the
+// policy table. A renamed tool misses the refusal and falls through to
+// at-once denial — safe, but the agent loses the draft guidance for the
 // exact flow v1 sells ("create a draft instead"). Sync this list with
 // the wired servers' real tool names whenever they change.
 func TestIsDraftOnlySendMatchesServers(t *testing.T) {
@@ -1567,7 +1567,7 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 		t.Error("unknown tools must not be refused")
 	}
 	// Cf-suffixed inputs fold like clean ones: a zero-width-suffixed pair
-	// must hit the same refusal, not slip to the gated backstop.
+	// must hit the same refusal, not slip to the policy backstop.
 	if !IsDraftOnlySend("gmail⁠", "send_message⁠") {
 		t.Error("Cf-suffixed send should still be refused")
 	}
@@ -1594,10 +1594,10 @@ func TestIsDraftOnlySendMatchesServers(t *testing.T) {
 	}
 	// Oversize defers to the backstop on both parts: an oversized id is
 	// unknown by construction, and an oversized tool can never be a real
-	// send path — the gated backstop (approval hold) is the honest answer,
+	// send path — the policy backstop (at-once denial) is the honest answer,
 	// not a refusal text naming a draft workflow for a tool that cannot
 	// exist. A future legit upstream tool longer than the cap flips from
-	// gated to gated when the cap widens, never gated to refused.
+	// sensitive to sensitive when the cap widens, never sensitive to refused.
 	if IsDraftOnlySend(strings.Repeat("x", MaxConnectorIDLen+1), "send_message") {
 		t.Error("oversized server should fall to the backstop, not refuse")
 	}

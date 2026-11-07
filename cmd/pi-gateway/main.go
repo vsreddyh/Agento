@@ -360,12 +360,12 @@ func run() error {
 
 	// Approval gates + audit trail (#313). Same database, sibling
 	// collections to runs. Without it the gateway answers approvals from
-	// memory — but a decision then needs a SHARED store, and every MCP
-	// server except memory and browser hard-requires Mongo (fatal without
-	// it, and the entrypoint gate refuses boot), so a gateway-side fallback
-	// only meets memory's and browser's ephemeral gates: anything else is
-	// down together, fast, rather than a 14-minute hang (Store.Shared
-	// documents the contract).
+	// memory — but no new decision ever parks as of #487 (the gate runs
+	// tools at once; DecideApproval only touches pre-migration rows), and
+	// every MCP server except memory and browser hard-requires Mongo
+	// (fatal without it, and the entrypoint gate refuses boot), so a
+	// gateway-side fallback only serves pre-migration reads and sweeps,
+	// not live decisions (Store.Shared documents the contract).
 	var approvalStore approvals.Store
 	if store, err := approvals.FromEnv(); err != nil {
 		logger.Printf("approvals: falling back to in-memory: %v", err)
@@ -380,9 +380,9 @@ func run() error {
 			logger.Printf("approvals: index setup failed (records will not auto-expire): %v", err)
 		}
 		cancelIndex()
-		// A restart orphans the servers that owned every pending wait.
-		// Expire them before serving so the list never shows a pending row
-		// nothing will ever decide.
+		// A restart orphans pre-migration pending waits (nothing new parks
+		// as of #487). Expire them before serving so the list never shows
+		// a pending row nothing will ever decide.
 		markCtx, cancelMark := context.WithTimeout(ctx, 10*time.Second)
 		if n, err := store.MarkInterrupted(markCtx, time.Now()); err != nil {
 			logger.Printf("approvals: could not expire pending rows: %v", err)
@@ -421,7 +421,8 @@ func run() error {
 	// model but no job store, so a Mongo-less stack still answers "no runner"
 	// honestly instead of failing open. Scheduler fires do NOT use this path:
 	// they run as chat-agent turns (wired above), so they can read notes and
-	// fetch live pages at fire time.
+	// run list/query lookups at fire time (never browser navigation — no one
+	// is attached to approve a domain).
 	var teachRunner gateway.TeachRunner
 	if key := strings.TrimSpace(os.Getenv("OPENCODE_API_KEY")); key != "" {
 		runner := &cronjobs.BareClient{

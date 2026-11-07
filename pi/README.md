@@ -42,9 +42,10 @@ this PR added `mcp.json`, so the pi service must carry:
 
 - `MONGODB_URI` and `MONGODB_DB` — every server in `pi/mcp.json` except `memory`
   and `browser` opens the shared Atlas database on startup and exits without
-  them (`memory` and `browser` fall back to in-process stores whose gated
-  calls deny fail-closed; the entrypoint gate still refuses boot because the
-  other six die)
+  them (`memory` and `browser` fall back to in-process stores whose calls run
+  with an ephemeral audit trail that dies with the process — never blocked;
+  the entrypoint gate still refuses boot because the
+  other seven die)
 - `OPENCODE_API_KEY` — already enforced by the entrypoint
 
 `docker/docker-compose.yml` defines one anchor, `&mongo-env`, holding only the
@@ -230,9 +231,9 @@ through nginx — not `pi` itself.
 | `GET /api/runs/{id}/events` | yes — SSE snapshot, then live frames | run subscription |
 | `POST /api/runs/{id}/steer` | yes — queues an instruction into the running turn | Pi RPC `steer` |
 | `POST /api/runs/{id}/cancel` | yes — aborts, keeps partial output | Pi RPC `abort` |
-| `GET /api/approvals` (+ `/{profile}/api/approvals`) | yes — filters `status`, `limit` | `approvals` (Mongo), memory fallback |
-| `POST /api/approvals/{id}/approve` | yes — releases the held call, exactly once | approval store |
-| `POST /api/approvals/{id}/deny` | yes — refuses it, Pi gets a tool error | approval store |
+| `GET /api/approvals` (+ `/{profile}/api/approvals`) | yes — filters `status`, `limit` (pre-migration rows only; nothing new parks) | `approvals` (Mongo), memory fallback |
+| `POST /api/approvals/{id}/approve` | yes — releases a pre-migration held call, exactly once (nothing new parks) | approval store |
+| `POST /api/approvals/{id}/deny` | yes — refuses a pre-migration held call (nothing new parks) | approval store |
 | `GET /api/audit` (+ `/{profile}/api/audit`) | yes — filters `server`, `tool`, `limit` | `audit_log` (Mongo, 90-day TTL) |
 | `GET /api/memory` (+ `/{profile}/api/memory`) | yes — items, paused topics, topic list | `memory_items` (Mongo), memory fallback |
 | `POST /api/memory` | yes — create a confirmed, user-written item | memory store |
@@ -242,21 +243,28 @@ through nginx — not `pi` itself.
 | `PUT /api/memory/topics/{topic}` | yes — pause/resume one topic | memory store |
 | `POST /{profile}/api/questions/{id}` | yes — answer a pending `ask_user` dialog, exactly once | `extension_ui_response` over Pi stdin |
 
-Approval gates (#313) hold sensitive tool calls in an in-process gate inside
-each server (`internal/approvalgate`, ADR-0011 Stage 2): money writes, deletes,
-rewrites and real prunes wait up to 14 minutes for a decision here, then run
-or fail closed. See `docs/adr/0002-approval-gates.md`.
+Approval gates (#313) prompt for sensitive tool calls through the harness
+(T3/opencode permission prompts per `opencode.json`): money writes, account
+create/archive, browser navigation (per-task, URL shown), deletes,
+rewrites and real prunes ask first (counting prunes included — patterns
+cannot see arguments); connector sends (`send_message`/`send_gmail`,
+`create_event`/`send_invite`) refuse outright and never prompt, even if
+approved; pre-migration rows used to wait up to
+14 minutes for an in-app decision here. See `docs/adr/0002-approval-gates.md`
+(pre-migration design).
 
 Memory (#315) is the per-profile store behind the app's Memory screen. The
 gateway prefixes confirmed, unpaused items onto each turn; agent-proposed items
-land pending until the user confirms them, and deletion is immediate. The
+land pending until the user confirms them (when a database is configured —
+ephemeral saves never reach the screen), and deletion is immediate. The
 `memory` MCP server is how the agent
 proposes one, scoped by the `AGENTO_PROFILE` the gateway passes to Pi. See
 `docs/adr/0003-memory.md`.
 
 Browser (#312) is the read-only web task surface: a headless-Chromium MCP
-server (`browser_goto` gated per domain, `browser_read`, `browser_screenshot`,
-`browser_save_evidence` free) with one persistent profile per agent profile.
+server (`browser_goto` prompts per domain with the URL shown, `browser_read`,
+`browser_screenshot`, `browser_save_evidence` free) with one persistent
+profile per agent profile.
 Evidence bundles land in `exports/browser/` for the Files tab. There are no
 click/type tools by design, so logins are impossible and passwords never
 travel. See `docs/adr/0005-browser.md`.
