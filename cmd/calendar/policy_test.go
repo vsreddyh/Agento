@@ -12,10 +12,10 @@ import (
 // TestPublishedToolsMatchPolicy pins the publisher side of the rename-sync
 // obligation: every tool name this binary registers in AddTool must land
 // in exactly one policy bucket — free (runs ungated, never refused) or
-// refused (gate-refused + gated-true backstop). A typo'd AddTool name
-// ("create_even") holds for approval instead of failing loudly; this test
+// refused (gate-refused + sensitive-true backstop). A typo'd AddTool name
+// ("create_even") denies at once instead of failing loudly; this test
 // reads the registered names out of main.go so the typo fails here, in CI,
-// instead of stalling the agent in prod.
+// instead of silently denying in prod.
 //
 // TestConnectorPolicySync (connectors package) pins the other direction:
 // policy tables stay in agreement with each other. Together they close the
@@ -30,7 +30,7 @@ func TestPublishedToolsMatchPolicy(t *testing.T) {
 		t.Fatal("no AddTool names found in main.go")
 	}
 	// The server literal must be this binary's id and known to the
-	// policy table: a typo fails closed silently (every tool holds), so
+	// policy table: a typo fails closed silently (every tool is denied), so
 	// pin it here rather than relying on the startup warning alone.
 	for _, m := range names {
 		if got := m[1]; got == "" || got != "calendar" {
@@ -69,16 +69,16 @@ func TestPublishedToolsMatchPolicy(t *testing.T) {
 			t.Errorf("unexpected tool registration %q", name)
 		}
 		refused := connectors.IsDraftOnlySend("calendar", name)
-		holds := approvals.NeedsApproval("calendar", name, nil)
+		sensitive := approvals.NeedsApproval("calendar", name, nil)
 		switch {
-		case refused && holds:
-			// Refused write with gated-true backstop: correct.
-		case !refused && !holds:
+		case refused && sensitive:
+			// Refused write with sensitive-true backstop: correct.
+		case !refused && !sensitive:
 			// Free read/draft: correct.
-		case refused && !holds:
-			t.Errorf("tool %q refused by gate but not gated: bypass runs it free", name)
+		case refused && !sensitive:
+			t.Errorf("tool %q refused by gate but not sensitive: bypass runs it free", name)
 		default:
-			t.Errorf("tool %q holds for approval but is not a refused write: rename sync gap", name)
+			t.Errorf("tool %q is sensitive but is not a refused write: rename sync gap", name)
 		}
 	}
 	// Both directions: the count check catches add/delete with a changed

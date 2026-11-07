@@ -111,7 +111,7 @@ func decideCall(store *stubStore, server, tool string, exec func() (*mcp.CallToo
 		exec = okExec
 	}
 	name := strings.ToLower(strings.TrimSpace(tool))
-	return decide(context.Background(), server, tool, name, map[string]any{}, map[string]any{}, store, exec)
+	return decide(context.Background(), server, tool, name, map[string]any{}, store, exec)
 }
 
 func TestAllowPathRunsAndAuditsAllowed(t *testing.T) {

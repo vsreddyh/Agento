@@ -243,8 +243,8 @@ func TrimCredential(s string) string {
 // Follow-up obligation: keep this list in sync with the wired servers'
 // real tool names. Pinned by TestIsDraftOnlySendMatchesServers alongside
 // the scope test — a renamed tool fails loudly instead of silently
-// missing the refusal and falling through to the gated backstop
-// (fail-closed: holds for approval instead of refusing with the draft
+// missing the refusal and falling through to the policy backstop
+// (fail-closed: denied at once instead of refusing with the draft
 // message). Safe, but a UX divergence worth a sync check when the
 // connector MCP servers land.
 func IsDraftOnlySend(server, tool string) bool {

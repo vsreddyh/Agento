@@ -31,8 +31,8 @@ const (
 	// ApprovalsCollection holds pending and decided approvals. Short-lived:
 	// rows expire ApprovalTTL after creation whether decided or not.
 	ApprovalsCollection = "approvals"
-	// AuditCollection holds one row per gated tool call. The audit trail
-	// outlives the approval that allowed it.
+	// AuditCollection holds one row per executed tool call, reads
+	// included. The audit trail outlives any single decision.
 	AuditCollection = "audit_log"
 
 	// ApprovalTTL bounds pending-approval rows: decided or not, they
@@ -60,20 +60,22 @@ const (
 	// DispositionApproved means it ran after an explicit in-app approval.
 	// Pre-migration rows only: nothing mints these anymore.
 	DispositionApproved Disposition = "approved"
-	// DispositionDenied means the call was refused: a human refused it, the
-	// gate refused it outright (draft-only send, unknown tool), or no
-	// shared store could back it — never silent.
+	// DispositionDenied means the call was refused: a human refused it
+	// (pre-migration), or the gate refused it outright (draft-only send,
+	// unknown tool) — never silent.
 	DispositionDenied Disposition = "denied"
 	// DispositionExpired means nobody answered in time; fail closed.
 	// Pre-migration rows only.
 	DispositionExpired Disposition = "expired"
 )
 
-// Status is an approval's lifecycle state.
+// Status is a pre-migration approval's lifecycle state. Nothing new
+// parks as of #487; these shapes describe rows written before the
+// migration (and read by the startup sweep that expires them).
 type Status string
 
 const (
-	// StatusPending waits for a human.
+	// StatusPending waited for a human.
 	StatusPending Status = "pending"
 	// StatusApproved released the call.
 	StatusApproved Status = "approved"
@@ -386,7 +388,9 @@ func isSecretKey(k string) bool {
 	return false
 }
 
-// Approval is one held tool call awaiting a human.
+// Approval is one pre-migration held tool call: parked awaiting a human
+// who has since been replaced by the harness prompt. No new rows park;
+// the type stays for the stored rows and the sweep that expires them.
 type Approval struct {
 	ID        string         `bson:"_id" json:"id"`
 	Server    string         `bson:"server" json:"server"`
@@ -401,17 +405,19 @@ type Approval struct {
 	ExpiresAt time.Time `bson:"expiresAt" json:"-"`
 }
 
-// AuditEntry is one gated call and what happened to it.
+// AuditEntry is one executed call and what happened to it.
 type AuditEntry struct {
 	ID          string         `bson:"_id" json:"id"`
 	Server      string         `bson:"server" json:"server"`
 	Tool        string         `bson:"tool" json:"tool"`
 	Args        map[string]any `bson:"args" json:"args"`
 	Disposition Disposition    `bson:"disposition" json:"disposition"`
-	// Error carries the tool error for a denied/expired call (what Pi saw),
-	// or the upstream failure when the call itself broke.
+	// Error carries the tool error for a refused call, or the upstream
+	// failure when the call itself broke.
 	Error string `bson:"error,omitempty" json:"error,omitempty"`
-	// ApprovalID links back when a human decided; empty for direct allows.
+	// ApprovalID links back to the pre-migration approval that decided;
+	// always empty post-migration (the harness decision is not recorded
+	// here), so joining approvalId stops at the migration.
 	ApprovalID string `bson:"approvalId,omitempty" json:"approval_id,omitempty"`
 
 	At        int64     `bson:"at" json:"at"`

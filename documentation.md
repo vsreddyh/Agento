@@ -287,32 +287,35 @@ All settings are configured in the single root `.env` file:
 
 ### Approval gates + audit log (#313)
 
-Sensitive tool calls pause for an explicit in-app approve/deny before they
-execute. Enforcement lives in an in-process gate inside each server
-(`internal/approvalgate`, ADR-0011 Stage 2): reads and routine writes forward
-untouched, while money
+Sensitive tool calls prompt for an explicit human decision before they
+execute. Confirmation lives in T3/opencode (permission prompts per
+`opencode.json`, mirrored from the sensitivity table in
+`internal/approvals`), not in an in-process wait: every `tools/call`
+through the wrapper (`internal/approvalgate`) runs at once and writes one
+audit row with tool, redacted args, disposition, result and decider. Money
 writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`) and
-prunes that actually delete (`prune_old` with `dry_run=false`) hold up to 14
-minutes for a decision, then run on approve or fail closed on deny/expiry —
-Pi gets a tool error and the turn continues. Unknown servers hold too
-(deny-by-default; unknown *tools* are rejected by the SDK before the gate
-ever sees them). Every `tools/call` through the gate writes one
-audit row with tool, redacted args, disposition (`allowed`/`approved`/
-`denied`/`expired`), result and decider; arg keys are redacted by substring
-and error text is pattern-scrubbed (300-rune cap), so treat `error` as
-untrusted display text. Pending queue: `GET /api/approvals` (pass
-`?status=pending`), decide with `POST /api/approvals/{id}/approve|deny`
-(exactly once — races after expiry 409); history: `GET /api/audit`
-(`?server=&tool=`). State is in Mongo (`approvals`, 15-minute TTL;
+prunes that actually delete (`prune_old`, counting prunes included —
+patterns cannot see arguments) prompt first; reads and routine writes run
+free. Connector send paths are refused outright (draft instead); unknown
+servers/tools deny fail-closed (unknown *tools* are rejected by the SDK
+before the wrapper ever sees them). Disposition `allowed` means executed
+(free, or under a harness grant — not "ran without asking");
+`approved`/`expired` rows are pre-migration only. Arg keys are redacted by
+substring and error text is pattern-scrubbed (300-rune cap), so treat
+`error` as untrusted display text. History: `GET /api/audit`
+(`?server=&tool=`). The pending queue (`GET /api/approvals`,
+`POST /api/approvals/{id}/approve|deny`) only ever shows pre-migration
+rows now — a "stuck" post-migration write is a T3 prompt, never a queued
+row. State is in Mongo (`approvals`, 15-minute TTL;
 `audit_log`, 90-day TTL) and survives restarts; without Mongo every server
-except memory and browser exits (log.Fatalf) and the entrypoint gate
-refuses boot — the gateway's in-memory fallback then meets only memory's
-and browser's ephemeral gates, whose gated calls deny immediately
-(`gate_unavailable`) while the app banners the queue as degraded
+except memory and browser exits (log.Fatalf) — those two run with an
+ephemeral in-memory audit trail that dies with the process, and the app
+treats unaudited operation as degraded
 instead of showing an undecidable list. The app surface (since 5.7.0) is the
 **Approvals** sheet: pending cards with redacted args + approve/deny, a
 badged entry with an in-turn banner while streaming, and the recent audit
-trail below. Full design: `docs/adr/0002-approval-gates.md`.
+trail below. Full design: `docs/adr/0002-approval-gates.md` (pre-migration
+design; the T3 re-ownership is recorded in the migration issues).
 
 Threat note — what this does and does not fix:
 

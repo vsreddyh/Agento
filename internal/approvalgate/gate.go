@@ -32,16 +32,18 @@
 // Outage posture: audit is best-effort (a wedged store logs and continues),
 // exactly like the relay — but the relay additionally failed closed on its
 // hold write, which no longer exists. In practice the domain write fails
-// first: every kept MCP server is Mongo-backed, so a down store errors
-// the handler before anything executes, and the failure is what gets
-// audited. Two boundaries on that claim, stated so they stick: browser is
+// first: most MCP servers are Mongo-backed, so a down store errors the
+// handler before anything executes, and the failure is what gets audited.
+// Three boundaries on that claim, stated so they stick: browser is
 // Chromium-backed, not Mongo-backed, so its navigation CAN execute while
 // unaudited during an outage (it goes away with #495; until then a missing
-// database means ephemeral audit, never blocked navigation); and connector
-// write paths are refused outright, so no external send can slip through
-// unaudited — only reads and drafts run. A destructive write that executes
-// while unaudited needs the domain to succeed while the audit write alone
-// fails — same-DB, transient-only.
+// database means ephemeral audit, never blocked navigation); gmail and
+// calendar drafts write to Google APIs, so a created draft is an external
+// side effect that can land unaudited the same way; and connector sends
+// are refused outright, so no external send can slip through — only reads
+// and drafts run. A destructive write that executes while unaudited needs
+// the domain to succeed while the audit write alone fails — same-DB,
+// transient-only.
 //
 // Cancellation: the handler still receives the caller's ctx, but the
 // wrapper does not pre-check it — an already-cancelled call runs rather
@@ -94,8 +96,7 @@ func AddTool[In, Out any](s *mcp.Server, server string, store approvals.Store, t
 	}
 	name := strings.ToLower(strings.TrimSpace(t.Name))
 	mcp.AddTool(s, t, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		args := argMap(in)
-		return run(ctx, server, t.Name, name, args, approvals.Redact(args), store,
+		return run(ctx, server, t.Name, name, approvals.Redact(argMap(in)), store,
 			func() (*mcp.CallToolResult, Out, error) { return h(ctx, req, in) })
 	})
 }
@@ -105,11 +106,11 @@ func AddTool[In, Out any](s *mcp.Server, server string, store approvals.Store, t
 // app attached to decide one (#487), so waiting would stall the turn for
 // the full timeout and then fail — the harness asks the human before the
 // call runs instead.
-func run[Out any](ctx context.Context, server, tool, name string, args, redacted map[string]any, store approvals.Store, exec func() (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
-	return decide(ctx, server, tool, name, args, redacted, store, exec)
+func run[Out any](ctx context.Context, server, tool, name string, redacted map[string]any, store approvals.Store, exec func() (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
+	return decide(ctx, server, tool, name, redacted, store, exec)
 }
 
-func decide[Out any](ctx context.Context, server, tool, name string, args, redacted map[string]any, store approvals.Store, exec func() (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
+func decide[Out any](ctx context.Context, server, tool, name string, redacted map[string]any, store approvals.Store, exec func() (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
 	var zero Out
 
 	// Draft-only refusal, before anything else (same order as the relay):
@@ -179,9 +180,11 @@ func audit(store approvals.Store, server, tool string, redacted map[string]any, 
 	}
 }
 
-// argMap renders the typed tool input as a plain map for the policy check,
-// the redactor, and the stored approval row. Unmarshalable input yields an
-// empty map: the policy still fails closed on it.
+// argMap renders the typed tool input as a plain map for the redactor.
+// Unmarshalable input yields an empty map and still executes (the handler
+// reports the shape error, audited like any other failure) — arguments
+// influence nothing here anymore; there is no policy check left for them
+// to fail closed on.
 func argMap[In any](in In) map[string]any {
 	raw, err := json.Marshal(in)
 	if err != nil {

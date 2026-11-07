@@ -40,7 +40,7 @@ Batch with `Promise.allSettled()`.
 - **project-manager** (5): `create_project`, `list_projects`, `get_project`,
   `update_project`, `delete_project`.
 - **notes** (6): `create_note`, `get_note`, `list_notes`, `search_notes`,
-  `update_note`, `delete_note` (the only gated one).
+  `update_note`, `delete_note` (deletes prompt for confirmation).
 - **reports** (3): `create_report`, `get_report`, `list_reports`. Files the
   ∃-Mail inbox the user reads in the app — markdown with `$..$`/`$$..$$`
   LaTeX, stored verbatim, compiled server-side on read. No update/delete
@@ -52,7 +52,7 @@ Batch with `Promise.allSettled()`.
   are the user's verbs; point them at the screen instead of claiming a change.
 - **browser** (4): `browser_goto`, `browser_read`, `browser_screenshot`,
   `browser_save_evidence`. Read-only web tasks with cited evidence: goto
-  holds for approval with the URL shown (every domain is an explicit human
+  prompts for confirmation with the URL shown (every domain is an explicit human
   decision), then read, screenshot and save run free. Save evidence bundles
   PNG + markdown + sources into `exports/browser/` for the Files tab —
   cite those paths and URLs in the answer. No forms, no logins, no passwords
@@ -70,8 +70,9 @@ Confirm first, stating scope: `delete_transactions`, `delete_meals`,
 
 Reads (`list_*`, `get_*`, `query_*`, `summarize`, `daily_summary`,
 `get_balances`, `scale_recipe`) need no confirmation. `fix_last_*` updates
-the most recent row in place: do it when the user just asked for a
-correction, without re-asking.
+the most recent row in place: the harness prompts first (opencode.json
+`*fix_last*: ask`), so state the correction when it asks instead of
+claiming none is needed.
 
 ## Interaction
 

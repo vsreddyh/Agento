@@ -20,8 +20,8 @@ func errBoom() error { return errors.New("boom") }
 
 // TestConnectorPolicySync pins the rename-sync obligation: the tool names
 // the servers publish must match the gate refusal and the approval policy
-// exactly. A renamed server tool that misses either table holds for
-// approval (safe) instead of refusing with the draft message (wrong UX) —
+// exactly. A renamed server tool that misses either table denies at once
+// (safe) instead of refusing with the draft message (wrong UX) —
 // or worse, runs free. The exposed lists live in ExposedTools (single
 // source of truth); this test fails loudly on drift instead of review
 // catching it.
@@ -29,16 +29,16 @@ func TestConnectorPolicySync(t *testing.T) {
 	for _, server := range []string{Gmail, Calendar} {
 		for _, tool := range ExposedTools(server) {
 			refused := IsDraftOnlySend(server, tool)
-			holds := approvals.NeedsApproval(server, tool, nil)
+			sensitive := approvals.NeedsApproval(server, tool, nil)
 			switch {
-			case refused && holds:
-				// Refused write with gated-true backstop: correct.
-			case !refused && !holds:
+			case refused && sensitive:
+				// Refused write with sensitive-true backstop: correct.
+			case !refused && !sensitive:
 				// Free read/draft: correct.
-			case refused && !holds:
-				t.Errorf("%s/%s refused by gate but not gated: bypass runs it free", server, tool)
+			case refused && !sensitive:
+				t.Errorf("%s/%s refused by gate but not sensitive: bypass runs it free", server, tool)
 			default:
-				t.Errorf("%s/%s holds for approval but is not a refused write: rename sync gap", server, tool)
+				t.Errorf("%s/%s is sensitive but is not a refused write: rename sync gap", server, tool)
 			}
 		}
 	}
