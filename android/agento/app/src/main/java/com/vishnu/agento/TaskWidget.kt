@@ -602,7 +602,7 @@ class TaskWidget : AppWidgetProvider() {
         }.getOrDefault("(log unavailable)")
 
         /** Lines worth keeping: our own widget code, our own API parse
-         * diagnostics (drop/shape warnings from Tasks/Jobs/Chat/Approvals
+         * diagnostics (drop/shape warnings from Tasks/Chat/Approvals
          * log under their own tags, #430), or a host-side widget failure
          * signature. Deliberately specific — a generic "widget" match
          * would drag in every other app's widget lines from the
@@ -613,7 +613,7 @@ class TaskWidget : AppWidgetProvider() {
                 l.contains("AppWidget") || l.contains("System.err") ||
                 l.contains("agento") || l.contains("com.vishnu") ||
                 l.contains("RemoteCollection") ||
-                l.contains("TasksApi") || l.contains("JobsApi") ||
+                l.contains("TasksApi") ||
                 l.contains("ChatApi") || l.contains("ApprovalsApi")
 
         // Bearer secrets must never ride along when the user pastes the

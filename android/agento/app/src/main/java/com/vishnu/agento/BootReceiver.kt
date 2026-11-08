@@ -40,6 +40,10 @@ class BootReceiver : BroadcastReceiver() {
                 // debounce would not stop it (the replaced package has just
                 // checked nothing). Asymmetry is the fix, not the oversight.
                 AgentoApp.scheduleUpdateChecks(context)
+                // Retired scheduler (#491): kill the 6.x agenteo_cron_sync
+                // ticks WorkManager persisted across the upgrade — the
+                // worker class is gone, so every surviving tick would fail.
+                AgentoApp.cancelRetiredCronSync(context)
                 val pending = goAsync()
                 scope.launch {
                     try {

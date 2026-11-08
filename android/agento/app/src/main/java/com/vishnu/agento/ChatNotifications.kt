@@ -15,14 +15,11 @@ import androidx.core.net.toUri
 /**
  * Reply notifications (issue #58).
  *
- * Scheduler responses arrive as stored job runs the app polls for
- * ([CronCheck]), and post through [notifyCron] below. What the app
- * notifies client-side is a backgrounded chat reply finishing (or
- * failing), a saved task instruction, or a fresh scheduler response.
- * That toggle lives in
+ * What the app notifies client-side is a backgrounded chat reply
+ * finishing (or failing), or a saved task instruction. That toggle lives in
  * Settings → Notifications as `notify_reply_done`; per-kind gates
- * (failures, saved instructions, scheduler responses) live in Behaviour
- * under the same master switch.
+ * (failures, saved instructions) live in Behaviour under the same master
+ * switch.
  */
 object ChatNotifications {
 
@@ -188,48 +185,6 @@ object ChatNotifications {
             .build()
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(INSTRUCT_NOTIFICATION_ID + ("instruct-failed:$threadId").hashCode(), notification)
-    }
-
-    /**
-     * Posts a cron-response notification on the same replies channel; tap
-     * opens the stored cron chat. Returns whether anything posted. The
-     * caller advances past posted runs, plus kind-off and empty-text
-     * drops (see CronCheck: only system denial retries).
-     *
-     * Gated by the scheduler kind (#355), master switch above it. */
-    fun notifyCron(
-        context: Context,
-        jobId: String,
-        jobName: String,
-        snippet: String,
-        moreCount: Int = 0,
-    ): Boolean {
-        if (!BehaviourSettings.notifyCron(context) || !canPost(context)) return false
-        ensureChannel(context)
-        val title = jobName.trim().ifEmpty { "Scheduled job" }
-        val text = if (moreCount > 0) "$snippet (+$moreCount more)" else snippet
-        val open = PendingIntent.getActivity(
-            context, ("cron:$jobId").hashCode(),
-            Intent(context, MainActivity::class.java)
-                .setAction(CronIntents.ACTION_CRON)
-                .putExtra(CronIntents.EXTRA_JOB_ID, jobId)
-                .setData("agento://cron/${android.net.Uri.encode(jobId)}".toUri()),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .build()
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        // One slot per job: successive responses on a job replace the
-        // previous, so the shade never stacks one card per fire.
-        nm.notify(NOTIFICATION_ID + ("cron:$jobId").hashCode(), notification)
-        return true
     }
 
     /**

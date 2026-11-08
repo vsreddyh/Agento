@@ -853,10 +853,8 @@ internal fun SettingSection.hubIcon() = when (this) {
 
 /** Reply-alerts hub (issue #58).
  *
- * 1) Scheduler responses post through [ChatNotifications.notifyCron] and are
- *    gated by the scheduler kind in Behaviour, under this master switch.
- * 2) Completion notifications: when a chat reply finishes while the app is
- *    in the background, Agento posts a local notification (toggle below).
+ * Completion notifications: when a chat reply finishes while the app is
+ * in the background, Agento posts a local notification (toggle below).
  */
 @Composable
 internal fun NotificationsSection() {
@@ -888,8 +886,8 @@ internal fun NotificationsSection() {
         subtitle = "Agento can notify you when a chat reply finishes while the " +
             "app is in the background. This master switch gates every kind. " +
             BehaviourSettings.SKIPPED_NOT_QUEUED +
-            " Per-kind toggles for failures, saved instructions and scheduler " +
-            "responses live in Settings → Behaviour.",
+            " Per-kind toggles for failures and saved instructions " +
+            "live in Settings → Behaviour.",
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

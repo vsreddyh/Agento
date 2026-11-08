@@ -27,8 +27,7 @@ import androidx.compose.ui.unit.dp
  * Review surface for one taught skill (#314).
  *
  * Drafts edit freely; Test runs the procedure once and shows the
- * transcript; Activate needs that test (the server enforces it);
- * Promote schedules a cron job carrying a copy of the reviewed text.
+ * transcript; Activate needs that test (the server enforces it).
  * Every write disables its buttons while in flight so a double tap
  * cannot fire two writes.
  */
@@ -43,14 +42,10 @@ internal fun TeachDialog(
     /** Successful saves from the screen: each increment collapses an open
      * editor, so a saved edit never lingers over fresh rows. */
     editSaves: Int = 0,
-    /** Successful schedules: each increment clears the cron fields, so a
-     * stale schedule never meets the next tap. */
-    promoteSaves: Int = 0,
     onSaveEdit: (String, String, String) -> Unit,
     onTest: (String) -> Unit,
     onActivate: () -> Unit,
     onDisable: () -> Unit,
-    onPromote: (String, String) -> Unit,
     onDelete: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -59,8 +54,6 @@ internal fun TeachDialog(
     var description by remember(skill.id) { mutableStateOf(skill.description) }
     var body by remember(skill.id) { mutableStateOf(skill.body) }
     var testInput by remember(skill.id) { mutableStateOf("") }
-    var schedule by remember(skill.id) { mutableStateOf("") }
-    var promoteName by remember(skill.id) { mutableStateOf("") }
     var deleteArmed by remember(skill.id) { mutableStateOf(false) }
     // A save collapses the editor; reopening re-seeds from the fresh row
     // in the Edit button's onClick below, so no stale snapshot survives a
@@ -69,12 +62,6 @@ internal fun TeachDialog(
     // typing.
     LaunchedEffect(editSaves) {
         if (editSaves > 0) editing = false
-    }
-    LaunchedEffect(promoteSaves) {
-        if (promoteSaves > 0) {
-            schedule = ""
-            promoteName = ""
-        }
     }
     AlertDialog(
         // No dismiss mid-write: the error has nowhere to render once the
@@ -272,45 +259,6 @@ internal fun TeachDialog(
                                     maxLines = 8,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                            }
-                        }
-                        if (skill.isActive() && skill.isTested()) {
-                            item {
-                                Text(
-                                    "Schedule routine",
-                                    style = MaterialTheme.typography.titleSmall,
-                                )
-                            }
-                            item {
-                                OutlinedTextField(
-                                    value = schedule,
-                                    onValueChange = { schedule = it },
-                                    label = { Text("Schedule (cron, e.g. 0 9 * * 1)") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                            item {
-                                OutlinedTextField(
-                                    value = promoteName,
-                                    onValueChange = { promoteName = it },
-                                    label = { Text("Routine name (optional)") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                            item {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End,
-                                ) {
-                                    TextButton(
-                                        onClick = { onPromote(schedule.trim(), promoteName.trim()) },
-                                        enabled = !acting && schedule.trim().isNotBlank(),
-                                    ) {
-                                        Text(if (acting) "Scheduling…" else "Schedule")
-                                    }
-                                }
                             }
                         }
                         item {

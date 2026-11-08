@@ -238,8 +238,6 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
 
     /** Successful saves, consumed by the dialog to collapse its editor. */
     var editSaves by remember(profile) { mutableStateOf(0) }
-    /** Successful schedules: the dialog clears its cron fields on each. */
-    var promoteSaves by remember(profile) { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { load() }
 
@@ -569,7 +567,6 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         TeachDialog(
             skill = open,
             editSaves = editSaves,
-            promoteSaves = promoteSaves,
             testOutput = testOutput,
             acting = managingBusy,
             error = managingError,
@@ -610,12 +607,6 @@ internal fun SkillsScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 mutate(
                     action = { api, path -> api.disableSkill(path, open.id) },
                     onSuccess = { testOutput = "" },
-                )
-            },
-            onPromote = { schedule, name ->
-                mutate(
-                    action = { api, path -> api.promoteSkill(path, open.id, schedule, name) },
-                    onSuccess = { testOutput = ""; promoteSaves++ },
                 )
             },
             onDelete = {

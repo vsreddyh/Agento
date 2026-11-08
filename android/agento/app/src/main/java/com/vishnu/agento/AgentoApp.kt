@@ -33,8 +33,12 @@ class AgentoApp : Application() {
             (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         scheduleSync(this)
         scheduleTaskSync(this)
-        CronSyncWorker.schedule(this)
         scheduleUpdateChecks(this)
+        // Retired scheduler (#491): 6.x enqueued 30-min agenteo_cron_sync
+        // ticks that WorkManager persists across upgrades, so cancel the
+        // persisted schedule or 7.0 keeps waking a worker class that no
+        // longer exists. One-way and idempotent — nothing re-enqueues it.
+        cancelRetiredCronSync(this)
         // After scheduling, so a disabled periodic poll cancels the job
         // first and a due startup check is the only one enqueued.
         maybeCheckForUpdatesOnStartup(this)
@@ -53,6 +57,18 @@ class AgentoApp : Application() {
         const val SYNC_WORK_NAME = "agento_sync"
         const val SYNC_INTERVAL_HOURS = 1L
         const val TASK_SYNC_WORK_NAME = "agento_task_sync"
+        /** Retired in #491 (class deleted): the cron scheduler's unique
+         * periodic work. Cancelled, never enqueued — see
+         * cancelRetiredCronSync. */
+        const val CRON_SYNC_WORK_NAME = "agento_cron_sync"
+
+        /** One-way retire of the deleted scheduler's persisted periodic
+         * work. Idempotent: cancelling a name with no work is a no-op, so
+         * fresh installs pay one harmless call per process start. */
+        fun cancelRetiredCronSync(context: Context) {
+            WorkManager.getInstance(context.applicationContext)
+                .cancelUniqueWork(CRON_SYNC_WORK_NAME)
+        }
 
         /**
          * How often the task widget and reminder alarms re-derive

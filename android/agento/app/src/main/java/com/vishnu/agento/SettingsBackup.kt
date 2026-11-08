@@ -99,7 +99,6 @@ object SettingsBackup {
         // old backups (without them) restore identically.
         BehaviourSettings.KEY_NOTIFY_FAILED,
         BehaviourSettings.KEY_NOTIFY_INSTRUCT,
-        BehaviourSettings.KEY_NOTIFY_CRON,
         BehaviourSettings.KEY_SYNC_WIFI_ONLY,
         BehaviourSettings.KEY_SYNC_PAUSED,
         // Update checks (#366): the two user-facing switches. The interval
