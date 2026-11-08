@@ -3,34 +3,12 @@
   "instructions": [".opencode/chat.md"],
   "mcp": {
     "servers": {
-      "calendar": {
-        "type": "local",
-        "command": ["./bin/calendar"],
-        "environment": {
-          "MONGODB_URI": "{env:MONGODB_URI}",
-          "MONGODB_DB": "{env:MONGODB_DB}",
-          "GOOGLE_CLIENT_ID": "{env:GOOGLE_CLIENT_ID}",
-          "GOOGLE_CLIENT_SECRET": "{env:GOOGLE_CLIENT_SECRET}",
-          "CONNECTORS_ENCRYPTION_KEY": "{env:CONNECTORS_ENCRYPTION_KEY}"
-        }
-      },
       "cookbook": {
         "type": "local",
         "command": ["./bin/cookbook"],
         "environment": {
           "MONGODB_URI": "{env:MONGODB_URI}",
           "MONGODB_DB": "{env:MONGODB_DB}"
-        }
-      },
-      "gmail": {
-        "type": "local",
-        "command": ["./bin/gmail"],
-        "environment": {
-          "MONGODB_URI": "{env:MONGODB_URI}",
-          "MONGODB_DB": "{env:MONGODB_DB}",
-          "GOOGLE_CLIENT_ID": "{env:GOOGLE_CLIENT_ID}",
-          "GOOGLE_CLIENT_SECRET": "{env:GOOGLE_CLIENT_SECRET}",
-          "CONNECTORS_ENCRYPTION_KEY": "{env:CONNECTORS_ENCRYPTION_KEY}"
         }
       },
       "health-check": {
@@ -85,7 +63,6 @@
     "*fix_last*": "ask",
     "*prune_old*": "ask",
     "*log_transaction*": "ask",
-    "*log_text*": "ask",
-    "*browser_goto*": "ask"
+    "*log_text*": "ask"
   }
 }

@@ -1,7 +1,7 @@
 # chat
 
 General operator for Vishnu's money, food and health tracking, plus tasks,
-projects, and mailed reports. Eight MCP tool backends, all in-repo Go
+projects, and mailed reports. Six MCP tool backends, all in-repo Go
 binaries speaking MongoDB (Atlas). Loaded in T3/opencode via the
 `instructions` entry in `opencode.json`, alongside the discovered
 `AGENTS.md` files.
@@ -55,14 +55,6 @@ instead of round-tripping one at a time.
   ∃-Mail inbox the user reads in the app — markdown with `$..$`/`$$..$$`
   LaTeX, stored verbatim, compiled server-side on read. No update/delete
   tools: those verbs belong to the app, not the filing path.
-- **gmail** (6): `search_gmail`, `read_gmail`, `list_messages`,
-  `create_draft` — plus `send_message` / `send_gmail`, which are refused:
-  sending is disabled in v1, create a draft instead and let the user send
-  it. Grants live server-side; connect/disconnect happens in the app's
-  Settings → Connectors, never in chat.
-- **calendar** (5): `list_events`, `get_event`, `create_event_draft` — plus
-  `create_event` / `send_invite`, refused like the gmail sends: draft
-  instead, user sends.
 
 Counts are stated so a new tool shows up as a mismatch. If a name here
 does not resolve, trust the server's tool list over this file.
@@ -96,8 +88,7 @@ when the user just asked for a correction, without re-asking.
 - **Questions** (replaces the old Pi ask-user extension): when you cannot
   proceed without a human decision, use the `question` tool with short
   labeled options. A free-form answer is always available; a dismissal
-  cancels. Never ask for passwords or tokens — connector grants happen in
-  the app, never in chat.
+  cancels. Never ask for passwords or tokens.
 
 ## Interaction
 
