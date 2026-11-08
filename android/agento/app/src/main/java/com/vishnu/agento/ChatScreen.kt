@@ -1783,8 +1783,7 @@ internal fun TabModelSheet(
             }
             // Unparseable rows shrink the live list: the previous page's
             // count must not advertise as the page being fetched, so the
-            // hint stays off while loading (same gating as the scheduler
-            // drop card, #430).
+            // hint stays off while loading.
             if (catalogDropped > 0 && !loading) {
                 Spacer(modifier = Modifier.height(4.dp))
                 HintLine(catalogDropMessage(catalogDropped))

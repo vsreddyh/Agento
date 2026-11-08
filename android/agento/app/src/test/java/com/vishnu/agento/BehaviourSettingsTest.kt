@@ -248,7 +248,6 @@ class BehaviourSettingsTest {
         for (k in listOf(
             BehaviourSettings.KEY_NOTIFY_FAILED,
             BehaviourSettings.KEY_NOTIFY_INSTRUCT,
-            BehaviourSettings.KEY_NOTIFY_CRON,
             BehaviourSettings.KEY_SYNC_WIFI_ONLY,
             BehaviourSettings.KEY_SYNC_PAUSED,
             // Surfaced-but-pre-existing switches: auto-read must survive a

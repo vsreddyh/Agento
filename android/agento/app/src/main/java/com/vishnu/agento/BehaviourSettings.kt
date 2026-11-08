@@ -30,9 +30,9 @@ object BehaviourSettings {
 
     // ── Health sync cadence ──────────────────────────────────────────────
     const val KEY_SYNC_INTERVAL_HOURS = "sync_interval_hours"
-    // Defaults live on AgentoApp (the scheduler's home) and are re-exported
-    // here, never re-spelled: one source, so a default change cannot drift
-    // between the section and the scheduler.
+    // Defaults live on AgentoApp (the sync defaults' home) and are
+    // re-exported here, never re-spelled: one source, so a default change
+    // cannot drift between the section and AgentoApp.
     const val DEFAULT_SYNC_INTERVAL_HOURS = AgentoApp.SYNC_INTERVAL_HOURS
     /** Displayed choices; WorkManager periodic work floors at 15 minutes. */
     val SYNC_INTERVAL_OPTIONS_HOURS = listOf(1L, 2L, 4L, 6L, 12L, 24L)
