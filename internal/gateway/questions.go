@@ -231,8 +231,8 @@ func (s *Server) handleExtensionUI(lr *liveRun, rec pi.Record) {
 	profile, conversation := lr.runProfile(), lr.runConversation()
 	if lr.subscriberCount() == 0 {
 		// No stream attached: nobody can see the card, so blocking would
-		// burn the whole TurnTimeout. Scheduler fires land here (they never
-		// subscribe) and fail the tool fast instead.
+		// burn the whole TurnTimeout. Unattended turns land here (they
+		// never subscribe) and fail the tool fast instead.
 		s.cfg.Logf("gateway: cancelling %s question %s with no subscriber", req.Method, req.ID)
 		s.respondCancelled(lr, req.ID)
 		return

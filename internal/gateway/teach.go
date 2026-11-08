@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"agento/internal/cronjobs"
 	"agento/internal/teach"
 )
 
@@ -18,8 +17,8 @@ import (
 //
 // A skill is a procedure the user taught the agent: draft → review/edit →
 // test-fire → activate. Only active skills materialize to SKILL.md files for
-// Pi's --skill flag, and only tested skills may activate or promote — the
-// store enforces both, so the gate is not a UI hint. Every route resolves
+// Pi's --skill flag, and only tested skills may activate — the
+// store enforces it, so the gate is not a UI hint. Every route resolves
 // the profile from the URL like memory and treats a foreign id as missing
 // (404, not 403).
 //
@@ -33,16 +32,15 @@ import (
 //	POST   /api/skills/{id}/test      run the procedure once, record transcript
 //	POST   /api/skills/{id}/activate  draft/disabled → active (needs a test)
 //	POST   /api/skills/{id}/disable   active/draft → disabled
-//	POST   /api/skills/{id}/promote   create a cron job running the procedure
 //
 // What the Skills tab shows is what Pi loads: v1/skills merges these rows
 // with Pi's own skill list, and the materialized files are byte-identical to
 // the rendered body the app reviewed.
 
 // TeachRunner runs one prompt through the bare model client and returns its
-// text. The cron worker's runner backs it: a test fire is the same shape as
-// a scheduled fire, minus the schedule. Nil means no LLM runner is
-// configured, and the test route answers 502 rather than faking a run.
+// text. A test fire runs the skill procedure once with the caller's input.
+// Nil means no LLM runner is configured, and the test route answers 502
+// rather than faking a run.
 type TeachRunner func(ctx context.Context, prompt, tag string) (string, error)
 
 func teachWire(s teach.Skill) map[string]any {
@@ -158,10 +156,6 @@ func (s *Server) handleTeach(w http.ResponseWriter, r *http.Request, rest, profi
 			func(w http.ResponseWriter, r *http.Request, profile, id string) {
 				s.handleSkillStatus(w, r, profile, id, teach.StatusDisabled, "disable")
 			})
-		return
-	case strings.HasSuffix(path, "/promote"):
-		s.handleSkillVerb(w, r, profile, strings.TrimSuffix(path, "/promote"),
-			s.handleSkillPromote)
 		return
 	}
 
@@ -402,96 +396,4 @@ func (s *Server) handleSkillTest(w http.ResponseWriter, r *http.Request, profile
 	// long run cannot make one large API response. The writer saw the full
 	// stream at test time; the record is what travels.
 	writeJSONResponse(w, http.StatusOK, map[string]any{"skill": teachWire(sk), "output": sk.TestText})
-}
-
-// handleSkillPromote creates a cron job running the skill's procedure on a
-// schedule. Only tested, active skills promote: a draft has no reviewed
-// procedure and a disabled one was deliberately stopped. The job's own
-// pause and 10-run history then govern it like any other routine.
-func (s *Server) handleSkillPromote(w http.ResponseWriter, r *http.Request, profile, id string) {
-	if !requireMethod(w, r, http.MethodPost, "/api/skills/{id}/promote") {
-		return
-	}
-	var body struct {
-		Name     string `json:"name"`
-		Schedule string `json:"schedule"`
-		Delivery string `json:"delivery"`
-	}
-	if err := decodeJSONBody(w, r, &body); err != nil {
-		return
-	}
-	ctx, cancel := teachCtx(r)
-	defer cancel()
-	// The skill gate first: whether the row may run on schedule does not
-	// depend on gateway wiring, and a draft must 400 even where jobs are
-	// unconfigured.
-	sk, err := s.teach.Get(ctx, id, profile)
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			apiError(w, http.StatusBadGateway, "upstream_error", "",
-				"the skill store did not answer in time")
-			return
-		}
-		teachError(w, err)
-		return
-	}
-	if sk.Status != teach.StatusActive || sk.TestedAt == 0 {
-		// Name the actual missing step: a tested-but-disabled skill was
-		// reviewed and tested, just deliberately stopped.
-		msg := "only a tested, active skill can run on schedule: activate it first"
-		if sk.TestedAt == 0 {
-			msg = "only a tested, active skill can run on schedule: review and test it first"
-		}
-		apiError(w, http.StatusBadRequest, "invalid_request_error", "", msg)
-		return
-	}
-	if s.cfg.CronJobs == nil {
-		apiError(w, http.StatusNotFound, "invalid_request_error", "",
-			"jobs are not configured on this gateway")
-		return
-	}
-	// A multi-KB name via promote must not bypass whatever the normal jobs
-	// route enforces: clip it like every other free-text label.
-	name := teach.ClipLabel(body.Name)
-	if name == "" {
-		// SafeName, like the prompt prefix below: a hand-edited stored
-		// name must not ride raw into the job.
-		name = teach.SafeName(sk)
-	}
-	// Validate the schedule before the store call: a parse failure is a
-	// caller bug (400), while a Create failure past this point is the
-	// store's problem (mapped below).
-	if _, err := cronjobs.Parse(body.Schedule); err != nil {
-		apiError(w, http.StatusBadRequest, "invalid_request_error", "",
-			"bad schedule: "+bounded(err.Error()))
-		return
-	}
-	prompt := "Routine \"" + teach.SafeName(sk) + "\" (taught skill, profile " + profile + "). " +
-		"Follow the procedure below.\n\n" + teach.RenderSKILL(sk)
-	// Own budget, not the Get's leftovers: same starvation shape as the
-	// test-fire record had before it got a fresh ctx.
-	createCtx, createCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer createCancel()
-	job, err := s.cfg.CronJobs.Create(createCtx, name, prompt, body.Schedule, body.Delivery)
-	if err != nil {
-		// cronjobs errors carry their own shape (NotFound/Upstream like
-		// teach errors): a Mongo outage at promote time is 502, not a
-		// "bad schedule" 400.
-		if se, ok := err.(*cronjobs.StoreError); ok {
-			switch {
-			case se.NotFound:
-				apiError(w, http.StatusNotFound, "invalid_request_error", "", bounded(se.Msg))
-			case se.Upstream:
-				apiError(w, http.StatusBadGateway, "upstream_error", "", bounded(se.Msg))
-			default:
-				apiError(w, http.StatusBadRequest, "invalid_request_error", "", bounded(se.Msg))
-			}
-		} else {
-			apiError(w, http.StatusBadGateway, "upstream_error", "", bounded(err.Error()))
-		}
-		return
-	}
-	writeJSONResponse(w, http.StatusOK, map[string]any{
-		"job": map[string]any{"id": job.ID, "name": job.Name, "schedule": job.Schedule},
-	})
 }

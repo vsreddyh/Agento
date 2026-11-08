@@ -63,6 +63,7 @@
     "*fix_last*": "ask",
     "*prune_old*": "ask",
     "*log_transaction*": "ask",
-    "*log_text*": "ask"
+    "*log_text*": "ask",
+    "*browser_goto*": "ask"
   }
 }

@@ -487,7 +487,7 @@ func TestQuestionReemittedOnReattach(t *testing.T) {
 	agent.deliver([]pi.Record{{Type: pi.TypeAgentSettled}})
 }
 
-// No stream attached (scheduler fires never subscribe): the dialog fails
+// No stream attached (unattended turns never subscribe): the dialog fails
 // fast instead of burning the whole TurnTimeout.
 func TestQuestionUnattendedCancels(t *testing.T) {
 	agent := newFakeAgent()

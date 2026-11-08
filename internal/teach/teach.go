@@ -187,7 +187,7 @@ func cleanFree(s string) string {
 
 // SafeName returns the name if it is valid, else a fixed fallback: a
 // hand-edited row must never inject YAML at render time or raw text into a
-// cron prompt. Used everywhere a stored name crosses a trust boundary.
+// skill prompt. Used everywhere a stored name crosses a trust boundary.
 func SafeName(s Skill) string {
 	if ValidName(s.Name) {
 		return s.Name

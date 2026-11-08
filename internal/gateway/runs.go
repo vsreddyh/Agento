@@ -332,7 +332,7 @@ func (lr *liveRun) runConversation() string {
 
 // subscriberCount reports how many streams are attached to the run. Zero
 // means nobody can see a question card, so the relay fails a dialog fast
-// instead of blocking the turn on it (scheduler fires never subscribe).
+// instead of blocking the turn on it (unattended turns never subscribe).
 func (lr *liveRun) subscriberCount() int {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
@@ -979,8 +979,8 @@ func truncateBytes(s string, limit int) string {
 	return s[:cut]
 }
 
-// handleRuns serves /api/runs. Reached with and without a profile segment, like
-// /api/jobs: runs are listed globally, with `profile` as an optional filter.
+// handleRuns serves /api/runs. Reached with and without a profile segment:
+// runs are listed globally, with `profile` as an optional filter.
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, rest string) {
 	path := strings.TrimPrefix(rest, "api/runs")
 	path = strings.TrimPrefix(path, "/")

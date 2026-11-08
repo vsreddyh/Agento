@@ -6,22 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	"agento/internal/cronjobs"
 	"agento/internal/teach"
 )
 
 // These tests pin the #314 taught-skills contract: drafts are born drafts,
-// activation needs a recorded test, foreign ids 404, and only tested active
-// skills promote to cron jobs.
+// activation needs a recorded test, and foreign ids 404.
 
-func teachServer(t *testing.T, runner TeachRunner, jobs JobStore) *Server {
+func teachServer(t *testing.T, runner TeachRunner) *Server {
 	t.Helper()
 	cfg := Config{}
 	if runner != nil {
 		cfg.TeachRunner = runner
-	}
-	if jobs != nil {
-		cfg.CronJobs = jobs
 	}
 	return newTestServer(t, &fakeAgent{}, cfg)
 }
@@ -36,7 +31,7 @@ func createDraft(t *testing.T, srv *Server, body string) string {
 }
 
 func TestTeachDraftLifecycle(t *testing.T) {
-	srv := teachServer(t, nil, nil)
+	srv := teachServer(t, nil)
 
 	id := createDraft(t, srv, `{"name":"weekly","description":"Sends the report","body":"# Weekly\nSend it."}`)
 	got := decodeBody(t, do(t, srv, http.MethodGet, "/api/skills", ""))
@@ -51,10 +46,10 @@ func TestTeachDraftLifecycle(t *testing.T) {
 	if rec := do(t, srv, http.MethodPost, "/api/skills/"+id+"/activate", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("untested activate: %d, want 400 (%s)", rec.Code, rec.Body)
 	}
-	// Promote without test+active fails the same way.
+	// Promote is gone with the scheduler: POST /api/skills/{id}/promote 404s.
 	if rec := do(t, srv, http.MethodPost, "/api/skills/"+id+"/promote",
-		`{"schedule":"0 9 * * 1"}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("unreviewed promote: %d, want 400 (%s)", rec.Code, rec.Body)
+		`{"schedule":"0 9 * * 1"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("promote after removal: %d, want 404 (%s)", rec.Code, rec.Body)
 	}
 
 	// Suffix verbs share the id guard: an over-long id 404s on /test as
@@ -79,7 +74,7 @@ func TestTeachTestFireRecords(t *testing.T) {
 	srv := teachServer(t, func(ctx context.Context, prompt, tag string) (string, error) {
 		gotPrompt = prompt
 		return "ran fine", nil
-	}, nil)
+	})
 
 	id := createDraft(t, srv, `{"name":"weekly","description":"Sends it","body":"Send the report."}`)
 	rec := do(t, srv, http.MethodPost, "/api/skills/"+id+"/test", `{"input":"for January"}`)
@@ -109,54 +104,17 @@ func TestTeachTestFireRecords(t *testing.T) {
 }
 
 func TestTeachTestWithoutRunner(t *testing.T) {
-	srv := teachServer(t, nil, nil)
+	srv := teachServer(t, nil)
 	id := createDraft(t, srv, `{"name":"weekly","description":"x","body":"y"}`)
 	if rec := do(t, srv, http.MethodPost, "/api/skills/"+id+"/test", ""); rec.Code != http.StatusBadGateway {
 		t.Fatalf("runnerless test: %d, want 502 (%s)", rec.Code, rec.Body)
 	}
 }
 
-func TestTeachPromote(t *testing.T) {
-	jobs := &fakeJobs{jobs: map[string]cronjobs.Job{}}
-	srv := teachServer(t, func(ctx context.Context, prompt, tag string) (string, error) {
-		return "ok", nil
-	}, jobs)
-
-	id := createDraft(t, srv, `{"name":"weekly","description":"Sends it","body":"Send the report."}`)
-	do(t, srv, http.MethodPost, "/api/skills/"+id+"/test", "")
-	do(t, srv, http.MethodPost, "/api/skills/"+id+"/activate", "")
-
-	rec := do(t, srv, http.MethodPost, "/api/skills/"+id+"/promote",
-		`{"schedule":"0 9 * * 1","delivery":"chat"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("promote: %d %s", rec.Code, rec.Body)
-	}
-	job := decodeBody(t, rec)["job"].(map[string]any)
-	if job["schedule"] != "0 9 * * 1" {
-		t.Fatalf("job = %#v", job)
-	}
-	jobID := decodeBody(t, rec)["job"].(map[string]any)["id"].(string)
-	jobs.mu.Lock()
-	stored, ok := jobs.jobs[jobID]
-	jobs.mu.Unlock()
-	if !ok {
-		t.Fatalf("promoted job %s not stored", jobID)
-	}
-	if !strings.Contains(stored.Prompt, "Send the report.") || !strings.Contains(stored.Prompt, "weekly") {
-		t.Fatalf("job prompt = %q", stored.Prompt)
-	}
-
-	// A bad schedule fails at promote, not at 9am Monday.
-	if rec := do(t, srv, http.MethodPost, "/api/skills/"+id+"/promote",
-		`{"schedule":"whenever"}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("bad schedule: %d, want 400 (%s)", rec.Code, rec.Body)
-	}
-}
-
 func TestTeachIsProfileScoped(t *testing.T) {
 	srv := teachServer(t, func(ctx context.Context, prompt, tag string) (string, error) {
 		return "ok", nil
-	}, nil)
+	})
 	store := srv.teach.(*teach.MemoryStore)
 	other, err := store.Create(context.Background(), teach.Skill{
 		Profile: "someone-else", Name: "weekly", Description: "x", Body: "y",
