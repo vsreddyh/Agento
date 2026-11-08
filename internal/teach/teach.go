@@ -11,7 +11,7 @@ import (
 )
 
 // A user-taught skill (#314): a procedure saved from the app, reviewed and
-// test-run before it may steer turns or schedules.
+// test-run before it may steer turns.
 //
 // Storage model (see docs/adr/0004-taught-skills.md): Mongo
 // (taught_skills) is the source of truth; the gateway materializes ACTIVE
@@ -37,7 +37,7 @@ const (
 )
 
 // Status is a skill's lifecycle. Drafts are inert: review, edit and test
-// happen before activate, and only active skills materialize or promote.
+// happen before activate, and only active skills materialize.
 type Status string
 
 const (
@@ -105,14 +105,6 @@ func (e *StoreError) Error() string { return e.Msg }
 // NewStoreError builds a caller-facing store error.
 func NewStoreError(msg string, upstream bool) *StoreError {
 	return &StoreError{Msg: msg, Upstream: upstream}
-}
-
-// MaxLabel bounds short display labels (promoted job names) in runes.
-const MaxLabel = 200
-
-// ClipLabel trims and bounds a short label.
-func ClipLabel(s string) string {
-	return clipRunes(strings.TrimSpace(strings.ReplaceAll(s, "\x00", "")), MaxLabel)
 }
 
 // ClippedBody reports whether CleanBody would shorten a body by length.

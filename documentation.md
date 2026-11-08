@@ -341,9 +341,9 @@ design; the T3 re-ownership is recorded in the migration issues).
 Threat note — what this does and does not fix:
 
 - Fixed: attended money writes, deletes, prunes and rewrites now need a
-  human via the T3 permission prompt (unattended scheduler fires have no
-  prompter — prompt text is their only enforcement, see
-  `internal/gateway/scheduler.go` and `internal/cronjobs/scheduler.go`); every executed call is attributable for
+  human via the T3 permission prompt (the retired scheduler's unattended
+  fires had no prompter — prompt text was their only enforcement;
+  the scheduler was deleted in #490); every executed call is attributable for
   90 days short of an audit-write outage (see above); deny leaves state
   unchanged (the harness gets a tool error,
   the turn continues).

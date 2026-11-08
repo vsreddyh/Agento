@@ -271,8 +271,8 @@ travel. See `docs/adr/0005-browser.md`.
 
 Runs are the resumable chat-turn surface (#311): one executing turn per profile,
 state in Mongo with a 7-day TTL, and a gateway restart marks stale rows
-`interrupted` rather than resuming them. They are a sibling of `/api/jobs`, not a
-reuse of it — see `docs/adr/0001-resumable-runs.md`.
+`interrupted` rather than resuming them. They are not a reuse of the former
+`/api/jobs` scheduler surface (deleted in #490) — see `docs/adr/0001-resumable-runs.md`.
 
 Through the proxy, always use the profile path (`/p/chat/api/runs`, served by
 pi-gateway): unprefixed `/api/*` belongs to health-api and a bare
