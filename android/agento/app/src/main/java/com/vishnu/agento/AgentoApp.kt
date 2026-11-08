@@ -33,7 +33,6 @@ class AgentoApp : Application() {
             (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         scheduleSync(this)
         scheduleTaskSync(this)
-        CronSyncWorker.schedule(this)
         scheduleUpdateChecks(this)
         // After scheduling, so a disabled periodic poll cancels the job
         // first and a due startup check is the only one enqueued.

@@ -213,7 +213,6 @@ object BehaviourSettings {
     // opens the section — and an opted-out one — behaves exactly like 5.12.0.
     const val KEY_NOTIFY_FAILED = "notify_reply_failed"
     const val KEY_NOTIFY_INSTRUCT = "notify_instruct_saved"
-    const val KEY_NOTIFY_CRON = "notify_cron"
 
     fun notifyFailed(ctx: Context): Boolean =
         ChatNotifications.isEnabled(ctx) && prefs(ctx).getBoolean(KEY_NOTIFY_FAILED, true)
@@ -221,17 +220,11 @@ object BehaviourSettings {
     fun notifyInstruct(ctx: Context): Boolean =
         ChatNotifications.isEnabled(ctx) && prefs(ctx).getBoolean(KEY_NOTIFY_INSTRUCT, true)
 
-    fun notifyCron(ctx: Context): Boolean =
-        ChatNotifications.isEnabled(ctx) && prefs(ctx).getBoolean(KEY_NOTIFY_CRON, true)
-
     fun notifyFailedRaw(ctx: Context): Boolean =
         prefs(ctx).getBoolean(KEY_NOTIFY_FAILED, true)
 
     fun notifyInstructRaw(ctx: Context): Boolean =
         prefs(ctx).getBoolean(KEY_NOTIFY_INSTRUCT, true)
-
-    fun notifyCronRaw(ctx: Context): Boolean =
-        prefs(ctx).getBoolean(KEY_NOTIFY_CRON, true)
 
     fun setNotifyFailed(ctx: Context, on: Boolean) {
         prefs(ctx).edit { putBoolean(KEY_NOTIFY_FAILED, on) }
@@ -239,10 +232,6 @@ object BehaviourSettings {
 
     fun setNotifyInstruct(ctx: Context, on: Boolean) {
         prefs(ctx).edit { putBoolean(KEY_NOTIFY_INSTRUCT, on) }
-    }
-
-    fun setNotifyCron(ctx: Context, on: Boolean) {
-        prefs(ctx).edit { putBoolean(KEY_NOTIFY_CRON, on) }
     }
 
     // ── App update checks (#366) ─────────────────────────────────────────
@@ -349,7 +338,6 @@ object BehaviourSettings {
         pitchPct = ttsPitchPct(ctx),
         kindFailed = notifyFailedRaw(ctx),
         kindInstruct = notifyInstructRaw(ctx),
-        kindCron = notifyCronRaw(ctx),
         remindersOn = TaskReminders.isEnabled(ctx),
         autoRead = ttsAuto(ctx),
         updateHours = updateIntervalHours(ctx),
@@ -372,7 +360,6 @@ object BehaviourSettings {
         pitchPct: Long,
         kindFailed: Boolean,
         kindInstruct: Boolean,
-        kindCron: Boolean,
         remindersOn: Boolean,
         autoRead: Boolean,
         // #366 append-only: existing callers (and the pinned test helper)
@@ -406,7 +393,6 @@ object BehaviourSettings {
         if (pp != DEFAULT_TTS_PCT) n++
         if (!kindFailed) n++
         if (!kindInstruct) n++
-        if (!kindCron) n++
         // Surfaced-but-pre-existing keys count too: enabling either is a
         // deliberate behaviour change made in this section.
         if (remindersOn) n++

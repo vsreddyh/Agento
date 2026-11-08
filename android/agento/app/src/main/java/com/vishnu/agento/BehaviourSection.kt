@@ -78,9 +78,6 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     var kindInstruct by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.notifyInstructRaw(context))
     }
-    var kindCron by remember(refreshTick) {
-        mutableStateOf(BehaviourSettings.notifyCronRaw(context))
-    }
     var updateStartup by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.updateStartup(context))
     }
@@ -436,15 +433,6 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
             onChange = {
                 BehaviourSettings.setNotifyInstruct(context, it)
                 kindInstruct = it
-            },
-        )
-        SwitchRow(
-            text = "Scheduler responses",
-            sub = "A scheduled job produced a new response. " + BehaviourSettings.SKIPPED_NOT_QUEUED,
-            checked = kindCron,
-            onChange = {
-                BehaviourSettings.setNotifyCron(context, it)
-                kindCron = it
             },
         )
     }

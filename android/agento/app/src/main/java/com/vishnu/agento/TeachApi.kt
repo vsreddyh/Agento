@@ -225,24 +225,6 @@ class TeachApi(context: Context) {
                     ?: throw RuntimeException("response had no skill")
             }
         }
-
-    /** Promotes a tested, active skill to a scheduled routine. Returns the
-     * created job's id. The job carries a copy of the reviewed text. */
-    suspend fun promoteSkill(
-        path: String,
-        id: String,
-        schedule: String,
-        name: String = "",
-        delivery: String = "",
-    ): Result<String> = withContext(Dispatchers.IO) {
-        val req = JSONObject().put("schedule", schedule)
-        if (name.isNotBlank()) req.put("name", name)
-        if (delivery.isNotBlank()) req.put("delivery", delivery)
-        call("POST", "$path/api/skills/${ApprovalsApi.encode(id)}/promote", req).mapCatching {
-            parseObject(checkOk(it).body).optJSONObject("job")?.optString("id", "").orEmpty()
-                .ifBlank { throw RuntimeException("response had no job") }
-        }
-    }
 }
 
 /** Maps a test response to its transcript. Missing output is

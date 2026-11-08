@@ -152,12 +152,11 @@ class BehaviourSettingsTest {
             pitchPct: Long = 100L,
             kindFailed: Boolean = true,
             kindInstruct: Boolean = true,
-            kindCron: Boolean = true,
             remindersOn: Boolean = false,
             autoRead: Boolean = false,
         ) = BehaviourSettings.customCount(
             syncHours, wifiOnly, paused, taskMinutes, leadMinutes, voice,
-            ratePct, pitchPct, kindFailed, kindInstruct, kindCron,
+            ratePct, pitchPct, kindFailed, kindInstruct,
             remindersOn, autoRead,
         )
         assertEquals(0, all())
@@ -166,7 +165,6 @@ class BehaviourSettingsTest {
         assertEquals(1, all(leadMinutes = 15L))
         assertEquals(1, all(voice = "en-x"))
         assertEquals(1, all(ratePct = 150L))
-        assertEquals(1, all(kindCron = false))
         assertEquals(1, all(remindersOn = true))
         assertEquals(1, all(autoRead = true))
         assertEquals(3, all(syncHours = 2L, kindFailed = false, autoRead = true))
@@ -356,7 +354,6 @@ class BehaviourSettingsTest {
             pitchPct: Long = 100L,
             kindFailed: Boolean = true,
             kindInstruct: Boolean = true,
-            kindCron: Boolean = true,
             remindersOn: Boolean = false,
             autoRead: Boolean = false,
             updateHours: Long = 24L,
@@ -364,7 +361,7 @@ class BehaviourSettingsTest {
             updateNotify: Boolean = false,
         ) = BehaviourSettings.customCount(
             syncHours, wifiOnly, paused, taskMinutes, leadMinutes, voice,
-            ratePct, pitchPct, kindFailed, kindInstruct, kindCron,
+            ratePct, pitchPct, kindFailed, kindInstruct,
             remindersOn, autoRead, updateHours, updateStartup, updateNotify,
         )
         // Defaults (daily poll, startup on, silent) count zero.
