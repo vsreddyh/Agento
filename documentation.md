@@ -33,6 +33,7 @@ The stack runs one chat profile, a health sync API, and a scheduled retention jo
 Agento (Android) ──► proxy (:8080 compose default) ──┬──► /p/* ──► pi ──► MongoDB
                                      └──► /api/* ─► health-api ──► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
+Scheduled prompts ───────► host cron ──► opencode run (repo root, MCP servers, #490)
 ```
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Go (`https://opencode.ai/zen/go/v1`, default model `mimo-v2.6-flash`).
@@ -55,6 +56,45 @@ Chat runs in T3/opencode, not in the pi container. T3 discovers `opencode.json` 
 - Secrets reach the servers through the process environment, never the committed file: each entry passes `{env:MONGODB_URI}` / `{env:MONGODB_DB}` through (gmail/calendar additionally pass `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CONNECTORS_ENCRYPTION_KEY`). Source those from the single root `.env` with the safe loader before launching T3 — `source scripts/lib/common.sh && load_root_env` (parsed, never `source .env`: a pasted Atlas URI carries `&` query params and secrets may hold `$`/backticks, which bare sourcing mangles or executes).
 - No secret is written into git; `.env` stays git-ignored.
 
+### Scheduled prompts on OS cron (#490)
+
+The `internal/cronjobs.Worker` ticker inside `pi-gateway` is disabled at cutover:
+schedules now live in the host crontab so they keep firing with the pi container
+stopped. [`scripts/t3-cron.sh`](scripts/t3-cron.sh) is the bridge.
+
+- **Install** (`./scripts/hermes.sh init` calls it): reads every `cron_jobs` row,
+  validates it, and renders a managed crontab block
+  (`# >>> t3-cron … # <<< t3-cron`). Prompts are cached under
+  `run/t3-cron/jobs.json`, so a 03:00 fire does not need MongoDB to know what to
+  say. `dry-run` prints the exact block without writing anything.
+- **Time zone**: schedules are entered as IST wall clock. Debian/Ubuntu cron has
+  no per-user `CRON_TZ` (`man 5 crontab`), so entries are converted to the
+  daemon's fixed offset at install time. A host zone that observes DST is
+  rejected rather than silently firing an hour off for half the year; day-of-
+  month schedules that would cross a calendar date are rejected with an
+  actionable message.
+- **Fire**: each crontab line runs
+  `opencode run --auto --archived --standalone --model <T3_CRON_MODEL> "<From
+  Scheduler …>"` with the repo root as cwd, so the turn inherits
+  `opencode.json`'s MCP servers and can write tasks/projects that the phone
+  sees through polling. `--auto` approves permission asks (explicit `deny`
+  rules still hold); nobody is attached to approve an unattended fire. Each
+  fire is a fresh archived session, so a prompt must be self-contained — it
+  does not share context with the previous day's fire.
+- **Logging**: one line per attempt in `run/t3-cron.log`
+  (`fire job="…" id=… status=ok|FAILED rc=…`), with the turn's full output in a
+  per-run file. Failures exit non-zero after the loud log line. A file lock per
+  job prevents a manual run and a scheduled fire from overlapping.
+- **Misses**: state files under `run/t3-cron/` record the last attempted
+  scheduled instant. `install` (baseline), `start` and `check` compare that to
+  the latest scheduled instant and log `miss … (host was down)` once per gap.
+  Missed fires are reported, never replayed — a morning nudge must not run in
+  the evening.
+- **Cutover order**: the new gateway no longer starts the ticker, so upgrading a
+  running host should `stop` the old container before installing the crontab;
+  otherwise the old worker and the new entries can both see a due job during the
+  install window. Fresh hosts are safe because `init` installs before `start`.
+
 ---
 
 ## LLM Connection (Direct Go)
@@ -72,11 +112,11 @@ All profiles connect directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) u
 All container management is orchestrated through [`scripts/hermes.sh`](scripts/hermes.sh), backed by [`docker/docker-compose.yml`](docker/docker-compose.yml).
 
 ### `init`
-1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
-2. Builds the agent image ([`docker/pi/Dockerfile`](docker/pi/Dockerfile): Node + Pi + the in-repo Go MCP binaries) and the `health-api` image.
+1. Verifies host dependencies (podman, compose, python3, curl, cron, the opencode CLI) and installs missing requirements.
+2. Builds the agent image ([`docker/pi/Dockerfile`](docker/pi/Dockerfile): Node + Pi + the in-repo Go MCP binaries) and the `health-api` image, then builds the local `bin/` MCP servers and `bin/t3-cron` when a Go toolchain is present.
 3. Initializes root `.env` from `.env.example` if not already present.
 4. Reports the skills it finds under `pi/skills/` and each profile's own `skills/`, and warns if there are none. Nothing is copied: both locations are tracked in git and bind-mounted into the container.
-5. Installs the daily data retention cron job (runs daily at 03:00).
+5. Installs the daily data retention cron job (runs daily at 03:00) and the scheduled-prompt crontab block (converted from `cron_jobs`, IST → host zone).
 
 ### `start`
 1. Cleans up any stale native PIDs in `run/bots/*.pid`.
@@ -85,6 +125,7 @@ All container management is orchestrated through [`scripts/hermes.sh`](scripts/h
    (skipped build with `PI_NO_BUILD=1`, plain `up -d`). Without
    `--force-recreate` a rebuild silently keeps the OLD container running.
 3. Runs an initial retention check using [`scripts/retention.sh`](scripts/retention.sh).
+4. Logs scheduled fires missed while the host was down (`scripts/t3-cron.sh check`).
 
 ### `stop`
 Gracefully halts running containers: `podman-compose -f docker/docker-compose.yml down`.
@@ -98,7 +139,7 @@ removed, just recreated).
 Displays container states and published ports via `podman-compose -f docker/docker-compose.yml ps`.
 
 ### `clean` (Destructive)
-Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered configs, and removes the retention crontab entry. **Never touches remote MongoDB.** (There are no per-profile `.env` files — the single root `.env` is the only one, and clean never touches it either.)
+Stops containers, wipes volumes (`down -v`), removes `run/`, clears rendered configs, and removes the retention and scheduled-prompt crontab entries. **Never touches remote MongoDB.** (There are no per-profile `.env` files — the single root `.env` is the only one, and clean never touches it either.)
 
 ---
 

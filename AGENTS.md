@@ -18,10 +18,12 @@
 - Disruptive actions need explicit user go-ahead first (STOP and ask):
   `start|stop|restart|init|clean`, recreating containers, editing the live
   `.env`, touching MongoDB data. No surprise restarts.
-- No host agent install exists here (no `pi` binary on PATH outside the
-  container, no systemd unit) — everything runs in the one compose stack below.
-  The script name `scripts/hermes.sh` is a leftover from the Hermes era and is
-  kept so the cron/sysmon helpers and the docs keep pointing at something real.
+- No host *chat agent* install exists here (no `pi` binary on PATH outside the
+  container, no systemd unit) — chat runs in the one compose stack below. The
+  opencode CLI is installed on the host for scheduled prompts (`opencode run`
+  from cron, #490), not as a chat server. The script name `scripts/hermes.sh`
+  is a leftover from the Hermes era and is kept so the cron/sysmon helpers and
+  the docs keep pointing at something real.
 
 ## What this project is
 
@@ -33,7 +35,8 @@ MongoDB for domain data (money, health, cookbook, notes). **The live stack is fu
 containerized** — one compose file (`docker/docker-compose.yml`): health-api +
 one `pi` container (direct to `https://opencode.ai/zen/go/v1`) + nginx +
 a one-shot retention job. Development runs the SAME single compose file against
-Atlas. No host agent install, no native processes.
+Atlas. Chat has no host agent install and no native processes; scheduled
+prompts run from host cron via `opencode run` (#490).
 
 ```
 chat
@@ -52,10 +55,21 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   NO `profiles/*/.env`.
 - Docs: `README.md` = quick start; `documentation.md` = deep dive.
 - `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`),
-  a thin Podman orchestrator over `docker/docker-compose.yml`. No host installs.
+  a thin Podman orchestrator over `docker/docker-compose.yml`. No host agent
+  processes or venvs.
   `init` self-installs the host tools it needs: **podman + compose, curl,
-  python3, cron** (only git + sudo must pre-exist). Container harness only —
-  `init` never installs the opencode CLI. health-api (:8001 compose default — `HEALTH_HOST_PORT` remaps) binds `0.0.0.0` inside its container.
+  python3, cron, the opencode CLI** (only git + sudo must pre-exist). The CLI is
+  installed deliberately: scheduled prompts run outside the container via
+  `opencode run` (#490). health-api (:8001 compose default — `HEALTH_HOST_PORT` remaps) binds `0.0.0.0` inside its container.
+- `scripts/t3-cron.sh` = OS-cron bridge for scheduled prompts (#490):
+  `install` converts the `cron_jobs` rows (IST wall clock) into host crontab
+  entries and caches the prompts under `run/t3-cron/`; each fire runs
+  `opencode run --auto --standalone` from the repo root so it inherits
+  `opencode.json`'s MCP servers; `check` logs one `miss` line for fires the
+  host slept through. The pi worker's tick loop is disabled at cutover, so a
+  job cannot fire twice. Log: `run/t3-cron.log` (one `fire` line per attempt,
+  `status=ok|FAILED`); prompts are edited in Mongo and re-installed with
+  `./scripts/t3-cron.sh install`. `dry-run` prints the exact crontab entries.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`podman-compose run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;

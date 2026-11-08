@@ -6,12 +6,16 @@ set -euo pipefail
 # Everything (health-api, pi (chat profile), proxy, retention) — direct to
 # https://opencode.ai/zen/go/v1, no LLM proxy — runs as compose services in
 # docker/docker-compose.yml. init self-installs the host tools it needs (curl,
-# podman + podman-compose, python3, cron), builds the images, seeds the single
-# root .env, reports the skills it finds, and installs the retention cron. Only git
-# + sudo must pre-exist. All env lives in the root .env (no per-profile .env files).
-# No host agent install, venvs, or native processes.
-# NOTE: container harness only — this script never installs the opencode CLI
-# (LLM traffic goes direct to OpenCode Go over HTTPS; no CLI needed).
+# podman + podman-compose, python3, cron, the opencode CLI), builds the images
+# and the local MCP/t3-cron binaries, seeds the single root .env, reports the
+# skills it finds, and installs the retention + scheduled-prompt cron entries.
+# Only git + sudo must pre-exist. All env lives in the root .env (no per-profile
+# .env files).
+#
+# The opencode CLI is installed by init because scheduled prompts run outside
+# the container: each cron fire executes `opencode run` from the repo root so
+# the turn inherits opencode.json's MCP servers (#490). Container chat still
+# talks to OpenCode Go directly over HTTPS.
 #
 # The name is left over from when the agent host was the Hermes gateway.
 # Renaming is a separate mechanical change — README.md, documentation.md,
@@ -49,7 +53,7 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env (all env vars), report the skills found, set up host tools (curl, podman, python, cron), install retention cron
+  init       Build images, seed the root .env (all env vars), report the skills found, set up host tools (curl, podman, python, cron, opencode), install retention + scheduled-prompt cron
   start      Start the whole container stack (health-api, pi (chat profile), proxy, retention)
   stop       Stop the container stack
   restart    Recreate containers in place (up --build --force-recreate)
@@ -217,6 +221,105 @@ ensure_cron() {
     info "cron installed."
 }
 
+# The opencode CLI is required by the OS-cron bridge (#490): each scheduled
+# prompt runs `opencode run` from the repo root so it inherits the MCP servers
+# in opencode.json. This deliberately reverses the old "never install the CLI"
+# rule — crons no longer run inside pi-gateway.
+ensure_opencode() {
+    [[ "${T3_NO_OPENCODE:-0}" == "1" ]] && { info "opencode install skipped (T3_NO_OPENCODE=1)."; return 0; }
+    if command -v opencode &>/dev/null; then
+        info "opencode available ($(opencode --version 2>/dev/null || echo '?'))."
+        return 0
+    fi
+    # A per-user install may exist without being on this shell's PATH (the
+    # T3 runtime invokes it by absolute path), so check before reinstalling.
+    local c bin=""
+    for c in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+        if [[ -x "$c" ]]; then
+            bin="$c"
+            break
+        fi
+    done
+    if [[ -z "$bin" ]]; then
+        ensure_curl || return 1
+        info "Installing opencode CLI (scheduled prompts execute via opencode run)..."
+        if ! curl -fsSL https://opencode.ai/install | bash; then
+            warn "opencode install failed — install manually: https://opencode.ai/docs/"
+            return 1
+        fi
+        for c in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+            if [[ -x "$c" ]]; then
+                bin="$c"
+                break
+            fi
+        done
+    fi
+    if ! command -v opencode &>/dev/null && [[ -n "$bin" ]]; then
+        # The installer drops the binary outside the non-interactive PATH;
+        # cron needs a stable path, so expose it system-wide.
+        info "opencode at $bin — symlinking into /usr/local/bin."
+        sudo ln -sf "$bin" /usr/local/bin/opencode 2>/dev/null || warn "could not symlink opencode into /usr/local/bin; set T3_CRON_OPENCODE instead."
+    fi
+    if command -v opencode &>/dev/null; then
+        info "opencode installed: $(opencode --version 2>/dev/null || echo '?')."
+        return 0
+    fi
+    warn "opencode still not on PATH — scheduled prompts will fail until it is (or set T3_CRON_OPENCODE)."
+    return 1
+}
+
+# Go builds the local MCP binaries opencode.json points at and the t3-cron
+# runner. It is not installed automatically: a distro package is often older
+# than go.mod's toolchain and the failure is clearer as an explicit warning.
+ensure_go() {
+    if command -v go &>/dev/null; then
+        info "go $(go version 2>/dev/null | sed 's/^go version //; s/ .*//') available."
+        return 0
+    fi
+    warn "Go toolchain not found — bin/ MCP servers and bin/t3-cron cannot be built. Install Go 1.26+ and re-run init."
+    return 1
+}
+
+build_t3_binaries() {
+    if ! command -v go &>/dev/null; then
+        warn "Skipping MCP/t3-cron builds: no Go toolchain."
+        return 0
+    fi
+    info "Building MCP servers for T3/opencode..."
+    if bash "$SCRIPTS_DIR/build-mcps.sh"; then
+        info "MCP binaries ready in bin/."
+    else
+        warn "MCP build failed — T3 chat will have no tools until ./scripts/build-mcps.sh succeeds."
+    fi
+    info "Building the OS-cron runner..."
+    if ( cd "$REPO" && go build -trimpath -o "$REPO/bin/t3-cron" ./cmd/t3-cron ); then
+        info "bin/t3-cron ready."
+    else
+        warn "t3-cron build failed — scheduled prompts cannot run until it builds."
+    fi
+}
+
+# ────────────────────────────────────────────────────────────
+# SCHEDULED PROMPTS (OS CRON, #490)
+# ────────────────────────────────────────────────────────────
+# Cron rows move from the pi-gateway worker to the host crontab. install
+# renders the entries from cron_jobs (IST -> host zone), caches the prompts,
+# and writes the block; check logs fires the host missed while it was down.
+install_t3_cron() {
+    bash "$SCRIPTS_DIR/t3-cron.sh" install || {
+        warn "Scheduled-prompt crontab install failed — no cron will fire. Fix the error above and re-run ./scripts/t3-cron.sh install."
+        return 1
+    }
+}
+
+remove_t3_cron() {
+    bash "$SCRIPTS_DIR/t3-cron.sh" remove || warn "Scheduled-prompt crontab removal failed."
+}
+
+t3_cron_check() {
+    bash "$SCRIPTS_DIR/t3-cron.sh" check || warn "Scheduled-prompt miss check failed."
+}
+
 # ────────────────────────────────────────────────────────────
 # INIT
 # ────────────────────────────────────────────────────────────
@@ -236,11 +339,15 @@ cmd_init() {
     ensure_podman || true
     ensure_python || true
     ensure_cron || true
+    ensure_opencode || true
+    ensure_go || true
 
     info "Building container images (agent, health-api)..."
     podman_compose -f "$COMPOSE" build 2>&1 || { error "podman-compose build failed."; exit 1; }
     info "Pruning unused images (prevents GBs of bloat)..."
     podman image prune -f 2>&1 | sed 's/^/  /' || true
+
+    build_t3_binaries
 
     mkdir -p "$PI_HOME" "$REPO/workspace" "$REPO/exports/browser"
     # No chown here, and that is the fix rather than an omission. This used to hand
@@ -312,6 +419,7 @@ cmd_init() {
 
 install_retention_cron
     bash "$SCRIPTS_DIR/sysmon.sh" install || true
+    install_t3_cron || true
 
     echo
     info "Initialization complete."
@@ -404,6 +512,10 @@ cmd_start() {
     info "Running data retention ..."
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
 
+    # Report scheduled fires the host missed while it was down (one line per
+    # gap). Non-fatal: a miss note must never keep the stack from starting.
+    t3_cron_check || true
+
     echo ""
     # Before the status table, so a failed turn is the last thing on screen.
     smoke_chat || SMOKE_FAILED=1
@@ -435,6 +547,7 @@ cmd_restart() {
     # `start` prunes dangling images, `restart` does not
     info "Running data retention ..."
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
+    t3_cron_check || true
     echo ""
     smoke_chat || SMOKE_FAILED=1
     cmd_status
@@ -458,7 +571,7 @@ cmd_clean() {
     echo -e "${RED}This wipes:${NC}"
     echo "  - every conversation transcript, and pi runtime state (sessions, logs, cache)"
     echo "  - the provider credentials Pi wrote at login (pi/auth.json)"
-    echo "  - the retention cron entry"
+    echo "  - the retention and scheduled-prompt cron entries"
     echo "  - container volumes and containers"
     echo -e "${RED}Remote MongoDB is NOT touched. Everything tracked in git —"
     echo -e "pi/settings.json, pi/mcp.json, the AGENTS.md files, skills, the"
@@ -473,6 +586,7 @@ cmd_clean() {
     info "Containers and volumes removed."
 
     remove_retention_cron
+    remove_t3_cron
     bash "$SCRIPTS_DIR/sysmon.sh" remove || true
     rm -rf "$RUN_DIR"
     info "run/ removed."

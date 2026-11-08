@@ -16,6 +16,7 @@ Fully containerized agent stack running one chat profile against OpenCode Go (`h
 Agento (Android) ──► proxy (:8080 compose default) ──┬──► /p/* ──► pi :8643 ──► MongoDB
                                      └──► /api/* ─► health-api ─► MongoDB
 Retention ───────────────► one-shot container (cron 03:00 / on start)
+Scheduled prompts ───────► host cron ──► opencode run (repo root, MCP servers, #490)
 ```
 (Ports are compose defaults: `APP_PORT` / `HEALTH_HOST_PORT` / `PI_HOST_PORT` remap the host side.)
 
@@ -54,6 +55,8 @@ and unmanaged.)
 ### Required Host Tools & Access
 - **Git** (`git`) and **sudo** privileges (pre-installed).
 - **Podman** (4.0+) & **podman-compose** (`podman-compose`). Auto-installed by `./scripts/hermes.sh init` if missing. No daemon — Podman is daemonless.
+- **Go 1.26+**: builds the local MCP binaries `opencode.json` points at and `bin/t3-cron` (the OS-cron runner). Not auto-installed — `init` warns and skips those builds when it is missing.
+- **OpenCode CLI**: auto-installed by `./scripts/hermes.sh init` (skipped with `T3_NO_OPENCODE=1`). Scheduled prompts run `opencode run` on the host, outside the container.
 - **SSH Key Pair**: Configured in `~/.ssh` (read-only mounted into the pi service for host-side git by hand; missing files fail container creation — provision keys before the first `./scripts/hermes.sh start`, set `VPS_SSH_DIR` in `.env` if the VPS user isn't root). Retired side-profile repos (`vsreddyh/portals`, `vsreddyh/portfolio-resume`) are no longer cloned by `init`.
 
 ### Required External Services & API Keys
@@ -78,7 +81,7 @@ and unmanaged.)
 # 1. Initialize environment file and workspace
 cp .env.example .env && nano .env
 
-# 2. Build images and register daily retention cron
+# 2. Build images/binaries and register retention + scheduled-prompt cron
 ./scripts/hermes.sh init
 
 # 3. Start the entire container stack
@@ -100,12 +103,39 @@ podman-compose -f docker/docker-compose.yml logs -f pi
 
 | Command | Action |
 |---|---|
-| `./scripts/hermes.sh init` | Self-installs host deps (curl, podman + compose, python3, cron), builds images, creates directories, reports the skills it finds, sets up cron. Container harness only — never installs the opencode CLI. |
+| `./scripts/hermes.sh init` | Self-installs host deps (curl, podman + compose, python3, cron, the opencode CLI), builds images and the local MCP/`t3-cron` binaries, creates directories, reports the skills it finds, and installs the retention + scheduled-prompt cron entries. The CLI is needed because scheduled prompts run `opencode run` on the host. |
 | `./scripts/hermes.sh start` | Starts all services (`podman-compose up -d --build --force-recreate`, plain `up -d` with `PI_NO_BUILD=1`) and runs retention once. |
 | `./scripts/hermes.sh stop` | Shuts down the stack (`podman-compose down`). |
 | `./scripts/hermes.sh restart` | Rebuilds changed layers and recreates containers in place (`up -d --build --force-recreate`) — not a stop-then-start. |
 | `./scripts/hermes.sh status` | Displays container health and published ports (`podman-compose ps`). |
-| `./scripts/hermes.sh clean` | **Destructive.** Wipes containers, volumes, `run/`, rendered configs, and retention cron. Remote MongoDB is untouched (and there are no per-profile `.env` files — the single root `.env` is never touched either). |
+| `./scripts/hermes.sh clean` | **Destructive.** Wipes containers, volumes, `run/`, rendered configs, and the retention + scheduled-prompt cron entries. Remote MongoDB is untouched (and there are no per-profile `.env` files — the single root `.env` is never touched either). |
+
+---
+
+## Scheduled Prompts (OS cron)
+
+Scheduled prompts no longer tick inside the pi container (#490). `init` converts
+every `cron_jobs` row into a host crontab entry and each fire runs
+`opencode run` from the repo root, so the turn inherits `opencode.json`'s MCP
+servers and keeps working with the pi container stopped.
+
+```bash
+./scripts/t3-cron.sh dry-run   # print the exact crontab entries; no writes
+./scripts/t3-cron.sh install   # re-render after editing a job in MongoDB
+./scripts/t3-cron.sh list      # generated jobs (enabled/paused)
+./scripts/t3-cron.sh run <id>  # fire one job by hand
+./scripts/t3-cron.sh check     # log fires missed while the host was down
+```
+
+- Schedules stay **IST wall clock**. Debian/Ubuntu cron has no per-user timezone,
+  so `install` converts each 5-field expression to the daemon's fixed zone
+  (UTC on the default VPS) and stores the prompt text under `run/t3-cron/`.
+- One line per attempt lands in `run/t3-cron.log`
+  (`fire job=… status=ok|FAILED`); child output goes to a per-run file next to
+  it. A gap over a missed schedule logs a `miss … (host was down)` line at the
+  next install/start — stale fires are reported, never replayed.
+- `T3_CRON_MODEL` (default `opencode-go/mimo-v2.6-flash`) and
+  `T3_CRON_TIMEOUT` (default `10m`) tune fires; see `.env.example`.
 
 ---
 

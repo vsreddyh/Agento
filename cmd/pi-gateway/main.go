@@ -532,10 +532,14 @@ func run() error {
 	}
 
 	// Scheduler fires run as chat-agent turns on this server (#331), so the
-	// worker is wired — and its tick loop started — only now that the server
-	// exists. One tick a minute plus one immediate pass: the immediate pass
-	// accounts fires missed while down (skip-and-note) instead of leaving
-	// LastFire stale until the next minute.
+	// worker's Fire function is wired only now that the server exists.
+	//
+	// Cutover (#490): the tick loop is deliberately NOT started. Schedules are
+	// owned by the host crontab (scripts/t3-cron.sh) so they keep firing with
+	// this container stopped; leaving the in-process ticker alive would let a
+	// job fire twice once the crontab entries are installed. Fire is still
+	// wired because the manual /run route calls FireNow, and a hand tap is an
+	// explicit action rather than a second scheduled fire.
 	if cronWorker != nil {
 		cronWorker.Fire = func(ctx context.Context, job cronjobs.Job) (cronjobs.FireResult, error) {
 			text, runID, err := srv.FireSchedulerJob(ctx, job)
@@ -546,20 +550,7 @@ func run() error {
 			}
 			return cronjobs.FireResult{Text: text, RunID: runID}, nil
 		}
-		worker := cronWorker
-		go func() {
-			worker.Tick(ctx, time.Now())
-			tick := time.NewTicker(time.Minute)
-			defer tick.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case now := <-tick.C:
-					worker.Tick(ctx, now)
-				}
-			}
-		}()
+		logger.Printf("cron: in-process worker disabled; schedules run from the host crontab (#490)")
 	}
 
 	// PI_GATEWAY_ADDR wins outright, and PI_SERVER_PORT is then not consulted at
