@@ -56,7 +56,7 @@ func cleanCreate(in Skill, now int64) (Skill, error) {
 	// backdate sort order, and nothing legitimate sets it.
 	in.CreatedAt = now
 	in.UpdatedAt = now
-	// Drafts are born drafts: only review + test promote, never the create
+	// Drafts are born drafts: only review + test advance, never the create
 	// call itself.
 	in.Status = StatusDraft
 	in.TestedAt = 0

@@ -10,7 +10,7 @@ procedure evaporates with the thread, and the Skills tab is a read-only
 catalog. The expected loop (#314) is: save a procedure from the app → review
 and edit it → test-run it once → activate it for the model. (Promoting an
 active skill to a scheduled routine was removed in #490; the app-side
-Schedule UI is removed in #491.)
+Schedule UI removal is planned in #491 / PR #506.)
 
 ## Decision
 
