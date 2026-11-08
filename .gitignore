@@ -128,6 +128,7 @@ __pycache__/
 # Go build outputs (single-package `go build` drops the binary in cwd)
 # NOTE: always `go build -o /tmp/...` for a binary you keep; never bare
 # `go build ./cmd/...` in the repo root, or the next `git add -A` commits it.
+/bin/
 /health-api
 /pi-gateway
 /mongo
