@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [7.0.0]
+- **Cron/Scheduler surface removed (#491).** The Scheduler screen, its
+  navigation destination, the background cron poll worker, the scheduler
+  notification kind (toggle and backup entry), and the skill schedule /
+  promote entry points are gone — the server deleted its cron worker in
+  #490, so the app no longer polls, notifies, or schedules anything cron.
+  Task reminders (AlarmManager) and the update check (WorkManager) are
+  untouched.
+
 ## [6.4.0]
 - **In-chat connector mentions (#441).** Typing `@` in the composer offers
   `@gmail` / `@calendar` rows; tapping one inserts the mention and the turn

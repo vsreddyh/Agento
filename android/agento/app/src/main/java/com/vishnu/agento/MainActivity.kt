@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Undo
@@ -46,7 +45,6 @@ private enum class Destination(val title: String) {
     Tasks("Projects"),
     TaskManager("Task Manager"),
     Storage("Files"),
-    Scheduler("Scheduler"),
     Reports("∃-Mail"),
     Skills("Skills"),
     Tools("Tools"),
@@ -58,7 +56,6 @@ private fun Destination.icon() = when (this) {
     Destination.Tasks -> Icons.Filled.List
     Destination.TaskManager -> Icons.Filled.Assignment
     Destination.Storage -> Icons.Filled.Folder
-    Destination.Scheduler -> Icons.Filled.Schedule
     Destination.Reports -> Icons.Filled.Mail
     Destination.Skills -> Icons.Filled.Extension
     Destination.Tools -> Icons.Filled.Build
@@ -114,16 +111,8 @@ class MainActivity : ComponentActivity() {
     private val tasksTargetId = mutableStateOf<String?>(null)
 
     /**
-     * Cron notification tap (#289). Generation counter like tasksGen so
-     * retaps renavigate; SchedulerScreen consumes the job id and clears it
-     * once the list loads.
-     */
-    private val schedulerGen = mutableIntStateOf(0)
-    private val schedulerTargetId = mutableStateOf<String?>(null)
-
-    /**
      * Update-available notification tap (#366). Generation counter like
-     * schedulerGen so retaps renavigate; lands on Settings → About (where
+     * tasksGen so retaps renavigate; lands on Settings → About (where
      * the App updates section lives).
      */
     private val updateGen = mutableIntStateOf(0)
@@ -149,12 +138,6 @@ class MainActivity : ComponentActivity() {
                 tasksTargetId.value = it
             }
         }
-        if (intent.action == CronIntents.ACTION_CRON) {
-            schedulerGen.intValue++
-            intent.getStringExtra(CronIntents.EXTRA_JOB_ID)?.let {
-                schedulerTargetId.value = it
-            }
-        }
         if (intent.action == InstructIntents.ACTION_CHAT) {
             chatGen.intValue++
             chatThreadId.value = intent.getStringExtra(InstructIntents.EXTRA_THREAD_ID)
@@ -178,13 +161,6 @@ class MainActivity : ComponentActivity() {
             tasksGen.intValue = 1
             intent.getStringExtra(TaskWidget.EXTRA_TASK_ID)?.let {
                 tasksTargetId.value = it
-            }
-        }
-        // Cron notification tap: same redelivery guard.
-        if (savedInstanceState == null && intent?.action == CronIntents.ACTION_CRON && schedulerGen.intValue == 0) {
-            schedulerGen.intValue = 1
-            intent.getStringExtra(CronIntents.EXTRA_JOB_ID)?.let {
-                schedulerTargetId.value = it
             }
         }
         // Task-instruction tap: same redelivery guard.
@@ -228,12 +204,6 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(tasksGen.intValue) {
                         if (tasksGen.intValue > 0) {
                             dest = Destination.TaskManager
-                        }
-                    }
-                    // Cron notification tap (#289): land on the Scheduler screen.
-                    LaunchedEffect(schedulerGen.intValue) {
-                        if (schedulerGen.intValue > 0) {
-                            dest = Destination.Scheduler
                         }
                     }
                     // Task-instruction tap (#287): land on the Chat tab; the
@@ -368,11 +338,6 @@ class MainActivity : ComponentActivity() {
                                 Destination.Storage -> StorageScreen(
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
-                                Destination.Scheduler -> SchedulerScreen(
-                                    onMenu = { scope.launch { drawerState.open() } },
-                                    deepLinkJobId = schedulerTargetId.value,
-                                    onDeepLinkConsumed = { schedulerTargetId.value = null },
-                                )
                                 Destination.Reports -> ReportsScreen(
                                     onMenu = { scope.launch { drawerState.open() } },
                                     onUnreadChanged = { reportsUnread = it },
@@ -479,7 +444,7 @@ private fun DrawerList(
     modelFor: (Destination) -> String? = { null },
     reportsUnread: Int? = null,
 ) {
-    // Scrollable (#105): 9 destinations overflow short screens — without
+    // Scrollable (#105): 8 destinations overflow short screens — without
     // this the bottom items are cut off with no way to reach them.
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Text(

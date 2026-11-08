@@ -1,12 +1,13 @@
 // Package runs stores conversation-attached agent runs: one turn of work that
 // outlives the HTTP request that started it.
 //
-// This is deliberately a SIBLING of cronjobs, not a reuse of it. Cron jobs are
-// fire-and-forget, identified by schedule and prompt, and carry a short capped
-// history of replies. A run is a single execution with a lifecycle the client
-// can observe, reattach to, steer and cancel; its output is the turn itself,
-// not a notification about one. Sharing the cron collection would mean one
-// document shape doing two jobs, and /api/jobs would grow a second meaning.
+// This is deliberately NOT a reuse of the retired scheduler: scheduled
+// prompts were fire-and-forget, identified by schedule and prompt, carrying
+// a short capped history of replies. A run is a single execution with a
+// lifecycle the client can observe, reattach to, steer and cancel; its
+// output is the turn itself, not a notification about one. Sharing one
+// document shape would mean it doing two jobs, and the jobs route would
+// have grown a second meaning.
 //
 // State lives in MongoDB (see store_mongo.go) so a run survives the app being
 // killed, a network drop, and a gateway restart (with the caveat recorded in
@@ -269,7 +270,7 @@ func (f Filter) Matches(r Run) bool {
 }
 
 // StoreError is the domain error the HTTP layer maps onto status codes, the
-// same shape cronjobs uses.
+// same shape the retired scheduler store used.
 type StoreError struct {
 	Msg      string
 	NotFound bool

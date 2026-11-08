@@ -105,15 +105,6 @@ type Config struct {
 	// construct Servers directly and leave this empty.
 	CrashDir string
 
-	// CronJobs is the scheduled-prompt backend. Nil means the jobs
-	// routes answer 404; tests and binaries without Mongo leave it nil.
-	CronJobs JobStore
-
-	// CronFire fires one job now (manual /run). Required alongside
-	// CronJobs; the tick worker and the route share it so a manual run
-	// and a scheduled fire can never overlap a job.
-	CronFire CronFire
-
 	// RunStore persists conversation-attached runs (#311). Nil means an
 	// in-memory store: turns still outlive the request that started them,
 	// they just do not survive a gateway restart, and /api/runs answers from
@@ -614,17 +605,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cron jobs, matched by prefix because the job id and the
-	// pause/resume/run verbs are path segments. Profile-independent like
-	// the sessions routes above: jobs are global to the single profile.
-	// Handled before the switch so all five shapes share one place.
-	if rest == "api/jobs" || strings.HasPrefix(rest, "api/jobs/") {
-		s.handleJobs(w, r, rest)
-		return
-	}
-
-	// Resumable conversation runs (#311). A sibling of /api/jobs, never an
-	// alias: jobs stay fire-and-forget, runs are observable and steerable.
+	// Resumable conversation runs (#311): observable and steerable turns.
 	if rest == "api/runs" || strings.HasPrefix(rest, "api/runs/") {
 		s.handleRuns(w, r, rest)
 		return

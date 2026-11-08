@@ -1,6 +1,9 @@
 # ADR-0001: Conversation runs are a sibling of cron jobs
 
 - Status: accepted (2026-10)
+- Note (2026-11, #490): the cron-jobs sibling this ADR contrasts with was
+  deleted (`internal/cronjobs/`, `/api/jobs` gone). The contrast below reads
+  as the retired design; runs themselves are unchanged.
 - Issue: #311
 
 ## Context
@@ -51,16 +54,16 @@ the next morning and see what happened; short enough that run output does not
 quietly become a second, unmanaged transcript archive. A run in flight refreshes
 its expiry when it settles, so it cannot be deleted mid-turn.
 
-### Sibling of `/api/jobs`, not a reuse of `cronjobs`
+### Former sibling of `/api/jobs`, not a reuse of `cronjobs`
 
-Cron jobs are fire-and-forget: identified by schedule and prompt, carrying a
-short capped history of notifications. A run is one execution with an
-observable lifecycle. Sharing the collection would mean one document shape doing
-two jobs and `/api/jobs` growing a second meaning.
+Cron jobs were fire-and-forget: identified by schedule and prompt, carrying
+a short capped history of notifications. A run is one execution with an
+observable lifecycle. Sharing the collection would have meant one document
+shape doing two jobs and `/api/jobs` growing a second meaning.
 
-`internal/runs` and `internal/cronjobs` stay separate packages, and the routes
-stay separate collections of handlers. `/api/runs` is read-mostly plus a small
-set of verbs:
+`internal/runs` and the retired `internal/cronjobs` stayed separate
+packages, and the routes stayed separate collections of handlers.
+`/api/runs` is read-mostly plus a small set of verbs:
 
 | route | purpose |
 |---|---|
@@ -71,7 +74,8 @@ set of verbs:
 | `POST /api/runs/{id}/cancel` | abort the turn, keep partial output |
 
 Both `/api/runs` and `/{profile}/api/runs` spellings are served, matching
-`/api/jobs` and the app's profile-path `base + "/p/chat"` construction.
+the app's profile-path `base + "/p/chat"` construction (the `/api/jobs`
+parallel held until the scheduler surface was deleted in #490).
 
 ### Reattach is snapshot plus live frames, not an event log
 

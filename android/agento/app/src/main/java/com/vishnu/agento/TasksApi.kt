@@ -435,6 +435,12 @@ fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
 internal fun optJsonStr(o: JSONObject, key: String): String =
     if (o.isNull(key)) "" else o.optString(key, "").trim()
 
+/** Presence that treats explicit JSON null as absent (#430): `has`
+ * alone is true for a null value, which would read a null tri-state as
+ * a value instead of unknown. */
+internal fun hasValue(o: JSONObject, key: String): Boolean =
+    o.has(key) && !o.isNull(key)
+
 /** Lenient weekday-selection read (#304): a missing or mistyped key is an
  * empty selection rather than a parse failure — the whole parse path is
  * lenient across shapes, and the round-trip compare is what reports a

@@ -1,4 +1,4 @@
-package cronjobs
+package teach
 
 import (
 	"bytes"
@@ -18,12 +18,12 @@ const (
 	inferenceURL = "https://opencode.ai/inference/go/v1/chat/completions"
 	// userAgent identifies the caller per the Go docs (own UA, not a
 	// generic HTTP-library name).
-	userAgent = "agento-cron/1.0"
-	// maxTokens bounds one nudge reply: cron prompts are short and so are
-	// their answers; an unbounded completion on a schedule is a runaway
-	// cost with nobody watching.
+	userAgent = "agento-teach/1.0"
+	// maxTokens bounds one test reply: skill-test prompts are short and so
+	// are their answers; an unbounded completion is a runaway cost with
+	// nobody watching.
 	maxTokens = 1024
-	// callTimeout bounds one fire: the tick loop must not pile up
+	// callTimeout bounds one test call: the skill tab must not hang
 	// behind a slow model.
 	callTimeout = 3 * time.Minute
 )
@@ -53,12 +53,9 @@ type chatResponse struct {
 }
 
 // BareClient is a direct model client with no persona and no tools: one
-// prompt in, one reply out. HTTP is injectable for tests.
-//
-// Production scheduler fires do NOT use this path anymore: they run as
-// chat-agent turns (see FireFunc and gateway's FireSchedulerJob), so they can
-// read notes and run list/query lookups. BareClient serves skill test-fires (same
-// key and model, no job store) and unit tests.
+// prompt in, one reply out. HTTP is injectable for tests. It serves skill
+// test-fires (same key and model as the retired scheduler, no job store)
+// and unit tests.
 type BareClient struct {
 	APIKey  string
 	Model   string
@@ -66,16 +63,16 @@ type BareClient struct {
 	HTTP    *http.Client
 }
 
-// Run sends one nudge. sessionID is stable per job (cron-<id>) so the
-// provider can route and cache by conversation, per the Go docs.
-func (c *BareClient) Run(ctx context.Context, prompt, sessionID string) (string, error) {
+// Run sends one skill-test prompt. tag is stable per test (agento-teach-<id>)
+// so the provider can route and cache by conversation, per the Go docs.
+func (c *BareClient) Run(ctx context.Context, prompt, tag string) (string, error) {
 	if strings.TrimSpace(c.APIKey) == "" {
-		return "", fmt.Errorf("cron: OPENCODE_API_KEY is unset")
+		return "", fmt.Errorf("teach: OPENCODE_API_KEY is unset")
 	}
 	model := strings.TrimSpace(c.Model)
 	model = strings.TrimPrefix(model, "opencode-go/")
 	if model == "" {
-		return "", fmt.Errorf("cron: model is unset")
+		return "", fmt.Errorf("teach: model is unset")
 	}
 	url := c.BaseURL
 	if url == "" {
@@ -98,7 +95,7 @@ func (c *BareClient) Run(ctx context.Context, prompt, sessionID string) (string,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.APIKey))
-	req.Header.Set("x-opencode-session", sessionID)
+	req.Header.Set("x-opencode-session", tag)
 	req.Header.Set("User-Agent", userAgent)
 	httpClient := c.HTTP
 	if httpClient == nil {
@@ -106,16 +103,16 @@ func (c *BareClient) Run(ctx context.Context, prompt, sessionID string) (string,
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("cron: call failed: %w", err)
+		return "", fmt.Errorf("teach: call failed: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", fmt.Errorf("cron: read failed: %w", err)
+		return "", fmt.Errorf("teach: read failed: %w", err)
 	}
 	var out chatResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return "", fmt.Errorf("cron: bad response (HTTP %d): %s", resp.StatusCode, truncate(string(raw), 200))
+		return "", fmt.Errorf("teach: bad response (HTTP %d): %s", resp.StatusCode, truncate(string(raw), 200))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || out.Error != nil {
 		msg := ""
@@ -125,14 +122,14 @@ func (c *BareClient) Run(ctx context.Context, prompt, sessionID string) (string,
 		if msg == "" {
 			msg = truncate(string(raw), 200)
 		}
-		return "", fmt.Errorf("cron: HTTP %d: %s", resp.StatusCode, msg)
+		return "", fmt.Errorf("teach: HTTP %d: %s", resp.StatusCode, msg)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("cron: empty choices")
+		return "", fmt.Errorf("teach: empty choices")
 	}
 	text := strings.TrimSpace(out.Choices[0].Message.Content)
 	if text == "" {
-		return "", fmt.Errorf("cron: empty reply")
+		return "", fmt.Errorf("teach: empty reply")
 	}
 	return text, nil
 }

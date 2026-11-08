@@ -30,7 +30,6 @@ import (
 	"agento/internal/approvals"
 	"agento/internal/connectors"
 	"agento/internal/crashlog"
-	"agento/internal/cronjobs"
 	"agento/internal/memory"
 	"agento/internal/runs"
 	"agento/internal/teach"
@@ -301,35 +300,8 @@ func run() error {
 		return errors.New("no profile produced a working agent")
 	}
 
-	// Cron jobs live in Mongo next to the other domain collections. A
-	// store failure must not take chat down: without it the jobs routes
-	// answer 404 and the Scheduler stays idle, loudly logged.
-	//
-	// Only the store opens here. Fires run as chat-agent turns (#331), so
-	// the worker's Fire function is wired after the gateway server exists
-	// below; the tick loop starts there too.
-	var cronStore gateway.JobStore
-	var cronWorker *cronjobs.Worker
-	if store, err := cronjobs.FromEnv(); err != nil {
-		logger.Printf("cron jobs disabled: %v", err)
-	} else {
-		cronStore = store
-		cronWorker = &cronjobs.Worker{Store: store, Logf: logger.Printf}
-	}
-	var cronFire gateway.CronFire
-	if cronWorker != nil {
-		// Bound to the worker, not to its Fire field: Fire is assigned
-		// after the server exists (see below), and the method value reads
-		// it at call time. Nothing serves requests before ListenAndServe,
-		// which happens after that assignment — do not move serving
-		// earlier without moving the assignment too. Manual /run shares
-		// the tick path, so a hand tap and a scheduled fire can never
-		// overlap a job.
-		cronFire = cronWorker.FireNow
-	}
-
 	// Conversation-attached runs (#311). Same Mongo database as the rest of
-	// the domain data, a sibling collection to cron jobs. Without it, runs
+	// the domain data. Without it, runs
 	// still outlive their request in this process, but a restart loses the
 	// history — so a store failure is logged and the gateway keeps serving.
 	var runStore runs.Store
@@ -417,19 +389,16 @@ func run() error {
 		}()
 	}
 
-	// The test-fire runner is a bare model client: it needs the same key and
-	// model but no job store, so a Mongo-less stack still answers "no runner"
-	// honestly instead of failing open. Scheduler fires do NOT use this path:
-	// they run as chat-agent turns (wired above), so they can read notes and
-	// run list/query lookups at fire time (never browser navigation — no one
-	// is attached to approve a domain).
+	// The test-fire runner is a bare model client (internal/teach): it
+	// needs the same key and model but no job store, so a Mongo-less
+	// stack still answers "no runner" honestly instead of failing open.
 	var teachRunner gateway.TeachRunner
 	if key := strings.TrimSpace(os.Getenv("OPENCODE_API_KEY")); key != "" {
-		runner := &cronjobs.BareClient{
+		runner := &teach.BareClient{
 			APIKey: key,
-			// Renamed with fallback: PI_CRON_MODEL predates the split
-			// (scheduler fires are chat turns now); existing deploys
-			// keep working, new ones use the honest name.
+			// PI_CRON_MODEL is kept as a fallback until #494 removes the
+			// gateway-only env; existing deploys keep working, new ones
+			// use the honest name.
 			Model: envOr("PI_TEACH_MODEL", envOr("PI_CRON_MODEL", "mimo-v2.6-flash")),
 		}
 		teachRunner = runner.Run
@@ -526,40 +495,9 @@ func run() error {
 		defaultProfile = names[0]
 	}
 
-	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, cronStore, cronFire, runStore, approvalStore, memoryStore, teachStore, teachRunner, connectorStore, connectorOAuth, logger.Printf), agents)
+	srv, err := gateway.New(gatewayConfig(password, agentDir, defaultProfile, crashDir, runStore, approvalStore, memoryStore, teachStore, teachRunner, connectorStore, connectorOAuth, logger.Printf), agents)
 	if err != nil {
 		return err
-	}
-
-	// Scheduler fires run as chat-agent turns on this server (#331), so the
-	// worker is wired — and its tick loop started — only now that the server
-	// exists. One tick a minute plus one immediate pass: the immediate pass
-	// accounts fires missed while down (skip-and-note) instead of leaving
-	// LastFire stale until the next minute.
-	if cronWorker != nil {
-		cronWorker.Fire = func(ctx context.Context, job cronjobs.Job) (cronjobs.FireResult, error) {
-			text, runID, err := srv.FireSchedulerJob(ctx, job)
-			// The run id travels even on failure: a failed chat turn
-			// still exists in the Runs list, and the error row links it.
-			if err != nil {
-				return cronjobs.FireResult{RunID: runID}, err
-			}
-			return cronjobs.FireResult{Text: text, RunID: runID}, nil
-		}
-		worker := cronWorker
-		go func() {
-			worker.Tick(ctx, time.Now())
-			tick := time.NewTicker(time.Minute)
-			defer tick.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case now := <-tick.C:
-					worker.Tick(ctx, now)
-				}
-			}
-		}()
 	}
 
 	// PI_GATEWAY_ADDR wins outright, and PI_SERVER_PORT is then not consulted at
@@ -757,7 +695,7 @@ func skillArgs(skillsDir string) []string {
 // InventoryTimeout line left every test green, because the test exercised secondsEnv
 // directly and never the wiring. A budget that cannot be shown to reach its field is
 // not configurable in any useful sense.
-func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStore gateway.JobStore, cronFire gateway.CronFire, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, teachStore teach.Store, teachRunner gateway.TeachRunner, connectorStore connectors.Store, connectorOAuth *connectors.OAuthConfig, logf func(string, ...any)) gateway.Config {
+func gatewayConfig(password, agentDir, defaultProfile, crashDir string, runStore runs.Store, approvalStore approvals.Store, memoryStore memory.Store, teachStore teach.Store, teachRunner gateway.TeachRunner, connectorStore connectors.Store, connectorOAuth *connectors.OAuthConfig, logf func(string, ...any)) gateway.Config {
 	return gateway.Config{
 		Password: password,
 		// The toolsets inventory reads <agentDir>/mcp.json, so the agent dir has to
@@ -769,10 +707,6 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		// survive container restarts). Resolved in run(), not derived in
 		// New, so the mapping stays testable like every other field.
 		CrashDir: crashDir,
-		// Cron backend and manual-run entry, both owned by run(): the
-		// store needs env and the fire path needs the worker.
-		CronJobs: cronStore,
-		CronFire: cronFire,
 		// Resumable run history, owned by run(): it needs env and the
 		// startup reconciliation that marks dead runs interrupted.
 		RunStore: runStore,
@@ -781,7 +715,7 @@ func gatewayConfig(password, agentDir, defaultProfile, crashDir string, cronStor
 		// Per-profile memory, owned by run() for the same reason.
 		MemoryStore: memoryStore,
 		// Taught skills, owned by run() for the same reason. The runner is
-		// the cron runner's sibling (same key/model, no job store); the
+		// a bare model client (same key/model, no job store); the
 		// materializer closes over the agent dir to reach the runtime tree.
 		TeachStore:  teachStore,
 		TeachRunner: teachRunner,
