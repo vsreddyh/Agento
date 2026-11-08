@@ -574,10 +574,10 @@ internal fun SettingSection.hubIcon() = when (this) {
 
 /** Notification permission hub (#493).
  *
- * Chat reply alerts are gone with chat. What remains are the reminder,
- * update and sync notifications, each with its own switch (reminders in
- * Settings → Behaviour, update notices next to their cadence there). This
- * section owns the one thing they share: the system-level grant.
+ * Chat reply alerts are gone with chat. What remains are the reminder and
+ * update notices, each with its own switch (reminders in Settings →
+ * Behaviour, update notices next to their cadence there). This section
+ * owns the one thing they share: the system-level grant.
  */
 @Composable
 internal fun NotificationsSection() {
@@ -605,8 +605,8 @@ internal fun NotificationsSection() {
 
     SectionCard(
         title = "Notifications",
-        subtitle = "Task reminders, app-update notices and sync failures all " +
-            "need the system grant below. Per-kind switches live in " +
+        subtitle = "Task reminders and app-update notices need " +
+            "the system grant below. Per-kind switches live in " +
             "Settings → Behaviour.",
     ) {
         if (!canPost) {
