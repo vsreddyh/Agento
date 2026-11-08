@@ -1,6 +1,80 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": [".opencode/chat.md"],
+  "mcp": {
+    "servers": {
+      "calendar": {
+        "type": "local",
+        "command": ["./bin/calendar"],
+        "environment": {
+          "MONGODB_URI": "{env:MONGODB_URI}",
+          "MONGODB_DB": "{env:MONGODB_DB}",
+          "GOOGLE_CLIENT_ID": "{env:GOOGLE_CLIENT_ID}",
+          "GOOGLE_CLIENT_SECRET": "{env:GOOGLE_CLIENT_SECRET}",
+          "CONNECTORS_ENCRYPTION_KEY": "{env:CONNECTORS_ENCRYPTION_KEY}"
+        }
+      },
+      "cookbook": {
+        "type": "local",
+        "command": ["./bin/cookbook"],
+        "environment": {
+          "MONGODB_URI": "{env:MONGODB_URI}",
+          "MONGODB_DB": "{env:MONGODB_DB}"
+        }
+      },
+      "gmail": {
+        "type": "local",
+        "command": ["./bin/gmail"],
+        "environment": {
+          "MONGODB_URI": "{env:MONGODB_URI}",
+          "MONGODB_DB": "{env:MONGODB_DB}",
+          "GOOGLE_CLIENT_ID": "{env:GOOGLE_CLIENT_ID}",
+          "GOOGLE_CLIENT_SECRET": "{env:GOOGLE_CLIENT_SECRET}",
+          "CONNECTORS_ENCRYPTION_KEY": "{env:CONNECTORS_ENCRYPTION_KEY}"
+        }
+      },
+      "health-check": {
+        "type": "local",
+        "command": ["./bin/health-check"],
+        "environment": {
+          "MONGODB_URI": "{env:MONGODB_URI}",
+          "MONGODB_DB": "{env:MONGODB_DB}"
+        }
+      },
+      "miser-money": {
+        "type": "local",
+        "command": ["./bin/miser-money"],
+        "environment": {
+          "MONGODB_URI": "{env:MONGODB_URI}",
+          "MONGODB_DB": "{env:MONGODB_DB}"
+        }
+      },
+      "project-manager": {
+        "type": "local",
+        "command": ["./bin/project-manager"],
+        "environment": {
+          "MONGODB_URI": "{env:MONGODB_URI}",
+          "MONGODB_DB": "{env:MONGODB_DB}"
+        }
+      },
+      "reports": {
+        "type": "local",
+        "command": ["./bin/reports"],
+        "environment": {
+          "MONGODB_URI": "{env:MONGODB_URI}",
+          "MONGODB_DB": "{env:MONGODB_DB}"
+        }
+      },
+      "task-manager": {
+        "type": "local",
+        "command": ["./bin/task-manager"],
+        "environment": {
+          "MONGODB_URI": "{env:MONGODB_URI}",
+          "MONGODB_DB": "{env:MONGODB_DB}"
+        }
+      }
+    }
+  },
   "permission": {
     "external_directory": {
       "/tmp/*": "allow"
