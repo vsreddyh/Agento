@@ -177,7 +177,8 @@ func hostExpressions(s *Schedule, shift int) ([]string, error) {
 		for _, m := range minutes {
 			total := h*60 + m - shift
 			if total < 0 || total >= 24*60 {
-				return nil, fmt.Errorf("schedule %q crosses a calendar date when converted to the host zone; move it to 05:30 IST or later (or express it as a daily/weekly job)", s.String())
+				return nil, fmt.Errorf("schedule %q crosses a calendar date when converted to the host zone (%s); %s (or express it as a daily/weekly job)",
+					s.String(), zoneShiftLabel(shift), safeWindow(shift))
 			}
 		}
 	}
@@ -208,6 +209,35 @@ func hostExpressions(s *Schedule, shift int) ([]string, error) {
 			numList(sortedInts(shiftedMinutes), 0, 59),
 			numList(sortedInts(shiftedHours), 0, 23), dom, month, dow),
 	}, nil
+}
+
+// zoneShiftLabel renders how far the host zone is from IST for error
+// messages, e.g. "host is 5h30 behind IST".
+func zoneShiftLabel(shift int) string {
+	dir := "behind"
+	if shift < 0 {
+		dir = "ahead of"
+		shift = -shift
+	}
+	return fmt.Sprintf("host is %dh%02d %s IST", shift/60, shift%60, dir)
+}
+
+// safeWindow names the IST clock range whose conversion stays on one host
+// calendar date. The bound is computed from shift, so the advice is right on
+// any fixed-offset host rather than only on UTC.
+func safeWindow(shift int) string {
+	hm := func(min int) string { return fmt.Sprintf("%02d:%02d", min/60, min%60) }
+	lo, hi := shift, 24*60+shift
+	switch {
+	case lo <= 0 && hi >= 24*60:
+		return "any IST time is safe"
+	case lo <= 0:
+		return fmt.Sprintf("keep it earlier than %s IST", hm(hi))
+	case hi >= 24*60:
+		return fmt.Sprintf("move it to %s IST or later", hm(lo))
+	default:
+		return fmt.Sprintf("move it to between %s and %s IST", hm(lo), hm(hi))
+	}
 }
 
 type osClock struct{ m, h int }

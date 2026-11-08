@@ -22,9 +22,12 @@ func TestRenderBlockExactEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	block := renderBlock(entries, "/repo", now)
-	want := "30 3 * * * TZ=Asia/Kolkata bash /repo/scripts/t3-cron.sh run 68abc >> /repo/run/t3-cron.log 2>&1"
+	want := "30 3 * * * bash /repo/scripts/t3-cron.sh run 68abc >> /repo/run/t3-cron.log 2>&1"
 	if !strings.Contains(block, want) {
 		t.Fatalf("block missing %q:\n%s", want, block)
+	}
+	if strings.Contains(block, "TZ=Asia/Kolkata bash") {
+		t.Fatalf("the schedule fields are host-local; an inline TZ= on the command reads as if they were IST:\n%s", block)
 	}
 	if !strings.Contains(block, "# job: Morning nudge (id 68abc) — 0 9 * * * IST") {
 		t.Fatalf("block missing provenance comment:\n%s", block)

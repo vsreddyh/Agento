@@ -186,7 +186,9 @@ func renderBlock(entries []cronjobs.RenderedEntry, repo string, now time.Time) s
 	zoneName := hostZoneLabel()
 	fmt.Fprintf(&b, "%s (#490) — managed by scripts/t3-cron.sh; edits are overwritten on install >>>\n", markerStart)
 	fmt.Fprintf(&b, "# Schedules are entered as IST wall clock and converted to this host's fixed\n")
-	fmt.Fprintf(&b, "# offset (%s): Debian/Ubuntu cron has no per-user CRON_TZ.\n", zoneName)
+	fmt.Fprintf(&b, "# offset (%s): Debian/Ubuntu cron has no per-user CRON_TZ. The 5 crontab\n", zoneName)
+	fmt.Fprintf(&b, "# fields below are HOST-local time — not IST. scripts/t3-cron.sh exports\n")
+	fmt.Fprintf(&b, "# TZ=Asia/Kolkata for the child so the turn's clock is IST.\n")
 	fmt.Fprintf(&b, "# Generated %s\n", now.In(cronjobs.IST).Format("2006-01-02 15:04:05 IST"))
 	if len(entries) == 0 {
 		b.WriteString("# (no enabled jobs in cron_jobs)\n")
@@ -198,7 +200,7 @@ func renderBlock(entries []cronjobs.RenderedEntry, repo string, now time.Time) s
 		}
 		fmt.Fprintf(&b, "# job: %s (id %s) — %s IST\n", name, e.JobID, e.ISTSchedule)
 		for _, sched := range e.Schedules {
-			fmt.Fprintf(&b, "%s TZ=Asia/Kolkata bash %s/scripts/t3-cron.sh run %s >> %s 2>&1\n",
+			fmt.Fprintf(&b, "%s bash %s/scripts/t3-cron.sh run %s >> %s 2>&1\n",
 				sched, repo, e.JobID, logPath(repo))
 		}
 	}
@@ -402,19 +404,9 @@ func cmdRun(id string) int {
 		return 0
 	}
 
-	lock, err := acquireLock(filepath.Join(runDir(repo), id+".lock"), false)
-	if err != nil {
-		return runFail(log, id, job.Name, "%v", err)
-	}
-	if lock == nil {
-		// A previous fire is still running. Cron only invokes at the
-		// schedule, so this is a doubled entry or a manual run; never let
-		// two turns write the same domain concurrently.
-		logLine(log, "skip job=%q id=%s status=already-running", job.Name, id)
-		return 0
-	}
-	defer releaseLock(lock)
-
+	// Resolve the due instant before taking the lock: a fire that loses the
+	// lock still has to stamp it, or `check` would later blame the host for
+	// being down.
 	sched, err := cronjobs.Parse(job.Schedule)
 	if err != nil {
 		return runFail(log, id, job.Name, "bad schedule %q: %v", job.Schedule, err)
@@ -424,8 +416,27 @@ func cmdRun(id string) int {
 	if fireAt.IsZero() {
 		return runFail(log, id, job.Name, "schedule %q never fires", job.Schedule)
 	}
-
 	statePath := filepath.Join(runDir(repo), id+".state")
+
+	lock, err := acquireLock(filepath.Join(runDir(repo), id+".lock"), false)
+	if err != nil {
+		return runFail(log, id, job.Name, "%v", err)
+	}
+	if lock == nil {
+		// A previous fire is still running. Cron only invokes at the
+		// schedule, so this is a doubled entry or a manual run; never let
+		// two turns write the same domain concurrently. The running fire
+		// owns this instant, so stamp it here as well — otherwise the next
+		// `check` counts a skipped instant as a host-down miss.
+		if err := writeState(statePath, fireAt); err != nil {
+			logLine(log, "warn job=%q id=%s write state after skipped overlapping fire: %v", job.Name, id, err)
+		}
+		logLine(log, "skip job=%q id=%s status=already-running scheduled=%s",
+			job.Name, id, fireAt.In(cronjobs.IST).Format(time.RFC3339))
+		return 0
+	}
+	defer releaseLock(lock)
+
 	last := readState(statePath)
 	if !last.IsZero() {
 		if first, missed := missedInstants(sched, last, fireAt); missed > 0 {
@@ -645,16 +656,24 @@ func releaseLock(f *os.File) {
 	_ = f.Close()
 }
 
+// logLine appends one line to the shared log. If the file cannot be written
+// the same line goes to stderr and syslog via logger(1), so an unwritable log
+// directory (or a cron mail-less host) cannot swallow a failure.
 func logLine(path, format string, args ...any) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
+	line := fmt.Sprintf("%s %s\n", time.Now().In(cronjobs.IST).Format(time.RFC3339), fmt.Sprintf(format, args...))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+		if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+			_, werr := f.WriteString(line)
+			f.Close()
+			if werr == nil {
+				return
+			}
+		}
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return
+	fmt.Fprint(os.Stderr, "t3-cron: "+line)
+	if p, err := exec.LookPath("logger"); err == nil {
+		_ = exec.Command(p, "-t", "t3-cron", strings.TrimSpace(line)).Run()
 	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", time.Now().In(cronjobs.IST).Format(time.RFC3339), fmt.Sprintf(format, args...))
 }
 
 // missedInstants counts scheduled instants strictly between from (exclusive)

@@ -310,6 +310,19 @@ install_t3_cron() {
         warn "Scheduled-prompt crontab install failed — no cron will fire. Fix the error above and re-run ./scripts/t3-cron.sh install."
         return 1
     }
+    warn_stale_pi_worker
+}
+
+# The tick loop only exists in a pre-#490 image. Installing the crontab while
+# such a container is still up leaves two schedulers racing for the same job,
+# so a cutover must stop (or recreate) the stack before the next due fire.
+warn_stale_pi_worker() {
+    local stale
+    stale="$(podman ps --filter name=_pi_ --format '{{.Names}}' 2>/dev/null || true)"
+    [[ -z "$stale" ]] && return 0
+    warn "pi container(s) still running: $(echo "$stale" | tr '\n' ' ') — if they predate #490,"
+    warn "their in-process cron worker still ticks alongside the new crontab. Run"
+    warn "./scripts/hermes.sh stop (or restart onto the new image) before the next due job."
 }
 
 remove_t3_cron() {
@@ -420,6 +433,10 @@ cmd_init() {
 install_retention_cron
     bash "$SCRIPTS_DIR/sysmon.sh" install || true
     install_t3_cron || true
+    # Report fires the host missed before install landed (and baseline the
+    # first run). install itself only renders and caches, so the miss check
+    # lives here, right after it.
+    t3_cron_check || true
 
     echo
     info "Initialization complete."

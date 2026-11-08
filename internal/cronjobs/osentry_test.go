@@ -90,6 +90,31 @@ func TestRenderRejectsDateCrossingForDayRestrictedSchedule(t *testing.T) {
 	}
 }
 
+func TestRenderDateCrossingAdviceMatchesHostZone(t *testing.T) {
+	// The suggested threshold must be the host's real one: 05:30 IST only
+	// on UTC, earlier on UTC+2 and later on UTC-5.
+	cases := []struct {
+		zone, want string
+	}{
+		{"Etc/GMT-2", "03:30 IST or later"}, // UTC+2
+		{"Etc/GMT+5", "10:30 IST or later"}, // UTC-5
+	}
+	for _, c := range cases {
+		loc, err := time.LoadLocation(c.zone)
+		if err != nil {
+			t.Skipf("zoneinfo unavailable: %v", err)
+		}
+		jobs := []OSJob{{ID: "x", Name: "monthly", Prompt: "p", Schedule: "0 2 1 * *", Enabled: true}}
+		_, err = RenderJobs(jobs, loc, time.Date(2026, 11, 8, 12, 0, 0, 0, loc))
+		if err == nil {
+			t.Fatalf("%s: expected a date-crossing error", c.zone)
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: error should offer %q, got: %v", c.zone, c.want, err)
+		}
+	}
+}
+
 func TestRenderInISTIsIdentity(t *testing.T) {
 	ist, err := time.LoadLocation("Asia/Kolkata")
 	if err != nil {

@@ -130,10 +130,16 @@ servers and keeps working with the pi container stopped.
 - Schedules stay **IST wall clock**. Debian/Ubuntu cron has no per-user timezone,
   so `install` converts each 5-field expression to the daemon's fixed zone
   (UTC on the default VPS) and stores the prompt text under `run/t3-cron/`.
+  The numbers in `crontab -l` are therefore **host time**; the fire itself runs
+  with `TZ=Asia/Kolkata` (`T3_CRON_TZ` overrides) so the prompt sees IST.
 - One line per attempt lands in `run/t3-cron.log`
   (`fire job=… status=ok|FAILED`); child output goes to a per-run file next to
   it. A gap over a missed schedule logs a `miss … (host was down)` line at the
-  next install/start — stale fires are reported, never replayed.
+  next `start`/`check` (`init` runs one right after installing) — stale fires
+  are reported, never replayed.
+- Upgrading an existing host: the pre-#490 gateway still ticks its in-process
+  worker, so `stop` the stack before installing the crontab (`init` and
+  `install` now warn when a pi container is still running).
 - `T3_CRON_MODEL` (default `opencode-go/mimo-v2.6-flash`) and
   `T3_CRON_TIMEOUT` (default `10m`) tune fires; see `.env.example`.
 

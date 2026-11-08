@@ -63,13 +63,19 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   `opencode run` (#490). health-api (:8001 compose default — `HEALTH_HOST_PORT` remaps) binds `0.0.0.0` inside its container.
 - `scripts/t3-cron.sh` = OS-cron bridge for scheduled prompts (#490):
   `install` converts the `cron_jobs` rows (IST wall clock) into host crontab
-  entries and caches the prompts under `run/t3-cron/`; each fire runs
-  `opencode run --auto --standalone` from the repo root so it inherits
-  `opencode.json`'s MCP servers; `check` logs one `miss` line for fires the
-  host slept through. The pi worker's tick loop is disabled at cutover, so a
-  job cannot fire twice. Log: `run/t3-cron.log` (one `fire` line per attempt,
-  `status=ok|FAILED`); prompts are edited in Mongo and re-installed with
-  `./scripts/t3-cron.sh install`. `dry-run` prints the exact crontab entries.
+  entries (the 5 fields are host-local; the `run` path exports
+  `TZ=Asia/Kolkata` for the child) and caches the prompts under `run/t3-cron/`;
+  each fire runs `opencode run --auto --archived --standalone --model
+  <T3_CRON_MODEL> --title 'cron: <name>'` from the repo root so it inherits
+  `opencode.json`'s MCP servers. Hand-fire with `./scripts/t3-cron.sh run <id>`,
+  never a raw `opencode run` — the wrapper supplies the cached prompt, the
+  per-job lock, the state stamp and the log line. `check` logs one `miss` line
+  for fires the host slept through (`init` runs it right after install;
+  `start`/`restart` run it too). The pi worker's tick loop is disabled at
+  cutover, so a job cannot fire twice. Log: `run/t3-cron.log` (one `fire` line
+  per attempt, `status=ok|FAILED`); prompts are edited in Mongo and re-installed
+  with `./scripts/t3-cron.sh install`. `dry-run` prints the exact crontab
+  entries.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`podman-compose run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;

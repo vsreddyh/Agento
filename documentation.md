@@ -69,31 +69,43 @@ stopped. [`scripts/t3-cron.sh`](scripts/t3-cron.sh) is the bridge.
   say. `dry-run` prints the exact block without writing anything.
 - **Time zone**: schedules are entered as IST wall clock. Debian/Ubuntu cron has
   no per-user `CRON_TZ` (`man 5 crontab`), so entries are converted to the
-  daemon's fixed offset at install time. A host zone that observes DST is
-  rejected rather than silently firing an hour off for half the year; day-of-
-  month schedules that would cross a calendar date are rejected with an
-  actionable message.
-- **Fire**: each crontab line runs
-  `opencode run --auto --archived --standalone --model <T3_CRON_MODEL> "<From
-  Scheduler …>"` with the repo root as cwd, so the turn inherits
-  `opencode.json`'s MCP servers and can write tasks/projects that the phone
-  sees through polling. `--auto` approves permission asks (explicit `deny`
-  rules still hold); nobody is attached to approve an unattended fire. Each
-  fire is a fresh archived session, so a prompt must be self-contained — it
-  does not share context with the previous day's fire.
+  daemon's fixed offset at install time — the 5 fields in `crontab -l` are
+  **host-local time**, not IST. The `run` path exports
+  `TZ=Asia/Kolkata` (`T3_CRON_TZ` overrides) so the fire itself sees IST. A host
+  zone that observes DST is rejected rather than silently firing an hour off for
+  half the year; day-of-month schedules that would cross a calendar date are
+  rejected with the actionable window for *that* host's offset.
+- **Fire**: each crontab line runs `./scripts/t3-cron.sh run <id>`, which loads
+  the root `.env` and execs
+  `opencode run --auto --archived --standalone --model <T3_CRON_MODEL> --title
+  "cron: <name>" "<From Scheduler …>"` with the repo root as cwd, so the turn
+  inherits `opencode.json`'s MCP servers and can write tasks/projects that the
+  phone sees through polling. Fire by hand through the wrapper, never by
+  copy-pasting that `opencode` line: the wrapper supplies the cached prompt, the
+  per-job lock, the state stamp and the log line. `--auto` approves permission
+  asks (explicit `deny` rules still hold); nobody is attached to approve an
+  unattended fire. Each fire is a fresh archived session, so a prompt must be
+  self-contained — it does not share context with the previous day's fire.
 - **Logging**: one line per attempt in `run/t3-cron.log`
   (`fire job="…" id=… status=ok|FAILED rc=…`), with the turn's full output in a
-  per-run file. Failures exit non-zero after the loud log line. A file lock per
-  job prevents a manual run and a scheduled fire from overlapping.
+  per-run file. Failures exit non-zero after the loud log line; when the log
+  itself cannot be written the line also goes to stderr and syslog (`logger -t
+  t3-cron`), so a failure is never silent. A file lock per job prevents a manual
+  run and a scheduled fire from overlapping (the skipped fire is logged and
+  still stamps its instant, so it is not later reported as a host-down miss).
 - **Misses**: state files under `run/t3-cron/` record the last attempted
-  scheduled instant. `install` (baseline), `start` and `check` compare that to
-  the latest scheduled instant and log `miss … (host was down)` once per gap.
-  Missed fires are reported, never replayed — a morning nudge must not run in
-  the evening.
+  scheduled instant. `run` and `check` compare that to the latest scheduled
+  instant and log `miss … (host was down)` once per gap. `install` only renders
+  and caches — it does not touch state — so `init` runs `check` immediately
+  after it, and `start`/`restart` run it too (the first run on a fresh host
+  baselines instead of reporting pre-migration instants). Missed fires are
+  reported, never replayed — a morning nudge must not run in the evening.
 - **Cutover order**: the new gateway no longer starts the ticker, so upgrading a
-  running host should `stop` the old container before installing the crontab;
+  running host must `stop` the old container *before* installing the crontab;
   otherwise the old worker and the new entries can both see a due job during the
   install window. Fresh hosts are safe because `init` installs before `start`.
+  `init`/`install` warn when a pi container is still running for exactly this
+  reason.
 
 ---
 
@@ -116,7 +128,7 @@ All container management is orchestrated through [`scripts/hermes.sh`](scripts/h
 2. Builds the agent image ([`docker/pi/Dockerfile`](docker/pi/Dockerfile): Node + Pi + the in-repo Go MCP binaries) and the `health-api` image, then builds the local `bin/` MCP servers and `bin/t3-cron` when a Go toolchain is present.
 3. Initializes root `.env` from `.env.example` if not already present.
 4. Reports the skills it finds under `pi/skills/` and each profile's own `skills/`, and warns if there are none. Nothing is copied: both locations are tracked in git and bind-mounted into the container.
-5. Installs the daily data retention cron job (runs daily at 03:00) and the scheduled-prompt crontab block (converted from `cron_jobs`, IST → host zone).
+5. Installs the daily data retention cron job (runs daily at 03:00) and the scheduled-prompt crontab block (converted from `cron_jobs`, IST → host zone), then runs the miss check so gaps are reported immediately.
 
 ### `start`
 1. Cleans up any stale native PIDs in `run/bots/*.pid`.
