@@ -8,8 +8,9 @@ Agent skills ship in git (`pi/skills/*`, `pi/profiles/<name>/skills/*`) and
 bake into the image. The user cannot teach the agent anything: a corrected
 procedure evaporates with the thread, and the Skills tab is a read-only
 catalog. The expected loop (#314) is: save a procedure from the app → review
-and edit it → test-run it once → activate it for the model → optionally
-promote it to a scheduled routine with run history.
+and edit it → test-run it once → activate it for the model. (Promoting an
+active skill to a scheduled routine was removed in #490; the app-side
+Schedule UI is removed in #491.)
 
 ## Decision
 
@@ -30,13 +31,16 @@ taught skills.**
   (`testedAt`), enforced in the store, not the UI. Disabling removes the
   file on the next reconcile; deleting removes the row.
 - A test fire runs the rendered procedure once through a bare model client
-  (no persona, no tools — the same client cron fires used before #331, kept
-  for this purpose) and stores the transcript. It is a smoke test,
+  (no persona, no tools — the client the retired scheduler used for fires
+  before #331, kept for test fires after the scheduler's deletion in #490)
+  and stores the transcript. It is a smoke test,
   honestly scoped: the runner has no MCP tools, so a pass means the
   procedure reads coherently, not that it ran against real data.
-- Promoting creates a cron job whose prompt embeds the procedure. The job's
-  own pause and 10-run history then govern it; pausing a routine never
-  touches the skill, and disabling a skill never touches promoted jobs
+- Promoting created a cron job whose prompt embeds the procedure (removed
+  in #490: `POST /api/skills/{id}/promote` is gone, so nothing can promote).
+  The paragraph below describes the retired behavior, kept for the record:
+  the job's own pause and 10-run history then governed it; pausing a routine
+  never touched the skill, and disabling a skill never touched promoted jobs
   (they carry a copy of the reviewed text, so a later edit cannot silently
   change what runs at 9am).
 
