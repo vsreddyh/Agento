@@ -62,7 +62,9 @@ log_fail() {
     if mkdir -p "$(dirname "$LOG")" 2>/dev/null && echo "$line" >> "$LOG" 2>/dev/null; then
         return 0
     fi
-    command -v logger >/dev/null 2>&1 && logger -t t3-cron "$line" || true
+    if command -v logger >/dev/null 2>&1; then
+        logger -t t3-cron "$line" || true
+    fi
 }
 
 build_bin() {
