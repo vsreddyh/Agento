@@ -87,6 +87,18 @@ case "${1:-help}" in
     install)
         load_root_env
         need_bin || exit 1
+        # A pre-#490 pi container keeps ticking its in-process worker, so
+        # installing beside it double-fires until the stack is recreated.
+        # hermes.sh init warns too; this covers the documented direct
+        # `./scripts/t3-cron.sh install` reinstall path.
+        if command -v podman &>/dev/null; then
+            stale="$(podman ps --filter name=_pi_ --format '{{.Names}}' 2>/dev/null || true)"
+            if [[ -n "$stale" ]]; then
+                warn "pi container(s) still running: $(echo "$stale" | tr '\n' ' ') — pre-#490 images still tick"
+                warn "their in-process cron worker alongside the new crontab. Run ./scripts/hermes.sh stop"
+                warn "(or restart onto the new image) before the next due job."
+            fi
+        fi
         exec "$BIN" install
         ;;
     dry-run)

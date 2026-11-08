@@ -86,6 +86,13 @@ stopped. [`scripts/t3-cron.sh`](scripts/t3-cron.sh) is the bridge.
   asks (explicit `deny` rules still hold); nobody is attached to approve an
   unattended fire. Each fire is a fresh archived session, so a prompt must be
   self-contained — it does not share context with the previous day's fire.
+  This is intentionally writable — a reversal from the old in-process worker,
+  whose `SchedulerPrompt` restricted turns to read-only tools. #490 needs
+  task/project writes to surface on the phone, so every fire carries a
+  guardrail instead: create/update tasks, projects, reports and notes freely,
+  but report (don't execute) deletes, prunes and archives. `--auto` still
+  auto-approves `ask` entries, so add explicit `deny` rules if a class of tool
+  must never run unattended.
 - **Logging**: one line per attempt in `run/t3-cron.log`
   (`fire job="…" id=… status=ok|FAILED rc=…`), with the turn's full output in a
   per-run file. Failures exit non-zero after the loud log line; when the log
@@ -95,11 +102,13 @@ stopped. [`scripts/t3-cron.sh`](scripts/t3-cron.sh) is the bridge.
   still stamps its instant, so it is not later reported as a host-down miss).
 - **Misses**: state files under `run/t3-cron/` record the last attempted
   scheduled instant. `run` and `check` compare that to the latest scheduled
-  instant and log `miss … (host was down)` once per gap. `install` only renders
-  and caches — it does not touch state — so `init` runs `check` immediately
-  after it, and `start`/`restart` run it too (the first run on a fresh host
-  baselines instead of reporting pre-migration instants). Missed fires are
-  reported, never replayed — a morning nudge must not run in the evening.
+  instant and log `miss … (host was down)` once per gap. `install` renders,
+  caches, and re-baselines newly-enabled and schedule-changed jobs (so a
+  pause→resume or edit does not report the paused interval as missed);
+  `init` still runs `check` immediately after it, and `start`/`restart` run it
+  too (the first run on a fresh host baselines instead of reporting
+  pre-migration instants). Missed fires are reported, never replayed — a
+  morning nudge must not run in the evening.
 - **Cutover order**: the new gateway no longer starts the ticker, so upgrading a
   running host must `stop` the old container *before* installing the crontab;
   otherwise the old worker and the new entries can both see a due job during the

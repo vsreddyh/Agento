@@ -170,9 +170,14 @@ func cmdInstall(dryRun bool) int {
 		HostZone:    hostZoneLabel(),
 		Jobs:        snapshot,
 	}
+	oldFile, _ := loadCache(repo)
 	if err := saveCache(cachePath(repo), file); err != nil {
 		return fail("write job cache: %v", err)
 	}
+	// A pause→resume or schedule edit must not report the paused/old-grid
+	// interval as "host was down": baseline state for newly-enabled and
+	// schedule-changed jobs so the next run/check starts counting from now.
+	baselineChangedStates(repo, oldFile.Jobs, snapshot, now)
 	if err := installCrontab(repo, block); err != nil {
 		return fail("install crontab: %v", err)
 	}
@@ -450,7 +455,18 @@ func cmdRun(id string) int {
 		return runFail(log, id, job.Name, "write state: %v", err)
 	}
 
-	prompt := fmt.Sprintf("From Scheduler %s: %s", job.Name, strings.TrimSpace(job.Prompt))
+	// Intentionally writable — this is a reversal from the old in-process
+	// worker, whose SchedulerPrompt restricted turns to read-only tools.
+	// #490 requires fires to write tasks/projects (the phone polls them),
+	// so each fire runs unattended with --auto: `ask` permissions in
+	// opencode.json auto-approve, and only explicit `deny` rules still hold.
+	// The guardrail below steers the turn toward the intended writes and
+	// away from the destructive ones; a needed delete/prune/archive must be
+	// reported in the reply instead of executed.
+	prompt := fmt.Sprintf("From Scheduler %s: %s\n\nYou are firing unattended on a schedule: nobody is attached to approve anything. "+
+		"You may create and update tasks, projects, reports and notes. Do not delete, prune, or archive anything; "+
+		"if one of those is needed, report it in the reply instead.",
+		job.Name, strings.TrimSpace(job.Prompt))
 	model := strings.TrimSpace(os.Getenv("T3_CRON_MODEL"))
 	if model == "" {
 		model = defaultModel
@@ -544,6 +560,33 @@ func opencodePath() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("opencode CLI not found — run scripts/hermes.sh init or set T3_CRON_OPENCODE")
+}
+
+// baselineChangedStates stamps the current instant for jobs whose counting
+// must restart: newly-enabled jobs, re-enabled jobs, and jobs whose schedule
+// changed. Without this the next run/check would count the paused (or
+// old-grid) interval as missed and log a phantom "host was down".
+func baselineChangedStates(repo string, old, fresh []cronjobs.OSJob, now time.Time) {
+	byID := map[string]cronjobs.OSJob{}
+	for _, j := range old {
+		byID[j.ID] = j
+	}
+	for _, j := range fresh {
+		if !j.Enabled {
+			continue
+		}
+		prev, ok := byID[j.ID]
+		if ok && prev.Enabled && prev.Schedule == j.Schedule {
+			continue
+		}
+		sched, err := cronjobs.Parse(j.Schedule)
+		if err != nil {
+			continue
+		}
+		if fireAt := sched.LatestBefore(now); !fireAt.IsZero() {
+			_ = writeState(filepath.Join(runDir(repo), j.ID+".state"), fireAt)
+		}
+	}
 }
 
 // ────────────────────────────────────────────────────────────

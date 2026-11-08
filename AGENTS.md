@@ -72,7 +72,10 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   per-job lock, the state stamp and the log line. `check` logs one `miss` line
   for fires the host slept through (`init` runs it right after install;
   `start`/`restart` run it too). The pi worker's tick loop is disabled at
-  cutover, so a job cannot fire twice. Log: `run/t3-cron.log` (one `fire` line
+  cutover, so a job cannot fire twice once the old container is
+  stopped/recreated — `stop` the stack before installing the crontab on an
+  existing host (`init` and `t3-cron.sh install` both warn when a pi container
+  is still running). Log: `run/t3-cron.log` (one `fire` line
   per attempt, `status=ok|FAILED`); prompts are edited in Mongo and re-installed
   with `./scripts/t3-cron.sh install`. `dry-run` prints the exact crontab
   entries.

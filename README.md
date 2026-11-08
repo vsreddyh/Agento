@@ -136,7 +136,15 @@ servers and keeps working with the pi container stopped.
   (`fire job=… status=ok|FAILED`); child output goes to a per-run file next to
   it. A gap over a missed schedule logs a `miss … (host was down)` line at the
   next `start`/`check` (`init` runs one right after installing) — stale fires
-  are reported, never replayed.
+  are reported, never replayed. `install` also re-baselines newly-enabled and
+  schedule-changed jobs, so a pause→resume or edit does not report the paused
+  interval as missed.
+- Fires are intentionally writable (reversal from the old in-process worker,
+  whose prompt restricted turns to read-only tools): #490 needs task/project
+  writes to surface on the phone. Each fire carries a guardrail — create/update
+  tasks, projects, reports and notes freely, but report (don't execute)
+  deletes, prunes and archives. `--auto` still auto-approves `ask` permissions,
+  so add explicit `deny` rules in `opencode.json` if you want a hard stop.
 - Upgrading an existing host: the pre-#490 gateway still ticks its in-process
   worker, so `stop` the stack before installing the crontab (`init` and
   `install` now warn when a pi container is still running).

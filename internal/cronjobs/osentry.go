@@ -3,6 +3,7 @@ package cronjobs
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -170,7 +171,7 @@ func hostExpressions(s *Schedule, shift int) ([]string, error) {
 		return dailyExpressions(minutes, hours, dows, dowFull, shift)
 	}
 
-	// Day-restricted schedules: shifting is only faithful while the fire
+	// Date-restricted schedules: shifting is only faithful while the fire
 	// stays on the same IST calendar date. Otherwise dom/month would have
 	// to move with the calendar, which 5-field cron cannot express.
 	for _, h := range hours {
@@ -183,13 +184,11 @@ func hostExpressions(s *Schedule, shift int) ([]string, error) {
 		}
 	}
 
-	shiftedMinutes := map[int]bool{}
-	shiftedHours := map[int]bool{}
+	clocks := map[[2]int]bool{}
 	for _, h := range hours {
 		for _, m := range minutes {
 			total := h*60 + m - shift
-			shiftedMinutes[total%60] = true
-			shiftedHours[total/60] = true
+			clocks[[2]int{total / 60, total % 60}] = true
 		}
 	}
 	dom := "*"
@@ -204,11 +203,7 @@ func hostExpressions(s *Schedule, shift int) ([]string, error) {
 	if !dowFull {
 		dow = numList(dows, 0, 6)
 	}
-	return []string{
-		fmt.Sprintf("%s %s %s %s %s",
-			numList(sortedInts(shiftedMinutes), 0, 59),
-			numList(sortedInts(shiftedHours), 0, 23), dom, month, dow),
-	}, nil
+	return clockLines(clocks, dom, month, dow), nil
 }
 
 // zoneShiftLabel renders how far the host zone is from IST for error
@@ -240,13 +235,11 @@ func safeWindow(shift int) string {
 	}
 }
 
-type osClock struct{ m, h int }
-
 // dailyExpressions handles schedules whose dom and month are unrestricted:
-// every fire is expressible as weekday + clock time, so a -330 minute shift
-// only moves the weekday. Identical weekday sets collapse back to "*".
+// every fire is expressible as weekday + clock time, so a shift only moves
+// the weekday and (when it has a minute component) the clock.
 func dailyExpressions(minutes, hours, dows []int, dowFull bool, shift int) ([]string, error) {
-	byDow := map[int]map[osClock]bool{}
+	byDow := make([]map[[2]int]bool, 7)
 	for _, d := range dows {
 		for _, h := range hours {
 			for _, m := range minutes {
@@ -261,33 +254,22 @@ func dailyExpressions(minutes, hours, dows []int, dowFull bool, shift int) ([]st
 					ud = (ud + 1) % 7
 				}
 				if byDow[ud] == nil {
-					byDow[ud] = map[osClock]bool{}
+					byDow[ud] = map[[2]int]bool{}
 				}
-				byDow[ud][osClock{total % 60, total / 60}] = true
+				byDow[ud][[2]int{total / 60, total % 60}] = true
 			}
 		}
 	}
 
 	out := []string{}
-	if dowFull && len(byDow) == 7 {
-		want := clockSignature(byDow[0])
-		same := true
-		for d := 1; d < 7; d++ {
-			if clockSignature(byDow[d]) != want {
-				same = false
-				break
-			}
-		}
-		if same {
-			return []string{clockExpression(byDow[0]) + " *"}, nil
-		}
+	if dowFull && sameClocks(byDow) {
+		return clockLines(byDow[0], "*", "*", "*"), nil
 	}
 	for d := 0; d < 7; d++ {
-		set, ok := byDow[d]
-		if !ok {
+		if byDow[d] == nil {
 			continue
 		}
-		out = append(out, fmt.Sprintf("%s %d", clockExpression(set), d))
+		out = append(out, clockLines(byDow[d], "*", "*", strconv.Itoa(d))...)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("schedule never fires")
@@ -295,34 +277,58 @@ func dailyExpressions(minutes, hours, dows []int, dowFull bool, shift int) ([]st
 	return out, nil
 }
 
-func clockSignature(set map[osClock]bool) string {
-	clocks := make([]osClock, 0, len(set))
-	for c := range set {
-		clocks = append(clocks, c)
+// sameClocks reports whether every weekday carries the identical set of
+// fires, which lets the seven per-day lines collapse back to "*".
+func sameClocks(byDow []map[[2]int]bool) bool {
+	first := byDow[0]
+	if first == nil {
+		return false
 	}
-	sort.Slice(clocks, func(i, j int) bool {
-		if clocks[i].h != clocks[j].h {
-			return clocks[i].h < clocks[j].h
+	for d := 1; d < 7; d++ {
+		if len(byDow[d]) != len(first) {
+			return false
 		}
-		return clocks[i].m < clocks[j].m
-	})
-	var b strings.Builder
-	for _, c := range clocks {
-		fmt.Fprintf(&b, "%d:%d,", c.m, c.h)
+		for c := range first {
+			if !byDow[d][c] {
+				return false
+			}
+		}
 	}
-	return b.String()
+	return true
 }
 
-func clockExpression(set map[osClock]bool) string {
-	minutes := map[int]bool{}
-	hours := map[int]bool{}
-	for c := range set {
-		minutes[c.m] = true
-		hours[c.h] = true
+// clockLines renders the exact fires as 5-field expressions. Hours are
+// grouped by the minute set they share: rendering one line from independent
+// minute and hour fields would emit their cartesian product, inventing fires
+// whenever the IST→host shift moves minutes (09:00 and 09:30 IST are 03:30 and
+// 04:00 UTC — a single "0,30 3,4" line would also fire at 03:00 and 04:30).
+func clockLines(clocks map[[2]int]bool, dom, month, dow string) []string {
+	byHour := map[int]map[int]bool{}
+	for c := range clocks {
+		if byHour[c[0]] == nil {
+			byHour[c[0]] = map[int]bool{}
+		}
+		byHour[c[0]][c[1]] = true
 	}
-	return fmt.Sprintf("%s %s * *",
-		numList(sortedInts(minutes), 0, 59),
-		numList(sortedInts(hours), 0, 23))
+	groups := map[string][]int{}
+	for h, ms := range byHour {
+		key := numList(sortedInts(ms), 0, 59)
+		groups[key] = append(groups[key], h)
+	}
+	for _, hs := range groups {
+		sort.Ints(hs)
+	}
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return groups[keys[i]][0] < groups[keys[j]][0] })
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, fmt.Sprintf("%s %s %s %s %s",
+			k, numList(groups[k], 0, 23), dom, month, dow))
+	}
+	return out
 }
 
 func sortedInts(set map[int]bool) []int {

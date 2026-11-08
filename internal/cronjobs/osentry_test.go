@@ -115,6 +115,24 @@ func TestRenderDateCrossingAdviceMatchesHostZone(t *testing.T) {
 	}
 }
 
+func TestRenderMultiMinuteHourGroupsByHour(t *testing.T) {
+	// 0,30 9,10 IST is 4 fires (03:30, 04:00, 04:30, 05:00 UTC). A single
+	// "0,30 3,4,5" line would invent 03:00 and 04:30 — group by hour instead.
+	got := mustRender(t, "0,30 9,10 * * *", utcLoc(t))
+	want := []string{"30 3 * * *", "0,30 4 * * *", "0 5 * * *"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
+func TestRenderMultiMinuteHourDayRestricted(t *testing.T) {
+	got := mustRender(t, "0,30 9 1 * *", utcLoc(t))
+	want := []string{"30 3 1 * *", "0 4 1 * *"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
 func TestRenderInISTIsIdentity(t *testing.T) {
 	ist, err := time.LoadLocation("Asia/Kolkata")
 	if err != nil {
