@@ -28,12 +28,12 @@ class SyncClient(context: Context) {
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    /** Single server URL (proxy: chat + sync on one port). Resolved through
+    /** Single server URL (proxy: sync/tasks/files/mail on one port). Resolved through
      * [ServerEndpoint] like every other client, pre-save included, so
-     * background sync can never read a retired key chat would ignore. */
+     * background sync can never read a retired key. */
     fun serverUrl(): String = ServerEndpoint.base(prefs)
 
-    /** Single app password (the sync token doubles as chat credential). */
+    /** Single app password (the sync bearer token). */
     fun password(): String = ServerEndpoint.password(prefs)
     /** Marks the one-time historical backfill done so later runs send today-only payloads. */
     fun markFirstSyncDone() {
@@ -53,6 +53,40 @@ class SyncClient(context: Context) {
             remove("server_url")
             remove("auth_token")
             remove("api_base_url")
+        }
+    }
+
+    /** Side-effect-free connectivity probe for Settings → Connection Test:
+     * GETs one task row with Bearer auth — no Health Connect, no upload,
+     * no backfill, no first-sync flip. Distinguishes server failures from
+     * device state so Test never blames the server for missing grants.
+     * Never throws — failures become SyncResult. */
+    suspend fun probe(): SyncResult = withContext(Dispatchers.IO) {
+        val url = serverUrl()
+        if (url.isEmpty()) {
+            return@withContext SyncResult(false, null, ServerEndpoint.UNCONFIGURED)
+        }
+        val request = Request.Builder()
+            .url("$url/api/tasks?state=open&limit=1")
+            .header("Authorization", "Bearer ${password()}")
+            .get()
+            .build()
+        try {
+            http.newCall(request).execute().use { response ->
+                val body = response.body?.string()?.take(200) ?: ""
+                val message = when {
+                    response.isSuccessful ->
+                        "Connected — server reachable (HTTP ${response.code})."
+                    response.code == 401 || response.code == 403 ->
+                        "Connected, but the password was rejected (HTTP ${response.code}) — re-enter it in Settings → Connection."
+                    response.code == 404 ->
+                        "Server answered, but /api/* was not found (HTTP 404) — is the Server URL the :8080 proxy? Direct :8643 is the retired agent gateway this app no longer uses."
+                    else -> "Server answered HTTP ${response.code}: $body"
+                }
+                SyncResult(response.isSuccessful, response.code, message)
+            }
+        } catch (e: Exception) {
+            SyncResult(false, null, e.message ?: e.javaClass.simpleName)
         }
     }
 

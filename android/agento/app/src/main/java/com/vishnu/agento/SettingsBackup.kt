@@ -163,18 +163,18 @@ object SettingsBackup {
      * UNGATED: File.length() is a metadata stat, so any thread may call it. */
     internal fun backupFilesBytes(dir: java.io.File): Long =
         backupFiles().sumOf { name ->
-            // isFile, not exists (#339): a directory at a thread-file path
+            // isFile, not exists (#339): a directory at an export-file path
             // would report metadata bytes and under-read the floor.
             java.io.File(dir, name).takeIf { it.isFile }?.length() ?: 0L
         }
     /** One export's result (#339): the payload plus the files that could not
-     * be read. A thread file that fails to read is simply MISSING from the
+     * be read. An export file that fails to read is simply MISSING from the
      * backup, and reporting that beats a "complete" backup that quietly
-     * lost a conversation. */
+     * lost tasks. */
     data class Export(val json: JSONObject, val unreadable: List<String>)
 
     /** One import's result (#339): what was applied plus the files that were
-     * skipped (invalid shape, unreadable, or unwritable). A skipped thread
+     * skipped (invalid shape, unreadable, or unwritable). A skipped export
      * file is NOT restored, so the count has to reach the user. */
     data class Outcome(val applied: Int, val skipped: List<String>)
 

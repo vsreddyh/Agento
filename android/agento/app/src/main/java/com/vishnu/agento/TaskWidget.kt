@@ -613,10 +613,11 @@ class TaskWidget : AppWidgetProvider() {
                 l.contains("AppWidget") || l.contains("System.err") ||
                 l.contains("agento") || l.contains("com.vishnu") ||
                 l.contains("RemoteCollection") ||
-                l.contains("TasksApi")
+                l.contains("TasksApi") || l.contains("TaskSyncWorker") ||
+                l.contains("SyncRunner")
 
         // Bearer secrets must never ride along when the user pastes the
-        // log into chat. Redacts key=value pairs for the usual secret
+        // log elsewhere. Redacts key=value pairs for the usual secret
         // names (case-insensitive); the diagnostics summary itself never
         // carries secrets (counts and error strings only).
         private val secretRE =

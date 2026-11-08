@@ -263,19 +263,20 @@ internal fun SettingsScreen(
                                     report = null
                                     error = ""
                                     scope.launch {
-                                        // The test IS a sync: the only
-                                        // backends left are sync-shaped, so a
-                                        // lightweight GET elsewhere would
-                                        // prove less than the real run.
+                                        // The test is a probe, not a sync: a
+                                        // lightweight authenticated GET that
+                                        // proves reachability without Health
+                                        // Connect grants, uploads, backfill
+                                        // or first-sync flips.
                                         val r = withContext(Dispatchers.IO) {
                                             runCatching {
-                                                SyncRunner.run(context.applicationContext)
+                                                SyncClient(context.applicationContext).probe()
                                             }.getOrNull()
                                         }
                                         if (r == null) {
                                             error = ServerEndpoint.UNCONFIGURED
                                         } else if (r.success) {
-                                            report = "Connected — sync reachable (${r.statusCode})."
+                                            report = r.message.ifBlank { "Connected — server reachable (${r.statusCode})." }
                                         } else {
                                             error = r.message.ifBlank { "Sync backend unreachable" }
                                         }
@@ -691,7 +692,7 @@ internal fun SettingsBackupSection(
                     // consent-to-proceed, but consent cannot survive an OOM —
                     // fail with a named error naming the remedy. Disk×2 +
                     // slack: the cap is heap peak, the meter is file bytes.
-                    // DISK BYTES: `upfront` is File.length() of the thread
+                    // DISK BYTES: `upfront` is File.length() of the export
                     // files. The cap is a HEAP peak, so the meter doubles it
                     // (the export string runs ~2x as UTF-16) plus the floor
                     // slack. disk x2 is an UPPER BOUND on the string's UTF-16
@@ -1385,7 +1386,7 @@ internal fun WidgetDiagnosticsCard() {
         ) {
             Text(if (clearing) "Clearing…" else "Clear system log")
         }
-        if (copied) HintLine("Copied — paste it in chat.")
+        if (copied) HintLine("Copied.")
         if (saved.isNotEmpty()) HintLine(saved)
         if (cleared.isNotEmpty()) HintLine(cleared)
     }

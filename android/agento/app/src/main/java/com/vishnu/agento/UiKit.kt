@@ -142,13 +142,6 @@ fun Modifier.contentWidth(wc: WindowClass): Modifier = when (wc) {
     WindowClass.Expanded -> this.fillMaxWidth().widthIn(max = 960.dp)
 }
 
-/** Chat bubble width as a fraction of the row, per window class. */
-fun bubbleFraction(wc: WindowClass): Float = when (wc) {
-    WindowClass.Compact -> 0.88f
-    WindowClass.Medium -> 0.76f
-    WindowClass.Expanded -> 0.64f
-}
-
 // ---------------------------------------------------------------------------
 // Friendly errors — user-facing copy lives here, not inline in screens.
 // ---------------------------------------------------------------------------
