@@ -52,7 +52,7 @@ Retention ───────────────► one-shot container (c
 Chat runs in T3/opencode, not in the pi container. T3 discovers `opencode.json` by walking up from its working directory, so **the repo root must be the cwd** — that is also what the `./bin/<server>` commands in `mcp.servers` resolve against.
 
 - Build the servers with `./scripts/build-mcps.sh` (static `CGO_ENABLED=0` binaries into git-ignored `bin/`; same flags as the pi image build). Kept servers only — `notes`, `memory` and `browser` are being removed (#495) and stay unwired.
-- Secrets reach the servers through the process environment, never the committed file: each entry passes `{env:MONGODB_URI}` / `{env:MONGODB_DB}` through (gmail/calendar additionally pass `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CONNECTORS_ENCRYPTION_KEY`). Source those from the single root `.env` before launching T3, e.g. `set -a; source .env; set +a`.
+- Secrets reach the servers through the process environment, never the committed file: each entry passes `{env:MONGODB_URI}` / `{env:MONGODB_DB}` through (gmail/calendar additionally pass `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CONNECTORS_ENCRYPTION_KEY`). Source those from the single root `.env` with the safe loader before launching T3 — `source scripts/lib/common.sh && load_root_env` (parsed, never `source .env`: a pasted Atlas URI carries `&` query params and secrets may hold `$`/backticks, which bare sourcing mangles or executes).
 - No secret is written into git; `.env` stays git-ignored.
 
 ---
