@@ -25,7 +25,7 @@ import kotlin.coroutines.resume
 /**
  * Settings → Behaviour (#355): every device-local knob in one place —
  * sync cadence, task refresh, reminder lead time + enable, TTS voice/rate/
- * pitch + auto-read, and the per-kind notification gates.
+ * pitch, and the app update checks.
  *
  * All reads/writes go through [BehaviourSettings] (the single inventory);
  * this file owns no pref key spelling. [refreshTick] re-reads everything
@@ -37,8 +37,8 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     val appCtx = context.applicationContext
 
     // Re-read on every resume (declared first: state below keys on it).
-    // Covers flips made outside this section — the chat-bar auto-read
-    // toggle, the exact-alarm grant — without waiting for an import.
+    // Covers flips made outside this section — the exact-alarm grant —
+    // without waiting for an import.
     var resumeTick by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
 
@@ -69,15 +69,6 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     var ttsPitch by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.ttsPitchPct(context))
     }
-    var autoRead by remember(refreshTick, resumeTick) {
-        mutableStateOf(BehaviourSettings.ttsAuto(context))
-    }
-    var kindFailed by remember(refreshTick) {
-        mutableStateOf(BehaviourSettings.notifyFailedRaw(context))
-    }
-    var kindInstruct by remember(refreshTick) {
-        mutableStateOf(BehaviourSettings.notifyInstructRaw(context))
-    }
     var updateStartup by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.updateStartup(context))
     }
@@ -87,7 +78,6 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     var updateNotify by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.updateNotify(context))
     }
-    val masterOn = ChatNotifications.isEnabled(context)
 
     // Reminder enable flow (moved from the Task Manager bell): exact alarms
     // need a settings redirect on S+, notifications a runtime grant on 33+.
@@ -343,7 +333,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
 
     SectionCard(
         title = "Speech",
-        subtitle = "Voice and delivery for chat read-aloud and reminder speech.",
+        subtitle = "Voice and delivery for reminder speech.",
     ) {
         OptionMenu(
             label = "Voice",
@@ -398,43 +388,6 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         if (ttsPitch !in BehaviourSettings.TTS_PCT_OPTIONS) {
             HintLine("Kept from an import: this pitch isn't offered above, but it still applies.")
         }
-        SwitchRow(
-            text = "Auto-read replies",
-            sub = "Same switch as the chat bar toggle — both write one key.",
-            checked = autoRead,
-            onChange = {
-                BehaviourSettings.setTtsAuto(context, it)
-                autoRead = it
-            },
-        )
-    }
-
-    SectionCard(
-        title = "Notification kinds",
-        subtitle = "Each applies only while the master reply-alerts switch " +
-            "(Settings → Notifications) is on; all default on.",
-    ) {
-        if (!masterOn) {
-            HintLine("Master reply alerts are off — every kind below stays silent until re-enabled in Notifications.")
-        }
-        SwitchRow(
-            text = "Reply failed",
-            sub = "The turn was cut off or errored while backgrounded.",
-            checked = kindFailed,
-            onChange = {
-                BehaviourSettings.setNotifyFailed(context, it)
-                kindFailed = it
-            },
-        )
-        SwitchRow(
-            text = "Instruction saved",
-            sub = "A task instruction card is ready to start.",
-            checked = kindInstruct,
-            onChange = {
-                BehaviourSettings.setNotifyInstruct(context, it)
-                kindInstruct = it
-            },
-        )
     }
 
     SectionCard(

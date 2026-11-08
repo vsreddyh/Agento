@@ -150,14 +150,11 @@ class BehaviourSettingsTest {
             voice: String = "",
             ratePct: Long = 100L,
             pitchPct: Long = 100L,
-            kindFailed: Boolean = true,
-            kindInstruct: Boolean = true,
             remindersOn: Boolean = false,
-            autoRead: Boolean = false,
         ) = BehaviourSettings.customCount(
             syncHours, wifiOnly, paused, taskMinutes, leadMinutes, voice,
-            ratePct, pitchPct, kindFailed, kindInstruct,
-            remindersOn, autoRead,
+            ratePct, pitchPct,
+            remindersOn,
         )
         assertEquals(0, all())
         assertEquals(1, all(syncHours = 2L))
@@ -166,8 +163,7 @@ class BehaviourSettingsTest {
         assertEquals(1, all(voice = "en-x"))
         assertEquals(1, all(ratePct = 150L))
         assertEquals(1, all(remindersOn = true))
-        assertEquals(1, all(autoRead = true))
-        assertEquals(3, all(syncHours = 2L, kindFailed = false, autoRead = true))
+        assertEquals(2, all(syncHours = 2L, remindersOn = true))
         // wifiOnly is moot while paused: one effective change, not two.
         assertEquals(1, all(wifiOnly = true, paused = true))
         assertEquals(1, all(wifiOnly = true))
@@ -246,14 +242,8 @@ class BehaviourSettingsTest {
             assertTrue("STRING_KEYS lacks $k", SettingsBackup.STRING_KEYS.contains(k))
         }
         for (k in listOf(
-            BehaviourSettings.KEY_NOTIFY_FAILED,
-            BehaviourSettings.KEY_NOTIFY_INSTRUCT,
             BehaviourSettings.KEY_SYNC_WIFI_ONLY,
             BehaviourSettings.KEY_SYNC_PAUSED,
-            // Surfaced-but-pre-existing switches: auto-read must survive a
-            // restore exactly like the reminders switch it sits beside —
-            // dropping either silently is the regression this pins.
-            BehaviourSettings.KEY_TTS_AUTO,
             // The pre-existing switch this section surfaces: pinned by
             // reference (PREF_ENABLED is internal for exactly this), so a
             // rename cannot silently drop it from restores.
@@ -351,17 +341,14 @@ class BehaviourSettingsTest {
             voice: String = "",
             ratePct: Long = 100L,
             pitchPct: Long = 100L,
-            kindFailed: Boolean = true,
-            kindInstruct: Boolean = true,
             remindersOn: Boolean = false,
-            autoRead: Boolean = false,
             updateHours: Long = 24L,
             updateStartup: Boolean = true,
             updateNotify: Boolean = false,
         ) = BehaviourSettings.customCount(
             syncHours, wifiOnly, paused, taskMinutes, leadMinutes, voice,
-            ratePct, pitchPct, kindFailed, kindInstruct,
-            remindersOn, autoRead, updateHours, updateStartup, updateNotify,
+            ratePct, pitchPct,
+            remindersOn, updateHours, updateStartup, updateNotify,
         )
         // Defaults (daily poll, startup on, silent) count zero.
         assertEquals(0, all())

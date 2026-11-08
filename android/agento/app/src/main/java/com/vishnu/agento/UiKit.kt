@@ -28,9 +28,14 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -559,5 +564,63 @@ fun HintLine(text: String, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** `1.1 MB`-style rendering of [bytes] for limit errors. One decimal at MB
+ * and above, integer KB below that, plain count below 1000 B (never blank).
+ * Pinned to US formatting: user-visible strings must not render `1,1 MB`.
+ * Never renders a cross-unit value: the KB branch floors up to 999_950, where
+ * 1-decimal MB reads "1.0". Negative input renders "unknown size".
+ * Decimal SI throughout (1000-based KB/MB). */
+fun formatBytes(bytes: Long): String {
+    if (bytes < 0) return "unknown size"
+    if (bytes < 1_000L) return "$bytes B"
+    // Floor + 999_950 threshold per the KDoc above: no cross-unit values.
+    if (bytes < 999_950L) return "${bytes / 1_000} KB"
+    return "${"%.1f".format(java.util.Locale.US, bytes / 1_000_000.0)} MB"
+}
+
+/** Read-only option menu (saved values stay intact; picks write the slug). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun OptionMenu(
+    label: String,
+    shown: String,
+    options: List<Pair<String, String>>,
+    onPick: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+    ) {
+        OutlinedTextField(
+            value = shown,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            if (options.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("No options — reload or check Settings") },
+                    onClick = { expanded = false },
+                    enabled = false,
+                )
+            } else {
+                options.forEach { (value, text) ->
+                    DropdownMenuItem(
+                        text = { Text(text) },
+                        onClick = { onPick(value); expanded = false },
+                    )
+                }
+            }
+        }
     }
 }

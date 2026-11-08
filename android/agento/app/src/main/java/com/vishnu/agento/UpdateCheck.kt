@@ -5,7 +5,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import java.util.concurrent.TimeUnit
 
@@ -112,7 +115,7 @@ object UpdateCheck {
                 if (notify && shouldPostNotification(
                         newer = isPending(appCtx, rel),
                         enabled = BehaviourSettings.updateNotify(appCtx),
-                        canPost = ChatNotifications.canPost(appCtx),
+                        canPost = canPostNotification(appCtx),
                         inForeground = ForegroundTracker.isForeground,
                         alreadyPostedTag = prefs(appCtx).getString(KEY_NOTIFIED_TAG, "").orEmpty(),
                         tag = rel.tag,
@@ -227,6 +230,14 @@ object UpdateCheck {
                 },
             )
         }
+    }
+
+    /** True when posting is allowed (pre-33 always; 33+ needs the runtime grant). */
+    internal fun canPostNotification(ctx: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(
+            ctx, android.Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun post(ctx: Context, rel: AppRelease) {

@@ -8,9 +8,7 @@ package com.vishnu.agento
  *
  * Moved verbatim out of MainActivity.kt; the only changes are visibility
  * (`private` to `internal`, same package, so every caller keeps working)
- * and the import list, which carries exactly what this file uses. The two
- * helpers the settings still take from MainActivity (`catalogPath`,
- * `formatSyncTime`) were widened there for the same reason.
+ * and the import list, which carries exactly what this file uses.
  */
 import android.Manifest
 import android.appwidget.AppWidgetManager
@@ -33,19 +31,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
@@ -69,9 +61,7 @@ import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mikepenz.markdown.m3.Markdown
-import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -79,23 +69,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 internal enum class SettingSection(val title: String) {
     Connection("Connection"),
-    Connectors("Connectors"),
     Health("Health sync"),
     Appearance("Appearance"),
     Widget("Home-screen widget"),
     Notifications("Notifications"),
     Behaviour("Behaviour"),
     Storage("Backup"),
-    Usage("Usage"),
     About("About"),
 }
 
 
 /** App theme mode keys (prefs `theme_mode`; #28). */
 
-/** Settings hub (#60): subsections live in the hub and each gets its
- * own screen (#418); model pickers live on each tab's own page (#18). Theme toggle
- * lives under Appearance (#28). */
+/** Settings hub (#60, #493): subsections live in the hub and each gets its
+ * own screen (#418). Theme toggle lives under Appearance (#28). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsScreen(
@@ -113,61 +100,19 @@ internal fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val toasts = remember(scope) { ToastCenter(scope) }
     var error by remember { mutableStateOf("") }
-    // Probe state for the Connection section: declared here (not next to
-    // the Test button) so Save can clear the report AND the section
-    // footer below can read it — both sit outside the card the button
-    // lives in. A stale "Connected" must not outlive a failed refetch,
-    // and the "not set up yet" hint must not show next to a probe
-    // report that already explains the empty catalog (#430).
+    // Probe state for the Connection section: declared here (not inside
+    // the section) so Save can clear the report AND the footer below can
+    // read it — a stale "Connected" must not outlive a failed refetch,
+    // and the "not set up yet" hint must not show next to a probe report.
     var testing by remember { mutableStateOf(false) }
-    var report by remember { mutableStateOf<ChatApi.ConnectionReport?>(null) }
+    var report by remember { mutableStateOf<String?>(null) }
     // Bumped on every resume so the hub's widget count reflects a
     // placement added (or removed) while the app was in the background —
     // same reason the widget section re-reads.
     var resumeTick by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
-    // Live picker inventory (providers + their models); empty until loaded.
-    var catalog by remember { mutableStateOf<List<ProviderOption>>(emptyList()) }
-    // True while a catalog fetch is in flight (preload or Save
-    // refetch): without it the footer reads the in-flight state as
-    // final — a stale "Connected" for old creds, or a clean-empty
-    // flash — like the picker would show without its spinner arm (#430).
-    var catalogLoading by remember { mutableStateOf(true) }
-    // Rows the server sent but the picker could not read: surfaced as a
-    // count in the section footer, like the picker sheet (#430). Reset
-    // with the catalog on every fetch; a failed fetch sets `error`
-    // instead, and the error card explains.
-    var catalogDropped by remember { mutableStateOf(0) }
     // Bumped after a settings import so the fields below reload from prefs.
     var settingsRefresh by remember { mutableIntStateOf(0) }
-
-    /** Preloads the live provider/model catalog (pickers live per tab now).
-     * A failure surfaces in `error` like any other connection problem —
-     * defaulting to empty would read as "not set up yet" with no error
-     * and no retry (#430). */
-    LaunchedEffect(settingsRefresh) {
-        error = ""
-        // A probe report belongs to one attempt: a settings import
-        // refetches for new creds, so the old report must not outlive
-        // it next to the fresh result (#430).
-        report = null
-        catalogLoading = true
-        val api = ChatApi(context)
-        catalog = runCatching {
-            api.fetchCatalog(catalogPath(api)).getOrThrow()
-        }.fold(
-            onSuccess = { page ->
-                catalogDropped = page.dropped
-                page.providers
-            },
-            onFailure = { e ->
-                error = e.message ?: e.javaClass.simpleName
-                catalogDropped = 0
-                emptyList()
-            },
-        )
-        catalogLoading = false
-    }
 
     /** Refreshes health state after any permission flow returns. */
     val hcPermissionLauncher = rememberLauncherForActivityResult(
@@ -219,22 +164,9 @@ internal fun SettingsScreen(
             ) {
                 when (section) {
                     null -> {
-                        val usageStatus = remember(context, settingsRefresh) {
-                            val all = UsageStore.loadAll(context)
-                            val total = all.values.fold(0L) { acc, t -> acc + t.total }
-                            val turns = all.values.fold(0L) { acc, t -> acc + t.turns }
-                            if (turns == 0L) "Not tracked yet"
-                            else "${formatTokens(total)} tokens · $turns turns"
-                        }
                         SettingsHub(
                             serverStatus = if (state.serverUrl.isBlank()) {
                                 "Not set up"
-                            } else if (catalog.isNotEmpty() && error.isEmpty()) {
-                                // Gated on a clean fetch: a failed refetch
-                                // keeps the previous good list, but the hub
-                                // must not call it "Connected" next to the
-                                // Connection section's error (#430).
-                                "Connected"
                             } else {
                                 state.serverUrl
                             },
@@ -251,7 +183,7 @@ internal fun SettingsScreen(
                                 ThemeStore.DARK -> "Dark"
                                 else -> "System"
                             },
-                            notificationsStatus = if (ChatNotifications.isEnabled(context)) "On" else "Off",
+                            notificationsStatus = if (UpdateCheck.canPostNotification(context)) "On" else "Off",
                             behaviourStatus = remember(context, settingsRefresh, resumeTick) {
                                 BehaviourSettings.hubStatus(context)
                             },
@@ -264,7 +196,6 @@ internal fun SettingsScreen(
                                     else -> "$placed on home screen"
                                 }
                             },
-                            usageStatus = usageStatus,
                             appVersion = remember(context) {
                                 UpdateManager.currentVersion(context).first
                             },
@@ -274,7 +205,7 @@ internal fun SettingsScreen(
                     SettingSection.Connection -> {
                         SectionCard(
                             title = "Connection",
-                            subtitle = "One URL for chat + sync. The proxy routes chat to the gateway and health data to the sync service.",
+                            subtitle = "One URL for everything. The proxy routes health data, tasks, files and ∃-Mail to the sync service.",
                         ) {
                             OutlinedTextField(
                                 value = state.serverUrl,
@@ -305,9 +236,8 @@ internal fun SettingsScreen(
                                 keyboardActions = KeyboardActions(onDone = { /* saved via button */ }),
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            /** Saves server fields (chat config per tab saves from its own page). */
+                            /** Saves the server URL + password. */
                             Button(onClick = {
-                                val api = ChatApi(context)
                                 val prefs = context.getSharedPreferences(
                                     AgentoApp.PREFS_NAME, android.content.Context.MODE_PRIVATE)
                                 prefs.edit {
@@ -323,22 +253,8 @@ internal fun SettingsScreen(
                                 }
                                 error = ""
                                 report = null
-                                catalogLoading = true
-                                scope.launch {
-                                    api.fetchCatalog(catalogPath(api), refresh = true).fold(
-                                        onSuccess = { page ->
-                                            catalog = page.providers
-                                            catalogDropped = page.dropped
-                                            toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
-                                        },
-                                        onFailure = { e ->
-                                            error = e.message ?: e.javaClass.simpleName
-                                            catalogDropped = 0
-                                        },
-                                    )
-                                    catalogLoading = false
-                                }
-                            }, enabled = !testing && !catalogLoading, modifier = Modifier.fillMaxWidth()) {
+                                toasts.toast(Toasts.SERVER_SAVED, ToastKind.Success)
+                            }, enabled = !testing, modifier = Modifier.fillMaxWidth()) {
                                 Text("Save server")
                             }
                             OutlinedButton(
@@ -347,44 +263,26 @@ internal fun SettingsScreen(
                                     report = null
                                     error = ""
                                     scope.launch {
-                                        val api = ChatApi(context)
-                                        val r = api.testConnection(catalogPath(api)).getOrNull()
-                                        report = r
+                                        // The test IS a sync: the only
+                                        // backends left are sync-shaped, so a
+                                        // lightweight GET elsewhere would
+                                        // prove less than the real run.
+                                        val r = withContext(Dispatchers.IO) {
+                                            runCatching {
+                                                SyncRunner.run(context.applicationContext)
+                                            }.getOrNull()
+                                        }
                                         if (r == null) {
                                             error = ServerEndpoint.UNCONFIGURED
-                                        } else if (!r.gatewayOk) {
-                                            // No heal refetch runs on a failed
-                                            // probe, so drop the previous good
-                                            // catalog — otherwise the footer
-                                            // and hub keep reporting
-                                            // "Connected" next to the probe
-                                            // error (#430).
-                                            catalog = emptyList()
-                                            catalogDropped = 0
-                                        } else if (r.gatewayOk) {
-                                            // The probe answers but the picker
-                                            // reads the catalog: heal a failed
-                                            // preload now, or the footer
-                                            // claims "Connected" next to a
-                                            // stale catalog error (#430).
-                                            catalog = runCatching {
-                                                api.fetchCatalog(catalogPath(api), refresh = true).getOrThrow()
-                                            }.fold(
-                                                onSuccess = { page ->
-                                                    catalogDropped = page.dropped
-                                                    page.providers
-                                                },
-                                                onFailure = { e ->
-                                                    error = e.message ?: e.javaClass.simpleName
-                                                    catalogDropped = 0
-                                                    catalog
-                                                },
-                                            )
+                                        } else if (r.success) {
+                                            report = "Connected — sync reachable (${r.statusCode})."
+                                        } else {
+                                            error = r.message.ifBlank { "Sync backend unreachable" }
                                         }
                                         testing = false
                                     }
                                 },
-                                enabled = !testing && !catalogLoading,
+                                enabled = !testing,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Text(if (testing) "Testing…" else "Test connection")
@@ -394,67 +292,15 @@ internal fun SettingsScreen(
                             }
                             val rep = report
                             if (rep != null) {
-                                if (rep.gatewayOk && rep.syncOk) {
-                                    // Probe counts only: never backfill
-                                    // `catalog` with the offline list here —
-                                    // that would masquerade as live inventory
-                                    // and the footer below would count it
-                                    // (#430). The picker reads the real
-                                    // catalog (or its error) on open. The
-                                    // drop count rides in the same line (not
-                                    // a second stacked warning): the same
-                                    // inventory must never read clean here
-                                    // and lossy one card below.
-                                    HintLine(
-                                        "Connected — chat (${rep.providers} provider(s), ${rep.models} model(s)) and sync both reachable." +
-                                            if (rep.dropped > 0) " ${catalogDropMessage(rep.dropped)}" else "",
-                                    )
-                                } else {
-                                    if (!rep.gatewayOk) {
-                                        ErrorCard(raw = rep.gatewayError.ifEmpty { "Chat backend unreachable" })
-                                    }
-                                    if (!rep.syncOk) {
-                                        ErrorCard(raw = rep.syncError.ifEmpty { "Sync backend unreachable" })
-                                    }
-                                    if (rep.gatewayOk && !rep.syncOk) {
-                                        HintLine("Chat works, but sync is unreachable — health data won't upload.")
-                                    }
-                                }
+                                HintLine(rep)
                             }
                         }
                         if (error.isNotEmpty()) {
                             ErrorCard(raw = error)
-                        } else if (testing || catalogLoading) {
-                            // Probe or catalog fetch in flight: neither the
-                            // stale counts nor the clean-empty hint may read
-                            // as final while it runs — the section already
-                            // spins the button row, this holds the footer
-                            // to the same story (#430).
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        } else if (catalog.isNotEmpty()) {
-                            val count = catalog.sumOf { it.models.size }
-                            HintLine("Connected — ${catalog.size} provider(s), $count model(s). Pick a model on each assistant's page.")
-                            // Unparseable rows shrink the live list the
-                            // counts above describe: the count rides with
-                            // them, like the picker sheet (#430).
-                            if (catalogDropped > 0) {
-                                HintLine(catalogDropMessage(catalogDropped))
-                            }
-                        } else if (report == null) {
-                            // Reached only when not loading (arm above):
-                            // the catalog simply never loaded.
-                            HintLine("No providers loaded yet — save the server above first.")
+                        } else if (report == null && !testing) {
+                            HintLine("Save the server above first, then test the connection.")
                         }
-                        // No final else: when a probe report exists but the
-                        // catalog is empty, the report's own cards already
-                        // explain — the "not set up yet" hint would
-                        // misdirect into re-saving (#430).
                     }
-                    SettingSection.Connectors -> {
-                        ConnectorsSection(toasts)
-                    }
-                    // #61: the "Chat backend" subsection is removed (provider +
-                    // model are picked on each tab's own page; nothing to show).
                     SettingSection.Appearance -> {
                         SectionCard(
                             title = "Theme",
@@ -642,132 +488,11 @@ internal fun SettingsScreen(
                             },
                         )
                     }
-                    SettingSection.Usage -> {
-                        UsageSection()
-                    }
                 }
             }
         }
         ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
     }
-    }
-}
-
-/** Real usage: per-assistant token counts reported by the server.
- * Each completed turn's stream carries a `usage` object (see
- * [parseTokenUsage]); totals accumulate on-device from those reports, so
- * turns from before this update — and failed turns, which report zeros —
- * contribute nothing. Cached is the of-prompt cached subset. Cost is
- * deliberately absent: the gateway reports estimated_cost_usd 0.0 /
- * unknown, so nothing renders until pricing is real. */
-@Composable
-internal fun UsageSection() {
-    val context = LocalContext.current
-    // Application context for the IO block below: thread/usage reads may
-    // outlive the screen, so the hop must not hold the Activity.
-    val appContext = context.applicationContext
-    var rows by remember { mutableStateOf<List<UsageRow>>(emptyList()) }
-    var loaded by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        val data = withContext(Dispatchers.IO) {
-            UsageStore.clearLegacy(appContext)
-            // Single chat tab since #289 (retired god/story/resumes thread
-            // files stay on disk, orphaned — only chat is read).
-            listOf(
-                "chat" to "Chat",
-            ).map { (tab, label) ->
-                val threads = ChatThreads.load(appContext, tab)
-                val t = UsageStore.load(appContext, tab)
-                // Replies with no usable report (failed/interrupted turns,
-                // or history from before per-message tracking) surface as
-                // explicit gaps instead of silent skips.
-                val unreported = threads.flatMap { it.messages }.count {
-                    it.role != "user" && it.content.isNotBlank() &&
-                        it.total <= 0 && it.prompt <= 0 && it.completion <= 0
-                }
-                UsageRow(
-                    label = label,
-                    conversations = threads.size,
-                    messages = threads.sumOf { it.messages.size },
-                    prompt = t.prompt,
-                    completion = t.completion,
-                    total = t.total,
-                    cached = t.cached,
-                    turns = t.turns,
-                    unreported = unreported,
-                )
-            }
-        }
-        rows = data
-        loaded = true
-    }
-
-    if (!loaded) {
-        Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-        return
-    }
-    val totalTokens = rows.sumOf { it.total }
-    val countedTurns = rows.sumOf { it.turns }
-    SectionCard(
-        title = "Total",
-        subtitle = "Server-reported tokens across all assistants, counted on this device.",
-    ) {
-        Text(
-            "${formatTokens(totalTokens)} tokens · " +
-                "${rows.sumOf { it.messages }} messages · " +
-                "${rows.sumOf { it.conversations }} conversations",
-            style = MaterialTheme.typography.bodyLarge,
-        )
-    }
-    rows.forEach { r ->
-        SectionCard(title = r.label) {
-            Text(
-                "${formatTokens(r.total)} tokens · " +
-                    "${r.messages} messages · ${r.conversations} conversations",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            HintLine(
-                if (r.turns > 0) {
-                    listOfNotNull(
-                        "Prompt ${formatTokens(r.prompt)}",
-                        "completion ${formatTokens(r.completion)}",
-                        if (r.cached > 0) "cached ${formatTokens(r.cached)}" else null,
-                        "${r.turns} counted turns",
-                        if (r.unreported > 0) "${r.unreported} without reports" else null,
-                    ).joinToString(" · ")
-                } else {
-                    "No token counts reported yet — chat once to start tracking."
-                }
-            )
-        }
-    }
-    if (countedTurns == 0L) {
-        HintLine("Nothing counted yet. Turns from before this update have no reports and can't be backfilled.")
-    } else {
-        HintLine("Only turns with server reports count — failed turns report zeros and are skipped.")
-    }
-}
-
-internal data class UsageRow(
-    val label: String,
-    val conversations: Int,
-    val messages: Int,
-    val prompt: Long,
-    val completion: Long,
-    val total: Long,
-    val cached: Long,
-    val turns: Long,
-    val unreported: Int,
-)
-
-internal fun formatTokens(tokens: Long): String {
-    return when {
-        tokens >= 1_000_000 -> "%.1fM".format(Locale.US, tokens / 1_000_000.0)
-        tokens >= 1_000 -> "%.1fk".format(Locale.US, tokens / 1_000.0)
-        else -> "$tokens"
     }
 }
 
@@ -781,21 +506,18 @@ internal fun SettingsHub(
     notificationsStatus: String,
     behaviourStatus: String,
     widgetStatus: String,
-    usageStatus: String,
     appVersion: String,
     onPick: (SettingSection) -> Unit,
 ) {
-    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, behaviourStatus, widgetStatus, usageStatus, appVersion) {
+    val rows = remember(serverStatus, healthStatus, themeStatus, notificationsStatus, behaviourStatus, widgetStatus, appVersion) {
         listOf(
             HubRow(SettingSection.Connection, serverStatus),
-            HubRow(SettingSection.Connectors, "Gmail · Calendar"),
             HubRow(SettingSection.Health, healthStatus),
             HubRow(SettingSection.Appearance, themeStatus),
             HubRow(SettingSection.Widget, widgetStatus),
             HubRow(SettingSection.Notifications, notificationsStatus),
             HubRow(SettingSection.Behaviour, behaviourStatus),
             HubRow(SettingSection.Storage, "Export & import"),
-            HubRow(SettingSection.Usage, usageStatus),
             HubRow(SettingSection.About, appVersion),
         )
     }
@@ -840,32 +562,31 @@ internal data class HubRow(val section: SettingSection, val status: String)
 
 internal fun SettingSection.hubIcon() = when (this) {
     SettingSection.Connection -> Icons.Filled.Cloud
-    SettingSection.Connectors -> Icons.Filled.Link
     SettingSection.Health -> Icons.Filled.Favorite
     SettingSection.Appearance -> Icons.Filled.DarkMode
     SettingSection.Widget -> Icons.Filled.Dashboard
     SettingSection.Notifications -> Icons.Filled.Notifications
     SettingSection.Behaviour -> Icons.Filled.Tune
     SettingSection.Storage -> Icons.Filled.Backup
-    SettingSection.Usage -> Icons.Filled.DataUsage
     SettingSection.About -> Icons.Filled.Info
 }
 
-/** Reply-alerts hub (issue #58).
+/** Notification permission hub (#493).
  *
- * Completion notifications: when a chat reply finishes while the app is
- * in the background, Agento posts a local notification (toggle below).
+ * Chat reply alerts are gone with chat. What remains are the reminder,
+ * update and sync notifications, each with its own switch (reminders in
+ * Settings → Behaviour, update notices next to their cadence there). This
+ * section owns the one thing they share: the system-level grant.
  */
 @Composable
 internal fun NotificationsSection() {
     val context = LocalContext.current
-    var enabled by remember { mutableStateOf(ChatNotifications.isEnabled(context)) }
-    var canPost by remember { mutableStateOf(ChatNotifications.canPost(context)) }
+    var canPost by remember { mutableStateOf(UpdateCheck.canPostNotification(context)) }
     var status by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        canPost = ChatNotifications.canPost(context)
+        canPost = UpdateCheck.canPostNotification(context)
     }
 
     /** Asks for the runtime notification grant (Android 13+). */
@@ -875,45 +596,19 @@ internal fun NotificationsSection() {
         canPost = granted
         failed = !granted
         status = if (granted) {
-            "Allowed — reply alerts will post."
+            "Allowed — reminders and update notices will post."
         } else {
             "Notifications are still blocked. Allow them for Agento in system Settings."
         }
     }
 
     SectionCard(
-        title = "Reply alerts",
-        subtitle = "Agento can notify you when a chat reply finishes while the " +
-            "app is in the background. This master switch gates every kind. " +
-            BehaviourSettings.SKIPPED_NOT_QUEUED +
-            " Per-kind toggles for failures and saved instructions " +
-            "live in Settings → Behaviour.",
+        title = "Notifications",
+        subtitle = "Task reminders, app-update notices and sync failures all " +
+            "need the system grant below. Per-kind switches live in " +
+            "Settings → Behaviour.",
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Notify when a reply finishes",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
-            )
-            Switch(
-                checked = enabled,
-                onCheckedChange = {
-                    enabled = it
-                    ChatNotifications.setEnabled(context, it)
-                    status = ""
-                    failed = false
-                    if (it && !ChatNotifications.canPost(context) &&
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                    ) {
-                        permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                },
-            )
-        }
-        if (enabled && !canPost) {
+        if (!canPost) {
             ErrorCard(raw = "Notifications are blocked at the system level.")
             OutlinedButton(onClick = {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -922,23 +617,8 @@ internal fun NotificationsSection() {
             }, modifier = Modifier.fillMaxWidth()) {
                 Text("Allow notifications")
             }
-        }
-        OutlinedButton(
-            onClick = {
-                failed = false
-                status = if (ChatNotifications.sendTest(context)) {
-                    Toasts.TEST_SENT
-                } else if (!ChatNotifications.isEnabled(context)) {
-                    failed = true
-                    "Turn the toggle on first, then test again."
-                } else {
-                    failed = true
-                    "Notifications are blocked — allow them first, then test again."
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Send test notification")
+        } else {
+            HintLine("Notifications are allowed at the system level.")
         }
         if (status.isNotEmpty()) {
             if (failed) ErrorCard(raw = status) else HintLine(status)
@@ -946,15 +626,15 @@ internal fun NotificationsSection() {
     }
 }
 
-/** Backup size past which the export status warns: thread files ride
- * wholesale (photo payloads included), so restores are slow. */
+/** Backup size past which the export status warns: the stored tasks file
+ * rides wholesale, so large restores are slow. */
 private const val BACKUP_LARGE_BYTES = 5_000_000
 
 // The hard cap (BACKUP_HARD_CAP_BYTES) and its floor slack live on
 // SettingsBackup: export() enforces the same wall at the boundary.
 
 /** Names the first few skipped/unreadable files (#339): the count alone
- * says a conversation was lost, the name says which. */
+ * says a file was lost, the name says which. */
 private fun namesOf(names: List<String>): String {
     val shown = names.take(3).joinToString(", ")
     val more = if (names.size > 3) " (+${names.size - 3} more)" else ""
@@ -1027,7 +707,7 @@ internal fun SettingsBackupSection(
                     if (upfront * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(SettingsBackup.backupTooLargeMessage(upfront))
                     }
-                    // The floor counts the THREAD FILES only (#339): the
+                    // The floor counts the STORED FILES only (#339): the
                     // prefs snapshot and the JSON framing are not in
                     // `upfront`, so a prefs-heavy backup reads low here.
                     // The export's own wall (the built string) is what
@@ -1043,21 +723,21 @@ internal fun SettingsBackupSection(
                             failed = false
                         }
                     }
-                    // Sized for the photo-thread warning: the export holds
-                    // thread files wholesale, so photo-heavy threads make for
+                    // Sized for the large-backup warning: the export holds
+                    // stored files wholesale, so large task files make for
                     // slow restores. Streamed in chunks, not via toByteArray():
                     // the string must exist to write at all, but the duplicate
                     // byte[] copy is avoidable. Compact, not pretty.
                     val export = SettingsBackup.export(appContext)
                     val text = export.json.toString()
                     // Post-build peak check: a concurrent save can grow the
-                    // thread files between the meter and this build. Measured
+                    // stored files between the meter and this build. Measured
                     // on the STRING ITSELF (length × 2 = UTF-16 bytes:
                     // String.length counts code units, not disk bytes).
                     if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup grew past the safe limit during export. " +
-                                "Delete old photo threads in the thread switcher, then try again.",
+                                "Delete old tasks, then try again.",
                         )
                     }
                     var written = 0L
@@ -1119,7 +799,7 @@ internal fun SettingsBackupSection(
                     }
                     if (size > BACKUP_LARGE_BYTES) {
                         Toasts.EXPORTED + " Large backup (${formatBytes(size)}) — " +
-                            "photo threads make restores slow." + missing
+                            "large task files make restores slow." + missing
                     } else {
                         Toasts.EXPORTED + missing
                     }
@@ -1173,7 +853,7 @@ internal fun SettingsBackupSection(
                     if (pickedBytes >= 0 && pickedBytes * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup too large to import safely (${formatBytes(pickedBytes)} on disk). " +
-                                "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                                "Delete old tasks, export a smaller backup, then try again.",
                         )
                     }
                     val text = appContext.contentResolver.openInputStream(uri)?.use { input ->
@@ -1199,7 +879,7 @@ internal fun SettingsBackupSection(
                                 if (sb.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                                     throw IllegalStateException(
                                         "Backup too large to import safely. " +
-                                            "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                                            "Delete old tasks, export a smaller backup, then try again.",
                                     )
                                 }
                             }
@@ -1213,7 +893,7 @@ internal fun SettingsBackupSection(
                     if (text.length.toLong() * 2 + BACKUP_FLOOR_SLACK_BYTES > BACKUP_HARD_CAP_BYTES) {
                         throw IllegalStateException(
                             "Backup too large to import safely. " +
-                                "Delete old photo threads in the switcher, export a smaller backup, then try again.",
+                                "Delete old tasks, export a smaller backup, then try again.",
                         )
                     }
                     SettingsBackup.importFrom(appContext, org.json.JSONObject(text)).getOrThrow()
@@ -1225,7 +905,7 @@ internal fun SettingsBackupSection(
             }
             result.fold(
                 onSuccess = { outcome ->
-                    // Skipped files are named (#339): a dropped thread file is
+                    // Skipped files are named (#339): a dropped stored file is
                     // not restored, and "Restored N" alone reads as success.
                     val skippedNote = if (outcome.skipped.isEmpty()) {
                         ""
@@ -1248,7 +928,7 @@ internal fun SettingsBackupSection(
 
     SectionCard(
         title = "Backup",
-        subtitle = "Keep a copy of your settings and conversations somewhere safe. Restoring brings them back after a reinstall.",
+        subtitle = "Keep a copy of your settings somewhere safe. Restoring brings them back after a reinstall.",
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(

@@ -427,11 +427,7 @@ fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
 
 /** Lenient string read: Android's `optString` coerces JSON null to
  * the string "null", so every nullable string field must go through
- * here (#130).
- *
- * Neutral name on purpose: the package already has a stricter top-level
- * `optStr` (MemoryApi) that blanks non-string values, which would
- * silently change number fields here if this shadowed it. */
+ * here (#130). */
 internal fun optJsonStr(o: JSONObject, key: String): String =
     if (o.isNull(key)) "" else o.optString(key, "").trim()
 
@@ -787,7 +783,7 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
         // reminder paths take `.tasks` and never see the count, but
         // their log lines surface in Settings → About diagnostics.
         // runCatching: Log is stubbed (throws) on the JVM unit-test
-        // classpath, same guard as ApprovalsApi.
+        // classpath, same guard as every other API client.
         runCatching {
             Log.w("TasksApi", "dropped $dropped unparseable task row(s) in list response")
         }
@@ -1558,8 +1554,8 @@ class TasksApi(context: Context) {
             ?: throw RuntimeException(TASKS_SHAPE_ERROR)
 
     /** Ids are hex today, but encoded defensively so a malformed id can
-     * never break the request path (the `+` fix-up mirrors ServerApi:
-     * form-encoding emits `+` for space, valid only in query strings). */
+     * never break the request path (form-encoding emits `+` for space,
+     * valid only in query strings, so it is fixed up to `%20`). */
     private fun encodeId(id: String): String =
         URLEncoder.encode(id.trim(), Charsets.UTF_8.name()).replace("+", "%20")
 

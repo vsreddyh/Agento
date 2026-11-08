@@ -1199,28 +1199,6 @@ class TaskAlarmReceiver : BroadcastReceiver() {
                 .setData("agento://reminder/${Uri.encode(taskId)}/skip".toUri()),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        // Instruct Agent opens a text box inside the notification
-        // (RemoteInput, #287); on send TaskInstructReceiver starts a new
-        // chat thread tagging this task plus the instruction text.
-        // Data URI + own request code for the same identity reason.
-        val instructIntent = Intent(appCtx, TaskInstructReceiver::class.java)
-            .putExtra(TaskWidget.EXTRA_TASK_ID, taskId)
-            .setData("agento://reminder/${Uri.encode(taskId)}/instruct".toUri())
-        val instruct = PendingIntent.getBroadcast(
-            // MUTABLE, not IMMUTABLE: the system delivers the typed reply
-            // as a fill-in intent, which an immutable PendingIntent
-            // rejects on API 31+. (FLAG_MUTABLE is compile-inlined, so
-            // referencing it is safe down to minSdk 28.)
-            appCtx, ("instruct:$taskId").hashCode(), instructIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
-        )
-        val instructAction = NotificationCompat.Action.Builder(
-            0, "Instruct Agent", instruct,
-        ).addRemoteInput(
-            androidx.core.app.RemoteInput.Builder(TaskInstructReceiver.KEY_INSTRUCT)
-                .setLabel("Instruction for the agent")
-                .build(),
-        ).build()
         val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE)
             as NotificationManager
         // No SDK guard: notification channels exist since 26 and minSdk
@@ -1256,7 +1234,6 @@ class TaskAlarmReceiver : BroadcastReceiver() {
             // icons on some OEMs.
             .addAction(0, "Completed", done)
             .addAction(0, "Skip", skip)
-            .addAction(instructAction)
         // Expanded view whenever it would add something: a task with no
         // description still carries its window, and "Due now" alone leaves
         // the time unsaid. When the body *is* just the message there is

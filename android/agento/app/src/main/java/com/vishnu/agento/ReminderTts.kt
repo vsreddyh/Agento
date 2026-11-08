@@ -64,6 +64,35 @@ internal fun isStoredVoiceMissing(availableNames: Collection<String>, want: Stri
 }
 
 /**
+ * Strips markdown/HTML from a string before handing it to TTS (moved here
+ * in #493 when the chat speech helper was deleted — reminder speech is the
+ * only caller left).
+ * Decodes entities so words survive; strips real HTML tags — the
+ * leading-letter guard keeps "a < b" prose intact.
+ */
+internal fun cleanForSpeech(raw: String): String {
+    var s = raw
+    s = s.replace(Regex("(?s)```.*?```"), " code ")
+    s = s.replace(Regex("`([^`]*)`"), "$1")
+    s = s.replace(Regex("!\\[([^\\]]*)]\\([^\\)]*\\)"), "$1")
+    s = s.replace(Regex("\\[([^\\]]*)]\\([^\\)]*\\)"), "$1")
+    s = s.replace(Regex("(?m)^\\s{0,3}#{1,6}\\s+"), "")
+    s = s.replace(Regex("[*_~]{1,3}"), "")
+    s = s.replace(Regex("(?m)^\\s*>\\s?"), "")
+    s = s.replace("|", " ")
+    s = s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+    s = s.replace(Regex("</?[A-Za-z][^>]*>"), " ")
+    s = s.replace(Regex("(?m)^\\s*[-*+]\\s+"), "")
+    s = s.replace(Regex("(?m)^\\s*\\d+[.)]\\s+"), "")
+    s = s.replace(Regex("\\s+"), " ").trim()
+    return s
+}
+
+/**
  * What [purgeTaskSpeech] removed: queued items dropped and whether an
  * in-flight utterance was suppressed. Failure-notice retraction is
  * enumerated from live system tags, not from here: terminal failures post
@@ -335,7 +364,7 @@ object ReminderTts {
         // Quotes delimit the name in text but some engines verbalize "quote",
         // so they are stripped only on the speech path (reminderSpeech keeps them).
         val leadMinutes = BehaviourSettings.reminderLeadMinutes(appCtx)
-        val text = ChatTts.cleanForSpeech(reminderSpeech(kind, task.name, task.speakName, overdueElapsed, leadMinutes))
+        val text = cleanForSpeech(reminderSpeech(kind, task.name, task.speakName, overdueElapsed, leadMinutes))
             .replace("\"", "").replace(QUOTE_CHARS, "")
         val id = "${kind.key}-${UUID.randomUUID()}"
         val item = QueuedSpeech(id, text, task.id, kind.key, task.name)

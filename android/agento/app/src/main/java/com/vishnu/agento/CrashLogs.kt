@@ -20,8 +20,8 @@ import java.util.Locale
  * handler afterwards — the app still dies normally; a crash is never
  * swallowed. Catches every thread, not just main.
  *
- * Contents are the enumerated fields below: timestamp, app version, model +
- * effort, device + Android version, thread name, full stack trace. No bearer
+ * Contents are the enumerated fields below: timestamp, app version,
+ * device + Android version, thread name, full stack trace. No bearer
  * token, no app password is ever written — the writer only emits these
  * fields. (An exception message can echo the server host, which carries no
  * credential; the URL itself is never stored as a field.)
@@ -95,14 +95,9 @@ object CrashLogs {
         }.getOrNull()
 
     internal fun reportText(appCtx: Context, thread: Thread, e: Throwable): String {
-        val api = ChatApi(appCtx.applicationContext)
-        val model = api.modelFor("chat")
-        val effort = api.effortFor("chat", model)
         return buildList {
             add("timestamp: ${LocalDateTime.now(IST)}")
             add("app: ${UpdateManager.currentVersion(appCtx).first}")
-            add("model: ${model.ifEmpty { "(not set)" }}")
-            add("effort: ${effort.ifEmpty { "(default)" }}")
             add("device: ${Build.MANUFACTURER} ${Build.MODEL}")
             add("android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
             add("thread: ${thread.name}")

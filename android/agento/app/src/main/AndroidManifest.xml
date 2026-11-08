@@ -10,26 +10,11 @@
     <!-- Due-time task reminders: exact alarms when the OS grants them
          (inexact fallback otherwise). -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <!-- Fired when a Hermes reply finishes while the app is backgrounded
-         (Settings → Hermes notifications, issue #58). -->
+    <!-- Fired when a reminder or update check needs attention while the app
+         is backgrounded (Settings → Notifications, issue #58). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Chat photo attachments (#318): camera captures staged in the
-         composer. Gallery picks need no permission (the system picker
-         grants read access to just the chosen images). The uses-feature
-         stays not-required: gallery-only devices (ChromeOS, Play
-         filtering) remain fully supported without a camera. -->
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <!-- CAMERA implies autofocus too: without this Play can still filter
-         fixed-focus camera devices, same reason as the line above. -->
-    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
-    <!-- Live voice mode (#85): background speech detector that hears the user
-         talking over the readout (hands-free interrupt). The one-shot system
-         recognizer used for transcription needs no permission; without this,
-         live mode still works but interrupt is tap-only. -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- In-app updater (Settings → App updates): fires the platform package
          installer for a downloaded release APK (issue #6). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -46,12 +31,6 @@
 
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
-        <!-- Voice input (chat mic): package visibility for the system
-             speech recognizer on Android 11+ (API 30+); without this,
-             resolveActivity-style checks always fail. -->
-        <intent>
-            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
-        </intent>
     </queries>
 
     <application
@@ -126,18 +105,6 @@
             tools:node="merge" />
 
         <receiver
-            android:name=".LiveWidget"
-            android:exported="false"
-            android:label="@string/live_widget_desc">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/live_widget_info" />
-        </receiver>
-
-        <receiver
             android:name=".TaskWidget"
             android:exported="false"
             android:label="@string/task_widget_desc">
@@ -180,11 +147,6 @@
         <!-- Due-time task reminder alarms (explicit intents only). -->
         <receiver
             android:name=".TaskAlarmReceiver"
-            android:exported="false" />
-
-        <!-- Notification inline-reply for [Instruct Agent] (explicit intents only). -->
-        <receiver
-            android:name=".TaskInstructReceiver"
             android:exported="false" />
 
         <!-- Reminder notification [Completed]/[Skip] actions (#368):

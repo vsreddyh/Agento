@@ -38,41 +38,29 @@ object SettingsBackup {
      * wall, and the import gate — the next reword fixes every path. */
     internal fun backupTooLargeMessage(onDisk: Long): String =
         "Backup too large to export safely (${formatBytes(onDisk)} on disk). " +
-            "Delete old photo threads in the thread switcher, then try again."
+            "Delete old tasks, then try again."
 
     // NOTE: stays 1 — import skips unknown keys and never reads the
-    // version, so removing the retired story/resumes keys (#289) neither
+    // version, so removing the retired chat keys (#493) neither
     // breaks old-backup import (their keys are skipped) nor requires a bump.
     // Old readers ignore the additive "files" section for the same reason.
     const val VERSION = 1
 
-    // Single chat tab since #289; retired story/resumes keys stay out of
-    // the allowlists, so their values are neither exported nor imported —
-    // orphaned, like the thread files below.
-    private val TABS = listOf("chat")
-
-    /** App files mirrored into backups (chat threads, tasks). */
+    /** App files mirrored into backups (tasks only since #493; chat thread
+     * files are gone with the chat they belonged to). */
     private fun backupFiles(): List<String> = buildList {
-        for (t in TABS) add("chat_threads_$t.json")
         add("tasks.json")
     }
 
     /** Every string pref the app reads; import ignores anything else. */
     val STRING_KEYS: List<String> = buildList {
-        // Canonical server URL (proxy: chat + sync) + single app password.
-        // Retired server_url/api_base_url/auth_token keys are deliberately
-        // absent (#433): nothing reads them, so an old backup that still
+        // Canonical server URL (proxy: sync + tasks/files/mail) + single app password.
+        // Retired keys are deliberately
+        // absent (#433, #493): nothing reads them, so an old backup that still
         // carries them imports them nowhere and the user re-enters config
         // once — a visible setup screen, never a silent stale bridge.
         add(ServerEndpoint.BASE_KEY)
         add(ServerEndpoint.PASSWORD_KEY)
-        for (t in TABS) {
-            add("provider_$t")
-            add("model_$t")
-            // Current effort pick per tab; per-model memory
-            // (`effort_<tab>_<model>`) is dynamic — see effortKeys() below.
-            add("effort_$t")
-        }
         add("theme_mode")
         add("last_sync_at")
         // Behaviour (#355): stored TTS voice name, "" for engine default.
@@ -82,23 +70,15 @@ object SettingsBackup {
     /** Boolean prefs the app reads. */
     val BOOLEAN_KEYS: List<String> = listOf(
         "first_sync_done",
-        "notify_reply_done",
         // Reminders on/off — the one task_reminder_* key that is a user
         // setting rather than device-local alarm bookkeeping (#169). The
         // armed set and the budget snapshot are excluded on purpose; see the
         // note under [isWidgetDisplayKey]. By reference like every other
         // entry: no re-spelled keys anywhere in this list.
         TaskReminders.PREF_ENABLED,
-        // Auto-read (#355): a user setting like the reminders switch above,
-        // previously omitted by oversight — without it an export silently
-        // lost the pick while reminders survived. Additive like everything
-        // else: old backups (without it) restore to off, old readers skip it.
-        BehaviourSettings.KEY_TTS_AUTO,
-        // Behaviour (#355): per-kind notification gates plus the health-sync
+        // Behaviour (#355): the health-sync
         // pause/Wi-Fi-only switches. All default to today's behaviour, so
         // old backups (without them) restore identically.
-        BehaviourSettings.KEY_NOTIFY_FAILED,
-        BehaviourSettings.KEY_NOTIFY_INSTRUCT,
         BehaviourSettings.KEY_SYNC_WIFI_ONLY,
         BehaviourSettings.KEY_SYNC_PAUSED,
         // Update checks (#366): the two user-facing switches. The interval
@@ -110,17 +90,11 @@ object SettingsBackup {
     )
 
     /**
-     * Cumulative real token totals per assistant (see UsageStore). Longs are
-     * exported/imported like the string/boolean allowlists above — additive
-     * and optional, so old backups (without these keys) still restore and
-     * old readers ignore the extra numbers.
-     *
-     * Behaviour (#355) cadence/lead/TTS knobs ride the same list: they are
-     * longs for exactly this reason, and both sides coerce through
-     * [BehaviourSettings.coerceImport], so a hand-edited import can never
-     * store a value the getters silently disagree with.
+     * Behaviour (#355) cadence/lead/TTS knobs: longs, so both sides coerce
+     * through [BehaviourSettings.coerceImport], and a hand-edited import can
+     * never store a value the getters silently disagree with.
      */
-    val LONG_KEYS: List<String> = (UsageStore.LONG_KEYS + listOf(
+    val LONG_KEYS: List<String> = listOf(
         BehaviourSettings.KEY_SYNC_INTERVAL_HOURS,
         BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES,
         BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
@@ -128,42 +102,22 @@ object SettingsBackup {
         BehaviourSettings.KEY_TTS_PITCH_PCT,
         // Update poll cadence (#366: 0 = off); coerced like the rest.
         BehaviourSettings.KEY_UPDATE_INTERVAL_HOURS,
-    )).distinct()
-
-    /**
-     * True for per-model effort memory keys (`effort_<tab>_<model>` with tab
-     * in [TABS]). Shaped tight so a hand-edited backup can't pollute prefs
-     * with arbitrary `effort_*` keys.
-     */
-    fun isEffortMemoryKey(k: String): Boolean {
-        if (!k.startsWith("effort_")) return false
-        for (t in TABS) {
-            if (k.startsWith("effort_${t}_") && k.length > "effort_${t}_".length) return true
-        }
-        return false
-    }
-
-    /** Dynamic per-model effort keys, enumerated from ONE prefs snapshot: the
-     * caller passes the same `all` map it type-checks against, so a write
-     * landing mid-export cannot split check-vs-read across two reads. */
-    private fun effortKeys(all: Map<String, *>): List<String> =
-        all.keys.filter { k ->
-            isEffortMemoryKey(k) && all[k] is String
-        }.sorted()
+    )
 
     /**
      * Per-widget display settings, keyed by the widget id the user configured:
      * `task_widget_{view,density,due,scroll}_<appWidgetId>`, written by
      * `TaskWidgetConfigActivity.onSave` and read by the widget rows (#169).
      *
-     * Same shape as the effort-memory keys — enumerated live because the
-     * suffix is a runtime id, and shaped tight so a hand-edited backup cannot
-     * inject arbitrary `task_widget_*` prefs: four prefixes, each with its own
+     * Per-widget display settings: enumerated live because the key ends in
+     * a runtime id, and shaped tight so a hand-edited backup cannot
+     * inject arbitrary `task_widget_*` prefs: five prefixes, each with its own
      * value type, and a numeric suffix (widget ids are ints — anything else
-     * matches nothing). Values are mixed: `view` and `density` are enum names,
-     * `due` and `scroll` are booleans, so export writes, and import accepts,
-     * each by its own type. A mistyped value in a hand-edited backup is
-     * skipped rather than coerced, exactly like every other key.
+     * matches nothing). Values are mixed: `view`, `density` and `sort` are
+     * enum names, `due` and `scroll` are booleans, so export writes, and
+     * import accepts, each by its own type. A mistyped value in a
+     * hand-edited backup is skipped rather than coerced, exactly like
+     * every other key.
      *
      * Deliberately NOT backed up, and the reason matters: the two other
      * `task_reminder_*` prefs are device-local alarm bookkeeping, not settings.
@@ -224,17 +178,17 @@ object SettingsBackup {
      * file is NOT restored, so the count has to reach the user. */
     data class Outcome(val applied: Int, val skipped: List<String>)
 
-    /** Full-settings export (prefs + thread files) as one JSONObject; absent
+    /** Full-settings export (prefs + stored files) as one JSONObject; absent
      * keys are omitted (not nulled). IO-REQUIRED (enforced via
-     * requireIoThread): a photo-heavy export holds ~2x peak on the caller's
-     * thread — the same Main-never rule as ChatThreads.load(). */
+     * requireIoThread): a large export holds ~2x peak on the caller's
+     * thread, so it never runs on Main. */
     @androidx.annotation.WorkerThread
     fun export(context: Context): Export {
         requireIoThread("SettingsBackup.export")
         // The cap lives HERE, not only in the caller: the wall belongs on the
         // boundary that builds the peak, so a caller that skips the Settings
         // pre-meter still fails closed. Both use the same constant + wording.
-        // DISK BYTES (File.length of the thread files) x2 + floor slack: the
+        // DISK BYTES (File.length of the stored files) x2 + floor slack: the
         // cap is a HEAP peak and the export string runs ~2x its size as
         // UTF-16. This is the AUTHORITATIVE meter — the UI's pre-meter and
         // its post-build string meter are advisory estimates that can
@@ -250,9 +204,6 @@ object SettingsBackup {
         // Skip, never coerce — import guards the same way.
         val all = prefs.all
         for (k in STRING_KEYS) {
-            (all[k] as? String)?.let { values.put(k, it) }
-        }
-        for (k in effortKeys(all)) {
             (all[k] as? String)?.let { values.put(k, it) }
         }
         // Per-widget display settings: enumerated live because the key ends in
@@ -284,7 +235,7 @@ object SettingsBackup {
         }
         val files = JSONObject()
         // Unreadable files are named, not swallowed (#339): the backup
-        // silently loses that thread, so the UI says which ones.
+        // would silently lose that file, so the UI says which ones.
         val unreadable = mutableListOf<String>()
         for (name in backupFiles()) {
             val f = java.io.File(context.filesDir, name)
@@ -299,7 +250,7 @@ object SettingsBackup {
             }
         }
         // Post-read re-check (#339): the cap was metered BEFORE the reads,
-        // and a concurrent save can grow a thread file in between — the
+        // and a concurrent save can grow a stored file in between — the
         // oversize payload would be built anyway, which is the very peak the
         // cap exists to prevent. Measured from the strings already read (no
         // second materialization): their UTF-16 size is the export's bulk.
@@ -346,11 +297,11 @@ object SettingsBackup {
                         applied++
                     }
                 }
-                // Real token totals: Long/Int only, mirroring export — opt()
+                // Long/Int only, mirroring export — opt()
                 // then optLong() would coerce a fractional Double (1.9) into
-                // a wrong-but-plausible 1. Negatives (hand-edited) clamp to 0,
-                // except behaviour keys, which coerce to their own floors via
-                // the inventory, so stored and shown can never disagree.
+                // a wrong-but-plausible 1. Behaviour keys coerce to their own
+                // floors via the inventory, so stored and shown can never
+                // disagree.
                 for (k in LONG_KEYS) {
                     val n: Long? = when (val v = values.opt(k)) {
                         is Long -> v
@@ -362,18 +313,11 @@ object SettingsBackup {
                         applied++
                     }
                 }
-                // Per-model effort memory: same allowlist shape as export.
-                val names = values.keys().asSequence().toList()
-                for (k in names) {
-                    if (isEffortMemoryKey(k) && values.opt(k) is String) {
-                        putString(k, values.optString(k, ""))
-                        applied++
-                    }
-                }
                 // Per-widget display settings: the export allowlist mirrored
                 // per prefix — view/density/sort take strings only, due/scroll
                 // take booleans only. A cross-typed value in a hand-edited
                 // backup is skipped: the widget reads those keys with getBoolean.
+                val names = values.keys().asSequence().toList()
                 for (k in names) {
                     if (isStringWidgetKey(k) && values.opt(k) is String) {
                         putString(k, values.optString(k, ""))
@@ -398,14 +342,14 @@ object SettingsBackup {
                 }
             }
             val files = json.optJSONObject("files")
-            // Skipped files are named (#339): a skipped thread file is NOT
+            // Skipped files are named (#339): a skipped stored file is NOT
             // restored, and "Restored N setting(s)" over a dropped
-            // conversation reads as a clean success.
+            // file reads as a clean success.
             val skipped = mutableListOf<String>()
             if (files != null) {
                 // Size gate, the export's twin (#339): a hand-crafted
-                // backup can carry a thread file far past the cap, and
-                // canonicalizing it would parse a 100 MB string on the very
+                // backup can carry a stored file far past the cap, and
+                // validating it would parse a 100 MB string on the very
                 // device the export cap protects. Measured from the strings
                 // already in memory (no second copy).
                 val incomingChars = files.keys().asSequence()
@@ -418,7 +362,7 @@ object SettingsBackup {
                         IllegalStateException(backupTooLargeMessage(incomingChars)),
                     )
                 }
-                // Unknown keys (a retired tab, a renamed file) are named
+                // Unknown keys (a retired file, a renamed file) are named
                 // too (#339): they are not restored, and "Restored N" must
                 // not hide what was left behind.
                 val known = backupFiles()
@@ -438,52 +382,7 @@ object SettingsBackup {
                         skipped += name
                         continue
                     }
-                    if (name.startsWith("chat_threads_")) {
-                        // Single parse, not probe-then-parse: the old org.json
-                        // probe decoded the multi-MB string just to check shape,
-                        // then canonicalizeFile decoded it AGAIN. Its null
-                        // return IS the validity check (same skip contract).
-                        // Valid-JSON-but-wrong-shape SKIPS: the old raw
-                        // fallback wrote bytes load() cannot decode, so the
-                        // next load returned emptyList() — wiping the LIVE
-                        // threads the import just overwrote.
-                        // Oversize persists until send, BY DESIGN (#339):
-                        // canonicalize does not enforce the 1.5M staging
-                        // cap, so an imported thread may hold a payload the
-                        // current build would refuse to stage. The cost is
-                        // a cold start that materializes it (the ADR
-                        // discloses the backup growth); the alternative —
-                        // trimming on import — would DELETE the user's
-                        // photos at restore time, which is worse.
-                        val toWrite = ChatThreads.canonicalizeFile(text)
-                        if (toWrite == null) {
-                            skipped += name
-                            continue
-                        }
-                        val tab = name.removePrefix("chat_threads_").removeSuffix(".json")
-                        runCatching {
-                            java.io.File(context.filesDir, name).writeText(toWrite, Charsets.UTF_8)
-                            // Invalidate the save cache: the import bypasses
-                            // save(), so a stale snapshot would write the
-                            // pre-import bytes back over the restored file.
-                            ChatThreads.invalidate(tab)
-                            // Tell the live ViewModel too: it still holds the
-                            // pre-import threads, and its next persist would
-                            // write them back over this file.
-                            ChatThreads.notifyRewritten(tab)
-                            // The restored file replaces whatever a recorded
-                            // write failure described (#435 review): clear
-                            // the banner state, or every launch cries
-                            // failure over a successful restore. A failed
-                            // import skips this, correctly.
-                            ChatThreads.clearSaveErrorState(context, tab)
-                            applied++
-                        }.onFailure { skipped += name }
-                        continue
-                    }
-                    // Validate JSON shape before overwriting live state
-                    // (non-thread files only; thread files validate via the
-                    // canonicalizeFile null above).
+                    // Validate JSON shape before overwriting live state.
                     val valid = runCatching { org.json.JSONArray(text); true }
                         .recoverCatching { org.json.JSONObject(text); true }
                         .getOrDefault(false)

@@ -31,7 +31,7 @@ data class UiState(
     val lastSyncAt: String = "",
 )
 
-/** Owns health-sync config and status; chat state lives in per-tab ChatViewModels. */
+/** Owns health-sync config and status for the thin phone client. */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = mutableStateOf(UiState())
@@ -99,12 +99,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Updates draft server URL in memory; persisted by Save chat config. */
+    /** Updates draft server URL in memory; persisted by Save server. */
     fun onServerUrl(v: String) {
         _state.value = _state.value.copy(serverUrl = v)
     }
 
-    /** Updates draft password in memory; persisted by Save chat config. */
+    /** Updates draft password in memory; persisted by Save server. */
     fun onPassword(v: String) {
         _state.value = _state.value.copy(password = v)
     }
