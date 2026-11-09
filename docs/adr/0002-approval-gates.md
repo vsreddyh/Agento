@@ -202,15 +202,17 @@ join. Post-Stage-2 each server ran the same per-server sweep itself — until
 (zero callers in the repo), the package is gone, and with no pending table
 there is nothing to sweep.)
 
-A server that restarts expires its **own server's** pending rows at startup
-(`MarkServerInterrupted`, called in each `main` before serving): it owns
+A server that restarted expired its **own server's** pending rows at startup
+(`MarkServerInterrupted`, called in each `main` before serving): it owned
 that server's queue, so those rows belonged to the process that died, and
 leaving them pending would show the app a card whose approval could never
-forward (pre-#487; post-#487 only pre-migration rows can be pending, so no
-live hold is ever at risk). The gateway's global `MarkInterrupted` still runs at its own
-startup for the whole collection. There is no teardown join anymore: the
-hold blocked the handler goroutine, and `ctx.Done` expired it with audit;
-post-#487 a dead context denies before anything executes instead. The
+forward (pre-#487; post-#487 only pre-migration rows could be pending, so no
+live hold was ever at risk). The gateway's global `MarkInterrupted` ran at its own
+startup for the whole collection. #503 deleted the sweep, the package and
+the gateway: no pending table exists, so there is nothing to sweep and no
+sweep code runs anywhere. There was no teardown join anymore: the
+hold had blocked the handler goroutine, and `ctx.Done` expired it with audit;
+post-#487 a dead context denied before anything executed instead. The
 sweep covers what a SIGKILL left behind.
 
 The sweep writes no per-row audit entry (the count log is the record),
@@ -231,8 +233,9 @@ tool or a human made: `gate_unavailable` (unshared store) and `gate_store`
 relay there is no framing to fault, no notification path (the SDK never
 routes notifications to handlers), and no pending table to evict from. Pre-#487
 a `denied` **without** a prefix meant a human said no; post-#487 `denied`
-is overwhelmingly gate refusals (draft-only, unknown tool, cancelled
-context), and a human tap survives only in pre-migration rows.
+was overwhelmingly gate refusals (draft-only, unknown tool, cancelled
+context), and a human tap survived only in pre-migration rows. #503
+deleted the gate outright, so no denial branch exists anymore.
 
 Error scrubbing is pattern-based, not exhaustive (relay-era rows; no rows
 are written anymore — the live scrub is `crashlog.ScrubError`, called only
@@ -291,5 +294,7 @@ surface exists anywhere.)
   deleted the `mcp-gate` relay; enforcement is in-process now); the entrypoint
   `pi mcp list` gate probes the servers directly, unchanged.
 - The app needs an approvals surface (pending cards + approve/deny) and an
-  audit screen — second PR in this stack.
+  audit screen — second PR in this stack. (Never built as specified here:
+  the in-app approval queue that did exist was removed in #487, and #503
+  deleted the audit trail — no approvals surface exists.)
 - Adding an MCP tool now requires a policy row, enforced by test.
