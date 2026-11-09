@@ -105,7 +105,7 @@ cp .env.example .env && nano .env
 
 # 4. Inspect container health and logs
 ./scripts/hermes.sh status
-podman-compose --env-file .env -f docker/docker-compose.yml logs -f health-api
+podman-compose --env-file "$REPO/.env" -f docker/docker-compose.yml logs -f health-api  # $REPO = repo checkout root
 
 # 5. Stop the stack
 ./scripts/hermes.sh stop

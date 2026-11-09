@@ -86,7 +86,8 @@ Measured (`podman system df` + image sizes), not guessed:
 - 10 GB is the comfortable floor (stack + logs + a snapshot).
 - 20 GB leaves room for years of logs and image layers.
 - **Always run `podman image prune -f` after every build** — dangling images pile
-  up fast. `scripts/hermes.sh start` and `init` already prune.
+  up fast. `scripts/hermes.sh start` and `init` already prune; `restart`
+  rebuilds without pruning, so prune manually after repeated restarts.
 - Enable container log rotation (`max-size`) so the services do not quietly eat disk.
 
 ## Network
