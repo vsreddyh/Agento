@@ -105,7 +105,7 @@ cp .env.example .env && nano .env
 
 # 4. Inspect container health and logs
 ./scripts/hermes.sh status
-podman-compose -f docker/docker-compose.yml logs -f health-api
+podman-compose --env-file .env -f docker/docker-compose.yml logs -f health-api
 
 # 5. Stop the stack
 ./scripts/hermes.sh stop
@@ -115,7 +115,7 @@ podman-compose -f docker/docker-compose.yml logs -f health-api
 
 ## Management CLI
 
-`scripts/hermes.sh` is the single entry-point orchestrator:
+`scripts/hermes.sh` is the single entry-point orchestrator (its `podman_compose()` wrapper always passes `--env-file .env` — the bare `podman-compose` spellings in the table below render every `${VAR}` empty without it, so run them through the script, not copy-paste):
 
 | Command | Action |
 |---|---|

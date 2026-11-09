@@ -231,7 +231,7 @@ Every `PI_*` variable and `VPS_SSH_DIR` was removed with the agent container in 
 
 Sensitive tool calls are approved by the T3/opencode permission prompts configured in `opencode.json` (the old in-app approval queue is gone). Each kept MCP server still wraps its tool registrations with `internal/approvalgate`, which runs the call at once and attempts one best-effort audit row (tool, redacted args, disposition, result; no decider) in the `audit_log` collection. A missing row is an outage gap, not proof nothing ran.
 
-- Money writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`), prunes that actually delete, account create/archive, and browser navigation prompt first; reads and routine writes run free.
+- Money writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`), prunes that actually delete, and account create/archive prompt first; reads and routine writes run free. (Browser navigation stays in the policy table but the browser server is unwired, so no prompt fires until it is wired again.)
 - Arg keys are redacted by substring and error text is pattern-scrubbed (300-rune cap), so treat `error` as untrusted display text.
 - The audit wrapper, its policy tables and the `approvals`/`audit_log` collections are scheduled for pure removal in #503.
 
