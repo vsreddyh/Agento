@@ -106,7 +106,6 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | `task_mutations` | Task-manager | The change log (#176): one row per mutation — `op`, `task_id`, `source`, `detail`, `at` — from **both** writers. Served read-only as `GET /api/tasks/mutations?task_id=&op=&since=&limit=` and as the `task_history` MCP tool (#350). It outlives its subject on purpose (done tasks are TTL-deleted after 3 days). Pruned at 90 days. Indexed `{task_id, at}` and `{at, _id}` |
 | `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Testing\|Blocked\|Paused\|Done), `note`, `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab |
 | `reports` | Reports (∃-Mail, #365) | `title`, `body_md` (markdown with `$..$`/`$$..$$` LaTeX, compiled server-side on read), `source`, `read`, `starred`, `createdAt` — **7-day conditional retention**: pruned when `createdAt < today - 7d AND read AND NOT starred` |
-| `approvals`, `audit_log` | MCP audit (retiring in #503) | Pre-migration approval rows and the 90-day audit trail written by `internal/approvalgate` |
 
 ### Database Helper CLI
 Operators use the `mongo` Go CLI (`cmd/mongo/main.go`) directly:
@@ -134,7 +133,6 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `task_mutations` | > 90 days | Pruned when `at < today - 90d` — the task audit log (#176) |
 | `tasks_changes` | Permanent | **Never pruned** — one single-document counter, not a log (#178) |
 | `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
-| `approvals`, `audit_log` | TTL | 15-minute TTL on `approvals`, 90-day on `audit_log`; removed with #503 |
 
 Run manual dry-runs via:
 ```bash
@@ -216,13 +214,12 @@ Every `PI_*` variable and `VPS_SSH_DIR` was removed with the agent container in 
 - **Container Isolation**: `health-api` mounts only `exports/` (writable — the Files upload stages and renames there, jailed by the handler which never replaces an existing file) and the docker socket is not mounted anywhere (Podman is daemonless — there is no shared socket). No container runs the agent; T3/opencode runs as the invoking host user.
 - **Single credential, one principal**: the same `PASSWORD` bearer authenticates every `health-api` route except the unauthenticated `GET /health` liveness, so domain writes from the app and the agent share one principal. Per-user auth arrives only with per-user auth, not before.
 
-### Approval prompts + audit (#313, #487, #503)
+### Approval prompts (#313, #487, #503)
 
-Sensitive tool calls are approved by the T3/opencode permission prompts configured in `opencode.json` (the old in-app approval queue is gone). Each kept MCP server still wraps its tool registrations with `internal/approvalgate`, which runs the call at once and attempts one best-effort audit row (tool, redacted args, disposition, result; no decider) in the `audit_log` collection. A missing row is an outage gap, not proof nothing ran.
+Sensitive tool calls are approved by the T3/opencode permission prompts configured in `opencode.json` (pinned by `opencode_perm_test.go`) — the old in-app approval queue and the in-process approval gate are both gone (#503 removed `internal/approvals` and `internal/approvalgate` outright: no wrapper, no audit rows, no `approvals`/`audit_log` collections).
 
 - Money writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`), prunes, and account create/archive prompt first; reads and routine writes run free. (The harness cannot see arguments, so even a counting prune with `dry_run=true` prompts.)
-- Arg keys are redacted by substring and error text is pattern-scrubbed (300-rune cap), so treat `error` as untrusted display text.
-- The audit wrapper, its policy tables and the `approvals`/`audit_log` collections are scheduled for pure removal in #503.
+- Error text is pattern-scrubbed (300-rune cap), so treat `error` as untrusted display text.
 
 ---
 

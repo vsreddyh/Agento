@@ -20,11 +20,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
-	"agento/internal/approvalgate"
-	"agento/internal/approvals"
-	"agento/internal/mongo"
 	"agento/internal/reports"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -75,16 +71,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("reports: %v", err)
 	}
-	// Gate shares the domain store's client: mongo.DB() is process-cached and
-	// reports.New built on it, so this adds zero clients.
-	db, err := mongo.DB()
-	if err != nil {
-		log.Fatalf("reports: %v", err)
-	}
-	gate := approvals.NewOn(db)
 	s := mcp.NewServer(&mcp.Implementation{Name: "reports", Version: "1.0.0"}, nil)
 
-	approvalgate.AddTool(s, "reports", gate, &mcp.Tool{Name: "create_report",
+	mcp.AddTool(s, &mcp.Tool{Name: "create_report",
 		Description: "File a report in the user's ∃-Mail inbox. body_md is markdown with inline $..$ and block $$..$$ LaTeX math (stored verbatim, compiled server-side on read). The inbox is read-only for the user — no reply, no thread, no send. Over-cap title/body is stored truncated and reported in `truncated`."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createReportInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.CreateReport(ctx, in.Title, in.BodyMD, in.Source)
@@ -94,7 +83,7 @@ func main() {
 			return result(map[string]any{"ok": true, "report": r})
 		})
 
-	approvalgate.AddTool(s, "reports", gate, &mcp.Tool{Name: "get_report",
+	mcp.AddTool(s, &mcp.Tool{Name: "get_report",
 		Description: "Get one report by id (the id from list_reports). Returns the full body_md with math stored verbatim — pre-rendered segments are served by the read API, not here. Titles are not unique, so a title will not resolve."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getReportInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.GetReport(ctx, in.ID)
@@ -107,7 +96,7 @@ func main() {
 			return result(map[string]any{"ok": true, "report": r})
 		})
 
-	approvalgate.AddTool(s, "reports", gate, &mcp.Tool{Name: "list_reports",
+	mcp.AddTool(s, &mcp.Tool{Name: "list_reports",
 		Description: "List filed reports, newest first. Returns summaries WITHOUT bodies — call get_report for the text. There is no search, no archive, no folders: the inbox is newest-first only."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listReportsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListReports(ctx, in.Limit)
@@ -117,15 +106,6 @@ func main() {
 			return result(map[string]any{"ok": true, "count": len(rows), "reports": rows})
 		})
 
-	// Sweep pre-migration orphaned holds: before #487 a crash between
-	// CreateApproval and decision left a pending row no live holder
-	// polled. Nothing new parks, so this only expires rows predating the
-	// migration. Scoped by server, like the other servers; best-effort.
-	sweepCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if _, serr := gate.MarkServerInterrupted(sweepCtx, "reports", time.Now()); serr != nil {
-		log.Printf("reports: startup sweep failed: %v", serr)
-	}
-	cancel()
 	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "reports:", err)
 		os.Exit(1)
