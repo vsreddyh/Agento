@@ -250,6 +250,12 @@ belongs to #312.
 
 ## Consequences
 
+(Historical record — the relay-era outcome below was superseded first by
+#487 (holds became harness prompts) and then by #503, which deleted the
+in-process gate, the policy table and the audit trail outright: servers
+register tools directly with `mcp.AddTool`, no policy row or approvals
+surface exists anywhere.)
+
 - `pi/mcp.json` points straight at each server binary (ADR-0011 Stage 2
   deleted the `mcp-gate` relay; enforcement is in-process now); the entrypoint
   `pi mcp list` gate probes the servers directly, unchanged.
