@@ -1,8 +1,10 @@
 # ADR-0002: Approval gates via an MCP relay, audit in Mongo
 
 - Status: superseded in substance by ADR-0011 (2026-11) for the
-  process-isolation claim, and by the T3 migration (#487, 2026-11) for the
-  hold flow itself: holds are gone entirely — no park, no poll, no wait.
+  process-isolation claim, by the T3 migration (#487, 2026-11) for the
+  hold flow itself, and by the pure removal (#503, 2026-11) for the
+  wrapper and audit trail: holds are gone entirely — no park, no poll,
+  no wait, no audit rows.
   Confirmation lives in T3/opencode permission prompts; the wrapper
   executes known tools at once with an audit row (reads included) and
   refuses draft-only sends plus unknown tools outright. `allowed`
@@ -29,12 +31,17 @@ not enforcement.
 > The pump / framing / batch / teardown-join mechanics below describe the
 > relay as built. T3-era (#487) then removed the hold flow the relay had
 > established: no park, no poll, audit every known call including reads.
-> Read `internal/approvalgate/gate.go` for the live path.
+> Pure removal (#503) then deleted the wrapper and audit trail entirely:
+> the file below no longer exists. Read the current `opencode.json`
+> permission rules for the live gate — the harness prompts, the servers
+> execute at once, no audit row is written.
 
 ### Enforce in a relay, not in Pi or the gateway
 
-(Relay-era: this section describes the deleted relay. The live enforcement
-point is `internal/approvalgate.AddTool` in each server main.)
+(Relay-era: this section describes the deleted relay. The enforcement
+point was `internal/approvalgate.AddTool` in each server main until #503
+deleted it; the live gate is `mcp.AddTool` plus the `opencode.json`
+permission prompts.)
 
 `cmd/mcp-gate` sits between Pi and each MCP server (`pi/mcp.json` points
 every server at it; it spawns the real binary). It relays newline-delimited

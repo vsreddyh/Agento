@@ -218,8 +218,10 @@ Every `PI_*` variable and `VPS_SSH_DIR` was removed with the agent container in 
 
 Sensitive tool calls are approved by the T3/opencode permission prompts configured in `opencode.json` (pinned by `opencode_perm_test.go`) — the old in-app approval queue and the in-process approval gate are both gone (#503 removed `internal/approvals` and `internal/approvalgate` outright: no wrapper, no audit rows, no `approvals`/`audit_log` collections).
 
+Upgrading with an existing database (e.g. a separate dev database): deleting the code does not delete existing collections or their TTL indexes — drop the retired ones by hand (`go run ./cmd/mongo drop approvals`, `go run ./cmd/mongo drop audit_log`). Fresh databases simply never create them.
+
 - Money writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`), prunes, and account create/archive prompt first; reads and routine writes run free. (The harness cannot see arguments, so even a counting prune with `dry_run=true` prompts.)
-- Error text is pattern-scrubbed (300-rune cap), so treat `error` as untrusted display text.
+- Error text in health-api responses is pattern-scrubbed (300-rune cap), so treat `detail` as untrusted display text. (MCP tool handlers return their errors raw — scrubbing happens at the HTTP envelope, not in the servers.)
 
 ---
 
