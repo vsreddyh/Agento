@@ -9,12 +9,12 @@
 - `gateway/` holds the *former* Hermes runtime state (transcripts, sqlite WALs,
   caches) and nothing reads it any more, but it is not in git and cannot be
   recovered from git, so it is left on disk. NEVER commit runtime state: only
-  edit source files (templates, scripts, compose, code, docs). Check `git status` before staging and leave
+  edit source files (scripts, compose, code, docs). Check `git status` before staging and leave
   state files (`.pid`, `.heartbeat`, `logs/`, `*.db*`, `cache/`,
   `.curator_state` churn) uncommitted.
 - Read-only live inspection is always fine: `podman ps/logs`,
   `scripts/hermes.sh status`, reading logs/config, `curl` against
-  localhost ports, rendering templates to /tmp.
+  localhost ports.
 - Disruptive actions need explicit user go-ahead first (STOP and ask):
   `start|stop|restart|init|clean`, recreating containers, editing the live
   `.env`, touching MongoDB data. No surprise restarts.
@@ -88,7 +88,7 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
 - App API: `health-api` (`cmd/health-api`) on `:8001` compose default
   (`HEALTH_HOST_PORT` remaps), single-password `PASSWORD`; the proxy (`:8080`,
   `APP_PORT` remaps) is the app's one URL and routes `/api/*` + `/health`.
-  Chat, resumable runs and the pi-gateway surface (`/p/*`, `:8643`) are gone
+  Chat, resumable runs and the pi-gateway surface are gone
   with #494. The provider key lives only in the git-ignored `.env`.
 - CI: `android-apk.yml` (unit tests + lint on PRs; release APK on `main`) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). `./gradlew lintDebug` (release variant on `main`) fails on errors; the report uploads always. Fix what it reports rather than baselining. Verify shell with `bash -n scripts/*.sh`,
   `podman-compose --env-file .env -f docker/docker-compose.yml config` (from the repo root), then check health-api logs on the live machine.

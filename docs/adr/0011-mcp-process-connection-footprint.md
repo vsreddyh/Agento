@@ -1,5 +1,6 @@
 # ADR-0011: MCP process and Mongo connection footprint
 
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) — the Pi stack this ADR measures and plans for (pi container, mcp-gate relays, pi-gateway stores, gmail/calendar wiring) is gone; kept on disk as history, not rewritten.
 - Status: proposed (2026-10)
 - Issue: #424 (follow-up: #421, #423)
 

@@ -52,13 +52,13 @@ The agent runs on the host, not in a container. T3 discovers `opencode.json` by 
 
 ### LLM connection
 
-T3/opencode talks directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) using `OPENCODE_API_KEY` from the root `.env`. The provider and model are selected in T3; no proxy and no in-repo model config remain. The retired `pi-gateway` chat surface (`/p/*`, `/api/model/options`, SSE turns, resumable runs) went with #494.
+T3/opencode talks directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) using `OPENCODE_API_KEY` from the root `.env`. The provider and model are selected in T3; no proxy and no in-repo model config remain.
 
 ---
 
 ## Stack Lifecycle (Podman)
 
-All container management is orchestrated through [`scripts/hermes.sh`](scripts/hermes.sh), backed by [`docker/docker-compose.yml`](docker/docker-compose.yml). The script's `podman_compose()` wrapper always passes `--env-file "$REPO/.env"` — a bare `podman-compose` without it renders every `${VAR}` empty, so never copy-paste the `podman-compose` lines below without the env file.
+All container management is orchestrated through [`scripts/hermes.sh`](scripts/hermes.sh), backed by [`docker/docker-compose.yml`](docker/docker-compose.yml). Run the commands through the script, not the parenthesised spellings: the script's `podman_compose()` wrapper adds `--env-file .env -f docker/docker-compose.yml` from the repo root, and the bare `podman-compose` spellings below fail everywhere without those flags.
 
 ### `init`
 1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
@@ -186,8 +186,6 @@ The custom Android app (`android/agento/`) uses ONE Server URL + Password — th
 ```bash
 curl http://<host>:8080/api/tasks/changes -H "Authorization: Bearer <PASSWORD>"
 ```
-
-Chat, resumable runs, model pickers, approvals and the other agent-facing routes were served by `pi-gateway`; that binary, its `/p/*` surface and the app screens built on it were removed in #493/#494.
 
 ---
 

@@ -2,6 +2,8 @@
 
 Status: accepted (#318, images half)
 
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
+
 ## Context
 
 Every chat turn was text: the composer had no attach affordance and

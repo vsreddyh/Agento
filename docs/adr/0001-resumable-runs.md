@@ -4,6 +4,7 @@
 - Note (2026-11, #490): the cron-jobs sibling this ADR contrasts with was
   deleted (`internal/cronjobs/`, `/api/jobs` gone). The contrast below reads
   as the retired design; runs themselves are unchanged.
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
 - Issue: #311
 
 ## Context

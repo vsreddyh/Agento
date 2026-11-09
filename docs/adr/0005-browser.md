@@ -1,6 +1,10 @@
 # 0005 — Browser tasks
 
-Status: accepted (#312, server half). T3-era note (#487, 2026-11):
+Status: accepted (#312, server half).
+
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces — there is no browser server any more, so the prompt-per-navigation passages below describe no live path; kept on disk as history, not rewritten.
+
+T3-era note (#487, 2026-11):
 confirmation is a harness permission prompt per navigation, not an
 in-process hold — nothing ever parks. Read "holds for approval" /
 "human-approved" / "approval-gated" below as the prompt with the URL
