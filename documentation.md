@@ -181,7 +181,6 @@ The custom Android app (`android/agento/`) uses ONE Server URL + Password — th
 | `/api/projects` | Project board CRUD |
 | `/api/files`, `/api/files/upload`, `/api/files/download` | The Files tab shelf over `exports/` |
 | `/api/reports` | ∃-Mail inbox (markdown + LaTeX) |
-| `/api/connectors` | Google connector grants (retiring in #495) |
 | `/health`, `/health/` | Liveness probe (unauthenticated) |
 
 ```bash
