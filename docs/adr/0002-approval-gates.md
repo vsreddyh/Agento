@@ -85,10 +85,14 @@ decides, never rewrites it.)
 
 ### What gates, what runs free
 
+(Relay-era table record — the live pin is `TestEveryToolClassified` in
+`opencode_perm_test.go`, which enumerates the registered tools. Named here
+as the table gated them:)
+
 Deny-by-default for money and deletes, exactly as the issue scopes it:
 
-- gate: all `miser-money` writes, every `delete_*`/`archive_*`, destructive
-  rewrites (`fix_*`), and prunes that actually delete (`prune_old` with
+- gate: all `miser-money` writes, every `delete_*` plus `archive_account`, destructive
+  rewrites (`fix_last_*`), and prunes that actually delete (`prune_old` with
   `dry_run=false`; pre-#487 a counting dry run ran free — post-#487 it
   prompts in T3 like a real one, since patterns cannot see arguments);
 - free: reads and routine creates/updates (`log_meal`, `create_task`,
@@ -193,7 +197,10 @@ the tool-level failure signal, so a reader can separate "ran and failed" from
 "never ran" without parsing the payload.
 
 (Relay-era: the relay swept at startup and converged through its teardown
-join. Post-Stage-2 each server runs the same per-server sweep itself.)
+join. Post-Stage-2 each server ran the same per-server sweep itself — until
+#503 deleted the sweeps too: no `main` calls `MarkServerInterrupted`
+(zero callers in the repo), the package is gone, and with no pending table
+there is nothing to sweep.)
 
 A server that restarts expires its **own server's** pending rows at startup
 (`MarkServerInterrupted`, called in each `main` before serving): it owns
@@ -227,7 +234,10 @@ a `denied` **without** a prefix meant a human said no; post-#487 `denied`
 is overwhelmingly gate refusals (draft-only, unknown tool, cancelled
 context), and a human tap survives only in pre-migration rows.
 
-Error scrubbing is pattern-based, not exhaustive: `args` are redacted by key,
+Error scrubbing is pattern-based, not exhaustive (relay-era rows; no rows
+are written anymore — the live scrub is `crashlog.ScrubError`, called only
+from health-api's `boundedDetail`, which re-caps at 128 runes for the
+`detail` envelope): `args` are redacted by key,
 while `error` is free text and is only masked where it matches a
 credential-shaped pattern (plus a 300-rune cap). A server that echoes a bare
 secret with no recognizable prefix can still land it in a row, so the app must

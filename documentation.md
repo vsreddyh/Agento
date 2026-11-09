@@ -221,7 +221,7 @@ Sensitive tool calls are approved by the T3/opencode permission prompts configur
 Upgrading with an existing database (e.g. a separate dev database): deleting the code does not delete existing collections or their TTL indexes — drop the retired ones by hand (`go run ./cmd/mongo drop approvals`, `go run ./cmd/mongo drop audit_log`). Fresh databases simply never create them.
 
 - Money writes, account lifecycle (`create_account`/`archive_account`), every `delete_*`, destructive rewrites (`fix_last_*`), and prunes prompt first; reads and routine writes run free. (The harness cannot see arguments, so even a counting prune with `dry_run=true` prompts.)
-- Error text in health-api responses is pattern-scrubbed (128-rune cap on the `detail` envelope; 300 is the scrub's internal bound), so treat `detail` as untrusted display text. (MCP tool handlers return their errors raw — scrubbing happens at the HTTP envelope, not in the servers.)
+- Error text in the Health Sync response (`POST /api/health/sync`) is pattern-scrubbed (128-rune cap on the `detail` envelope; 300 is the scrub's internal bound). Other endpoints echo decode errors raw — treat every `detail` string as untrusted display text regardless. (MCP tool handlers return their errors raw — scrubbing happens at the HTTP envelope, not in the servers.)
 
 ---
 
