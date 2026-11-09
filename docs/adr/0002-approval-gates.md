@@ -93,19 +93,20 @@ Deny-by-default for money and deletes, exactly as the issue scopes it:
   `add_recipe`, `log_cook`, ...).
 
 Gating every write would make the agent ask permission to take notes —
-approval fatigue, not safety. The table is complete by contract
-(`TestPolicyTableIsComplete` fails when a server gains an unclassified
-tool), and reads never gate. Pre-#487 unknown servers held; post-#487
-they deny at once. Unknown tools are
-rejected by the SDK before the gate ever runs (see ADR-0011 Stage 2).
+approval fatigue, not safety. The table was complete by contract; the live
+pin is now `TestEveryToolClassified` in `opencode_perm_test.go`, which fails
+when a registered tool is neither ask-covered nor explicitly free. Reads
+never gated. Pre-#487 unknown servers held; post-#487 they denied at once.
+Unknown tools were rejected by the SDK before the gate ever ran
+(see ADR-0011 Stage 2).
 
 A gated `tools/call` **notification** (no `id`) was denied inline instead of
 parked: nothing was waiting for it, so an approval card would promise a
 released turn that did not exist. That path is unreachable now — the SDK
 never routes notifications to handlers, so the in-process gate only ever
-sees a decoded call with a reply id — and the rule survives as the reason a
-direct caller that bypassed the SDK would still be denied and audited rather
-than parked.
+saw a decoded call with a reply id. #503 deleted the gate outright:
+servers now execute at once via `mcp.AddTool` and no denial/audit path
+remains.
 
 ### State in Mongo, memory fallback
 
