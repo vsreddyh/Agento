@@ -183,6 +183,8 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).
 - `notes`: **Permanent retention** (never pruned) — the agent's no-op (collection retired with the server in #495).
 - `reports` (∃-Mail): purges records where `createdAt < today - 7d AND read AND NOT starred` — unread and starred are never pruned.
+- `tasks`: reconciled, never pruned — completed structured repeats with no successor are reported (#180).
+- `task_mutations`: purges entries where `at < today - 90d`.
 
 ---
 

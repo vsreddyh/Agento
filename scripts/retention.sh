@@ -16,6 +16,8 @@ set -euo pipefail
 #   cookbook    permanent — no-op
 #   reports     read+unstarred pruned when createdAt is >7 days old;
 #               unread and starred are NEVER touched
+#   tasks       reconciled, never pruned (structured repeats with no
+#               successor are REPORTED); task_mutations pruned after 90 days
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE="$REPO/docker/docker-compose.yml"

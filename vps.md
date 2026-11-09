@@ -42,7 +42,7 @@ measurement, because the host also carries other tooling. So:
   the container stack. Add T3/opencode's own footprint when the agent is running.
 - Recommended: **2 GB** — buys headroom for builds and a host agent session.
 
-Add ~2 GB swap as a spike buffer: the image build (`podman-compose --env-file "$REPO/.env" -f docker/docker-compose.yml build`, run inside `scripts/hermes.sh init`) is
+Add ~2 GB swap as a spike buffer: the image build (`scripts/hermes.sh init`, i.e. `podman-compose --env-file .env -f docker/docker-compose.yml build` from the repo root) is
 the hungriest operation in this repo, and building inside 1 GB of RAM with no
 swap is how you get a killed build rather than a slow one. If you cannot spare
 the swap, build elsewhere and pull.
