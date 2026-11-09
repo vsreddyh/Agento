@@ -10,11 +10,9 @@
 // T3/opencode (permission rules in opencode.json), not in an in-process
 // wait for an app tap — there is no app attached to decide one, so a hold
 // would stall the turn for the full wait and then fail. What remains is
-// immediate execution with an audit row, plus three fail-closed refusals:
-// a dead calling context (stop means stop), draft-only sends (connector
-// write paths refused outright with the drafts-instead message) and unknown
-// (server, tool) pairs (a tool no policy table reviewed never executes
-// blind).
+// immediate execution with an audit row, plus two fail-closed refusals:
+// a dead calling context (stop means stop) and unknown (server, tool) pairs
+// (a tool no policy table reviewed never executes blind).
 //
 // Deliberately NOT consulted anymore: approvals.NeedsApproval, including
 // its arg-sensitive exemptions (a counting prune with dry_run=true prompts
@@ -37,24 +35,11 @@
 // before anything executes, and the failure is what gets attempted for
 // audit — on a full outage the audit write fails the same way and only
 // the log line survives (treat a missing row as an outage gap, never as
-// proof nothing was attempted). Four
-// boundaries on that claim, stated so they stick: browser is
-// Chromium-backed, not Mongo-backed, so its navigation CAN execute while
-// unaudited during an outage (it goes away with #495; until then a missing
-// database means ephemeral audit, never blocked navigation); memory falls
-// back to an in-process domain store, so saves CAN execute with an audit
-// row that dies with the process; gmail drafts
-// write to the Gmail API, so a created draft is an external side effect
-// that can land unaudited the same way (calendar drafts are validated
-// locally and sent nowhere — unaudited there means a local row only);
-// and connector sends are refused outright, so no external connector
-// *send* slips through — but browser navigation and gmail drafts still
-// can (neither is a read, and the draft is a real Gmail API write). A
-// destructive Mongo-backed write that executes while unaudited needs the
-// domain to succeed while the audit write alone fails — same-DB,
-// transient-only. The browser, memory and gmail-draft cases are NOT
-// same-DB transient: different stores, so plan for them, don't dismiss
-// them.
+// proof nothing was attempted). Every kept server is Mongo-backed and
+// hard-requires its database, so there is no side store that could execute
+// while the audit write fails: a destructive write that executes while
+// unaudited needs the domain to succeed while the audit write alone fails —
+// same-DB, transient-only.
 //
 // Cancellation: a dead calling context refuses before anything executes
 // (stop means stop — teardown must prevent the side effect, not race
@@ -76,7 +61,6 @@ import (
 	"time"
 
 	"agento/internal/approvals"
-	"agento/internal/connectors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -140,15 +124,6 @@ func decide[Out any](ctx context.Context, server, tool, name string, redacted ma
 		audit(store, auditServer, name, redacted, approvals.DispositionDenied,
 			"abandoned: calling context ended before execution", "")
 		return nil, zero, errors.New("not executing " + server + "/" + tool + ": calling context ended; failing closed")
-	}
-
-	// Draft-only refusal, before anything else (same order as the relay):
-	// connector send paths never reach a server, however permissive the
-	// harness permission is.
-	if connectors.IsDraftOnlySend(server, name) {
-		audit(store, auditServer, name, redacted, approvals.DispositionDenied,
-			"connector_draft_only: "+connectors.RefusalMessage, "")
-		return nil, zero, errors.New(connectors.RefusalMessage)
 	}
 
 	// Unknown (server, tool) fails closed: a tool no policy table reviewed

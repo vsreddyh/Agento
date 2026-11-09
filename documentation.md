@@ -45,7 +45,7 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
 
 The agent runs on the host, not in a container. T3 discovers `opencode.json` by walking up from its working directory, so **the repo root must be the cwd** — that is also what the `./bin/<server>` commands in `mcp.servers` resolve against.
 
-- Build the servers with `./scripts/build-mcps.sh` (static `CGO_ENABLED=0` binaries into git-ignored `bin/`). Kept servers: `task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`. The five retired servers (`notes`, `memory`, `browser`, `gmail`, `calendar`) are still in the source tree until #495 and are not wired.
+- Build the servers with `./scripts/build-mcps.sh` (static `CGO_ENABLED=0` binaries into git-ignored `bin/`). Kept servers: `task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`.
 - Secrets reach the servers through the process environment, never the committed file: each entry passes `{env:MONGODB_URI}` / `{env:MONGODB_DB}` through. Source those from the single root `.env` with the safe loader before launching T3 — `source scripts/lib/common.sh && load_root_env` (parsed, never `source .env`: a pasted Atlas URI carries `&` query params and secrets may hold `$`/backticks, which bare sourcing mangles or executes).
 - No secret is written into git; `.env` stays git-ignored.
 - The persona and shared skills live in `.opencode/chat.md` and `.opencode/skills/`; `opencode.json`'s `instructions` entry loads the former.
@@ -105,9 +105,7 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | `tasks_changes` | Task-manager | Single document (`_id: "revision"`) holding the collection-wide change counter every task write advances — create, update, complete (plus its rollover successor), skip, reopen, delete — from **both** writers, because the marker is bumped by the store itself (#178). Served read-only as `GET /api/tasks/changes?since=`; a collection that has never been written reports revision 0. **Permanent** |
 | `task_mutations` | Task-manager | The change log (#176): one row per mutation — `op`, `task_id`, `source`, `detail`, `at` — from **both** writers. Served read-only as `GET /api/tasks/mutations?task_id=&op=&since=&limit=` and as the `task_history` MCP tool (#350). It outlives its subject on purpose (done tasks are TTL-deleted after 3 days). Pruned at 90 days. Indexed `{task_id, at}` and `{at, _id}` |
 | `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Testing\|Blocked\|Paused\|Done), `note`, `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab |
-| `notes` | Notes (retiring in #495) | `title` (NOT unique), `body`, `tags[]`, `pinned`, `createdAt`, `updatedAt` — **permanent** |
 | `reports` | Reports (∃-Mail, #365) | `title`, `body_md` (markdown with `$..$`/`$$..$$` LaTeX, compiled server-side on read), `source`, `read`, `starred`, `createdAt` — **7-day conditional retention**: pruned when `createdAt < today - 7d AND read AND NOT starred` |
-| `connectors`, `oauth_states` | Connectors (retiring in #495) | Encrypted Google OAuth grants and single-use OAuth state rows (10-minute TTL on `oauth_states`) |
 | `approvals`, `audit_log` | MCP audit (retiring in #503) | Pre-migration approval rows and the 90-day audit trail written by `internal/approvalgate` |
 
 ### Database Helper CLI
@@ -132,12 +130,10 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `hc_days` | > 30 days | Pruned when `date < today - 30d` |
 | `hc_weight` | Permanent | **Never pruned** |
 | `cookbook_*` | Permanent | **Never pruned** |
-| `notes` | Permanent | **Never pruned** (collection retires with the server in #495) |
 | `reports` (#365) | > 7 days, conditional | Pruned when `createdAt < today - 7d AND read AND NOT starred` — unread/starred never pruned |
 | `task_mutations` | > 90 days | Pruned when `at < today - 90d` — the task audit log (#176) |
 | `tasks_changes` | Permanent | **Never pruned** — one single-document counter, not a log (#178) |
 | `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
-| `connectors` (#316) | Permanent | **Never pruned** until #495 removes the feature; `oauth_states` carries its own 10-minute TTL |
 | `approvals`, `audit_log` | TTL | 15-minute TTL on `approvals`, 90-day on `audit_log`; removed with #503 |
 
 Run manual dry-runs via:
@@ -212,10 +208,6 @@ All settings are configured in the single root `.env` file:
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
 | `PASSWORD` | **Yes** | Single password for the Android app's bearer authentication |
-| `GOOGLE_CLIENT_ID` | For Connectors (until #495) | OAuth client ID for Gmail/Calendar grants |
-| `GOOGLE_CLIENT_SECRET` | For Connectors (until #495) | OAuth client secret (VPS-only, never committed) |
-| `GOOGLE_REDIRECT_URL` | For Connectors (until #495) | Exact registered callback URL |
-| `CONNECTORS_ENCRYPTION_KEY` | For Connectors (until #495) | 64-hex-char envelope key for OAuth tokens at rest |
 
 Every `PI_*` variable and `VPS_SSH_DIR` was removed with the agent container in #494.
 
@@ -231,13 +223,9 @@ Every `PI_*` variable and `VPS_SSH_DIR` was removed with the agent container in 
 
 Sensitive tool calls are approved by the T3/opencode permission prompts configured in `opencode.json` (the old in-app approval queue is gone). Each kept MCP server still wraps its tool registrations with `internal/approvalgate`, which runs the call at once and attempts one best-effort audit row (tool, redacted args, disposition, result; no decider) in the `audit_log` collection. A missing row is an outage gap, not proof nothing ran.
 
-- Money writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`), prunes, and account create/archive prompt first; reads and routine writes run free. (The harness cannot see arguments, so even a counting prune with `dry_run=true` prompts. Browser navigation stays in the policy table but the browser server is unwired, so no prompt fires until it is wired again.)
+- Money writes, every `delete_*`/`archive_*`, destructive rewrites (`fix_*`), prunes, and account create/archive prompt first; reads and routine writes run free. (The harness cannot see arguments, so even a counting prune with `dry_run=true` prompts.)
 - Arg keys are redacted by substring and error text is pattern-scrubbed (300-rune cap), so treat `error` as untrusted display text.
 - The audit wrapper, its policy tables and the `approvals`/`audit_log` collections are scheduled for pure removal in #503.
-
-### Connectors — Gmail, Calendar (#316, retiring in #495)
-
-Google OAuth grants are stored envelope-encrypted in Mongo (`connectors`), and health-api serves `/api/connectors` (list/connect/disconnect/callback). The Gmail/Calendar MCP servers remain in the tree but are **not wired** into `opencode.json` (unwired in #504); #495 removes the servers, the grant store and these routes. See `docs/adr/0009-connectors.md` and `docs/adr/0010-connector-mcp-servers.md` for the historical design.
 
 ---
 

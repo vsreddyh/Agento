@@ -69,21 +69,15 @@ func authorize(r *http.Request) (int, string) {
 		// loop would otherwise fill the log with one identical line per
 		// allowed poll, burying the single boot-time signal. A green
 		// /health does NOT contradict this: liveness is exempt from auth
-		// and throttling by design, and the OAuth callback bypasses auth
-		// (the state is the capability) — both still serve. Probe an
-		// auth-bearing route (not /health) for serving readiness.
+		// and throttling by design. Probe an auth-bearing route
+		// (not /health) for serving readiness.
 		passwordWarnOnce.Do(func() {
-			log.Print("PASSWORD not set — rejecting auth-bearing requests (/health and the OAuth callback still serve)")
+			log.Print("PASSWORD not set — rejecting auth-bearing requests (/health still serves)")
 		})
 		return http.StatusServiceUnavailable, "server not configured with tokens"
 	}
-	// Deliberate divergences from the gateway's authenticate, both
-	// health-api-wins and both predating the connector move: an empty
-	// PASSWORD fails closed here (503) instead of opening up, and
+	// An empty PASSWORD fails closed here (503) instead of opening up, and
 	// comma-separated rotation tokens all work here instead of one.
-	// Both retire with the gateway in #494 — until then the two surfaces
-	// answer differently on empty/multi-token setups, and this side is
-	// the safe one.
 	h := r.Header.Get("Authorization")
 	const bearerPrefix = "Bearer "
 	// Scheme case-insensitive per RFC 7235 (and like the gateway): a
@@ -135,15 +129,6 @@ func recoverCrash(next http.Handler) http.Handler {
 					}
 				}
 				secrets = append(secrets, os.Getenv("MONGODB_URI"))
-				// OAuth values live in this binary too (connect/exchange/
-				// seal paths): a panic carrying one must not land verbatim
-				// in `logs health-api`. Redaction is pattern-based — see
-				// crashlog.Redact — so append raw and let it scrub.
-				for _, k := range []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URL", "CONNECTORS_ENCRYPTION_KEY"} {
-					if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-						secrets = append(secrets, v)
-					}
-				}
 				// Both halves redacted: the stack goes through Redact, and
 				// so must the panic value — a config echo or exchange error
 				// in `rec` would otherwise bypass the list just built.
@@ -166,7 +151,6 @@ func main() {
 	registerTasks(mux)
 	registerProjects(mux)
 	registerReports(mux)
-	registerConnectors(mux)
 	// Rate limiting wraps everything, and lives here because main is the only place
 	// that knows the whole handler set (#176). The API is network-reachable and
 	// authed by shared password(s), so without a counter a stuck client retrying in
@@ -196,15 +180,6 @@ func main() {
 		// it. The per-handler read budget above covers the abuse case (a stalled
 		// request body) without touching the response.
 	}
-	// Connector boot work is detached: initConnectors() runs in the
-	// background so boot (and /health) never waits on Mongo — a 10s index
-	// budget during an Atlas blip must not hold readiness. Serving uses
-	// the same cached store every verb (lazy per-verb fallback until the
-	// cache lands, then a 60s-budgeted Mongo retry while non-durable),
-	// and the boot lines below may lag "listening" by seconds — poll the
-	// log, don't grep it once.
-	go initConnectors()
-	log.Print("connectors: boot check started (OAuth status line follows)")
 	log.Print("health-api listening on :8000")
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)

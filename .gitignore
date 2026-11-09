@@ -141,12 +141,7 @@ __pycache__/
 /health-check
 /task-manager
 /project-manager
-/notes
-/memory
-/browser
 /reports
-/gmail
-/calendar
 
 # browser runtime state (page dumps, console logs)
 .playwright-mcp/

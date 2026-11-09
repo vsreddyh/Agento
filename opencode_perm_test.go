@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	"agento/internal/approvals"
-	"agento/internal/connectors"
 )
 
 // askPatterns reads the string-valued `ask` entries of opencode.json's
@@ -100,12 +99,6 @@ func TestAskMirrorsGated(t *testing.T) {
 	patterns := askPatterns(t)
 	for _, server := range approvals.Servers() {
 		for _, tool := range approvals.ToolsFor(server) {
-			// Draft-refused sends can never run however permitted, so
-			// they need no `ask` entry (and must not have one — see
-			// TestAskHasNoOrphansOrRefusals).
-			if connectors.IsDraftOnlySend(server, tool) {
-				continue
-			}
 			// Allow-path tools run free by policy; only gated ones must
 			// prompt. Empty args: the dry-run prune exemption is an
 			// in-gate concern the harness cannot see (patterns match
@@ -138,9 +131,6 @@ func TestAskHasNoOrphansOrRefusals(t *testing.T) {
 		hit := false
 		for _, server := range approvals.Servers() {
 			for _, tool := range approvals.ToolsFor(server) {
-				if connectors.IsDraftOnlySend(server, tool) {
-					continue
-				}
 				if !approvals.NeedsApproval(server, tool, map[string]any{}) {
 					continue
 				}

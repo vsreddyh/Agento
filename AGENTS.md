@@ -81,8 +81,7 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   `./bin/<server>` with the two Mongo env vars; `.opencode/chat.md` is the
   persona loaded through `instructions`, and `.opencode/skills/` holds the
   shared skills. `./scripts/build-mcps.sh` builds the binaries into git-ignored
-  `bin/`. The five retired servers (`notes`, `memory`, `browser`, `gmail`,
-  `calendar`) are still in the source tree until #495 and are NOT wired.
+  `bin/`.
 - LLM: T3/opencode talks directly to OpenCode Go
   (`https://opencode.ai/zen/go/v1`); one `OPENCODE_API_KEY` in the root `.env`.
   No proxy container and no in-repo model config.

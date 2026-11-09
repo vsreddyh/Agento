@@ -40,7 +40,7 @@ const (
 	maxBody = 50000
 	// maxSource caps the skill/agent id that filed the report.
 	maxSource = 80
-	// listCap is the ceiling for lists, which return summaries. Matches notes.
+	// listCap is the ceiling for lists, which return summaries.
 	listCap = 200
 )
 
@@ -104,7 +104,7 @@ func New() (*Store, error) {
 	s := &Store{reports: d.Collection("reports")}
 	// Newest-first is the only list order (∃-Mail shows newest on top), so the
 	// sort key gets the index. Titles are not unique and reports are addressed
-	// by id only, like notes.
+	// by id only.
 	if _, err := s.reports.Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
 		{Keys: bson.D{{Key: "createdAt", Value: -1}}},
 	}); err != nil {

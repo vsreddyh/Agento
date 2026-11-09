@@ -38,8 +38,6 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |
 
-The five retired servers (`notes`, `memory`, `browser`, `gmail`, `calendar`) are still in the source tree until #495; none of them is wired into `opencode.json`.
-
 ---
 
 ## Data domains & retention
@@ -51,7 +49,6 @@ The five retired servers (`notes`, `memory`, `browser`, `gmail`, `calendar`) are
 | Health tracking | `hc_meals`, `hc_days`, `hc_weight` + Health Connect sync via `health-api` | `hc_meals`/`hc_days` >30d; `hc_weight` **never pruned** |
 | Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |
 | ∃-Mail | `reports` | Read + unstarred >7d; unread and starred are never pruned |
-| Notes | `notes` | Permanent (server retired in #495) |
 
 (Retired in #289: the `story` and `resumes` side profiles. Their checkouts,
 `workspace/portals` and `workspace/portfolio-resume`, stay on disk, orphaned
@@ -181,7 +178,6 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 - `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
 - `hc_weight`: **Permanent retention** (never pruned).
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).
-- `notes`: **Permanent retention** (never pruned) — the agent's no-op (collection retired with the server in #495).
 - `reports` (∃-Mail): purges records where `createdAt < today - 7d AND read AND NOT starred` — unread and starred are never pruned.
 - `tasks`: reconciled, never pruned — completed structured repeats with no successor are reported (#180).
 - `task_mutations`: purges entries where `at < today - 90d`.
@@ -208,7 +204,6 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
 │   ├── task-manager/        # tasks MCP (code in cmd/ + internal/)
 │   ├── project-manager/     # projects MCP (code in cmd/ + internal/)
-│   ├── notes/               # notes MCP (retired in #495; code in cmd/ + internal/)
 │   └── reports/             # reports MCP (∃-Mail inbox writer, 7-day retention; code in cmd/ + internal/)
 ├── cmd/                     # Go services (each builds to a static binary)
 │   ├── mongo/               # MongoDB CLI helper
@@ -219,12 +214,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── health-check/        # health-check MCP server (stdio)
 │   ├── reports/             # reports MCP server — ∃-Mail inbox writer (stdio)
 │   ├── task-manager/        # tasks MCP server (stdio)
-│   ├── project-manager/     # projects MCP server (stdio)
-│   ├── notes/               # notes MCP server (retired in #495)
-│   ├── memory/              # memory MCP server (retired in #495)
-│   ├── browser/             # browser MCP server (retired in #495)
-│   ├── gmail/               # Gmail connector MCP server (retired in #495)
-│   └── calendar/            # Calendar connector MCP server (retired in #495)
+│   └── project-manager/     # projects MCP server (stdio)
 ├── internal/                # Shared Go packages (mongo, validate, money, cookbook, healthcheck, reports, tasks, projects)
 └── scripts/
     ├── hermes.sh            # Main orchestration CLI

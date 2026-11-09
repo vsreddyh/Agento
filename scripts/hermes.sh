@@ -230,7 +230,6 @@ cmd_init() {
     info "Pruning unused images (prevents GBs of bloat)..."
     podman image prune -f 2>&1 | sed 's/^/  /' || true
 
-    mkdir -p "$REPO/exports/browser"
     # The retired side-profile checkouts (workspace/portals,
     # workspace/portfolio-resume) stay on disk, orphaned and unmanaged:
     # init neither clones nor deletes them (#289), and nothing mounts them
