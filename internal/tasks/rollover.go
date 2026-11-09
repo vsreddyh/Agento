@@ -13,7 +13,7 @@ import (
 
 // Rollover policy: what completing a task does about its own recurrence.
 // A structured cadence mints its next occurrence here; a custom condition
-// is left to the caller (see pi/skills/task-manager/SKILL.md). Split out of
+// is left to the caller (see .opencode/skills/task-manager/SKILL.md). Split out of
 // store.go (#171); still a Store method, because minting writes.
 
 // Rollover is the outcome of a completion's recurrence step, as a named reason

@@ -106,9 +106,7 @@ func (s Status) Valid() bool {
 
 // Policy is the sensitivity record for one (server, tool): false runs
 // free, true is sensitive and must prompt in T3 (the `ask` rules in
-// opencode.json mirror this table, pinned by opencode_perm_test.go) —
-// except the four draft-refused sends, which are gated==true as a
-// backstop but refuse outright and must NOT have an `ask` pattern.
+// opencode.json mirror this table, pinned by opencode_perm_test.go).
 // Unknown servers deny: a tool added to an unlisted server is a write no
 // table reviewed, and failing closed beats executing blind. (Unknown
 // *tools* on a wired server never reach the gate — the MCP SDK rejects
@@ -117,7 +115,7 @@ func (s Status) Valid() bool {
 // not the wire path.) Pi built-in tools (bash/read/write via codemode)
 // never reach the gate at all — see the ADR's threat note.
 func NeedsApproval(server, tool string, args map[string]any) bool {
-	// Case-insensitive like connectors.IsDraftOnlySend: the server id is a
+	// Case-insensitive exact-match: the server id is a
 	// code literal in each cmd/*/main.go, so the fold guards callers that
 	// pass a differently-cased id — the table keys stay lowercase and the
 	// policy/gate tests pin the literals each binary registers.
@@ -205,12 +203,12 @@ func isDryRun(args map[string]any) bool {
 //
 // Reads never prompt. Routine creates and updates (log_meal, create_task,
 // add_recipe, log_cook, ...) run free — prompting on every write would make
-// the agent ask permission to take notes, which is approval fatigue, not
-// safety. Sensitive: money writes (including log_transaction/log_text),
-// account lifecycle (create/archive), browser navigation (per-task URL
-// prompt), deletes, destructive rewrites (fix_*), and prunes that actually
-// delete (the dry-run exemption lives in NeedsApproval; the harness cannot
-// see arguments, so counting prunes prompt too).
+// the agent ask permission for every note it files, which is approval
+// fatigue, not safety. Sensitive: money writes (including
+// log_transaction/log_text), account lifecycle (create/archive), deletes,
+// destructive rewrites (fix_*), and prunes that actually delete (the dry-run
+// exemption lives in NeedsApproval; the harness cannot see arguments, so
+// counting prunes prompt too).
 var gatedTools = map[string]map[string]bool{
 	"miser-money": {
 		"create_account": true, "list_accounts": false,
@@ -245,61 +243,11 @@ var gatedTools = map[string]map[string]bool{
 		"create_project": false, "list_projects": false, "get_project": false,
 		"update_project": false, "delete_project": true,
 	},
-	"notes": {
-		"create_note": false, "get_note": false, "list_notes": false,
-		"search_notes": false, "update_note": false, "delete_note": true,
-	},
 	// ∃-Mail inbox (#365): agents file, the user reads. Filing and reading
-	// run free like notes; deletion is the app's verb over health-api, not a
-	// tool, so no row gates it here.
+	// run free; deletion is the app's verb over health-api, not a tool, so
+	// no row gates it here.
 	"reports": {
 		"create_report": false, "get_report": false, "list_reports": false,
-	},
-	"memory": {
-		// A memory write starts pending in the memory store when a database
-		// is configured (the user confirms it on the Memory screen before
-		// it steers an answer; ephemeral saves never reach the screen),
-		// which is the confirmation that matters. Prompting on the write
-		// as well would make the agent ask twice for one fact. Reads never
-		// prompt anywhere.
-		"save_memory": false, "list_memory": false,
-	},
-	"browser": {
-		// Navigation is sensitive with the URL in front of the human: every
-		// domain is an explicit per-task prompt, which is the #312
-		// allowlist. Reads, screenshots and evidence saves run free once
-		// the navigation was approved; re-navigation to a new URL prompts
-		// again.
-		"browser_goto": true, "browser_read": false,
-		"browser_screenshot": false, "browser_save_evidence": false,
-	},
-	// First connectors, v1 (#316): gmail + calendar only — Drive was
-	// dropped from the connector set, so it has no policy row: an
-	// unknown server denies every call fail-closed by default, which is
-	// the correct posture for a server with no classification. (If Drive
-	// ever returns, its PR re-adds the row with its tools.) Reads and
-	// drafts run free; write paths are refused outright
-	// by the gate (see connectors.IsDraftOnlySend), and the true here
-	// is the backstop for a caller that bypasses that check: a write
-	// must never run free.
-	// Follow-up sync obligation (both sides): the draft allowlist here
-	// (create_draft/create_event_draft:false) depends on exact tool
-	// names exactly like the refusal list does. A renamed draft tool is
-	// unknown to both lists, so the gate denies it outright — safe, but
-	// the draft flow breaks loudly instead of degrading. The subtler
-	// drift is a *known* sensitive tool missing its `ask` pattern: the
-	// gate runs it under default-allow, which is exactly what
-	// opencode_perm_test.go fails on. Sync both lists with the wired
-	// servers' real names when they land.
-	"gmail": {
-		"search_gmail": false, "read_gmail": false,
-		"list_messages": false, "create_draft": false,
-		"send_message": true, "send_gmail": true,
-	},
-	"calendar": {
-		"list_events": false, "get_event": false,
-		"create_event_draft": false,
-		"create_event":       true, "send_invite": true,
 	},
 }
 

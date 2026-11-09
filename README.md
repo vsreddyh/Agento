@@ -1,38 +1,54 @@
 # Agento Android stack
 
-Fully containerized agent stack running one chat profile against OpenCode Go (`https://opencode.ai/zen/go/v1`). Includes **one pi container** — one `pi` process for the profile behind an OpenAI-compatible gateway — serving the custom **Android app** (Chat tab + Settings), headless-Chromium browser tasks via the `browser` MCP server, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+The Agento **Android app** (Tasks/Projects, Task Manager, Files, ∃-Mail, Health Sync, reminders and widgets) against a small Go backend: **`health-api`** for sync and domain data, an nginx **proxy** as the app's single URL, a one-shot **`retention`** job, and remote **MongoDB Atlas**.
+
+The agent does not run in this stack any more (#494). **T3/opencode runs on the host**, with the kept MCP servers built from this repo (`./scripts/build-mcps.sh` → `bin/<server>`) and wired in `opencode.json`. It reads and writes the same Atlas database the phone uses.
 
 ---
 
 ## Architecture
 
 ```
-                                Remote MongoDB (money, health, cookbook)
-                                             ▲
-                              Containers
-  chat ───  ONE pi host    │  agent dir   ▼   OpenCode Go Direct
-          1 pi process    │   /opt/pi     │  (https://opencode.ai/zen/go/v1)
-                          └─ API :8643 ─┤
-Agento (Android) ──► proxy (:8080 compose default) ──┬──► /p/* ──► pi :8643 ──► MongoDB
-                                     └──► /api/* ─► health-api ─► MongoDB
-Retention ───────────────► one-shot container (cron 03:00 / on start)
+                                        Remote MongoDB Atlas
+                                                  ▲
+                                                  │
+  Agento (Android) ──► proxy (:8080 compose default) ──► /api/* ──► health-api ──┘
+                                                          /health ──┘
+  T3/opencode (host) ──► bin/{task-manager,project-manager,miser-money,
+                              cookbook,health-check,reports} ──► MongoDB Atlas
+
+  Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```
-(Ports are compose defaults: `APP_PORT` / `HEALTH_HOST_PORT` / `PI_HOST_PORT` remap the host side.)
+(Ports are compose defaults: `APP_PORT` / `HEALTH_HOST_PORT` remap the host side.)
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `pi` | `pi` container (`pi-gateway`, PID 1) | `8643` (app API; `PI_HOST_PORT` remaps) | The agent host: one `pi` process for the single chat profile behind an OpenAI-compatible gateway |
-| `health-api` | `health-api` container | `8001` (`HEALTH_HOST_PORT` remaps) | Ingests Health Connect sync data from Android and persists to MongoDB |
-| `proxy` | `proxy` container (nginx) | `8080` (`APP_PORT` remaps) | Single app URL: routes `/p/*` → pi chat, `/api/*` → health sync (except `/api/model/options` → pi, the provider picker) |
+| `health-api` | `health-api` container | `8001` (`HEALTH_HOST_PORT` remaps) | Tasks, projects, files, Health Connect sync and ∃-Mail reports for the app; persists to MongoDB |
+| `proxy` | `proxy` container (nginx) | `8080` (`APP_PORT` remaps) | Single app URL: routes `/api/*` and `/health` → health-api |
 | `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, its own `docker/retention/Dockerfile` image) |
 
 ---
 
-## Profiles & Domains
+## Agent side (host)
 
-| Profile | App Tab | Purpose & Storage | Data Retention Policy |
-|---|---|---|---|
-| `chat` | Chat | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
+| Piece | What it is |
+|---|---|
+| `opencode.json` | T3/opencode config: the six kept MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`), each running `./bin/<server>` with the two Mongo env vars |
+| `.opencode/chat.md` | The operator persona and per-server rules |
+| `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
+| `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |
+
+---
+
+## Data domains & retention
+
+| Domain | Storage | Retention policy |
+|---|---|---|
+| Money | `money_transactions` | >90d autowipe |
+| Cookbook | `cookbook_*` | **Permanent** |
+| Health tracking | `hc_meals`, `hc_days`, `hc_weight` + Health Connect sync via `health-api` | `hc_meals`/`hc_days` >30d; `hc_weight` **never pruned** |
+| Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |
+| ∃-Mail | `reports` | Read + unstarred >7d; unread and starred are never pruned |
 
 (Retired in #289: the `story` and `resumes` side profiles. Their checkouts,
 `workspace/portals` and `workspace/portfolio-resume`, stay on disk, orphaned
@@ -46,27 +62,27 @@ and unmanaged.)
 
 | Specification | Minimum Requirement | Recommended (Production) | Notes |
 |---|---|---|---|
-| **CPU** | 1 vCPU (x86_64 or ARM64) | 2–4 vCPUs | Image build (Go, LaTeX/tectonic) benefits from multiple cores. |
-| **RAM** | 2 GB RAM (+ 2 GB swap) | 4–8 GB RAM | The `pi` container (Node + Pi + MCP servers — ten at measurement time, eight after the #424 Stage 1 unwire) measured **~350 MB** pre-Stage-1 (2026-10-31) — the real figure, not the multi-GB estimate this row used to carry (ADR-0011 is the measurement log). The eight-server steady state was expected ~270 MB at Stage 1 (350 − 2×~40, predicted). Stage 2 deletes the 8 relay processes outright (~124 MB summed-RSS in the ADR-0011 accounting), so lower still — ADR-0011 to confirm after deploy. Headless Chromium (image layer + ~150–300 MB runtime per profile, see `vps.md`) lands on top. 2 GB minimum with swap is required to avoid OOM during `podman build`. |
-| **Disk Storage** | 15 GB SSD | 30+ GB SSD | Base images, Go build cache, local repo clones, Pi's own runtime caches, and logs. |
+| **CPU** | 1 vCPU (x86_64 or ARM64) | 2 vCPUs | Image builds (Go) benefit from multiple cores. |
+| **RAM** | 1 GB RAM | 2 GB RAM | The stack is now `health-api` + nginx + a one-shot retention job; the former ~350 MB agent container is gone. T3/opencode runs on the host when used, and its footprint is the host tool's, not a container's. |
+| **Disk Storage** | 10 GB SSD | 20+ GB SSD | Base images, Go build cache and logs. |
 | **OS** | Linux (Ubuntu 22.04+, Debian 12+, Arch, Fedora) | Ubuntu 22.04/24.04 LTS or Debian 12 | Linux kernel 5.10+ with systemd and package manager (`apt`, `pacman`, or `dnf`). |
 
 ### Required Host Tools & Access
 - **Git** (`git`) and **sudo** privileges (pre-installed).
 - **Podman** (4.0+) & **podman-compose** (`podman-compose`). Auto-installed by `./scripts/hermes.sh init` if missing. No daemon — Podman is daemonless.
-- **SSH Key Pair**: Configured in `~/.ssh` (read-only mounted into the pi service for host-side git by hand; missing files fail container creation — provision keys before the first `./scripts/hermes.sh start`, set `VPS_SSH_DIR` in `.env` if the VPS user isn't root). Retired side-profile repos (`vsreddyh/portals`, `vsreddyh/portfolio-resume`) are no longer cloned by `init`.
+- **T3/opencode** on the host, only if you want the agent. It is not installed by `init`.
 
 ### Required External Services & API Keys
-- **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai). One key for the single `opencode-go` provider, selected per request in app Settings (model `mimo-v2.6-flash`).
-- **Android App Password**: `PASSWORD` (single bearer credential for chat + sync; generate with `openssl rand -hex 32`). The app takes one Server URL + Password; each tab picks provider/model from the live gateway catalog in Settings dropdowns. Provider keys live only in the VPS `.env`, never in git.
-- **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook.
-- **App Password**: `PASSWORD` Bearer token matching the Agento Android app Password field (single credential for chat + sync). (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password.)
+- **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai), for T3/opencode on the host.
+- **Android App Password**: `PASSWORD` (single bearer credential for sync; generate with `openssl rand -hex 32`).
+- **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook/tasks/projects/reports.
+- (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password. Retired with the agent container: every `PI_*` variable and `VPS_SSH_DIR`.)
 
 ### Network & Firewall Ports
-(Ports are compose defaults: `APP_PORT` / `HEALTH_HOST_PORT` / `PI_HOST_PORT` remap the host side.)
-- Port `${APP_PORT:-8080}/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (chat + sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings values: Server URL `http://<host>:${APP_PORT:-8080}`, Password = `PASSWORD`, provider/model picked from live dropdowns in Settings, path `/p/chat`. Direct ports stay published for comparison: `${PI_HOST_PORT:-8643}` (pi, what `/p/*` reaches) and `${HEALTH_HOST_PORT:-8001}` (sync).
-- Port `${HEALTH_HOST_PORT:-8001}/tcp` (Health API) — Inbound HTTP access for Android sync POST requests (same reachability note as the proxy).
-- Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas, and GitHub.
+(Ports are compose defaults: `APP_PORT` / `HEALTH_HOST_PORT` remap the host side.)
+- Port `${APP_PORT:-8080}/tcp` (App proxy — single URL) — Inbound HTTP access for the Android app (sync, single-password auth). The phone must reach the VPS: public IP + firewall rule; put a TLS reverse proxy in front if exposed publicly. App Settings: Server URL `http://<host>:${APP_PORT:-8080}`, Password = `PASSWORD`.
+- Port `${HEALTH_HOST_PORT:-8001}/tcp` (Health API) — direct access for debugging (same reachability note as the proxy).
+- Outbound HTTPS (`443/tcp`) for OpenCode Go (`opencode.ai`), MongoDB Atlas and GitHub.
 
 ---
 
@@ -75,7 +91,7 @@ and unmanaged.)
 ### Setup and Execution
 
 ```bash
-# 1. Initialize environment file and workspace
+# 1. Initialize environment file
 cp .env.example .env && nano .env
 
 # 2. Build images and register daily retention cron
@@ -86,7 +102,7 @@ cp .env.example .env && nano .env
 
 # 4. Inspect container health and logs
 ./scripts/hermes.sh status
-podman-compose -f docker/docker-compose.yml logs -f pi
+podman-compose --env-file .env -f docker/docker-compose.yml logs -f health-api  # from the repo root
 
 # 5. Stop the stack
 ./scripts/hermes.sh stop
@@ -96,16 +112,16 @@ podman-compose -f docker/docker-compose.yml logs -f pi
 
 ## Management CLI
 
-`scripts/hermes.sh` is the single entry-point orchestrator:
+`scripts/hermes.sh` is the single entry-point orchestrator — run the commands, not the parenthesised spellings, which are what the script's `podman_compose()` wrapper executes (it supplies `--env-file .env -f docker/docker-compose.yml` from the repo root; bare `podman-compose` fails everywhere without them):
 
 | Command | Action |
 |---|---|
-| `./scripts/hermes.sh init` | Self-installs host deps (curl, podman + compose, python3, cron), builds images, creates directories, reports the skills it finds, sets up cron. Container harness only — never installs the opencode CLI. |
-| `./scripts/hermes.sh start` | Starts all services (`podman-compose up -d --build --force-recreate`, plain `up -d` with `PI_NO_BUILD=1`) and runs retention once. |
+| `./scripts/hermes.sh init` | Self-installs host deps (curl, podman + compose, python3, cron), builds images, creates the exports dir, sets up cron. Container harness only — never installs the opencode CLI. |
+| `./scripts/hermes.sh start` | Starts all services (`podman-compose up -d --build --force-recreate`, plain `up -d` with `NO_BUILD=1`) and runs retention once. |
 | `./scripts/hermes.sh stop` | Shuts down the stack (`podman-compose down`). |
 | `./scripts/hermes.sh restart` | Rebuilds changed layers and recreates containers in place (`up -d --build --force-recreate`) — not a stop-then-start. |
 | `./scripts/hermes.sh status` | Displays container health and published ports (`podman-compose ps`). |
-| `./scripts/hermes.sh clean` | **Destructive.** Wipes containers, volumes, `run/`, rendered configs, and retention cron. Remote MongoDB is untouched (and there are no per-profile `.env` files — the single root `.env` is never touched either). |
+| `./scripts/hermes.sh clean` | **Destructive.** Wipes containers, volumes, `run/`, and the retention/sysmon cron entries. Remote MongoDB and every tracked file are untouched. |
 
 ---
 
@@ -121,30 +137,30 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 2. **`health-api` Service**: Validates auth, upserts one doc per date in `hc_days` (steps, active kcal, sleep hours, workouts — same shape the health-check MCP writes).
 
 > **Upgrading from Health Gateway?** Agento is a new app listing (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway build — no auto-update, no settings carry-over (Android sandboxes are per-package).
-> 1. Install Agento, then re-enter the sync server URL + token and chat Settings by hand (or copy values over from the old app's Settings screen).
+> 1. Install Agento, then re-enter the sync server URL + password by hand.
 > 2. Re-grant Health Connect permissions inside Agento (grants are per-package).
 > 3. Verify one hourly sync lands in `hc_days`, then **uninstall Health Gateway** so its hourly worker stops and the two apps don't double-sync.
 
 ## Agento Releases & In-App Updates
 
-- Every push to `main` that touches `android/**` builds the release APK and publishes it as a GitHub Release (`agento-v<version>`, version-only, e.g. `agento-v0.3.0` — same-version rebuilds upsert the existing Release), so installable APKs live under the repo's **Releases** page. PR/branch builds only upload the debug APK as a CI artifact, never cut a release.
+- Every push to `main` that touches `android/**` builds the release APK and publishes it as a GitHub Release (`agento-v<version>`, version-only, e.g. `agento-v8.0.0` — same-version rebuilds upsert the existing Release), so installable APKs live under the repo's **Releases** page. PR/branch builds run unit tests + lint only.
 - In the app, **Settings → App updates → Check for updates** diffs `/releases/latest` against the installed build, then **Download & install** streams the release APK and fires the platform installer (grants "install unknown apps" when prompted). Same-package updates keep all Settings + Health Connect grants.
 - Stable signing is required for updates to install: add these repo secrets once (Settings → Secrets → Actions) with your upload keystore — `ANDROID_KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Without them CI signs with a throwaway debug key and those APKs will not install over each other. `versionCode` derives from semver (`MAJOR*1000000+MINOR*1000+PATCH`) so every version bump sorts higher than the last — no build numbers anywhere.
 
-## Android App Screens (2.x)
+## Android App Screens (8.x thin client)
 
-- **Sidebar**: Chat + Tasks + Files + Reminders + Settings (drawer replaced the bottom bar).
-- **Chat tab**: threaded conversations persisted on-device (survive restarts; New starts a thread, switcher revisits/deletes old ones), sender labels + timestamps, copy button, retry on failure. Attach up to 2 photos per turn (gallery or camera, shrunk before sending) with or without text. Provider/model picked from its own model sheet (top-bar button), saved instantly. Live session (#317): hands-free talk-listen-talk with barge-in (talking cuts the turn), tool milestones spoken mid-task, thread keeps the full record.
-- **Tasks**: name/status/note table; tap status cycles todo → doing → done; add/edit dialog; persisted locally.
+- **Sidebar**: Tasks (Projects) + Task Manager + Files + ∃-Mail + Settings.
+- **Tasks / Projects**: project board and the task manager; task reminders arrive as exact-alarm notifications and survive reboot.
 - **Files**: two-way file shelf over the VPS `exports/` folder (subfolders supported) — upload from the device picker, download to mobile Downloads; uploads never replace an existing file and refuse past 25 MiB with a named error.
-- **Reminders**: exact-alarm local notifications (falls back to inexact without the system grant); survives reboot.
-- **Settings sections**: Server / Chat backend pointer / Appearance (System/Light/Dark theme) / App updates / Health sync / Settings backup (now includes threads, tasks, reminders files).
+- **∃-Mail**: the agent-filed report inbox.
+- **Settings sections**: Connection / Health / Appearance / Widget / Notifications / Behaviour / Storage / About, plus app updates and settings backup.
+- Chat, Skills, Tools, Teach, Memory, Runs, Approvals, Questions, Connectors and model pickers were removed in 8.0.0 (#493); the agent now runs in T3/opencode.
 
 ## Settings Backup (Survives Upgrade, Reinstall, Reinstall-After-Gap)
 
 - All config lives in one `SharedPreferences("agento")` file, which Android preserves across same-package upgrades automatically.
 - `backup_rules.xml` / `data_extraction_rules.xml` include sharedprefs + databases in Google Auto Backup, so settings also restore on reinstall from the same account.
-- For a reinstall after a long gap (cloud backup expired), use **Settings → Settings backup → Export settings** to keep a JSON copy, then **Import settings** to re-apply it. Import only applies known keys and reloads the on-screen fields.
+- For a reinstall after a long gap (cloud backup expired), use **Settings → Settings backup → Export settings** to keep a JSON copy, then **Import settings** to re-apply it. Import only applies known keys (old chat-era keys are skipped) and reloads the on-screen fields.
 
 ---
 
@@ -162,56 +178,47 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 - `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
 - `hc_weight`: **Permanent retention** (never pruned).
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).
-- `notes`: **Permanent retention** (never pruned) — the agent's no-op.
 - `reports` (∃-Mail): purges records where `createdAt < today - 7d AND read AND NOT starred` — unread and starred are never pruned.
+- `tasks`: reconciled, never pruned — completed structured repeats with no successor are reported (#180).
+- `task_mutations`: purges entries where `at < today - 90d`.
 
 ---
 
 ## Repository Layout
 
 ```
-├── AGENTS.md                # Agent sandbox rules and guidelines
+├── AGENTS.md                # Agent rules and guidelines
 ├── README.md                # Stack overview and quickstart guide
 ├── documentation.md         # Deep-dive architecture and component documentation
+├── opencode.json            # T3/opencode config: the six kept MCP servers
+├── .opencode/               # Persona (chat.md) + shared skills
+├── bin/                     # MCP binaries built by scripts/build-mcps.sh (git-ignored)
 ├── docker/
-│   ├── docker-compose.yml   # Unified compose configuration (health-api + pi + proxy + retention)
-│   ├── health-api/          # Health Connect Go sync service (Dockerfile, binary in the image)
-│   ├── pi/                  # The Pi agent image + entrypoint (MCP connectivity gate, then pi-gateway)
+│   ├── docker-compose.yml   # Unified compose configuration (health-api + proxy + retention)
+│   ├── health-api/          # Health Connect + domain Go service
 │   ├── retention/           # The one-shot retention image (one Go binary)
 │   └── proxy/               # nginx conf: the app's single URL
 ├── mcps/
 │   ├── money/               # miser-money MCP (accounts + transactions; code in cmd/ + internal/)
 │   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
 │   ├── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
-│   ├── notes/               # notes MCP (permanent markdown notes + lists; code in cmd/ + internal/)
+│   ├── task-manager/        # tasks MCP (code in cmd/ + internal/)
+│   ├── project-manager/     # projects MCP (code in cmd/ + internal/)
 │   └── reports/             # reports MCP (∃-Mail inbox writer, 7-day retention; code in cmd/ + internal/)
-├── pi/                    # The Pi agent dir, bind-mounted at /opt/pi
-│   ├── mcp.json            # the nine MCP servers Pi spawns (eight domain + browser);
-│   │                       # gmail/calendar stay unwired until Google OAuth is configured (#424)
-│   ├── settings.json       # Pi's own knobs (tool selection, retry, cache warming)
-│   ├── AGENTS.md           # rules shared by every profile
-│   ├── extensions/         # loaded by every profile (spawn_subagent)
-│   └── profiles/           # chat — the single pi process
-├── cmd/                 # Go services (each builds to a static binary)
-│   ├── mongo/             # MongoDB CLI helper for bot toolsets
-│   ├── retention/         # Data lifecycle prune runner
-│   ├── health-api/        # Health Connect sync service
-│   ├── miser-money/       # money MCP server (stdio)
-│   ├── cookbook/          # cookbook MCP server (stdio)
-│   ├── health-check/      # health-check MCP server (stdio)
-│   ├── notes/             # notes MCP server (stdio)
-│   ├── reports/           # reports MCP server — ∃-Mail inbox writer (stdio)
-│   ├── task-manager/      # tasks MCP server (stdio)
-│   ├── project-manager/   # projects MCP server (stdio)
-│   ├── memory/            # memory MCP server (stdio)
-│   ├── browser/           # browser MCP server (stdio)
-│   ├── gmail/             # Gmail connector MCP server (stdio)
-│   ├── calendar/          # Calendar connector MCP server (stdio)
-│   └── pi-gateway/        # OpenAI-compatible gateway + pi spawner
-├── internal/              # Shared Go packages (mongo, validate, money, cookbook, healthcheck, notes, reports)
-├── scripts/
-│   ├── hermes.sh            # Main orchestration CLI
-│   ├── retention.sh         # Retention execution wrapper
-│   └── sysmon.sh            # Resource metrics monitoring script
-└── pi/skills/               # Skills shared by every profile (plus per-profile ones under pi/profiles/<name>/skills/)
+├── cmd/                     # Go services (each builds to a static binary)
+│   ├── mongo/               # MongoDB CLI helper
+│   ├── retention/           # Data lifecycle prune runner
+│   ├── health-api/          # App backend (sync, tasks, projects, files, reports)
+│   ├── miser-money/         # money MCP server (stdio)
+│   ├── cookbook/            # cookbook MCP server (stdio)
+│   ├── health-check/        # health-check MCP server (stdio)
+│   ├── reports/             # reports MCP server — ∃-Mail inbox writer (stdio)
+│   ├── task-manager/        # tasks MCP server (stdio)
+│   └── project-manager/     # projects MCP server (stdio)
+├── internal/                # Shared Go packages (mongo, validate, money, cookbook, healthcheck, reports, tasks, projects)
+└── scripts/
+    ├── hermes.sh            # Main orchestration CLI
+    ├── retention.sh         # Retention execution wrapper
+    ├── build-mcps.sh        # Builds the kept MCP binaries into bin/
+    └── sysmon.sh            # Resource metrics monitoring script
 ```

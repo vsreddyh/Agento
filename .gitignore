@@ -23,6 +23,10 @@ run/
 # tree is a cache rebuilt on every gateway start. Never committed.
 pi/.runtime/
 
+# Retired agent directory (#494): the tracked source is gone, but live
+# runtime state (sessions, auth, logs) stays on disk and is never committed.
+/pi/
+
 # ────────────────────────────────────────────────────────
 # Workspace (per-bot cwd, host-only)
 # ────────────────────────────────────────────────────────
@@ -130,7 +134,6 @@ __pycache__/
 # `go build ./cmd/...` in the repo root, or the next `git add -A` commits it.
 /bin/
 /health-api
-/pi-gateway
 /mongo
 /retention
 /miser-money
@@ -138,9 +141,7 @@ __pycache__/
 /health-check
 /task-manager
 /project-manager
-/notes
-/memory
-/browser
+/reports
 
 # browser runtime state (page dumps, console logs)
 .playwright-mcp/

@@ -26,7 +26,7 @@ Blocked | Paused | Done), `note`, `createdAt`, `updatedAt` (bumped on every edit
   write, stored canonical). Blank status defaults to Todo.
 - **Permanent:** no TTL, no retention pruning. Done means finished.
 - **Shared board:** the app's Projects tab reads/writes the same rows
-  (see `pi/skills/project-manager/SKILL.md`); local `tasks.json` is gone.
+  (see `.opencode/skills/project-manager/SKILL.md`); local `tasks.json` is gone.
 
 ## Run
 
@@ -34,6 +34,6 @@ Blocked | Paused | Done), `note`, `createdAt`, `updatedAt` (bumped on every edit
 go run ./cmd/project-manager      # stdio transport (or go build -o project-manager ./cmd/project-manager)
 ```
 
-The binary is baked into the agent image (`docker/pi/Dockerfile`) and registered
-for every profile through `pi/mcp.json`, which is what `docker/pi/entrypoint.sh`
-verifies at boot by refusing to start if any server fails to connect.
+The binary is built by `scripts/build-mcps.sh` into `bin/project-manager` and
+registered in `opencode.json` (`mcp.servers["project-manager"]`), which is what
+T3/opencode executes from the repo root.

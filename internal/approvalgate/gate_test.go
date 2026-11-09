@@ -116,7 +116,7 @@ func decideCall(store *stubStore, server, tool string, exec func() (*mcp.CallToo
 
 func TestAllowPathRunsAndAuditsAllowed(t *testing.T) {
 	st := newStub(true)
-	res, _, err := decideCall(st, "notes", "list_notes", nil)
+	res, _, err := decideCall(st, "cookbook", "list_recipes", nil)
 	if err != nil {
 		t.Fatalf("allow path errored: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestAllowPathRunsAndAuditsAllowed(t *testing.T) {
 func TestAllowPathHandlerErrorAudited(t *testing.T) {
 	st := newStub(true)
 	boom := errors.New("db exploded")
-	_, _, err := decideCall(st, "notes", "list_notes", func() (*mcp.CallToolResult, map[string]any, error) {
+	_, _, err := decideCall(st, "cookbook", "list_recipes", func() (*mcp.CallToolResult, map[string]any, error) {
 		return nil, nil, boom
 	})
 	if err != boom {
@@ -147,7 +147,7 @@ func TestGatedToolRunsWithoutHold(t *testing.T) {
 	// parked hold) executes at once: no approval row is parked and the
 	// audit records an allow.
 	st := newStub(true)
-	res, _, err := decideCall(st, "notes", "delete_note", nil)
+	res, _, err := decideCall(st, "cookbook", "delete_recipe", nil)
 	if err != nil {
 		t.Fatalf("gated tool errored: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestGatedToolRunsWithoutHold(t *testing.T) {
 func TestGatedToolHandlerErrorAudited(t *testing.T) {
 	st := newStub(true)
 	boom := errors.New("db exploded")
-	_, _, err := decideCall(st, "notes", "delete_note", func() (*mcp.CallToolResult, map[string]any, error) {
+	_, _, err := decideCall(st, "cookbook", "delete_recipe", func() (*mcp.CallToolResult, map[string]any, error) {
 		return nil, nil, boom
 	})
 	if err != boom {
@@ -183,7 +183,7 @@ func TestGatedToolRunsOnUnsharedStore(t *testing.T) {
 	// the hold". With no holds left there is nothing to decide, so even a
 	// memory fallback runs the call (#487).
 	st := newStub(false)
-	res, _, err := decideCall(st, "notes", "delete_note", nil)
+	res, _, err := decideCall(st, "cookbook", "delete_recipe", nil)
 	if err != nil {
 		t.Fatalf("gated tool on unshared store errored: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestCancelledContextDenies(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	ran := false
-	_, _, err := decide(ctx, "notes", "delete_note", "delete_note", map[string]any{}, st,
+	_, _, err := decide(ctx, "cookbook", "delete_recipe", "delete_recipe", map[string]any{}, st,
 		func() (*mcp.CallToolResult, map[string]any, error) {
 			ran = true
 			return okExec()
@@ -218,7 +218,7 @@ func TestAuditColumnsCanonical(t *testing.T) {
 	// folded pair even when the caller spells them mixed-case: otherwise
 	// the granted allow is unattributable under the canonical filter.
 	st := newStub(true)
-	_, _, err := decide(context.Background(), "Notes", "List_Notes", "list_notes",
+	_, _, err := decide(context.Background(), "Cookbook", "List_Recipes", "list_recipes",
 		map[string]any{}, st, okExec)
 	if err != nil {
 		t.Fatalf("mixed-case known tool errored: %v", err)
@@ -229,8 +229,8 @@ func TestAuditColumnsCanonical(t *testing.T) {
 		t.Fatalf("want 1 audit row, got %d", len(st.audits))
 	}
 	got := st.audits[0]
-	if got.Server != "notes" || got.Tool != "list_notes" {
-		t.Errorf("audit columns = %q/%q, want notes/list_notes", got.Server, got.Tool)
+	if got.Server != "cookbook" || got.Tool != "list_recipes" {
+		t.Errorf("audit columns = %q/%q, want cookbook/list_recipes", got.Server, got.Tool)
 	}
 }
 
@@ -241,7 +241,7 @@ func TestUnknownToolDenied(t *testing.T) {
 	// This pins the policy branch, not the wire path: the SDK rejects
 	// unregistered tools before the gate ever runs.
 	ran := false
-	_, _, err := decideCall(st, "notes", "no_such_tool_xyz", func() (*mcp.CallToolResult, map[string]any, error) {
+	_, _, err := decideCall(st, "cookbook", "no_such_tool_xyz", func() (*mcp.CallToolResult, map[string]any, error) {
 		ran = true
 		return okExec()
 	})
@@ -258,29 +258,9 @@ func TestUnknownToolDenied(t *testing.T) {
 
 func TestUnknownServerDenied(t *testing.T) {
 	st := newStub(true)
-	_, _, err := decideCall(st, "no_such_server_xyz", "list_notes", nil)
+	_, _, err := decideCall(st, "no_such_server_xyz", "list_recipes", nil)
 	if err == nil || !strings.Contains(err.Error(), "failing closed") {
 		t.Fatalf("want fail-closed error, got %v", err)
-	}
-}
-
-func TestDraftOnlySendRefused(t *testing.T) {
-	st := newStub(true)
-	_, _, err := decideCall(st, "gmail", "send_message", nil)
-	if err == nil || !strings.Contains(err.Error(), "create a draft instead") {
-		t.Fatalf("want draft refusal, got %v", err)
-	}
-	if got := st.lastAudit(); got.Disposition != approvals.DispositionDenied {
-		t.Errorf("want denied audit, got %+v", got)
-	}
-	// The refused send must never reach the handler.
-	ran := false
-	_, _, _ = decideCall(st, "gmail", "send_message", func() (*mcp.CallToolResult, map[string]any, error) {
-		ran = true
-		return okExec()
-	})
-	if ran {
-		t.Error("refused send reached the handler")
 	}
 }
 
@@ -292,7 +272,7 @@ func TestDraftOnlySendRefused(t *testing.T) {
 func TestAddToolRegistersName(t *testing.T) {
 	st := newStub(true)
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1.0.0"}, nil)
-	AddTool(s, "notes", st, &mcp.Tool{Name: "list_notes", Description: "x"},
+	AddTool(s, "cookbook", st, &mcp.Tool{Name: "list_recipes", Description: "x"},
 		func(_ context.Context, _ *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 			return &mcp.CallToolResult{}, map[string]any{"ok": true}, nil
 		})

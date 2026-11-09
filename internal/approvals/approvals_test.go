@@ -31,7 +31,6 @@ func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
 		{"health-check", "delete_meals"},
 		{"task-manager", "delete_task"},
 		{"project-manager", "delete_project"},
-		{"notes", "delete_note"},
 		{"miser-money", "brand_new_tool"},
 		{"unknown-server", "list_things"},
 	}
@@ -47,7 +46,7 @@ func TestPolicyGatesMoneyAndDeletes(t *testing.T) {
 		{"health-check", "log_meal"},
 		{"task-manager", "create_task"},
 		{"task-manager", "complete_task"},
-		{"notes", "create_note"},
+		{"reports", "create_report"},
 	}
 	for _, tc := range free {
 		if NeedsApproval(tc[0], tc[1], nil) {
@@ -94,23 +93,9 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			"task_history"},
 		"project-manager": {"create_project", "list_projects", "get_project",
 			"update_project", "delete_project"},
-		"notes": {"create_note", "get_note", "list_notes", "search_notes",
-			"update_note", "delete_note"},
 		// ∃-Mail inbox (#365): agents file, the user reads. No update/delete
 		// tools — the app's PATCH/DELETE over health-api own those verbs.
 		"reports": {"create_report", "get_report", "list_reports"},
-		"memory":  {"save_memory", "list_memory"},
-		"browser": {"browser_goto", "browser_read", "browser_screenshot",
-			"browser_save_evidence"},
-		// First connectors v1 (#316): servers not yet wired, but the policy
-		// is classified now so a future mcp.json wiring cannot run a send
-		// free. Send rows are doubly covered: the gate refuses them
-		// outright (connectors.IsDraftOnlySend) and the true here backstops
-		// any caller that bypasses that check.
-		"gmail": {"search_gmail", "read_gmail", "list_messages",
-			"create_draft", "send_message", "send_gmail"},
-		"calendar": {"list_events", "get_event", "create_event_draft",
-			"create_event", "send_invite"},
 	}
 	n := 0
 	for server, tools := range known {
@@ -128,8 +113,8 @@ func TestPolicyTableIsComplete(t *testing.T) {
 			t.Errorf("server %s table has %d rules for %d tools", server, len(rules), len(tools))
 		}
 	}
-	if n != 71 {
-		t.Errorf("pinned %d tools, want the 71 inventoried", n)
+	if n != 48 {
+		t.Errorf("pinned %d tools, want the 48 inventoried", n)
 	}
 }
 
@@ -198,7 +183,7 @@ func TestMemoryTimeoutAndExpiry(t *testing.T) {
 	m := NewMemoryStore()
 	now := time.Now()
 	m.now = func() time.Time { return now }
-	a := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	a := Approval{ID: NewID(), Server: "cookbook", Tool: "delete_recipe"}
 	if err := m.CreateApproval(ctx, a); err != nil {
 		t.Fatal(err)
 	}
@@ -222,8 +207,8 @@ func TestMemoryMarkInterrupted(t *testing.T) {
 	ctx := context.Background()
 	m := NewMemoryStore()
 	now := time.Now()
-	pending := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
-	old := Approval{ID: NewID(), Server: "notes", Tool: "delete_note",
+	pending := Approval{ID: NewID(), Server: "cookbook", Tool: "delete_recipe"}
+	old := Approval{ID: NewID(), Server: "cookbook", Tool: "delete_recipe",
 		ExpiresAt: now.Add(-time.Minute)}
 	for _, a := range []Approval{pending, old} {
 		if err := m.CreateApproval(ctx, a); err != nil {
@@ -247,7 +232,7 @@ func TestMemoryMarkInterrupted(t *testing.T) {
 	// A row created after the restart instant belongs to this process and
 	// must survive the sweep.
 	m2 := NewMemoryStore()
-	late := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	late := Approval{ID: NewID(), Server: "cookbook", Tool: "delete_recipe"}
 	if err := m2.CreateApproval(ctx, late); err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +249,7 @@ func TestMemoryAuditCap(t *testing.T) {
 	m := NewMemoryStore()
 	for i := 0; i < 10*ListCap+3; i++ {
 		if err := m.Audit(ctx, AuditEntry{
-			ID: NewID(), Server: "notes", Tool: "list_notes",
+			ID: NewID(), Server: "cookbook", Tool: "list_recipes",
 			Disposition: DispositionAllow, At: int64(i),
 		}); err != nil {
 			t.Fatal(err)
@@ -343,8 +328,8 @@ func TestMemoryAuditExpiry(t *testing.T) {
 	store := NewMemoryStore()
 	now := time.Now()
 	rows := []AuditEntry{
-		{ID: "live", Server: "notes", Tool: "get_note", At: now.UnixMilli()},
-		{ID: "dead", Server: "notes", Tool: "get_note", At: now.UnixMilli() - 1000,
+		{ID: "live", Server: "cookbook", Tool: "get_recipe", At: now.UnixMilli()},
+		{ID: "dead", Server: "cookbook", Tool: "get_recipe", At: now.UnixMilli() - 1000,
 			ExpiresAt: now.Add(-time.Second)},
 	}
 	for _, e := range rows {
@@ -367,7 +352,7 @@ func TestMemoryAuditExpiry(t *testing.T) {
 // KnownServer is what the gate warns on at startup: a typo must be detectable
 // without importing the unexported table.
 func TestKnownServer(t *testing.T) {
-	if !KnownServer("notes") || !KnownServer("miser-money") {
+	if !KnownServer("cookbook") || !KnownServer("miser-money") {
 		t.Fatal("a wired server is not in the policy table")
 	}
 	if KnownServer("miser_monet") || KnownServer("") {
@@ -381,7 +366,7 @@ func TestStoresRedactOnWrite(t *testing.T) {
 	store := NewMemoryStore()
 	ctx := context.Background()
 	if err := store.CreateApproval(ctx, Approval{
-		ID: "a1", Server: "notes", Tool: "get_note", Status: StatusPending,
+		ID: "a1", Server: "cookbook", Tool: "get_recipe", Status: StatusPending,
 		Args: map[string]any{"password": "hunter2", "id": "n1"},
 	}); err != nil {
 		t.Fatal(err)
@@ -394,7 +379,7 @@ func TestStoresRedactOnWrite(t *testing.T) {
 		t.Fatalf("approval args = %#v, want password masked and id intact", a.Args)
 	}
 	if err := store.Audit(ctx, AuditEntry{
-		ID: "e1", Server: "notes", Tool: "get_note", Disposition: DispositionAllow,
+		ID: "e1", Server: "cookbook", Tool: "get_recipe", Disposition: DispositionAllow,
 		Args:  map[string]any{"token": "sk-live-abc"},
 		Error: "password=hunter2 rejected",
 	}); err != nil {
@@ -423,14 +408,14 @@ func TestStoresRedactOnWrite(t *testing.T) {
 func TestMarkServerInterruptedIsScoped(t *testing.T) {
 	ctx := context.Background()
 	m := NewMemoryStore()
-	mine := Approval{ID: NewID(), Server: "notes", Tool: "delete_note"}
+	mine := Approval{ID: NewID(), Server: "cookbook", Tool: "delete_recipe"}
 	other := Approval{ID: NewID(), Server: "miser-money", Tool: "log_transaction"}
 	for _, a := range []Approval{mine, other} {
 		if err := m.CreateApproval(ctx, a); err != nil {
 			t.Fatal(err)
 		}
 	}
-	n, err := m.MarkServerInterrupted(ctx, "notes", time.Now())
+	n, err := m.MarkServerInterrupted(ctx, "cookbook", time.Now())
 	if err != nil || n != 1 {
 		t.Fatalf("marked %d, err %v; want 1", n, err)
 	}
@@ -442,17 +427,17 @@ func TestMarkServerInterruptedIsScoped(t *testing.T) {
 	}
 }
 
-// Case-insensitive like the gate refusal (#316 re-review): a "Gmail"
+// Case-insensitive like the gate refusal (#316 re-review): a "Cookbook"
 // server id must not change a tool's gate. Fail-closed either way, but
 // the same logical tool must gate the same way whatever the case.
 func TestNeedsApprovalCaseInsensitive(t *testing.T) {
-	if NeedsApproval("Gmail", "Search_Gmail", nil) {
-		t.Error("Gmail/Search_Gmail should run free like gmail/search_gmail")
+	if NeedsApproval("Cookbook", "List_Recipes", nil) {
+		t.Error("Cookbook/List_Recipes should run free like cookbook/list_recipes")
 	}
-	if !NeedsApproval("GMAIL", "SEND_MESSAGE", nil) {
-		t.Error("GMAIL/SEND_MESSAGE should stay sensitive like gmail/send_message")
+	if !NeedsApproval("COOKBOOK", "DELETE_RECIPE", nil) {
+		t.Error("COOKBOOK/DELETE_RECIPE should stay sensitive like cookbook/delete_recipe")
 	}
-	if !KnownServer("Gmail") {
-		t.Error("KnownServer(Gmail) should be true")
+	if !KnownServer("Cookbook") {
+		t.Error("KnownServer(Cookbook) should be true")
 	}
 }

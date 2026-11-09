@@ -109,10 +109,9 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	}
 	var p HealthSyncPayload
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 5<<20)).Decode(&p); err != nil {
-		// Scrubbed + bounded like every connector surface: the decode
-		// error echoes client body bytes verbatim, and the app renders
-		// `detail` as-is.
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + connectorBounded(approvals.ScrubError(err.Error()))})
+		// Scrubbed + bounded: the decode error echoes client body bytes
+		// verbatim, and the app renders `detail` as-is.
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + boundedDetail(err)})
 		return
 	}
 	if len(p.Sleep) > 100 {
@@ -146,7 +145,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		if _, err := days.UpdateOne(ctx, bson.M{"date": statsDate}, bson.M{"$set": update}, upsert()); err != nil {
 			// Scrubbed + bounded, never the raw driver text (topology/
 			// dial internals the app would render and triage would miss).
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
 			return
 		}
 	}
@@ -164,7 +163,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 			"$push": bson.M{"sleep_sessions": bson.M{"start": s.StartISO, "minutes": s.TotalMinutes}},
 			"$set":  bson.M{"updatedAt": now},
 		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
 			return
 		}
 	}
@@ -192,7 +191,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 			"$push": bson.M{"workouts": wdoc},
 			"$set":  bson.M{"updatedAt": now},
 		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": connectorBounded(approvals.ScrubError(err.Error()))})
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
 			return
 		}
 	}
@@ -223,4 +222,16 @@ func registerHealth(mux *http.ServeMux) {
 	mux.HandleFunc("/health", health)
 	mux.HandleFunc("/health/", health)
 	mux.HandleFunc("/api/health/sync", sync)
+}
+
+// boundedDetail scrubs a driver/decode error and caps it for API bodies:
+// rune-cut with a visible marker, never silent.
+func boundedDetail(err error) string {
+	const maxEcho = 128
+	s := approvals.ScrubError(err.Error())
+	runes := []rune(s)
+	if len(runes) <= maxEcho {
+		return s
+	}
+	return string(runes[:maxEcho]) + "… (truncated)"
 }

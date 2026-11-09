@@ -2,8 +2,9 @@
 //
 // Storage: MongoDB (tasks collection). No status field — a task is open
 // while completedAt is null, done once set. Completed tasks expire via
-// TTL 3 days after completion; a repeat is stored but never interpreted
-// here (agent-side per pi/skills/task-manager/SKILL.md).
+// TTL 3 days after completion; a structured repeat is interpreted here
+// (rollOver mints the next occurrence on complete) while a custom
+// condition stays agent-side (per .opencode/skills/task-manager/SKILL.md).
 // Runs over stdio for MCP clients.
 package main
 
@@ -92,9 +93,8 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 	}, out, nil
 }
 
-// Input types are named rather than inline so that `internal/skills`-style assertions
-// and `cmd/task-manager/schema_test.go` can read the SAME tags the SDK infers the wire
-// schema from. An inline struct can only be checked by reading the handler, and the
+// Input types are named rather than inline so that `cmd/task-manager/schema_test.go`
+// can read the SAME tags the SDK infers the wire schema from. An inline struct can only be checked by reading the handler, and the
 // handler and the published schema disagreed for the whole life of this file.
 //
 // Optionality here is not cosmetic. The SDK treats a field as required unless its tag

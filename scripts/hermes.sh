@@ -3,15 +3,14 @@ set -euo pipefail
 
 # Fully-containerized live stack orchestrator (Podman).
 #
-# Everything (health-api, pi (chat profile), proxy, retention) — direct to
-# https://opencode.ai/zen/go/v1, no LLM proxy — runs as compose services in
-# docker/docker-compose.yml. init self-installs the host tools it needs (curl,
-# podman + podman-compose, python3, cron), builds the images, seeds the single
-# root .env, reports the skills it finds, and installs the retention cron. Only git
-# + sudo must pre-exist. All env lives in the root .env (no per-profile .env files).
-# No host agent install, venvs, or native processes.
-# NOTE: container harness only — this script never installs the opencode CLI
-# (LLM traffic goes direct to OpenCode Go over HTTPS; no CLI needed).
+# The stack is health-api, proxy and the one-shot retention job, all as compose
+# services in docker/docker-compose.yml, against MongoDB Atlas. The agent no
+# longer runs here: T3/opencode runs on the host (#494) and is started outside
+# this script. init self-installs the host tools it needs (curl, podman +
+# podman-compose, python3, cron), builds the images, seeds the single root .env
+# and installs the retention cron. Only git + sudo must pre-exist. All env lives
+# in the root .env.
+# NOTE: container harness only — this script never installs the opencode CLI.
 #
 # The name is left over from when the agent host was the Hermes gateway.
 # Renaming is a separate mechanical change — README.md, documentation.md,
@@ -22,17 +21,6 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
-# The single agent profile. Under Hermes these were split: `gateway/` was
-# both the gateway home AND the god profile, with story and resumes nested
-# under it (both retired in #289 — their workspace checkouts stay on disk,
-# orphaned and unmanaged). Pi has no such asymmetry — each profile is a
-# directory under the agent dir and each runs as its own process.
-PROFILES=(chat)
-PI_HOME="$REPO/pi"
-
-profile_home() {
-    echo "$PI_HOME/profiles/$1"
-}
 
 # shellcheck source=scripts/lib/common.sh
 . "$REPO/scripts/lib/common.sh"
@@ -49,12 +37,12 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env (all env vars), report the skills found, set up host tools (curl, podman, python, cron), install retention cron
-  start      Start the whole container stack (health-api, pi (chat profile), proxy, retention)
+  init       Build images, seed the root .env, set up host tools (curl, podman, python, cron), install retention cron
+  start      Start the whole container stack (health-api, proxy, retention)
   stop       Stop the container stack
   restart    Recreate containers in place (up --build --force-recreate)
   status     Show all service states
-  clean      Wipe everything (profiles state, container volumes, cron). Destructive.
+  clean      Wipe run state, containers and cron. Destructive.
 EOF
 }
 
@@ -237,164 +225,49 @@ cmd_init() {
     ensure_python || true
     ensure_cron || true
 
-    info "Building container images (agent, health-api)..."
+    info "Building container images (health-api, retention)..."
     podman_compose -f "$COMPOSE" build 2>&1 || { error "podman-compose build failed."; exit 1; }
     info "Pruning unused images (prevents GBs of bloat)..."
     podman image prune -f 2>&1 | sed 's/^/  /' || true
 
-    mkdir -p "$PI_HOME" "$REPO/workspace" "$REPO/exports/browser"
-    # No chown here, and that is the fix rather than an omission. This used to hand
-    # the workspace to uid/gid 10000 because the official Hermes image ran as 10000
-    # and bind mounts had to belong to it or the gateway crash-looped. Nothing runs as
-    # 10000 any more: the pi service is `user: "0:0"` precisely so the host-owned
-    # workspace stays writable. Left in place it did the opposite of its purpose —
-    # run as root without SUDO_USER it handed the tree to a uid that owns nothing
-    # here, and with SUDO_USER it was silently undone a few lines later.
-    #
-    # Ownership of the host's own files is the SUDO_USER fix-up's job, further down,
-    # and on a non-sudo run the invoking user already owns what they just created.
-    # HERMES_UID/HERMES_GID therefore have no remaining reader in this script.
-    mkdir -p "$(profile_home "chat")"
-    # The retired side profiles' checkouts (workspace/portals,
+    # The retired side-profile checkouts (workspace/portals,
     # workspace/portfolio-resume) stay on disk, orphaned and unmanaged:
-    # init neither clones nor deletes them (#289). An empty orphan dir
-    # would later read as deliberate, so nothing is created here either.
-    # Fix ownership: when run via sudo, dirs are root-owned and
-    # clone as $SUDO_USER would get Permission denied. Do it now, not after.
-    if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
-        chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$REPO/workspace" "$PI_HOME" 2>/dev/null || true
-    fi
+    # init neither clones nor deletes them (#289), and nothing mounts them
+    # any more. An empty orphan dir would later read as deliberate, so
+    # nothing is created here either.
 
-    # Retired side-profile checkouts (workspace/portals,
-    # workspace/portfolio-resume) stay on disk, orphaned: init no longer
-    # clones them and never deletes them (#289). Existing clones keep
-    # working from the host by hand; fresh hosts simply have no copy.
-    # When run with sudo, ensure workspace/profile dirs stay owned by the
-    # invoking user (not root), so dev edits don't need sudo. Prod also benefits.
-    if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
-        chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$REPO/workspace" "$PI_HOME" 2>/dev/null || true
-    fi
-
-    # Skills are NOT copied. They used to be: `init` copied every skill from the
-    # repo's `skills/` tree into each profile's own `skills/` directory, which is how
-    # Hermes loaded them. Pi discovers `<agent-dir>/skills/` on its own (measured —
-    # pi/README.md), so the copies were a second source of truth that could drift from
-    # the first, and `if [[ ! -d "$target" ]]` meant an existing checkout never
-    # received a fix. Skills now live in git, in the two places Pi reads them:
-    #   pi/skills/<name>/          — shared by every profile (agent dir)
-    #   pi/profiles/<name>/skills/ — that profile only, passed with --skill
-    # Both are bind-mounted into the container, so `init` has nothing to install.
-    # Distinct loop variables (`b` for the profile, `d`/`s` for directories) so a
-    # reader does not have to check which one a given line means.
-    local skill_count=0
-    local s
-    for s in "$PI_HOME"/skills/*/; do
-        [[ -d "$s" ]] || continue
-        skill_count=$((skill_count + 1))
-        info "  shared skill: $(basename "$s")"
-    done
-    local b d
-    for b in "${PROFILES[@]}"; do
-        d="$(profile_home "$b")/skills"
-        [[ -d "$d" ]] || continue
-        for s in "$d"/*/; do
-            [[ -d "$s" ]] || continue
-            skill_count=$((skill_count + 1))
-            info "  $b skill: $(basename "$s")"
-        done
-    done
-    # `if`, not `[[ … ]] && warn`: an &&-list evaluates to 1 when the test is false,
-    # which is the happy path here, and a construct that fails on success is one
-    # edit away from a `set -e` trap.
-    if (( skill_count == 0 )); then
-        warn "no skills found under $PI_HOME/skills or any profile's skills/ — profiles will run without them"
-    fi
-
-install_retention_cron
+    install_retention_cron
     bash "$SCRIPTS_DIR/sysmon.sh" install || true
 
     echo
     info "Initialization complete."
-    echo "  Next: edit .env with real keys (OPENCODE_API_KEY, PASSWORD, Mongo URI), then ./scripts/hermes.sh start"
-    echo "  Access: Agento app (single URL: chat + sync) at http://<host>:${APP_PORT:-8080}  (APP_PORT in .env)"
-    echo "  Access: agent API at http://<host>:${PI_HOST_PORT:-8643}  (PI_HOST_PORT in .env, bearer PASSWORD)"
+    echo "  Next: edit .env with real keys (PASSWORD, Mongo URI), then ./scripts/hermes.sh start"
+    echo "  Access: Agento app (sync) at http://<host>:${APP_PORT:-8080}  (APP_PORT in .env)"
     echo "  Access: health-api at http://<host>:${HEALTH_HOST_PORT:-8001}  (HEALTH_HOST_PORT in .env)"
 }
 
 # ────────────────────────────────────────────────────────────
 # START / STOP / RESTART
 # ────────────────────────────────────────────────────────────
-legacy_native_bots() {
-    # PIDs left behind by the pre-container native launcher.
-    local pf found=0
-    for pf in "$RUN_DIR"/bots/*.pid; do
-        [[ -f "$pf" ]] || continue
-        if kill -0 "$(cat "$pf")" 2>/dev/null; then
-            warn "Stale NATIVE bot process found: $pf (PID $(cat "$pf"))."
-            warn "  Stop it before starting the container stack or ports will conflict."
-            found=1
-        fi
-    done
-    [[ "$found" == "1" ]] && return 1
-    return 0
-}
-
-# One real turn through the app's own path, asserted to return words.
-#
-# This is not a health check: the container healthcheck passes on a process that is listening
-# while every turn it handles fails. That gap is not theoretical — a rebuild left this stack
-# answering HTTP 200 with an empty body for every request, healthcheck green throughout, and
-# the only evidence was `stopReason: "error"` inside session files. One cheap turn closes it,
-# so a broken deploy fails here instead of being noticed later by a person.
-smoke_chat() {
-    # Not fatal to the caller: a provider outage is not a reason to leave the stack down,
-    # and tearing down a working gateway because a model is briefly unavailable helps
-    # nobody. The failure is loud and the exit code says so.
-    if bash "$SCRIPTS_DIR/smoke.sh"; then
-        return 0
-    fi
-    warn "The stack is up but did not answer a real turn. See the checks above."
-    warn "If it was already like this before this run, the cause is not this deploy."
-    return 1
-}
-
 cmd_start() {
     load_root_env
     mkdir -p "$RUN_DIR"
 
-    legacy_native_bots || {
-        warn "Native bots still running — stopping them (legacy migration)."
-        local pf
-        for pf in "$RUN_DIR"/bots/*.pid; do
-            [[ -f "$pf" ]] || continue
-            local pid
-            pid="$(cat "$pf")"
-            if kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
-                sleep 2
-                if kill -0 "$pid" 2>/dev/null; then
-                    kill -9 "$pid" 2>/dev/null || true
-                fi
-                info "  stopped native bot $(basename "$pf")"
-            fi
-        done
-    }
-
-    info "Starting container stack (health-api, pi (chat profile), proxy)..."
+    info "Starting container stack (health-api, proxy, retention)..."
     # Restarts reuse layers; only `init` prunes. `up --build` rebuilds layers
     # whose COPY/requirements changed.
-    # PI_NO_BUILD, with HERMES_NO_BUILD still honoured: the old name is what any
-    # existing muscle memory, runbook or .env uses, and silently ignoring it would
-    # turn "skip the rebuild" into a full rebuild — the expensive direction.
+    # NO_BUILD, with PI_NO_BUILD / HERMES_NO_BUILD still honoured: the old names are
+    # what any existing muscle memory, runbook or .env uses, and silently ignoring
+    # them would turn "skip the rebuild" into a full rebuild — the expensive direction.
     # --force-recreate whenever we build, because `up --build` on its own does NOT
     # recreate a container whose compose config is unchanged — and rebuilding the image does
     # not change that config. Without this flag a restart silently keeps the OLD container:
-    # the build succeeds, the smoke test passes against the previous image, and the deploy
-    # is a no-op that reports success. That is not hypothetical; it is how a live session-
-    # routes fix sat in an image while the running server 404'd, through two restarts.
+    # the build succeeds and the deploy is a no-op that reports success. That is not
+    # hypothetical; it is how a live fix sat in an image while the running server 404'd,
+    # through two restarts.
     #
-    # Skipped when PI_NO_BUILD=1, where nothing was built and there is nothing to roll.
-    if [[ "${PI_NO_BUILD:-${HERMES_NO_BUILD:-0}}" == "1" ]]; then
+    # Skipped when NO_BUILD=1, where nothing was built and there is nothing to roll.
+    if [[ "${NO_BUILD:-${PI_NO_BUILD:-${HERMES_NO_BUILD:-0}}}" == "1" ]]; then
         podman_compose -f "$COMPOSE" up -d 2>&1 || { error "podman-compose up failed."; exit 1; }
     else
         podman_compose -f "$COMPOSE" up -d --build --force-recreate 2>&1 || { error "podman-compose up failed."; exit 1; }
@@ -405,11 +278,7 @@ cmd_start() {
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
 
     echo ""
-    # Before the status table, so a failed turn is the last thing on screen.
-    smoke_chat || SMOKE_FAILED=1
-
     cmd_status
-    return "${SMOKE_FAILED:-0}"
 }
 
 cmd_stop() {
@@ -436,19 +305,17 @@ cmd_restart() {
     info "Running data retention ..."
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
     echo ""
-    smoke_chat || SMOKE_FAILED=1
     cmd_status
-    return "${SMOKE_FAILED:-0}"
 }
 
 # ────────────────────────────────────────────────────────────
 # STATUS
 # ────────────────────────────────────────────────────────────
 cmd_status() {
-    echo "Agent Status (podman stack)" && echo ""
+    echo "Stack Status (podman stack)" && echo ""
     podman_compose -f "$COMPOSE" ps
     echo ""
-    echo "Logs: podman-compose -f docker/docker-compose.yml logs -f <service>"
+    echo "Logs (from repo root): podman-compose --env-file .env -f docker/docker-compose.yml logs -f <service>"
 }
 
 # ────────────────────────────────────────────────────────────
@@ -456,13 +323,10 @@ cmd_status() {
 # ────────────────────────────────────────────────────────────
 cmd_clean() {
     echo -e "${RED}This wipes:${NC}"
-    echo "  - every conversation transcript, and pi runtime state (sessions, logs, cache)"
-    echo "  - the provider credentials Pi wrote at login (pi/auth.json)"
-    echo "  - the retention cron entry"
+    echo "  - the retention cron entry and the every-minute sysmon sampler"
     echo "  - container volumes and containers"
-    echo -e "${RED}Remote MongoDB is NOT touched. Everything tracked in git —"
-    echo -e "pi/settings.json, pi/mcp.json, the AGENTS.md files, skills, the"
-    echo -e "workspace repos — is KEPT.${NC}"
+    echo "  - run/ (logs and sampled metrics)"
+    echo -e "${RED}Remote MongoDB is NOT touched, and no tracked file is deleted.${NC}"
     read -r -p "Type 'yes' to wipe everything: " answer
     if [[ "$answer" != "yes" ]]; then
         warn "Clean aborted."
@@ -477,33 +341,8 @@ cmd_clean() {
     rm -rf "$RUN_DIR"
     info "run/ removed."
 
-    local b
-    for b in "${PROFILES[@]}"; do
-        wipe_profile "$b"
-    done
-    # Agent-dir runtime state, named file by file on purpose: pi/ is a TRACKED
-    # directory (settings.json, mcp.json, AGENTS.md, profiles/*/AGENTS.md, skills),
-    # so a blanket `rm -rf` here would delete committed configuration that `init`
-    # does not recreate. Only what Pi writes at runtime goes.
-    if [[ -d "$PI_HOME" ]]; then
-        info "Wiping pi agent-dir runtime state ..."
-        rm -rf "$PI_HOME"/sessions "$PI_HOME"/logs "$PI_HOME"/cache "$PI_HOME"/tmp
-        rm -f "$PI_HOME"/auth.json "$PI_HOME"/models-store.json "$PI_HOME"/mcp-auth.json
-    fi
-
     echo ""
     info "Clean complete. Re-run ./scripts/hermes.sh init to start over."
-}
-
-# A profile directory is TRACKED too (AGENTS.md, skills/), so this removes
-# session and cache state and nothing else — `rm -rf` on a profile would delete
-# the instructions the next `init` would not put back.
-wipe_profile() {
-    local b="$1"
-    local d; d="$(profile_home "$b")"
-    [[ -d "$d" ]] || return 0
-    info "Wiping $b runtime state ..."
-    rm -rf "$d"/sessions "$d"/logs "$d"/cache "$d"/tmp
 }
 
 # ────────────────────────────────────────────────────────────

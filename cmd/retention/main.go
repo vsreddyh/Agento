@@ -1,10 +1,12 @@
-// Command retention enforces the Hermes bots' data lifecycle.
+// Command retention enforces the Agento domains' data lifecycle.
 //
-//	money        transactions autowiped when older than 90 days
-//	health-check hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
-//	cookbook     permanent — no-op
-//	reports      read+unstarred pruned after 7 days; unread/starred NEVER touched
-//	story/resumes git repos — no-op
+//	money         transactions autowiped when older than 90 days
+//	health-check  hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
+//	cookbook      permanent — no-op
+//	reports       read+unstarred pruned after 7 days; unread/starred NEVER touched
+//	tasks         reconciled, never pruned: completed structured repeats with
+//	              no successor are REPORTED (#180); plus task_mutations pruned
+//	              after 90 days
 //
 // Only the remote MongoDB is touched (MONGODB_URI / MONGODB_DB from env).
 package main

@@ -20,7 +20,7 @@ func testStore(t *testing.T) *Store {
 	// happened to run alongside money: the collection was dropped between a write and
 	// the read that asserted it, and the test reported empty results with no error
 	// anywhere. A test that fails based on which package the scheduler paired it with is
-	// not a test. internal/tasks, internal/projects and internal/notes already have
+	// not a test. internal/tasks and internal/projects already have
 	// their own; this closes the last two.
 	t.Setenv("MONGODB_DB", "cookbook_test")
 	s, err := New()
