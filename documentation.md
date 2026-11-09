@@ -176,7 +176,7 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080 compose def
 
 ## Android App API
 
-The custom Android app (`android/agento/`) uses ONE Server URL + Password — the proxy (`:8080` compose default, `APP_PORT` remaps) — which routes `/api/*` and `/health` to health-api (`:8000` container, `:8001` direct-host default). Every domain route is bearer-authenticated with `PASSWORD`.
+The custom Android app (`android/agento/`) uses ONE Server URL + Password — the proxy (`:8080` compose default, `APP_PORT` remaps) — which routes `/api/*` and `/health` to health-api (`:8000` container, `:8001` direct-host default). Every domain route is bearer-authenticated with `PASSWORD`, except `GET /health` (unauthenticated liveness) and `GET /api/connectors/callback` (the Google-redirected browser carries no `Authorization` header — the OAuth state is the capability).
 
 | Route | Purpose |
 |---|---|

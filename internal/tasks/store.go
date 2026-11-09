@@ -9,7 +9,7 @@
 // (= completedAt + RetentionDays); open tasks carry no expiresAt and never
 // expire. Complete rolls a STRUCTURED repeat (interval or selected days) over
 // itself and echoes the rule back so the caller can't miss it; a custom
-// condition is the caller's to advance (see pi/skills/task-manager/SKILL.md).
+// condition is the caller's to advance (see .opencode/skills/task-manager/SKILL.md).
 package tasks
 
 import (

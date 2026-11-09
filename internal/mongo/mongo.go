@@ -32,9 +32,10 @@ const (
 	//
 	// The driver default is 100 per member, which is dimensioning for load this
 	// deployment will never see: two users, one assistant turn at a time, and
-	// each server handles a single tool call sequentially. With ~18 clients
-	// the default lets a loaded stack hold thousands of connections (idle
-	// holds monitors only, ~18 x 3 = ~54, since minPoolSize is 0), and the
+	// each server handles a single tool call sequentially. With ~12 clients
+	// (11 MCP server processes plus health-api) the default lets a loaded
+	// stack hold thousands of connections (idle holds monitors only,
+	// ~12 x 3 = ~36, since minPoolSize is 0), and the
 	// 2026-10-31 outage showed why that matters — churn against that ceiling
 	// (#423) is what took the cluster down, not steady-state count (#424).
 	//
@@ -128,7 +129,7 @@ func Client() (*mongo.Client, error) {
 // ConnectURI dials an explicit URI (for stores targeting a specific database,
 // e.g. tests on a throwaway DB independent of process env). It shares the pool
 // defaults with Client(): a store that dials its own client is still one of the
-// ~18 clients whose connections add up.
+// ~12 clients whose connections add up.
 func ConnectURI(uri string) (*mongo.Client, error) {
 	return mongo.Connect(context.Background(), clientOptions(uri))
 }

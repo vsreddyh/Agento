@@ -16,7 +16,7 @@ import (
 //
 // The server stores the recurrence and rolls a STRUCTURED one (interval or
 // selected days) over itself on completion; only a custom condition is the
-// caller's to interpret (see pi/skills/task-manager/SKILL.md).
+// caller's to interpret (see .opencode/skills/task-manager/SKILL.md).
 
 // Repeat is a task's recurrence, in one of three mutually exclusive modes:
 //
@@ -27,7 +27,7 @@ import (
 //
 // An all-zero Repeat is a one-shot task. The server advances a structured
 // recurrence (interval or weekly) itself; a custom condition is the caller's
-// to interpret (see pi/skills/task-manager/SKILL.md).
+// to interpret (see .opencode/skills/task-manager/SKILL.md).
 type Repeat struct {
 	// Every is the count, RepeatEveryMin..RepeatEveryMax; 0 = unset.
 	Every int

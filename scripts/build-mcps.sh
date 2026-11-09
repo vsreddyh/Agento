@@ -6,17 +6,16 @@
 # so the binaries cannot break on a libc change (the same flags the container
 # images use).
 #
-# Kept servers only: notes, memory and browser are being removed (#495)
-# and must NOT be added here. Secrets are never baked in — every server
-# reads MONGODB_URI/MONGODB_DB (gmail/calendar also need
-# GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, CONNECTORS_ENCRYPTION_KEY)
-# from the environment at runtime; see opencode.json.
+# Kept servers only: notes, memory, browser, gmail and calendar are being
+# removed (#495) and must NOT be added here. Secrets are never baked in —
+# every server reads MONGODB_URI/MONGODB_DB from the environment at runtime;
+# see opencode.json.
 set -euo pipefail
 
 cd "$(dirname "$0")/.." # repo root
 
 # shellcheck disable=SC2034
-SERVERS="task-manager project-manager miser-money cookbook health-check reports gmail calendar"
+SERVERS="task-manager project-manager miser-money cookbook health-check reports"
 
 mkdir -p bin
 export CGO_ENABLED=0
