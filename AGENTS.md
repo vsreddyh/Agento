@@ -57,7 +57,7 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   `init` never installs the opencode CLI. health-api (`:8001` compose default —
   `HEALTH_HOST_PORT` remaps) binds `0.0.0.0` inside its container.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
-  (`podman-compose --env-file "$REPO/.env" -f docker/docker-compose.yml run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
+  (`podman-compose --env-file .env -f docker/docker-compose.yml run --rm retention` from the repo root → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
    permanent; reports (∃-Mail) prunes read+unstarred >7d (never unread/starred).

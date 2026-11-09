@@ -144,6 +144,9 @@ __pycache__/
 /notes
 /memory
 /browser
+/reports
+/gmail
+/calendar
 
 # browser runtime state (page dumps, console logs)
 .playwright-mcp/

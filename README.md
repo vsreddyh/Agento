@@ -49,7 +49,7 @@ The five retired servers (`notes`, `memory`, `browser`, `gmail`, `calendar`) are
 | Money | `money_transactions` | >90d autowipe |
 | Cookbook | `cookbook_*` | **Permanent** |
 | Health tracking | `hc_meals`, `hc_days`, `hc_weight` + Health Connect sync via `health-api` | `hc_meals`/`hc_days` >30d; `hc_weight` **never pruned** |
-| Tasks / projects | `tasks`, `projects` (+ `task_history`) | Task TTL 3 days; history outlives it |
+| Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |
 | ∃-Mail | `reports` | Read + unstarred >7d; unread and starred are never pruned |
 | Notes | `notes` | Permanent (server retired in #495) |
 
