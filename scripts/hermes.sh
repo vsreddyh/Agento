@@ -316,7 +316,7 @@ cmd_status() {
     echo "Stack Status (podman stack)" && echo ""
     podman_compose -f "$COMPOSE" ps
     echo ""
-    echo "Logs: podman-compose --env-file \"$REPO/.env\" -f docker/docker-compose.yml logs -f <service>"
+    echo "Logs (from repo root): podman-compose --env-file .env -f docker/docker-compose.yml logs -f <service>"
 }
 
 # ────────────────────────────────────────────────────────────

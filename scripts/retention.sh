@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Data retention for the Hermes bots. Runs via cron (installed by
+# Data retention for the Agento domains. Runs via cron (installed by
 # scripts/hermes.sh init) and once on every start.
 #
 # The live stack is fully containerized (Podman), so this just runs the `retention`
-# one-shot service from docker/docker-compose.yml (same bot image, Go
-# `retention` binary baked in, MONGODB_URI/MONGODB_DB injected from the root .env).
+# one-shot service from docker/docker-compose.yml (its own minimal image,
+# Go `retention` binary baked in, MONGODB_URI/MONGODB_DB injected from the root .env).
 # The actual policy logic lives in cmd/retention/main.go.
 #
 #   story       git repo (workspace/portals)   — no-op
