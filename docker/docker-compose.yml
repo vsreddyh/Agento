@@ -25,8 +25,11 @@ services:
       # container side.
       - "${HEALTH_HOST_PORT:-8001}:8000"
     volumes:
-      # VPS exports folder for mobile downloads (#26); read-only is enough.
-      - ../exports:/exports:ro
+      # VPS exports folder for the Files tab (#26 reads, #340 uploads):
+      # writable — uploads stage (CreateTemp) and land (rename) under here.
+      # The handler jails every write under /exports and never replaces an
+      # existing file, so this is not a general scratch space.
+      - ../exports:/exports:rw
     environment:
       # This service ingests Health Connect rows and writes them to MongoDB.
       # It never calls a model, so no provider credential belongs here.
