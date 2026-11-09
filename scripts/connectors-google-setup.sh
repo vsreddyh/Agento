@@ -1801,28 +1801,27 @@ if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/dock
   _render_missing=""
   # Health-api is REQUIRED (it serves connect/callback). The pi service
   # is gone with #494, so checking it would block setup on a correct tree.
-  for _svc in health-api; do
-    _block_out=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — stopping before the render"; exit 1; }
-    _service_block "$_svc" >"$_block_out"
-    for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
-      if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[[:space:]]*[^\"'[:space:]]" "$_block_out"; then
-        printf '  %s✓%s %s present for %s in rendered compose config\n' "$GREEN" "$RESET" "$k" "$_svc"
-      else
-        # Same rc discipline as the comment-block grep: rc=1 is a genuine
-        # empty render, rc≥2 is a read failure that must not masquerade as
-        # "renders EMPTY" (the message would send the reader to the wrong fix).
-        _render_rc=$?
-        if (( _render_rc != 1 )); then
-          warn "could not read the rendered config (grep exit $_render_rc) — the .env writes stand, but nothing is verified"
-          rm -f "$_block_out" || true
-          exit 1
-        fi
-        printf '  %s✗%s %s renders EMPTY for %s — fix it before restarting\n' "$YELLOW" "$RESET" "$k" "$_svc"
-        _render_missing="${_render_missing:+$_render_missing }${_svc}/${k}"
+  _svc=health-api
+  _block_out=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — stopping before the render"; exit 1; }
+  _service_block "$_svc" >"$_block_out"
+  for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
+    if grep -qE -- "^[[:space:]]*(-[[:space:]]*)?${k}[:=][[:space:]]*[\"']?[[:space:]]*[^\"'[:space:]]" "$_block_out"; then
+      printf '  %s✓%s %s present for %s in rendered compose config\n' "$GREEN" "$RESET" "$k" "$_svc"
+    else
+      # Same rc discipline as the comment-block grep: rc=1 is a genuine
+      # empty render, rc≥2 is a read failure that must not masquerade as
+      # "renders EMPTY" (the message would send the reader to the wrong fix).
+      _render_rc=$?
+      if (( _render_rc != 1 )); then
+        warn "could not read the rendered config (grep exit $_render_rc) — the .env writes stand, but nothing is verified"
+        rm -f "$_block_out" || true
+        exit 1
       fi
-    done
-    rm -f "$_block_out" || true
+      printf '  %s✗%s %s renders EMPTY for %s — fix it before restarting\n' "$YELLOW" "$RESET" "$k" "$_svc"
+      _render_missing="${_render_missing:+$_render_missing }${_svc}/${k}"
+    fi
   done
+  rm -f "$_block_out" || true
   if [[ -n "$_render_missing" ]]; then
     warn "empty render for: ${_render_missing} — an empty value is the misconfiguration this step exists to catch"
     exit 1
