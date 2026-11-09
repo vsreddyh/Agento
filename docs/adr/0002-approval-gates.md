@@ -290,11 +290,16 @@ in-process gate, the policy table and the audit trail outright: servers
 register tools directly with `mcp.AddTool`, no policy row or approvals
 surface exists anywhere.)
 
-- `pi/mcp.json` points straight at each server binary (ADR-0011 Stage 2
-  deleted the `mcp-gate` relay; enforcement is in-process now); the entrypoint
-  `pi mcp list` gate probes the servers directly, unchanged.
-- The app needs an approvals surface (pending cards + approve/deny) and an
-  audit screen — second PR in this stack. (Never built as specified here:
+- `pi/mcp.json` pointed straight at each server binary (ADR-0011 Stage 2
+  deleted the `mcp-gate` relay; enforcement was in-process from then until
+  #503 deleted the gate); the entrypoint `pi mcp list` gate probed the
+  servers directly. Both the file and the entrypoint are gone with the pi
+  container (#494).
+- The app needed an approvals surface (pending cards + approve/deny) and an
+  audit screen — second PR in this stack, never built as specified here:
   the in-app approval queue that did exist was removed in #487, and #503
-  deleted the audit trail — no approvals surface exists.)
-- Adding an MCP tool now requires a policy row, enforced by test.
+  deleted the audit trail — no approvals surface exists.
+- Adding an MCP tool required a policy row, enforced by test. #503 deleted
+  the table; the live pin is `TestEveryToolClassified` in
+  `opencode_perm_test.go`, which fails when a registered tool is neither
+  ask-covered nor explicitly free.
