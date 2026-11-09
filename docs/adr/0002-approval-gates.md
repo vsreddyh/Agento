@@ -280,7 +280,9 @@ deleted the audit trail, Pi and the containerised agent are gone with
   are out of scope (connectors issue owns the vault).
 - Residual: pre-#487 a 14-minute held call occupied its turn until expiry;
   post-#487 nothing parks, so a stuck sensitive write is a harness prompt,
-  never a hold. Approvals show tool + args + time but not which conversation asked.
+  never a hold. Approvals showed tool + args + time but not which
+  conversation asked — and no approvals surface exists any more (in-app
+  queue removed in #487, audit trail deleted in #503).
 
 ## Consequences
 
