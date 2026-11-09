@@ -225,7 +225,7 @@ Every `PI_*` variable and `VPS_SSH_DIR` was removed with the agent container in 
 
 - **Secrets Management**: Live API keys and database credentials reside exclusively in the git-ignored `.env` file.
 - **Container Isolation**: `health-api` mounts only `exports/` (read-only) and the docker socket is not mounted anywhere (Podman is daemonless — there is no shared socket). No container runs the agent; T3/opencode runs as the invoking host user.
-- **Single credential, one principal**: the same `PASSWORD` bearer authenticates every `health-api` route, so domain writes from the app and the agent share one principal. Per-user auth arrives only with per-user auth, not before.
+- **Single credential, one principal**: the same `PASSWORD` bearer authenticates every `health-api` route except the two unauthenticated ones (`GET /health` liveness and `GET /api/connectors/callback`), so domain writes from the app and the agent share one principal. Per-user auth arrives only with per-user auth, not before.
 
 ### Approval prompts + audit (#313, #487, #503)
 

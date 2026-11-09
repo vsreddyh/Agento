@@ -206,6 +206,8 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── money/               # miser-money MCP (accounts + transactions; code in cmd/ + internal/)
 │   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
 │   ├── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
+│   ├── task-manager/        # tasks MCP (code in cmd/ + internal/)
+│   ├── project-manager/     # projects MCP (code in cmd/ + internal/)
 │   ├── notes/               # notes MCP (retired in #495; code in cmd/ + internal/)
 │   └── reports/             # reports MCP (∃-Mail inbox writer, 7-day retention; code in cmd/ + internal/)
 ├── cmd/                     # Go services (each builds to a static binary)

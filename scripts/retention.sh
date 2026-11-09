@@ -27,7 +27,7 @@ COMPOSE="$REPO/docker/docker-compose.yml"
 load_root_env
 
 case "${1:-run}" in
-    --dry-run) podman_compose -f "$COMPOSE" run --rm retention -- --dry-run ;;
+    --dry-run) podman_compose -f "$COMPOSE" run --rm retention --dry-run ;;
     run|"") podman_compose -f "$COMPOSE" run --rm retention ;;
     *) echo "usage: $0 [run|--dry-run]" >&2; exit 2 ;;
 esac
