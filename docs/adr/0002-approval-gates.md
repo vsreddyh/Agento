@@ -5,13 +5,15 @@
   hold flow itself, and by the pure removal (#503, 2026-11) for the
   wrapper and audit trail: holds are gone entirely — no park, no poll,
   no wait, no audit rows.
-  Confirmation lives in T3/opencode permission prompts; the wrapper
-  executes known tools at once with an audit row (reads included) and
-  refuses draft-only sends plus unknown tools outright. `allowed`
-  post-migration means executed under a harness grant, not ran-without-
-  asking. The sections below describe the relay and the hold flow as
-  built; do not run them as a live runbook.
 - Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
+- Scope note (#503, 2026-11): nothing below this header describes live
+  code. The relay, the hold flow, the in-process gate, the policy table,
+  the `approvals`/`audit_log` collections and the sweep are all deleted;
+  present-tense sentences in the sections below ("the wrapper executes",
+  "the gate denies", "servers open the same collections") are relay-era
+  record, not runbooks. The live gate is the `opencode.json` permission
+  prompts plus `mcp.AddTool` in each server main — no audit row is
+  written anywhere.
 - Issue: #313
 
 ## Context
