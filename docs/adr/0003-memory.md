@@ -2,6 +2,8 @@
 
 Status: accepted (#315)
 
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
+
 ## Context
 
 Until now the agent's "memory" was whatever the operator had hand-edited into

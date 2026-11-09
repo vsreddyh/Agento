@@ -49,14 +49,21 @@ marked superseded and kept on disk, not rewritten.
   survives anything, nothing reattaches.
 - ADR-0002 (approval gates): holds are gone — confirmation is a harness
   prompt, the gate executes at once with an audit row.
+- ADR-0003 (per-profile memory): the Memory screen and the
+  `memory_items`/`memory_settings` store are gone with the memory server.
 - ADR-0004 (taught skills): Skills/Teach screens and the save-review-run
   loop are gone with the app chat era.
+- ADR-0005 (browser tasks): the browser server is gone — no navigation
+  runs, so no prompt-per-navigation fires.
 - ADR-0006 (live call mode): voice/live died with chat — the thin client
   is text/sync only.
 - ADR-0007 (chat attachments): the composer they attached to is gone.
 - ADR-0009 / ADR-0010 (connectors + connector MCP servers): grants,
   OAuth routes and the Gmail/Calendar servers are removed; no connector
   docs, env vars or collections remain.
+- ADR-0011 (connection footprint): the Pi stack it measures and plans
+  for (pi container, mcp-gate relays, pi-gateway stores) is gone —
+  superseded in full, including the staged plan.
 
 ## Consequences
 
@@ -66,5 +73,4 @@ marked superseded and kept on disk, not rewritten.
   except this ADR.
 - The six kept servers are the complete agent surface; adding one
   follows `documentation.md` ("Extending the Stack").
-- Current ADRs (0008 bulk-batch atomicity, 0011 connection footprint)
-  stand as written.
+- Current ADR-0008 (bulk-batch atomicity) stands as written.

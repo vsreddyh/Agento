@@ -58,7 +58,7 @@ T3/opencode talks directly to OpenCode Go (`https://opencode.ai/zen/go/v1`) usin
 
 ## Stack Lifecycle (Podman)
 
-All container management is orchestrated through [`scripts/hermes.sh`](scripts/hermes.sh), backed by [`docker/docker-compose.yml`](docker/docker-compose.yml). The `podman-compose` spellings below are what the script's `podman_compose()` wrapper executes (it supplies `--env-file .env -f docker/docker-compose.yml` from the repo root) — run them through the script, not copy-paste; bare `podman-compose` fails everywhere without the flags.
+All container management is orchestrated through [`scripts/hermes.sh`](scripts/hermes.sh), backed by [`docker/docker-compose.yml`](docker/docker-compose.yml). Run the commands through the script, not the parenthesised spellings: the script's `podman_compose()` wrapper adds `--env-file .env -f docker/docker-compose.yml` from the repo root, and the bare `podman-compose` spellings below fail everywhere without those flags.
 
 ### `init`
 1. Verifies host dependencies (podman, compose, python3, curl, cron) and installs missing requirements.
