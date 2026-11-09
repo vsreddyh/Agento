@@ -2,9 +2,9 @@
 # Build the kept MCP servers as static local binaries for T3/opencode (#489).
 #
 # Produces repo-root `bin/<server>` (git-ignored), which is what the
-# `mcp.servers` entries in `opencode.json` execute. Same flags as the pi
-# image build (`docker/pi/Dockerfile`): CGO_ENABLED=0 + -trimpath so the
-# binaries cannot break on a libc change.
+# `mcp.servers` entries in `opencode.json` execute. CGO_ENABLED=0 + -trimpath
+# so the binaries cannot break on a libc change (the same flags the container
+# images use).
 #
 # Kept servers only: notes, memory and browser are being removed (#495)
 # and must NOT be added here. Secrets are never baked in — every server

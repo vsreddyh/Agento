@@ -30,7 +30,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.23 // indirect
 	github.com/googleapis/gax-go/v2 v2.26.2 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect

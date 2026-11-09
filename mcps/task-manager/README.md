@@ -36,7 +36,7 @@ data model — `cmd/task-manager/schema_test.go` asserts the two agree per tool.
 - **No status field:** openness is `completedAt == null`. Never add one.
 - **No server-side repeat logic:** `repeat_rule` is never parsed here.
   The agent interprets it and creates the next occurrence (see
-  `pi/skills/task-manager/SKILL.md`); `complete_task` only echoes the rule
+  `.opencode/skills/task-manager/SKILL.md`); `complete_task` only echoes the rule
   back with a `follow_up` nudge.
 
 ## `complete_task` and the `rollover` field (#180)

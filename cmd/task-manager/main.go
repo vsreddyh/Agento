@@ -92,9 +92,8 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 	}, out, nil
 }
 
-// Input types are named rather than inline so that `internal/skills`-style assertions
-// and `cmd/task-manager/schema_test.go` can read the SAME tags the SDK infers the wire
-// schema from. An inline struct can only be checked by reading the handler, and the
+// Input types are named rather than inline so that `cmd/task-manager/schema_test.go`
+// can read the SAME tags the SDK infers the wire schema from. An inline struct can only be checked by reading the handler, and the
 // handler and the published schema disagreed for the whole life of this file.
 //
 // Optionality here is not cosmetic. The SDK treats a field as required unless its tag

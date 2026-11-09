@@ -1,36 +1,12 @@
-# ──────────────────────────────────────────────────────
-# Shared environment for the services that talk to MongoDB.
+# The whole live stack: health-api, proxy and the one-shot retention job.
 #
-# The anchor IS the mapping — three variables, no `environment:` wrapper. That is
-# not a style choice. podman-compose merges an anchor with `<<:` without
-# interpreting it, so a wrapper here does not merge: it produces one environment
-# entry literally named `environment`, whose value is the stringified mapping.
-# Nothing else is set, and it looks correct in `config` output, which still prints
-# the three variables underneath. Measured, after this file got that shape by
-# accident: the container's env was
+# The agent runtime is gone (#494). T3/opencode runs on the host and talks to
+# the same MongoDB Atlas the phone does; this file no longer carries an agent
+# service, an agent image or any PI_* variable.
 #
-#   environment={'OPENCODE_API_KEY': '...', 'MONGODB_URI': 'mongodb+srv://...', 'MONGODB_DB': 'hermes'}
-#
-# and nothing else, so all eight MCP servers failed with `MONGODB_URI is not set`
-# and the pi entrypoint refused to start. Usage is therefore:
-#
-#   environment:
-#     <<: *mongo-env
-#     PASSWORD: ...
-#
-# This replaced two anchors: `x-bot-base`, which existed to build the Hermes bot
-# image and so carried `build`/`user`/`restart` next to this mapping (a service
-# merging it wholesale inherited the Hermes image), and the `&bot-base-environment`
-# half of it, which is what survives here. The four `HERMES_*` variables that used
-# to sit alongside these went with the image that read them — a variable nothing
-# reads misleads whoever reads this file next.
-#
-# MONGODB_DB's default stays `hermes`: that is the name of the Atlas database, not
-# a reference to the agent, and changing it would point the stack at an empty one.
-x-mongo-env: &mongo-env
-  OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-  MONGODB_URI: ${MONGODB_URI:-}
-  MONGODB_DB: ${MONGODB_DB:-hermes}
+# MONGODB_DB's default stays `hermes`: that is the name of the Atlas database,
+# not a reference to the agent, and changing it would point the stack at an
+# empty one.
 
 services:
 
@@ -44,36 +20,32 @@ services:
       dockerfile: docker/health-api/Dockerfile
     user: "1000:1000"
     ports:
-      # HOST port only, like PI_HOST_PORT for pi: the container always
-      # listens on 8000 (main.go Addr, healthcheck URL), so change only
-      # the host mapping, never the container side.
+      # HOST port only: the container always listens on 8000 (main.go Addr,
+      # healthcheck URL), so change only the host mapping, never the
+      # container side.
       - "${HEALTH_HOST_PORT:-8001}:8000"
     volumes:
       # VPS exports folder for mobile downloads (#26); read-only is enough.
       - ../exports:/exports:ro
     environment:
-      # Deliberately NOT `<<: *mongo-env`. That anchor carries OPENCODE_API_KEY, and
-      # this service never calls a model — it ingests Health Connect rows and writes
-      # them to MongoDB. Merging it would put a provider credential in a container
-      # that has no use for one, so the two Mongo variables are restated instead.
-      # Recorded here because the next dedup pass would otherwise "fix" this.
+      # This service ingests Health Connect rows and writes them to MongoDB.
+      # It never calls a model, so no provider credential belongs here.
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
       PASSWORD: ${PASSWORD:-}
-      # Google connectors OAuth (#488): the connector routes live here now
+      # Google connectors OAuth (#488): the connector routes live here
       # (list/connect/disconnect/callback), so all four travel with this
       # service — any piece missing leaves ConnectorOAuth nil and connect
-      # answers 501. Same four the pi service carries; each service reads
-      # its own copy from the root .env.
+      # answers 501. Each service reads its own copy from the root .env.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-}
       CONNECTORS_ENCRYPTION_KEY: ${CONNECTORS_ENCRYPTION_KEY:-}
-      # Same GC target as pi (ADR-0011): this service is a long-lived Go process
-      # whose heap is almost entirely request-scoped, so halving the growth target
-      # is expected to cut its resident set at a CPU cost this box is nowhere near
-      # paying — expected, not measured: same hedge as pi's comment, same reason.
-      # Set here rather than in the Dockerfile so the value is visible next to the
+      # This service is a long-lived Go process whose heap is almost entirely
+      # request-scoped, so halving the growth target is expected to cut its
+      # resident set at a CPU cost this box is nowhere near paying — expected,
+      # not measured (ADR-0011): treat the comment as the hypothesis. Set here
+      # rather than in the Dockerfile so the value is visible next to the
       # other footprint knobs.
       GOGC: "50"
     healthcheck:
@@ -85,14 +57,11 @@ services:
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
-  # Proxy — single URL for the Agento app (chat + sync on one port).
-  # Routes /p/* → pi :8643 and /api/* + /health → health-api :8000
-  # (except /api/model/options → pi, the provider picker;
-  # see docker/proxy/nginx.conf). App Server URL: http://<host>:${APP_PORT:-8080}.
-  # Direct ports stay published for comparison: :8643 (pi) and :8001 (health-api)
-  # — compose defaults; PI_HOST_PORT / HEALTH_HOST_PORT remap the host side.
-  # The Hermes gateway's :8642 went with the service, and nothing but its own
-  # documentation still referred to it.
+  # Proxy — single URL for the Agento app (sync only).
+  # Routes /api/* + /health → health-api :8000.
+  # App Server URL: http://<host>:${APP_PORT:-8080}.
+  # Direct health-api stays published for comparison: :8001 — compose default;
+  # HEALTH_HOST_PORT remaps the host side.
   # ──────────────────────────────────────────────────────
   proxy:
     # Pinned by tag, not by digest, and deliberately so: this image is
@@ -113,17 +82,7 @@ services:
       # dependency graph with `deps = {x: {} for x in deps}` and a mapping value is
       # an unhashable dict, so ANY `condition:` form — list or mapping syntax —
       # makes it die with `TypeError: cannot use 'dict' as a dict key` before it
-      # reads a single service. Verified, both spellings. So the ordering is all we
-      # get, and ordering is all this needs: nginx re-resolves `pi` per request
-      # (`resolver 10.89.0.1 valid=10s`), so a proxy that starts before pi answers
-      # 502 for a few seconds rather than never.
-      #
-      # Not waiting on pi's *health* is also the right behaviour independently: that
-      # healthcheck is a real connectivity gate (its entrypoint refuses to start if
-      # any MCP server in pi/mcp.json fails to connect), so a proxy gated on it would
-      # take health-api's /api/* routes down with it — and health sync has nothing
-      # to do with the agent.
-      - pi
+      # reads a single service. Verified, both spellings.
       - health-api
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/ping"]
@@ -131,160 +90,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
-    restart: unless-stopped
-
-  # ──────────────────────────────────────────────────────
-  # Pi — the agent host. One container, one Pi process for the single chat
-  # profile, fronted by the pi-gateway binary which serves the OpenAI-compatible
-  # surface the Android app already speaks.
-  #
-  # This is the only agent host. It was the second one: `gateway` (the Hermes
-  # runtime, :8642) coexisted with this service while the app's single URL was being
-  # moved across, and it is gone now. Nothing routes to :8642 and nothing depends on
-  # it — the comparison it existed for is done.
-  #
-  # The port stays 8643, not 8642: 8642 was never this service's to take, it was the
-  # number the app already knew. Nothing reads that port any more, so moving would
-  # churn an app-facing default for no gain.
-  #
-  # Starts as root because the bind-mounted workspace and pi/ dir are owned by the
-  # host uid, so a non-root process cannot write session trees or repo checkouts
-  # there.
-  # ──────────────────────────────────────────────────────
-  pi:
-    build:
-      context: ..
-      dockerfile: docker/pi/Dockerfile
-    user: "0:0"
-    # pi-gateway, NOT the image's default CMD. It serves the HTTP surface and spawns
-    # one `pi --mode rpc` per profile with that profile's directory as cwd — which is
-    # what makes each agent load its own AGENTS.md. Running the image default (`pi
-    # --mode rpc` on stdio) starts a process that serves no port at all.
-    # The entrypoint execs this, after its `pi mcp list` check.
-    command: ["/usr/local/bin/pi-gateway"]
-    ports:
-      # HOST port only — the container always listens on 8643. Deliberately NOT
-      # named PI_SERVER_PORT: that is the variable pi-gateway itself reads as its
-      # bind port, so sharing the name invites the obvious wrong fix. Someone
-      # debugging a port problem reaches for PI_SERVER_PORT, which would move only
-      # this side; and if it were then also passed into the container, the listener
-      # would move off the mapped port and out from under the healthcheck.
-      # PI_HOST_PORT cannot collide with anything the binary reads.
-      #
-      # The app should go through the proxy (:8080) once nginx is pointed here.
-      - "${PI_HOST_PORT:-8643}:8643"
-    volumes:
-      # The Pi agent dir: settings.json, mcp.json, AGENTS.md, profiles/chat/.
-      # Pi writes sessions/, auth.json and models-store.json here; all gitignored.
-      - ../pi:/opt/pi
-      # Workspace checkouts from the retired side profiles (portals,
-      # portfolio-resume) stay mounted but unmanaged (#289).
-      - ../workspace:/workspace
-      # Exports, writable: the browser MCP server saves evidence bundles
-      # under browser/ (the Files tab reads them via health-api). rw only
-      # here — health-api keeps its read-only mount — and the server jails
-      # every write under browser/ with generated filenames, so the agent
-      # cannot touch anything else in the tree.
-      - ../exports:/exports:rw
-      # VPS SSH keys, least-privilege file mounts (read-only): kept for host-side
-      # git by hand. No profile clones or pulls on its own any more.
-      - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519:/root/.ssh/id_ed25519:ro
-      - ${VPS_SSH_DIR:-/root/.ssh}/id_ed25519.pub:/root/.ssh/id_ed25519.pub:ro
-      - ${VPS_SSH_DIR:-/root/.ssh}/known_hosts:/root/.ssh/known_hosts:ro
-    environment:
-      # Mongo + the provider key, from the shared anchor so they cannot drift from
-      # health-api's. Restating them here would duplicate the wiring, and that
-      # duplication is the bug this stack has been fighting throughout: someone adds a
-      # variable to the anchor and this service silently does not get it.
-      #
-      # A genuinely required variable going missing is still loud: the entrypoint
-      # dies if any MCP server fails to connect.
-      <<: *mongo-env
-      # Bearer token for the pi-gateway HTTP surface — the same value the app already
-      # sends, which is why the cutover needed no app change.
-      PASSWORD: ${PASSWORD:-}
-      # Go GC target for every Go process in this container — pi-gateway and each
-      # MCP server Pi spawns over stdio (they inherit this env; mcp.json passes no
-      # env of its own). GOGC=50 collects at half the heap of the default, which at
-      # one turn at a time is expected to give back a meaningful fraction of each
-      # process's resident set at a CPU cost this box is nowhere near paying —
-      # expected, not measured: ADR-0011 requires the Stage 1 PR to report the
-      # actual exchange rate, so treat the comment as the hypothesis. Node (`pi`)
-      # ignores it.
-      #
-      # Deliberately NOT a ${GOGC:-50} passthrough: this is a footprint decision
-      # recorded in ADR-0011, and a variable in .env would let one environment
-      # drift to a different memory profile than the one the ADR measured.
-      GOGC: "50"
-      # Explicit rather than relying on the binary's default, because three separate
-      # places have to agree on this number: here, the container side of the port
-      # mapping, and the healthcheck's URL. None of the three is derived from the
-      # others, so changing one means changing all three.
-      #
-      # Do NOT add PI_GATEWAY_ADDR to this service. It wins outright over
-      # PI_SERVER_PORT (see cmd/pi-gateway/main.go), so setting it would move the
-      # listener off the mapped port and out from under the healthcheck.
-      PI_SERVER_PORT: "8643"
-      # One assistant turn, and the layer that actually bounds a turn: the proxy's
-      # 990s idle timeout is deliberately ABOVE this, so the backend answers with
-      # its own structured timeout error instead of nginx returning a bare 504.
-      # 960s = the 900s spawn_subagent delegation ceiling + its 30s teardown + 30s
-      # of margin. Left at the 600s default, a turn that legitimately spent the
-      # delegation budget would be cut here with the agent still working — the
-      # proxy timeout would be generous and the backend would still be the one
-      # that fired.
-      PI_TURN_TIMEOUT: "960"
-      # Pinned for the same reason, and it is load-bearing in the other direction:
-      # nginx's picker read timeout (40s) is deliberately ABOVE this 30s so the
-      # backend's 502, which names the failure, arrives before nginx's 504, which
-      # does not. Pinning it here means the 40s in nginx.conf can be checked
-      # against this file, instead of against a Go default that nothing in the
-      # deployment records. If this moves, the proxy timeout moves with it.
-      PI_INVENTORY_TIMEOUT: "30"
-      PI_CODING_AGENT_DIR: /opt/pi
-      PI_PROFILE_DIR: /opt/pi/profiles
-      # Single chat profile (#289): the only directory under PI_PROFILE_DIR.
-      # Explicit rather than the binary's "default", which names a profile
-      # that does not exist.
-      PI_DEFAULT_PROFILE: chat
-      # OPENCODE_API_KEY is NOT repeated here: it arrives from *mongo-env, and saying
-      # it twice is exactly the drift the anchor comment warns about — two places to
-      # change when the provider key's name does. `OPENCODE_API_KEY` is also the name
-      # Pi itself reads, so one value serves both.
-      #
-      # Google connectors OAuth (#316): all four or nothing. Any piece missing
-      # leaves ConnectorOAuth nil and connect answers 501 — a half-open flow
-      # would strand the user mid-consent. Secrets arrive from the root .env
-      # (git-ignored); the client ID is public-ish but lives there too so all
-      # four travel together and rotate together.
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-}
-      CONNECTORS_ENCRYPTION_KEY: ${CONNECTORS_ENCRYPTION_KEY:-}
-      #
-      # Fail-closed SSH for agent-run git: only the mounted key is ever offered,
-      # never prompt, never trust unknown hosts (a GitHub key rotation fails loudly
-      # until known_hosts is updated on the VPS).
-      GIT_SSH_COMMAND: "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes"
-      # Fatal restart bound (#423): the entrypoint sleeps this many seconds
-      # before exiting after its MCP probe exhausts retries, so the
-      # `restart: unless-stopped` loop below cannot spin fast (bounded at
-      # ~1 restart/min instead of ~10). Non-numeric or 0 falls back to 60
-      # inside the entrypoint (with a warning in the container log).
-      PI_FATAL_RESTART_DELAY: ${PI_FATAL_RESTART_DELAY:-60}
-    healthcheck:
-      # /healthz is unauthenticated by design, so the probe needs no credential.
-      # This URL is INSIDE the container, so it uses the container port (8643) and
-      # never the host port — PI_HOST_PORT is not visible here. It must stay in step
-      # with PI_SERVER_PORT above; neither is derived from the other.
-      test: ["CMD", "curl", "-fsS", "http://localhost:8643/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      # Generous: the entrypoint runs `pi mcp list` before handing off, which
-      # connects every MCP server in pi/mcp.json. A short start_period reports
-      # unhealthy while that is still in progress.
-      start_period: 60s
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
@@ -301,8 +106,8 @@ services:
       dockerfile: docker/retention/Dockerfile
     user: "1000:1000"
     environment:
-      # Same reasoning as health-api, and for the same reason: Mongo only. This
-      # container prunes collections and talks to no model.
+      # Same reasoning as health-api: Mongo only. This container prunes
+      # collections and talks to no model.
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
       # No GOGC: one-shots are excluded from the footprint tuning on purpose.

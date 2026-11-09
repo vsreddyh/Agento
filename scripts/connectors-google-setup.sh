@@ -577,8 +577,8 @@ say "      existing nginx proxy on $_proxy_target. No ports are opened, no"
 say "      domain is bought. The app keeps its current Server URL."
 say "      Note: the funnel publishes the whole proxy (chat + sync stay"
 say "      PASSWORD-gated); the OAuth callback is the only new unauthenticated"
-say "      API surface (static liveness /health[/] and /ping, plus pi liveness"
-say "      /p/healthz[/], ride along). Do not share the *.ts.net URL."
+say "      API surface (static liveness /health[/] and /ping ride along)."
+say "      Do not share the *.ts.net URL."
 printf '\n'
 say "What is on disk right now:"
 for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
@@ -943,12 +943,11 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
   # The /p/ spelling is checked FIRST: glob `*` spans `/`, so it would
   # also match the bare pattern below and skip conversion entirely.
   if [[ "$_rec_fold" == https://*/p/api/connectors/callback ]]; then
-    # Pre-#488 spelling pointed at pi-gateway, which still serves it until
-    # the #494 teardown — but health-api (the future) does not, so offer
-    # the same host bare. Declining falls through to the typo path
+    # Pre-#488 spelling pointed at pi-gateway (served it until the #494
+    # teardown); health-api never did, so offer the same host bare. Declining falls through to the typo path
     # below, which names the mismatch and offers a knowingly-keep.
     _bare="${_recorded_uri%/p/api/connectors/callback}/api/connectors/callback"
-    warn "recorded URL uses the retired /p/ spelling (pi-gateway still serves it until the #494 teardown; health-api does not):"
+    warn "recorded URL uses the retired /p/ spelling (pi-gateway served it until the #494 teardown; health-api does not):"
     warn "  recorded: $_recorded_uri"
     warn "  bare:     $_bare"
     if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
@@ -987,11 +986,11 @@ if _recorded_uri=$(_existing GOOGLE_REDIRECT_URL 2>/dev/null) && [[ -n "$_record
     # BEFORE the bare http pattern for the same `*`-spans-`/` reason: the
     # bare branch would strict-pass `http://loopback:port/p/api/...` as a
     # valid registration, but health-api serves no /p/ prefix direct (and
-    # the proxy /p/ goes to pi) — so the probe 404s and misreports
+    # the proxy /p/ went to pi, now gone) — so the probe 404s and misreports
     # DNS-unreachability for a path-shape bug. Offer the bare URL instead;
     # declining falls to the typo path with a knowingly-keep like https.
     _bare="${_recorded_uri%/p/api/connectors/callback}/api/connectors/callback"
-    warn "recorded URL uses the retired /p/ spelling (pi-gateway still serves it until the #494 teardown; health-api does not):"
+    warn "recorded URL uses the retired /p/ spelling (pi-gateway served it until the #494 teardown; health-api does not):"
     warn "  recorded: $_recorded_uri"
     warn "  bare:     $_bare"
     if confirm "Switch to the bare URL (re-register it in the Google console)?"; then
@@ -1884,17 +1883,9 @@ printf '     They must match byte-for-byte;\n'
 printf '     the log prints the canonical form, so register THAT.\n'
 printf '  3. In the app: Settings → Connectors → Connect Gmail. Expect the\n'
 printf '     "app isn'"'"'t verified" warning (Testing mode) → Advanced → proceed.\n'
-printf '  4. Re-add gmail/calendar inside the "mcpServers" object in pi/mcp.json\n'
-printf '     by hand (unwired until OAuth is configured; OAuth alone does not\n'
-printf '     bring the agent tools back). The "reports" entry is currently last\n'
-printf '     and has no trailing comma — add one after it, then paste (commas\n'
-printf '     after reports and gmail, none after calendar):\n'
-printf '       "gmail": {"command": "/usr/local/bin/gmail"},\n'
-printf '       "calendar": {"command": "/usr/local/bin/calendar"}\n'
-printf '     then ./scripts/hermes.sh restart again so the pi container picks\n'
-printf '     them up (entrypoint refuses to start if a server fails to connect).\n'
-printf '     Verify with: python3 -m json.tool pi/mcp.json (invalid JSON\n'
-printf '     crash-loops the container — the lint is the step, not optional).\n'
+printf '  4. Do NOT re-add gmail/calendar to the agent config: the pi runtime is\n'
+printf '     gone (#494) and the connector MCP servers are being removed (#495).\n'
+printf '     The OAuth flow above still serves the health-api routes until then.\n'
 printf '\n'
 printf '  Re-running this wizard is safe: it keeps existing values as defaults.\n'
 printf '  Envelope key: BACKUP FIRST — rotating it invalidates every stored grant.\n\n'

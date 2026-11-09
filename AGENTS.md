@@ -2,10 +2,10 @@
 
 ## Hard rule: this repo on this machine IS the live stack
 
-- This checkout is the live deployment: `pi/` is bind-mounted into the running
-  pi container (`PI_CODING_AGENT_DIR=/opt/pi`), and the container stack
-  (`docker/docker-compose.yml`) runs from here. There is no separate
-  "live machine" — changes here affect production.
+- This checkout is the live deployment: the container stack
+  (`docker/docker-compose.yml`) runs from here, and the agent side
+  (`opencode.json` + `.opencode/`) runs from this checkout too. There is no
+  separate "live machine" — changes here affect production.
 - `gateway/` holds the *former* Hermes runtime state (transcripts, sqlite WALs,
   caches) and nothing reads it any more, but it is not in git and cannot be
   recovered from git, so it is left on disk. NEVER commit runtime state: only
@@ -18,28 +18,28 @@
 - Disruptive actions need explicit user go-ahead first (STOP and ask):
   `start|stop|restart|init|clean`, recreating containers, editing the live
   `.env`, touching MongoDB data. No surprise restarts.
-- No host agent install exists here (no `pi` binary on PATH outside the
-  container, no systemd unit) — everything runs in the one compose stack below.
+- There is no agent container any more (#494): T3/opencode runs on the host,
+  and the compose stack below is `health-api` + `proxy` + `retention` only.
   The script name `scripts/hermes.sh` is a leftover from the Hermes era and is
   kept so the cron/sysmon helpers and the docs keep pointing at something real.
 
 ## What this project is
 
-Runs one chat profile against OpenCode Go directly (no LLM proxy).
-ONE pi container runs one `pi` process for the profile — a profile is a directory
-with its own `AGENTS.md`, not a runtime option — fronted by `pi-gateway`, an
-OpenAI-compatible API server (:8643) for the custom Android app, with remote
-MongoDB for domain data (money, health, cookbook, notes). **The live stack is fully
-containerized** — one compose file (`docker/docker-compose.yml`): health-api +
-one `pi` container (direct to `https://opencode.ai/zen/go/v1`) + nginx +
-a one-shot retention job. Development runs the SAME single compose file against
-Atlas. No host agent install, no native processes.
+A **thin Android client** — Tasks/Projects, Task Manager, Files, ∃-Mail, Health
+Sync, reminders/widgets — plus the small Go backend it talks to: `health-api`
+(sync, tasks, projects, files, reports), an nginx proxy, and a one-shot retention
+job. **The live stack is fully containerized** — one compose file
+(`docker/docker-compose.yml`) — against remote MongoDB Atlas. Development runs
+the SAME single compose file against Atlas. There is no agent service in it.
+
+The agent runs **on the host in T3/opencode**, configured by `opencode.json`
+and `.opencode/`, with the six kept MCP servers built from this repo
+(`./scripts/build-mcps.sh` → `bin/<server>`) reading the same Atlas database.
 
 ```
-chat
-   └─► ONE `pi` container (PI_CODING_AGENT_DIR=/opt/pi = pi/, one pi process for the profile)
-        └─► OpenCode Go direct (https://opencode.ai/zen/go/v1, model mimo-v2.6-flash)
-proxy (:8080 compose default — `APP_PORT` remaps the host side, single app URL: /p/* → pi chat, /api/* → health sync)  •  health-api (:8001 compose default — `HEALTH_HOST_PORT` remaps)
+Agento (Android) ──► proxy (:8080 compose default — APP_PORT remaps)
+                       └─► /api/* + /health → health-api (:8001 compose default — HEALTH_HOST_PORT remaps)
+T3/opencode (host) ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check,reports}
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired story/resumes checkouts, unmanaged)
 ```
@@ -47,60 +47,51 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
 ## Repo facts
 
 - ONLY the root `.env` exists (git-ignored; `.env.example` tracked). Every env
-  var for the whole stack lives there — API keys, Mongo
-   URI, app API key. compose maps them into each service; there is
-  NO `profiles/*/.env`.
+  var for the whole stack lives there — provider key, Mongo URI, app password.
+  compose maps them into each service; there are no per-profile env files.
 - Docs: `README.md` = quick start; `documentation.md` = deep dive.
 - `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`),
   a thin Podman orchestrator over `docker/docker-compose.yml`. No host installs.
   `init` self-installs the host tools it needs: **podman + compose, curl,
   python3, cron** (only git + sudo must pre-exist). Container harness only —
-  `init` never installs the opencode CLI. health-api (:8001 compose default — `HEALTH_HOST_PORT` remaps) binds `0.0.0.0` inside its container.
+  `init` never installs the opencode CLI. health-api (`:8001` compose default —
+  `HEALTH_HOST_PORT` remaps) binds `0.0.0.0` inside its container.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`podman-compose run --rm retention` → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
-   permanent; story/resumes (git repos) are no-ops; reports (∃-Mail) prunes
-   read+unstarred >7d (never unread/starred). It also **reconciles** tasks:
-   completed structured repeats with no successor are REPORTED (#180), never
-   repaired — rollover is a side effect of `Complete`, so a repeat can stop
-   recurring with nothing else noticing.
+   permanent; reports (∃-Mail) prunes read+unstarred >7d (never unread/starred).
+   It also **reconciles** tasks: completed structured repeats with no successor
+   are REPORTED (#180), never repaired — rollover is a side effect of `Complete`,
+   so a repeat can stop recurring with nothing else noticing.
 - `cmd/mongo` = shared MongoDB CLI; `cmd/retention` = data lifecycle (both Go).
   `MONGODB_URI`/`MONGODB_DB` in root `.env` (Atlas, all environments).
 - Podman: `docker/docker-compose.yml` = the whole stack (health-api
-   + pi + proxy + retention) — the ONLY compose file. All environments run the
-   same file against the Atlas `MONGODB_URI`. The agent image is built from `docker/pi/Dockerfile` +
-   `docker/pi/entrypoint.sh` (registers bind-mounted repos with git, then `pi mcp list`
-   as a fail-fast connectivity gate, then execs pi-gateway; in-repo Go MCP servers built by a
-   golang stage); those are the image source, not a mirror stack. The Hermes `gateway`
-   service, `test/Dockerfile` and the tracked `gateway/` config are gone — `gateway/` on
-   disk is untracked runtime state only.
-   Provider keys + `PASSWORD` are injected via compose `environment:` interpolation
-   from the root `.env`; `podman_compose()` always passes `--env-file "$REPO/.env"`
-   (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
-   silently falls back empty/default).
-- LLM: direct to OpenCode (`https://opencode.ai/zen/go/v1`, model `mimo-v2.6-flash`) — no proxy container. One `OPENCODE_API_KEY` in root `.env` goes to OpenCode Go.
-- App API: `pi-gateway` (`cmd/pi-gateway`), the OpenAI-compatible server in the pi
-  container (`:8643` compose default — `PI_HOST_PORT` remaps the host side, single-password `PASSWORD`); one port, the app's Chat tab uses
-  profile path (`/p/chat`) and sends per-request provider `opencode-go` +
-  model from app Settings, plus `model_options.reasoning_effort` (required — Pi
-  accepts an unrecognised level silently). Provider key lives only in the VPS
-  `.env`, never in git.
-- Profile config is `pi/profiles/<name>/AGENTS.md` (the profile's own instructions
-  and personality) and `pi/AGENTS.md` (shared by every profile, since Pi layers it
-  into all of them). `pi-gateway` starts one `pi --mode rpc` per profile with that
-  directory as its cwd, which is the mechanism that loads them; per-profile skills
-  are passed explicitly with `--skill`, because Pi does **not** discover them from
-  a profile's working directory (measured — `pi/README.md`).
-- Skills: live in git, in the two places Pi reads them, and are **never copied**.
-  `pi/skills/<name>/` is shared by every profile (the agent dir is a discovered skill
-  location); `pi/profiles/<name>/skills/` is that profile only, passed to its child
-  with `--skill`. `./scripts/hermes.sh init` reports what it finds and warns when it
-  finds nothing. Skill content and each profile's instructions are committed so
-  personality survives moving between VPSes; only transient session/log/state files
-  are git-ignored.
+   + proxy + retention) — the ONLY compose file. All environments run the
+   same file against the Atlas `MONGODB_URI`. `PASSWORD` and the Mongo
+   variables are injected via compose `environment:` interpolation from the
+   root `.env`; `podman_compose()` always passes `--env-file "$REPO/.env"`
+   (compose otherwise looks for `.env` in the compose file's dir and every
+   `${VAR}` silently falls back empty/default). The Hermes `gateway` service,
+   `test/Dockerfile`, `docker/pi/`, `cmd/pi-gateway/` and the tracked
+   `gateway/` config are gone; `gateway/` on disk is untracked runtime state only.
+- Agent: `opencode.json` wires the six kept MCP servers (`task-manager`,
+  `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) to
+  `./bin/<server>` with the two Mongo env vars; `.opencode/chat.md` is the
+  persona loaded through `instructions`, and `.opencode/skills/` holds the
+  shared skills. `./scripts/build-mcps.sh` builds the binaries into git-ignored
+  `bin/`. The five retired servers (`notes`, `memory`, `browser`, `gmail`,
+  `calendar`) are still in the source tree until #495 and are NOT wired.
+- LLM: T3/opencode talks directly to OpenCode Go
+  (`https://opencode.ai/zen/go/v1`); one `OPENCODE_API_KEY` in the root `.env`.
+  No proxy container and no in-repo model config.
+- App API: `health-api` (`cmd/health-api`) on `:8001` compose default
+  (`HEALTH_HOST_PORT` remaps), single-password `PASSWORD`; the proxy (`:8080`,
+  `APP_PORT` remaps) is the app's one URL and routes `/api/*` + `/health`.
+  Chat, resumable runs and the pi-gateway surface (`/p/*`, `:8643`) are gone
+  with #494. The provider key lives only in the git-ignored `.env`.
 - CI: `android-apk.yml` (unit tests + lint on PRs; release APK on `main`) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). `./gradlew lintDebug` (release variant on `main`) fails on errors; the report uploads always. Fix what it reports rather than baselining. Verify shell with `bash -n scripts/*.sh` + render a template to /tmp,
-  `podman-compose -f docker/docker-compose.yml config`, then check pi logs on the live machine.
+  `podman-compose -f docker/docker-compose.yml config`, then check health-api logs on the live machine.
 - PR review loop (`opencode-review.yml`): every push to an open PR triggers an automatic review (usually ~2 min; timeout 10 min; a new push cancels the in-flight one). While waiting for review/checks, sleep between polls (`sleep 60`, then `gh pr checks` / `gh pr view --comments`) — never busy-loop. Verify each finding before fixing, then fix correctness, security, CI, documented rules and docs. Nothing real → ask the user to merge.
 - Android is CI-only: NEVER install an Android SDK, `local.properties`, or Gradle caches on this machine (no `./gradlew` builds/tests/lint locally — there is no local SDK and none must be created). App verification happens exclusively through `android-apk.yml` on the pushed PR (unit tests + lint; the release APK assembles on `main` only): push, read the CI logs, fix, push again. `android/agento/local.properties` is git-ignored; never commit it, never recreate it locally.
 - Git identity: every commit as `vsreddyh <shouryanreddyh@gmail.com>` (`git -c user.name=vsreddyh -c user.email=shouryanreddyh@gmail.com commit ...`). Never use another name/email.
@@ -115,7 +106,7 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
 - **PATCH** (`x.y.Z+1`): bug fixes with no behavior contract change — crash fix, sync bug, UI text/layout, proguard/R8 tweak. No new prefs keys, no new permissions, no workflow/tag changes.
 - **MINOR** (`x.Y+1.0`): backward-compatible features — new screen/section, new OPTIONAL prefs keys (old backups must still import: `SettingsBackup` skips unknown keys, so additive is safe), new permissions that degrade gracefully, new non-breaking server endpoints.
 - **MAJOR** (`X+1.0.0`): anything breaking — prefs key renames/removals, `PREFS_NAME` change, `applicationId` change, signing-key change, `SettingsBackup` export `version` bump, tag/scheme change, or a server API contract the old app can't speak (even if the breaking change lives outside `android/`).
-- Rules: any PR that changes the built APK (touches `android/**` or `.github/workflows/android-apk.yml` behavior) bumps `VERSION` EXACTLY ONCE at the highest applicable level and resets lower segments to 0. Pure docs/notes-text tweaks don't bump. Non-app PRs (`profiles/`, `docker/`, `scripts/`, `mcps/`, `tools/`, docs) NEVER touch `VERSION` — unless they force an app MAJOR per above.
+- Rules: any PR that changes the built APK (touches `android/**` or `.github/workflows/android-apk.yml` behavior) bumps `VERSION` EXACTLY ONCE at the highest applicable level and resets lower segments to 0. Pure docs/notes-text tweaks don't bump. Non-app PRs (`.opencode/`, `docker/`, `scripts/`, `mcps/`, `cmd/`, `internal/`, docs) NEVER touch `VERSION` — unless they force an app MAJOR per above.
 - CI split: `main` builds/uploads/releases the release APK; branches/PRs run unit tests + lint only (no APK artifact, no upload). A `Verify version consistency` step (main-only) fails the job if the built APK filename doesn't match the resolved version, so drift can never publish a mislabeled Release.
 
 ## Agent skills
@@ -139,12 +130,10 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
 - `make setup` in docker/ references `docker/.env.example` which doesn't exist;
   compose reads the ROOT `.env` via `--env-file "$REPO/.env"` (there is no
   `env_file:` directive). `make` targets wrap compose in `docker/`.
-- Legacy native install (pre-container): `start` detects stale `run/bots/*.pid`
-  processes and stops them first; if a `hermes-gateway` systemd unit survives,
-  `stop` best-effort stops it. Both are inert on a host that never had one, and
-  are kept for the hosts that did.
-- Port collisions: the Hermes gateway owned `:8642` and pi owns `:8643`, so the
-  two never fought — but a leftover native bot or a hand-started `pi` on the same
-  port will, and the symptom is a crash-loop, not a clear message.
+- A leftover `hermes-gateway` systemd unit is best-effort stopped by `stop`;
+  it is inert on a host that never had one.
+- Build the MCP binaries before launching T3/opencode: `./scripts/build-mcps.sh`
+  writes `bin/<server>`, and `opencode.json` runs them from the repo root — a
+  different cwd breaks every server command.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
 - Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service.

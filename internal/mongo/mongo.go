@@ -4,13 +4,12 @@
 //
 // The unit is one client per store, not per process: most stores dial their
 // own client through mongostore.Open -> ConnectURI, so long-lived steady state
-// is ~18 clients — 8 domain children with their own store plus the browser's
-// single gate client (browser holds no domain store), 6 stores inside
-// pi-gateway, 3 in health-api. One-shot dials (retention, cmd/mongo)
-// are excluded from the count. The in-process approval gate (ADR-0011
-// Stage 2) adds no client of its own: it shares the client each server's
-// domain store already holds, and browser's gate is the single new dial
-// counted above. The pool caps below are what keep that from being expensive.
+// is one client per running MCP server plus the health-api stores. The agent
+// host (pi-gateway) no longer runs (#494); T3/opencode spawns the MCP servers
+// on the host. One-shot dials (retention, cmd/mongo) are excluded from the
+// count. The in-process approval gate (ADR-0011 Stage 2) adds no client of its
+// own: it shares the client each server's domain store already holds. The pool
+// caps below are what keep that from being expensive.
 package mongo
 
 import (
@@ -40,11 +39,10 @@ const (
 	// (#423) is what took the cluster down, not steady-state count (#424).
 	//
 	// Invariant: nothing in this repo may need more than 2 concurrent Mongo
-	// operations per store. The parallel users pool-2 was sized against are
-	// pi-gateway's startup teach reconcile (one goroutine per profile, and
-	// there is one profile) and concurrent HTTP handlers against a shared
-	// store (pi-gateway/health-api serve concurrent requests). Two things a
-	// future reader must not miss: with the default primary read preference,
+	// operations per store. Concurrent HTTP handlers against a shared store
+	// (health-api) and multiple MCP tool calls from T3/opencode are the
+	// load this is sized against. Two things a future reader must not miss:
+	// with the default primary read preference,
 	// reads and writes pin to the primary, so the budget is 2 concurrent ops
 	// per store, not 2 per member; and a third concurrent writer queues toward
 	// the 8s ServerSelectionTimeout, which surfaces as an error, not just
