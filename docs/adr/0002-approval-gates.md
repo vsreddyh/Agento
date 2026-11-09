@@ -112,6 +112,13 @@ remains.
 
 ### State in Mongo, memory fallback
 
+(Deleted storage: the `approvals` (15-minute TTL) and `audit_log` (90-day
+TTL) collections were dropped from Atlas in #503 and the
+`internal/approvals` package is gone — no server opens these collections,
+and `pi mcp list` (with its gate boot probe) went with the pi container in
+#494. Everything below describes the relay-era store contract, not a live
+database.)
+
 `approvals` (15-minute TTL) and `audit_log` (90-day TTL) in the shared
 database, through `internal/approvals` — the same Store-interface +
 memory-fallback shape as runs. The servers and the gateway open the same
@@ -141,6 +148,12 @@ sweep (status flip only, no per-row audit — the count log is the record),
 so sweep-expired rows leave no audit row behind.
 
 ### The app decides, never with secrets
+
+(Deleted surface: `GET /api/approvals`, `POST .../approve|deny` and
+`GET /api/audit` have zero handlers — the app approval UI went with #487
+and the store behind these routes went with #503. A 404 from health-api
+today means no such route exists, not an "expired row". Everything below
+is relay-era contract record, not a live API.)
 
 `GET /api/approvals` (pending list), `POST .../approve|deny` (decision lands
 exactly once; races after expiry 409), `GET /api/audit` (trail). Approvals
@@ -231,6 +244,12 @@ issue stands: passwords/2FA never go through chat; the take-over path
 belongs to #312.
 
 ### Threat note (what this does and does not fix)
+
+(Partially stale: the T3 permission prompt is the live enforcement for
+attended turns. The audit-log attribution, Pi-built-in-tools, root-in-
+container and connector-vault sentences describe removed systems — #503
+deleted the audit trail, Pi and the containerised agent are gone with
+#494, and connectors were removed in #495.)
 
 - Fixed: attended money writes, deletes, prunes and rewrites now need an
   explicit human decision (pre-#487: in-app tap; post-#487: T3 permission
