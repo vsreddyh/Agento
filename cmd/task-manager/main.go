@@ -2,8 +2,9 @@
 //
 // Storage: MongoDB (tasks collection). No status field — a task is open
 // while completedAt is null, done once set. Completed tasks expire via
-// TTL 3 days after completion; a repeat is stored but never interpreted
-// here (agent-side per .opencode/skills/task-manager/SKILL.md).
+// TTL 3 days after completion; a structured repeat is interpreted here
+// (rollOver mints the next occurrence on complete) while a custom
+// condition stays agent-side (per .opencode/skills/task-manager/SKILL.md).
 // Runs over stdio for MCP clients.
 package main
 
