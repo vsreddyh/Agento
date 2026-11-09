@@ -13,8 +13,9 @@ package agento_test
 //     CI instead of running default-allow unprompted — the author must
 //     consciously classify it (add an `ask` pattern or a free entry).
 //
-// Sensitivity record (what prompts): money writes, account lifecycle,
-// deletes, destructive rewrites, prunes that delete. The harness cannot
+// Sensitivity record (what prompts): money writes, account lifecycle
+// (`create_account`/`archive_account`), every `delete_*`, destructive
+// rewrites (`fix_last_*`), prunes that delete. The harness cannot
 // see arguments, so even a counting prune with dry_run=true prompts.
 
 import (
