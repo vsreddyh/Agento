@@ -115,7 +115,7 @@ podman-compose --env-file "$REPO/.env" -f docker/docker-compose.yml logs -f heal
 
 ## Management CLI
 
-`scripts/hermes.sh` is the single entry-point orchestrator (its `podman_compose()` wrapper always passes `--env-file .env` — the bare `podman-compose` spellings in the table below render every `${VAR}` empty without it, so run them through the script, not copy-paste):
+`scripts/hermes.sh` is the single entry-point orchestrator (its `podman_compose()` wrapper always passes `--env-file "$REPO/.env"` — the bare `podman-compose` spellings in the table below render every `${VAR}` empty without it, so run them through the script, not copy-paste):
 
 | Command | Action |
 |---|---|

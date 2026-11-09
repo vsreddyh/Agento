@@ -34,10 +34,11 @@ data model — `cmd/task-manager/schema_test.go` asserts the two agree per tool.
 ### Key invariants
 
 - **No status field:** openness is `completedAt == null`. Never add one.
-- **No server-side repeat logic:** `repeat_rule` is never parsed here.
-  The agent interprets it and creates the next occurrence (see
-  `.opencode/skills/task-manager/SKILL.md`); `complete_task` only echoes the rule
-  back with a `follow_up` nudge.
+- **Server mints structured repeats:** a structured cadence in `repeat_rule`
+  is parsed here and `complete_task` mints the next occurrence as a side
+  effect (`rollOver` — see "complete_task and the rollover field" below).
+  Only a custom condition is agent-created (the server will not interpret
+  it; see `.opencode/skills/task-manager/SKILL.md`).
 
 ## `complete_task` and the `rollover` field (#180)
 
