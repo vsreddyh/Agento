@@ -102,9 +102,6 @@ func New(uri, dbName string) (*Store, error) {
 }
 
 // FromEnv builds a Store from MONGODB_URI/MONGODB_DB (single root .env).
-// DB exposes the store's database so the in-process approval gate
-// (ADR-0011 Stage 2) shares this client instead of dialing its own.
-func (s *Store) DB() *mongoDrv.Database { return s.db }
 
 func FromEnv() (*Store, error) {
 	uri, db := mongostore.Env()

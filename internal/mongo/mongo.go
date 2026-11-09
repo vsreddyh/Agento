@@ -7,9 +7,7 @@
 // is one client per running MCP server plus the health-api stores. The agent
 // host (pi-gateway) no longer runs (#494); T3/opencode spawns the MCP servers
 // on the host. One-shot dials (retention, cmd/mongo) are excluded from the
-// count. The in-process approval gate (ADR-0011 Stage 2) adds no client of its
-// own: it shares the client each server's domain store already holds. The pool
-// caps below are what keep that from being expensive.
+// count. The pool caps below are what keep that from being expensive.
 package mongo
 
 import (

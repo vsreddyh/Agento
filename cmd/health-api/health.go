@@ -3,7 +3,7 @@ package main
 // Health sync + status: payload types, the /health probe and the sync endpoint (#171).
 
 import (
-	"agento/internal/approvals"
+	"agento/internal/crashlog"
 	"agento/internal/mongo"
 	"context"
 	"encoding/json"
@@ -228,7 +228,7 @@ func registerHealth(mux *http.ServeMux) {
 // rune-cut with a visible marker, never silent.
 func boundedDetail(err error) string {
 	const maxEcho = 128
-	s := approvals.ScrubError(err.Error())
+	s := crashlog.ScrubError(err.Error())
 	runes := []rune(s)
 	if len(runes) <= maxEcho {
 		return s

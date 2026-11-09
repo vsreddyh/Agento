@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"agento/internal/approvals"
-
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -29,12 +27,9 @@ import (
 func callTool(t *testing.T, name string, args map[string]any) (string, string) {
 	t.Helper()
 
-	// No Mongo here by design (see above): point the gate at a memory
-	// store so audits land somewhere. Unshared means an ephemeral audit
-	// trail, not denial — these tests only call allow-path tools.
-	if gate == nil {
-		gate = approvals.NewMemoryStore()
-	}
+	// No Mongo here by design (see above): handlers validate before
+	// touching the store, and a handler that reaches MongoDB before
+	// validating panics — which is exactly the failure this file catches.
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "miser-money-test", Version: "0"}, nil)
 	registerTools(s)

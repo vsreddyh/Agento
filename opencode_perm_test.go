@@ -1,34 +1,60 @@
 package agento_test
 
-// Pin: opencode.json `ask` rules mirror the approval policy table (#487).
+// Pin: opencode.json `ask` rules are now the ONLY confirmation gate
+// (#503 deleted the in-process policy table and the approval gate).
+// Two properties are pinned, both fail-closed:
 //
-// Confirmation moved from the in-process hold to T3/opencode permission
-// prompts, which leaves two hand-maintained lists — the gated==true set in
-// internal/approvals and the `ask` patterns in opencode.json — with drift
-// in the unsafe direction: add a gated tool, forget the pattern, and the
-// gate runs it at once under opencode default-allow. This test fails CI on
-// either drift direction instead.
+//  1. TestAskSetPinned pins the exact `ask` set: adding, removing or
+//     respelling a pattern fails here until the expected set below is
+//     updated in the same change.
+//  2. TestEveryToolClassified enumerates every tool registered in
+//     cmd/*/main.go and requires each to be either `ask`-covered or in
+//     the explicit freeTools list. A new tool that matches neither fails
+//     CI instead of running default-allow unprompted — the author must
+//     consciously classify it (add an `ask` pattern or a free entry).
 //
-// Matcher caveat, read before trusting green: matchGlob/candidates are
-// this test's own model of harness matching, not the harness matcher. A
-// pattern passing here but spelled in a form opencode does not match would
-// still run default-allow in prod. The candidates cover the plausible id
-// shapes (bare tool, server-prefixed, mcp_-prefixed, hyphen/underscore
-// folds); when the servers get wired (#489), verify once against the live
-// harness and tighten this to the observed form.
+// Sensitivity record (what prompts): money writes, account lifecycle
+// (`create_account`/`archive_account`), every `delete_*`, destructive
+// rewrites (`fix_last_*`), prunes that delete. The harness cannot
+// see arguments, so even a counting prune with dry_run=true prompts.
 
 import (
 	"encoding/json"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
-
-	"agento/internal/approvals"
 )
 
-// askPatterns reads the string-valued `ask` entries of opencode.json's
-// permission map (object values like external_directory are boundaries,
-// not tool rules).
+// expectedAsk is the full `ask` set in opencode.json's permission map.
+// Object values like external_directory are boundaries, not tool rules.
+var expectedAsk = []string{
+	"*archive_account*",
+	"*create_account*",
+	"*delete*",
+	"*fix_last*",
+	"*log_text*",
+	"*log_transaction*",
+	"*prune_old*",
+}
+
+// freeTools names every registered tool that runs free by policy. A tool
+// here must NOT match any `ask` pattern (that would prompt a tool the
+// record calls free); a tool in neither list fails the coverage test.
+// Update this in the same change as any tool add/rename.
+var freeTools = map[string][]string{
+	"miser-money": {"list_accounts", "get_balances", "query_transactions", "summarize"},
+	"cookbook": {"add_ingredient", "list_ingredients", "add_recipe", "get_recipe",
+		"list_recipes", "update_recipe", "scale_recipe", "log_cook", "list_cooks"},
+	"health-check": {"log_meal", "query_meals", "log_weight", "log_sleep",
+		"log_workout", "daily_summary"},
+	"task-manager": {"create_task", "list_tasks", "get_task", "update_task",
+		"complete_task", "skip_task", "reopen_task", "task_history"},
+	"project-manager": {"create_project", "list_projects", "get_project", "update_project"},
+	"reports":         {"create_report", "get_report", "list_reports"},
+}
+
 func askPatterns(t *testing.T) []string {
 	t.Helper()
 	raw, err := os.ReadFile("opencode.json")
@@ -47,7 +73,20 @@ func askPatterns(t *testing.T) []string {
 			out = append(out, pattern)
 		}
 	}
+	sort.Strings(out)
 	return out
+}
+
+func TestAskSetPinned(t *testing.T) {
+	got := askPatterns(t)
+	if len(got) != len(expectedAsk) {
+		t.Fatalf("ask set = %q, want %q", got, expectedAsk)
+	}
+	for i := range got {
+		if got[i] != expectedAsk[i] {
+			t.Fatalf("ask set = %q, want %q", got, expectedAsk)
+		}
+	}
 }
 
 // matchGlob reports the repo's `*`-wildcard match: `*` spans any run,
@@ -95,55 +134,97 @@ func candidates(server, tool string) []string {
 	}
 }
 
-func TestAskMirrorsGated(t *testing.T) {
-	patterns := askPatterns(t)
-	for _, server := range approvals.Servers() {
-		for _, tool := range approvals.ToolsFor(server) {
-			// Allow-path tools run free by policy; only gated ones must
-			// prompt. Empty args: the dry-run prune exemption is an
-			// in-gate concern the harness cannot see (patterns match
-			// names, not arguments), so the counting prune prompts too.
-			if !approvals.NeedsApproval(server, tool, map[string]any{}) {
-				continue
-			}
-			covered := false
-			for _, p := range patterns {
-				for _, c := range candidates(server, tool) {
-					if matchGlob(p, c) {
-						covered = true
-						break
-					}
-				}
-			}
-			if !covered {
-				t.Errorf("gated %s/%s has no `ask` pattern in opencode.json", server, tool)
+// registeredTools enumerates (server, tool) pairs from the cmd mains by
+// reading what the servers actually register — not a hand-written list,
+// so a tool added without classification cannot hide from the test.
+func registeredTools(t *testing.T) [][2]string {
+	t.Helper()
+	var out [][2]string
+	entries, err := os.ReadDir("cmd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverRe := regexp.MustCompile(`mcp\.NewServer\(&mcp\.Implementation\{Name:\s*"([^"]+)"`)
+	toolRe := regexp.MustCompile(`mcp\.AddTool\(s,\s*&mcp\.Tool\{Name:\s*"([^"]+)"`)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile("cmd/" + e.Name() + "/main.go")
+		if err != nil {
+			continue
+		}
+		sm := serverRe.FindSubmatch(raw)
+		if sm == nil {
+			continue
+		}
+		server := string(sm[1])
+		seen := map[string]bool{}
+		for _, m := range toolRe.FindAllSubmatch(raw, -1) {
+			tool := string(m[1])
+			if !seen[tool] {
+				seen[tool] = true
+				out = append(out, [2]string{server, tool})
 			}
 		}
 	}
+	if len(out) == 0 {
+		t.Fatal("no registered tools found under cmd/*/main.go")
+	}
+	return out
 }
 
-func TestAskHasNoOrphansOrRefusals(t *testing.T) {
+func coveredByAsk(patterns []string, server, tool string) bool {
+	for _, p := range patterns {
+		for _, c := range candidates(server, tool) {
+			if matchGlob(p, c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestEveryToolClassified(t *testing.T) {
 	patterns := askPatterns(t)
-	// Every `ask` pattern must hit at least one gated, runnable tool —
-	// otherwise it is a stale entry (or, worse, an entry that prompts for
-	// a call the gate refuses outright).
+	free := map[string]map[string]bool{}
+	for server, tools := range freeTools {
+		free[server] = map[string]bool{}
+		for _, tool := range tools {
+			free[server][tool] = true
+		}
+	}
+	n := 0
+	for _, st := range registeredTools(t) {
+		server, tool := st[0], st[1]
+		n++
+		covered := coveredByAsk(patterns, server, tool)
+		isFree := free[server][tool]
+		if covered && isFree {
+			t.Errorf("tool %s/%s is ask-covered but listed free — pick one", server, tool)
+		}
+		if !covered && !isFree {
+			t.Errorf("tool %s/%s is neither ask-covered nor listed free — classify it (ask pattern or freeTools entry)", server, tool)
+		}
+	}
+	// Every `ask` pattern must hit at least one non-free (gated) tool —
+	// otherwise it is a stale entry matching nothing that prompts.
 	for _, p := range patterns {
 		hit := false
-		for _, server := range approvals.Servers() {
-			for _, tool := range approvals.ToolsFor(server) {
-				if !approvals.NeedsApproval(server, tool, map[string]any{}) {
-					continue
-				}
-				for _, c := range candidates(server, tool) {
-					if matchGlob(p, c) {
-						hit = true
-						break
-					}
+		for _, st := range registeredTools(t) {
+			if free[st[0]][st[1]] {
+				continue
+			}
+			for _, c := range candidates(st[0], st[1]) {
+				if matchGlob(p, c) {
+					hit = true
+					break
 				}
 			}
 		}
 		if !hit {
-			t.Errorf("`ask` pattern %q matches no gated tool (stale, or prompts for a call the gate refuses)", p)
+			t.Errorf("`ask` pattern %q matches no gated tool (stale, or prompts for a call that runs free)", p)
 		}
 	}
+	t.Logf("classified %d registered tools", n)
 }

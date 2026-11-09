@@ -1,15 +1,19 @@
 # ADR-0002: Approval gates via an MCP relay, audit in Mongo
 
 - Status: superseded in substance by ADR-0011 (2026-11) for the
-  process-isolation claim, and by the T3 migration (#487, 2026-11) for the
-  hold flow itself: holds are gone entirely — no park, no poll, no wait.
-  Confirmation lives in T3/opencode permission prompts; the wrapper
-  executes known tools at once with an audit row (reads included) and
-  refuses draft-only sends plus unknown tools outright. `allowed`
-  post-migration means executed under a harness grant, not ran-without-
-  asking. The sections below describe the relay and the hold flow as
-  built; do not run them as a live runbook.
+  process-isolation claim, by the T3 migration (#487, 2026-11) for the
+  hold flow itself, and by the pure removal (#503, 2026-11) for the
+  wrapper and audit trail: holds are gone entirely — no park, no poll,
+  no wait, no audit rows.
 - Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
+- Scope note (#503, 2026-11): nothing below this header describes live
+  code. The relay, the hold flow, the in-process gate, the policy table,
+  the `approvals`/`audit_log` collections and the sweep are all deleted;
+  present-tense sentences in the sections below ("the wrapper executes",
+  "the gate denies", "servers open the same collections") are relay-era
+  record, not runbooks. The live gate is the `opencode.json` permission
+  prompts plus `mcp.AddTool` in each server main — no audit row is
+  written anywhere.
 - Issue: #313
 
 ## Context
@@ -29,12 +33,17 @@ not enforcement.
 > The pump / framing / batch / teardown-join mechanics below describe the
 > relay as built. T3-era (#487) then removed the hold flow the relay had
 > established: no park, no poll, audit every known call including reads.
-> Read `internal/approvalgate/gate.go` for the live path.
+> Pure removal (#503) then deleted the wrapper and audit trail entirely:
+> the file below no longer exists. Read the current `opencode.json`
+> permission rules for the live gate — the harness prompts, the servers
+> execute at once, no audit row is written.
 
 ### Enforce in a relay, not in Pi or the gateway
 
-(Relay-era: this section describes the deleted relay. The live enforcement
-point is `internal/approvalgate.AddTool` in each server main.)
+(Relay-era: this section describes the deleted relay. The enforcement
+point was `internal/approvalgate.AddTool` in each server main until #503
+deleted it; the live gate is `mcp.AddTool` plus the `opencode.json`
+permission prompts.)
 
 `cmd/mcp-gate` sits between Pi and each MCP server (`pi/mcp.json` points
 every server at it; it spawns the real binary). It relays newline-delimited
@@ -76,31 +85,43 @@ decides, never rewrites it.)
 
 ### What gates, what runs free
 
+(Relay-era table record — the live pin is `TestEveryToolClassified` in
+`opencode_perm_test.go`, which enumerates the registered tools. Named here
+as the table gated them:)
+
 Deny-by-default for money and deletes, exactly as the issue scopes it:
 
-- gate: all `miser-money` writes, every `delete_*`/`archive_*`, destructive
-  rewrites (`fix_*`), and prunes that actually delete (`prune_old` with
+- gate: all `miser-money` writes, every `delete_*` plus `archive_account`, destructive
+  rewrites (`fix_last_*`), and prunes that actually delete (`prune_old` with
   `dry_run=false`; pre-#487 a counting dry run ran free — post-#487 it
   prompts in T3 like a real one, since patterns cannot see arguments);
 - free: reads and routine creates/updates (`log_meal`, `create_task`,
   `add_recipe`, `log_cook`, ...).
 
 Gating every write would make the agent ask permission to take notes —
-approval fatigue, not safety. The table is complete by contract
-(`TestPolicyTableIsComplete` fails when a server gains an unclassified
-tool), and reads never gate. Pre-#487 unknown servers held; post-#487
-they deny at once. Unknown tools are
-rejected by the SDK before the gate ever runs (see ADR-0011 Stage 2).
+approval fatigue, not safety. The table was complete by contract; the live
+pin is now `TestEveryToolClassified` in `opencode_perm_test.go`, which fails
+when a registered tool is neither ask-covered nor explicitly free. Reads
+never gated. Pre-#487 unknown servers held; post-#487 they denied at once.
+Unknown tools were rejected by the SDK before the gate ever ran
+(see ADR-0011 Stage 2).
 
 A gated `tools/call` **notification** (no `id`) was denied inline instead of
 parked: nothing was waiting for it, so an approval card would promise a
 released turn that did not exist. That path is unreachable now — the SDK
 never routes notifications to handlers, so the in-process gate only ever
-sees a decoded call with a reply id — and the rule survives as the reason a
-direct caller that bypassed the SDK would still be denied and audited rather
-than parked.
+saw a decoded call with a reply id. #503 deleted the gate outright:
+servers now execute at once via `mcp.AddTool` and no denial/audit path
+remains.
 
 ### State in Mongo, memory fallback
+
+(Deleted storage: the `approvals` (15-minute TTL) and `audit_log` (90-day
+TTL) collections were dropped from Atlas in #503 and the
+`internal/approvals` package is gone — no server opens these collections,
+and `pi mcp list` (with its gate boot probe) went with the pi container in
+#494. Everything below describes the relay-era store contract, not a live
+database.)
 
 `approvals` (15-minute TTL) and `audit_log` (90-day TTL) in the shared
 database, through `internal/approvals` — the same Store-interface +
@@ -131,6 +152,12 @@ sweep (status flip only, no per-row audit — the count log is the record),
 so sweep-expired rows leave no audit row behind.
 
 ### The app decides, never with secrets
+
+(Deleted surface: `GET /api/approvals`, `POST .../approve|deny` and
+`GET /api/audit` have zero handlers — the app approval UI went with #487
+and the store behind these routes went with #503. A 404 from health-api
+today means no such route exists, not an "expired row". Everything below
+is relay-era contract record, not a live API.)
 
 `GET /api/approvals` (pending list), `POST .../approve|deny` (decision lands
 exactly once; races after expiry 409), `GET /api/audit` (trail). Approvals
@@ -170,17 +197,22 @@ the tool-level failure signal, so a reader can separate "ran and failed" from
 "never ran" without parsing the payload.
 
 (Relay-era: the relay swept at startup and converged through its teardown
-join. Post-Stage-2 each server runs the same per-server sweep itself.)
+join. Post-Stage-2 each server ran the same per-server sweep itself — until
+#503 deleted the sweeps too: no `main` calls `MarkServerInterrupted`
+(zero callers in the repo), the package is gone, and with no pending table
+there is nothing to sweep.)
 
-A server that restarts expires its **own server's** pending rows at startup
-(`MarkServerInterrupted`, called in each `main` before serving): it owns
+A server that restarted expired its **own server's** pending rows at startup
+(`MarkServerInterrupted`, called in each `main` before serving): it owned
 that server's queue, so those rows belonged to the process that died, and
 leaving them pending would show the app a card whose approval could never
-forward (pre-#487; post-#487 only pre-migration rows can be pending, so no
-live hold is ever at risk). The gateway's global `MarkInterrupted` still runs at its own
-startup for the whole collection. There is no teardown join anymore: the
-hold blocked the handler goroutine, and `ctx.Done` expired it with audit;
-post-#487 a dead context denies before anything executes instead. The
+forward (pre-#487; post-#487 only pre-migration rows could be pending, so no
+live hold was ever at risk). The gateway's global `MarkInterrupted` ran at its own
+startup for the whole collection. #503 deleted the sweep, the package and
+the gateway: no pending table exists, so there is nothing to sweep and no
+sweep code runs anywhere. There was no teardown join anymore: the
+hold had blocked the handler goroutine, and `ctx.Done` expired it with audit;
+post-#487 a dead context denied before anything executed instead. The
 sweep covers what a SIGKILL left behind.
 
 The sweep writes no per-row audit entry (the count log is the record),
@@ -201,10 +233,14 @@ tool or a human made: `gate_unavailable` (unshared store) and `gate_store`
 relay there is no framing to fault, no notification path (the SDK never
 routes notifications to handlers), and no pending table to evict from. Pre-#487
 a `denied` **without** a prefix meant a human said no; post-#487 `denied`
-is overwhelmingly gate refusals (draft-only, unknown tool, cancelled
-context), and a human tap survives only in pre-migration rows.
+was overwhelmingly gate refusals (draft-only, unknown tool, cancelled
+context), and a human tap survived only in pre-migration rows. #503
+deleted the gate outright, so no denial branch exists anymore.
 
-Error scrubbing is pattern-based, not exhaustive: `args` are redacted by key,
+Error scrubbing is pattern-based, not exhaustive (relay-era rows; no rows
+are written anymore — the live scrub is `crashlog.ScrubError`, called only
+from health-api's `boundedDetail`, which re-caps at 128 runes for the
+`detail` envelope): `args` are redacted by key,
 while `error` is free text and is only masked where it matches a
 credential-shaped pattern (plus a 300-rune cap). A server that echoes a bare
 secret with no recognizable prefix can still land it in a row, so the app must
@@ -222,6 +258,12 @@ belongs to #312.
 
 ### Threat note (what this does and does not fix)
 
+(Partially stale: the T3 permission prompt is the live enforcement for
+attended turns. The audit-log attribution, Pi-built-in-tools, root-in-
+container and connector-vault sentences describe removed systems — #503
+deleted the audit trail, Pi and the containerised agent are gone with
+#494, and connectors were removed in #495.)
+
 - Fixed: attended money writes, deletes, prunes and rewrites now need an
   explicit human decision (pre-#487: in-app tap; post-#487: T3 permission
   prompt — attended turns only; the retired scheduler's unattended fires
@@ -238,13 +280,28 @@ belongs to #312.
   are out of scope (connectors issue owns the vault).
 - Residual: pre-#487 a 14-minute held call occupied its turn until expiry;
   post-#487 nothing parks, so a stuck sensitive write is a harness prompt,
-  never a hold. Approvals show tool + args + time but not which conversation asked.
+  never a hold. Approvals showed tool + args + time but not which
+  conversation asked — and no approvals surface exists any more (in-app
+  queue removed in #487, audit trail deleted in #503).
 
 ## Consequences
 
-- `pi/mcp.json` points straight at each server binary (ADR-0011 Stage 2
-  deleted the `mcp-gate` relay; enforcement is in-process now); the entrypoint
-  `pi mcp list` gate probes the servers directly, unchanged.
-- The app needs an approvals surface (pending cards + approve/deny) and an
-  audit screen — second PR in this stack.
-- Adding an MCP tool now requires a policy row, enforced by test.
+(Historical record — the relay-era outcome below was superseded first by
+#487 (holds became harness prompts) and then by #503, which deleted the
+in-process gate, the policy table and the audit trail outright: servers
+register tools directly with `mcp.AddTool`, no policy row or approvals
+surface exists anywhere.)
+
+- `pi/mcp.json` pointed straight at each server binary (ADR-0011 Stage 2
+  deleted the `mcp-gate` relay; enforcement was in-process from then until
+  #503 deleted the gate); the entrypoint `pi mcp list` gate probed the
+  servers directly. Both the file and the entrypoint are gone with the pi
+  container (#494).
+- The app needed an approvals surface (pending cards + approve/deny) and an
+  audit screen — second PR in this stack, never built as specified here:
+  the in-app approval queue that did exist was removed in #487, and #503
+  deleted the audit trail — no approvals surface exists.
+- Adding an MCP tool required a policy row, enforced by test. #503 deleted
+  the table; the live pin is `TestEveryToolClassified` in
+  `opencode_perm_test.go`, which fails when a registered tool is neither
+  ask-covered nor explicitly free.
