@@ -4,6 +4,7 @@
   confirmation is a harness permission prompt, not an in-process hold —
   nothing ever parks. Read "gate"/"gated" below as prompt-or-refuse, not
   as a waiting room. Do not run the hold flow as a live runbook.
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
 - Issue: #316
 
 ## Context

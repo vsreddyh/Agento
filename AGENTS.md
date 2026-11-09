@@ -9,12 +9,12 @@
 - `gateway/` holds the *former* Hermes runtime state (transcripts, sqlite WALs,
   caches) and nothing reads it any more, but it is not in git and cannot be
   recovered from git, so it is left on disk. NEVER commit runtime state: only
-  edit source files (templates, scripts, compose, code, docs). Check `git status` before staging and leave
+  edit source files (scripts, compose, code, docs). Check `git status` before staging and leave
   state files (`.pid`, `.heartbeat`, `logs/`, `*.db*`, `cache/`,
   `.curator_state` churn) uncommitted.
 - Read-only live inspection is always fine: `podman ps/logs`,
   `scripts/hermes.sh status`, reading logs/config, `curl` against
-  localhost ports, rendering templates to /tmp.
+  localhost ports.
 - Disruptive actions need explicit user go-ahead first (STOP and ask):
   `start|stop|restart|init|clean`, recreating containers, editing the live
   `.env`, touching MongoDB data. No surprise restarts.

@@ -6,6 +6,7 @@
   and confirmation is a harness prompt, not a hold. Read "waits for the
   approval-gate flow" as "has no tool path" and "gated backstop" as
   at-once denial. Do not run the hold flow as a live runbook.
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
 - Issue: #316 (follow-up to ADR-0009, stacked on #367)
 
 ## Context

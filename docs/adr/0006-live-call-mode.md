@@ -6,6 +6,8 @@ cancel, no held call survives anything. Read "approval-stalled" /
 "approval watch" / "held calls survive" below as pre-migration record.
 Do not run the hold flow as a live runbook.
 
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
+
 ## Context
 
 Voice was push-to-talk dictation plus TTS readout chained into a

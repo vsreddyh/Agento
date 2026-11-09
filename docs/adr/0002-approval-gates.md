@@ -9,6 +9,7 @@
   post-migration means executed under a harness grant, not ran-without-
   asking. The sections below describe the relay and the hold flow as
   built; do not run them as a live runbook.
+- Superseded by: [ADR-0012](0012-t3-opencode-migration.md) (#496, 2026-11) as it relates to the removed Pi surfaces; kept on disk as history, not rewritten.
 - Issue: #313
 
 ## Context
