@@ -1462,7 +1462,7 @@ printf '\n'
 say "This is the exact string to register in Google (copy it verbatim):"
 printf '\n  %s%s%s\n\n' "$BOLD" "$REDIRECT_URI" "$RESET"
 note "Through the proxy, /api/ goes straight to health-api, which serves"
-note "/api/connectors/callback — the one route that needs no bearer."
+note "/api/connectors/callback — the only /api route that needs no bearer (/health and /ping are unauthenticated too)."
 pause "Press Enter once you've copied it."
 
 # ── Stage 5: GCP project + APIs ───────────────────────────────────────────
@@ -1787,11 +1787,10 @@ RENDER_ERR=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — sto
 # would make that failure friendlier than the exit below.
 if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/docker-compose.yml config ) >"$RENDER_OUT" 2>"$RENDER_ERR"; then
   # Empty vars render as KEY: '' — the quote alone must not satisfy the
-  # check, or a missing var reads as "reaches the pi service".
-  # Scoped per service: the same four keys are mapped into both pi and
-  # health-api, and a whole-config grep would pass while one mapping is
-  # missing (the health-api mapping is what connect/callback actually
-  # read — a green proof with it missing 501s at runtime).
+  # check, or a missing var reads as reaching health-api. Scoped to the
+  # health-api block: a whole-config grep would pass while the mapping
+  # connect/callback actually read is missing (a green proof with it
+  # missing 501s at runtime).
   _service_block() {
     awk -v svc="$1" '
       $0 ~ "^  " svc ":$" { inblock=1; next }
@@ -1800,10 +1799,9 @@ if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/dock
     ' "$RENDER_OUT"
   }
   _render_missing=""
-  # Health-api is REQUIRED (it serves connect/callback); pi is warn-only
-  # (its verbs die with the #494 teardown, after which a required check
-  # here would block setup on a correct tree).
-  for _svc in health-api pi; do
+  # Health-api is REQUIRED (it serves connect/callback). The pi service
+  # is gone with #494, so checking it would block setup on a correct tree.
+  for _svc in health-api; do
     _block_out=$(mktemp) || { warn "temp file creation failed (TMPDIR full?) — stopping before the render"; exit 1; }
     _service_block "$_svc" >"$_block_out"
     for k in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL CONNECTORS_ENCRYPTION_KEY; do
@@ -1819,15 +1817,8 @@ if ( cd -- "$REPO_DIR" && "${_compose[@]}" --env-file "$ENV_FILE" -f docker/dock
           rm -f "$_block_out" || true
           exit 1
         fi
-        if [[ "$_svc" == "pi" ]]; then
-          # Warn-only: the pi verbs (and their env mapping) die with the
-          # #494 teardown — a required check here would block setup on a
-          # correct tree the moment they land.
-          printf '  %s!%s %s missing for %s (serving copy is health-api; pi mapping dies with #494)\n' "$YELLOW" "$RESET" "$k" "$_svc"
-        else
-          printf '  %s✗%s %s renders EMPTY for %s — fix it before restarting\n' "$YELLOW" "$RESET" "$k" "$_svc"
-          _render_missing="${_render_missing:+$_render_missing }${_svc}/${k}"
-        fi
+        printf '  %s✗%s %s renders EMPTY for %s — fix it before restarting\n' "$YELLOW" "$RESET" "$k" "$_svc"
+        _render_missing="${_render_missing:+$_render_missing }${_svc}/${k}"
       fi
     done
     rm -f "$_block_out" || true
@@ -1859,13 +1850,14 @@ finish
 
 # finish clears the screen, wiping the render ✓ lines just earned; restate
 # the proof beside the comparison step that now leans on it.
-note "render proof (cleared with the stage above): all four keys interpolated non-empty for health-api (any pi lines above are warn-only, not proof)"
+note "render proof (cleared with the stage above): all four keys interpolated non-empty for health-api"
 
 # ── Closing checklist (not a stage; nothing else is automated) ────────────
 printf '%s  Next, in this order:%s\n' "$BOLD" "$RESET"
 printf '  1. Restart now so every container picks up the new .env values\n'
-printf '     (health-api reads all four OAuth vars too — a pi-only recreate\n'
-printf '     leaves connect 501ing on stale config):\n'
+printf '     (health-api reads all four OAuth vars — a plain container\n'
+printf '     restart without recreation leaves connect 501ing on stale\n'
+printf '     config):\n'
 printf '     ./scripts/hermes.sh restart recreates them (a plain container\n'
 printf '     restart without recreation will not pick up .env changes).\n'
 printf '  2. Compare the canonical string health-api logs at boot:\n'
