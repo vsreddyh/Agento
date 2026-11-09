@@ -42,7 +42,7 @@ fun projectTimeMs(iso: String): Long {
 }
 
 /**
- * Client for the project board (same bearer auth as chat/sync, served
+ * Client for the project board (same bearer auth as the other clients, served
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
  * validation the agent uses over MCP. Row fields are lenient (missing reads
@@ -226,14 +226,15 @@ class ProjectsApi(context: Context) {
                 val text = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
                     // A 404 on an /api/* route almost always means the app's
-                    // Server URL points at the gateway (:8643) instead of the
-                    // proxy (:8080) — the gateway serves chat only, while
-                    // /api/* lives on health-api behind the proxy. Say so
-                    // instead of surfacing a bare "Not Found".
+                    // Server URL points at the retired agent gateway (:8643)
+                    // instead of the proxy (:8080) — :8643 served the chat-era
+                    // agent this app no longer uses, while /api/* lives on
+                    // health-api behind the proxy. Say so instead of
+                    // surfacing a bare "Not Found".
                     if (response.code == 404 && url.startsWith("/api/")) {
                         throw RuntimeException(
                             "HTTP 404: ${text.take(200)} (is the Server URL " +
-                                "the :8080 proxy? Direct :8643 serves chat only)"
+                                "the :8080 proxy? Direct :8643 is the retired agent gateway)"
                         )
                     }
                     throw RuntimeException("HTTP ${response.code}: ${text.take(200)}")

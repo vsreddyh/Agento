@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Agento</string>
-    <string name="live_widget_desc">Start a live voice session with God</string>
     <string name="task_widget_desc">Open tasks at a glance</string>
     <string name="task_widget_title">Task Manager</string>
     <string name="task_widget_loading">Loading…</string>

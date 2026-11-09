@@ -26,10 +26,6 @@ class FriendlyErrorTest {
             "3 tasks could not be parsed",
             friendlyError(taskDropMessage(3)).title,
         )
-        assertEquals(
-            "2 providers could not be parsed",
-            friendlyError(catalogDropMessage(2)).title,
-        )
     }
 
     @Test

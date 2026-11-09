@@ -79,7 +79,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 /** Task Manager: the user's own tasks from the shared `tasks` collection
  * (the same rows the assistant manages over MCP). Full CRUD here; the
- * assistant stays a second writer through chat, same as before. */
+ * assistant stays a second writer, same as before. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TaskManagerScreen(
@@ -1434,7 +1434,7 @@ internal fun TaskManagerScreen(
                 // Widget display settings moved to Settings -> Home-screen
                 // widget: they configure the home screen, not this task
                 // list, and they were the only controls below the rows.
-                HintLine("Your tasks, shared with your assistant — changes here and in chat land in the same list.")
+                HintLine("Your tasks, shared with your assistant — changes here and from the assistant land in the same list.")
                 }
             }
         }

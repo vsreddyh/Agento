@@ -8,6 +8,19 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [8.0.0]
+- **Thin phone client: Chat and agent-management surfaces removed (#493).**
+  The app is now Tasks/Projects, Task Manager, Files, ∃-Mail, Health Sync,
+  reminders/widgets and Settings. Chat is gone outright (no replacement):
+  the Chat screen, its threads, attachments, voice, notifications and model /
+  effort pickers are deleted, along with the Skills, Tools, Connectors and
+  Usage screens, the teach / memory / runs / approvals / questions dialogs
+  and their APIs, live voice mode and the live widget, the task-instruction
+  deep link, and the chat-only prefs and backup keys. Old backups still
+  import (unknown chat-era keys are skipped); export now covers the current
+  keys plus the stored tasks file. Notifications settings keep the system
+  grant plus the reminder and update-notice switches in Behaviour.
+
 ## [7.0.0]
 - **Cron/Scheduler surface removed (#491).** The Scheduler screen, its
   navigation destination, the background cron poll worker, the scheduler

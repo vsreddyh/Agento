@@ -427,11 +427,7 @@ fun ServerTask.isOpen(): Boolean = completedAt.isBlank()
 
 /** Lenient string read: Android's `optString` coerces JSON null to
  * the string "null", so every nullable string field must go through
- * here (#130).
- *
- * Neutral name on purpose: the package already has a stricter top-level
- * `optStr` (MemoryApi) that blanks non-string values, which would
- * silently change number fields here if this shadowed it. */
+ * here (#130). */
 internal fun optJsonStr(o: JSONObject, key: String): String =
     if (o.isNull(key)) "" else o.optString(key, "").trim()
 
@@ -787,7 +783,7 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
         // reminder paths take `.tasks` and never see the count, but
         // their log lines surface in Settings → About diagnostics.
         // runCatching: Log is stubbed (throws) on the JVM unit-test
-        // classpath, same guard as ApprovalsApi.
+        // classpath, same guard as every other API client.
         runCatching {
             Log.w("TasksApi", "dropped $dropped unparseable task row(s) in list response")
         }
@@ -819,7 +815,7 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
 }
 
 /**
- * Client for the user's tasks (same bearer auth as chat/sync, served
+ * Client for the user's tasks (same bearer auth as the other clients, served
  * through the proxy's /api/ route — no profile prefix; the collection is
  * global, not per-assistant). Full CRUD against the same store and
  * validation the agent uses over MCP. Row fields are lenient (missing reads
@@ -1558,8 +1554,8 @@ class TasksApi(context: Context) {
             ?: throw RuntimeException(TASKS_SHAPE_ERROR)
 
     /** Ids are hex today, but encoded defensively so a malformed id can
-     * never break the request path (the `+` fix-up mirrors ServerApi:
-     * form-encoding emits `+` for space, valid only in query strings). */
+     * never break the request path (form-encoding emits `+` for space,
+     * valid only in query strings, so it is fixed up to `%20`). */
     private fun encodeId(id: String): String =
         URLEncoder.encode(id.trim(), Charsets.UTF_8.name()).replace("+", "%20")
 
@@ -1597,14 +1593,15 @@ class TasksApi(context: Context) {
                 val text = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
                     // A 404 on an /api/* route almost always means the app's
-                    // Server URL points at the gateway (:8643) instead of the
-                    // proxy (:8080) — the gateway serves chat only, while
-                    // /api/* lives on health-api behind the proxy. Say so
-                    // instead of surfacing a bare "Not Found".
+                    // Server URL points at the retired agent gateway (:8643)
+                    // instead of the proxy (:8080) — :8643 served the chat-era
+                    // agent this app no longer uses, while /api/* lives on
+                    // health-api behind the proxy. Say so instead of
+                    // surfacing a bare "Not Found".
                     if (response.code == 404 && url.startsWith("/api/")) {
                         throw RuntimeException(
                             "HTTP 404: ${text.take(200)} (is the Server URL " +
-                                "the :8080 proxy? Direct :8643 serves chat only)"
+                                "the :8080 proxy? Direct :8643 is the retired agent gateway)"
                         )
                     }
                     throw RuntimeException("HTTP ${response.code}: ${text.take(200)}")

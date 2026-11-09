@@ -95,56 +95,6 @@ class StaleDataTest {
         )
     }
 
-    // ── Thread save-error state ───────────────────────────────────────
-
-    @Test
-    fun `save error defaults to empty`() {
-        assertEquals("", ChatThreads.saveError("stale-data-never-written"))
-    }
-
-    @Test
-    fun `record and clear round-trip`() {
-        val tab = "stale-data-roundtrip"
-        ChatThreads.clearSaveError(tab)
-        assertEquals("", ChatThreads.saveError(tab))
-        ChatThreads.recordSaveError(tab)
-        assertEquals(ChatThreads.SAVE_FAILED_MESSAGE, ChatThreads.saveError(tab))
-        ChatThreads.clearSaveError(tab)
-        assertEquals("", ChatThreads.saveError(tab))
-    }
-
-    @Test
-    fun `save error is per tab`() {
-        val a = "stale-data-tab-a"
-        val b = "stale-data-tab-b"
-        ChatThreads.clearSaveError(a)
-        ChatThreads.clearSaveError(b)
-        ChatThreads.recordSaveError(a)
-        assertEquals(ChatThreads.SAVE_FAILED_MESSAGE, ChatThreads.saveError(a))
-        assertEquals("", ChatThreads.saveError(b))
-        ChatThreads.clearSaveError(a)
-    }
-
-    @Test
-    fun `save-error marker key is per tab`() {
-        // The prefs marker survives the restart the flag is about; a shared
-        // key would banner every tab for one tab's failure, or clear another
-        // tab's marker on an unrelated success.
-        assertNotEquals(
-            ChatThreads.saveErrorMarkerKey("chat"),
-            ChatThreads.saveErrorMarkerKey("code"),
-        )
-        assertTrue(ChatThreads.saveErrorMarkerKey("chat").isNotBlank())
-    }
-
-    @Test
-    fun `save failure names storage`() {
-        // The banner's whole point: memory is ahead of disk, and the next
-        // cold start shows the older conversation. "Storage" tells the user
-        // what to free; a generic "failed" would not.
-        assertTrue(ChatThreads.SAVE_FAILED_MESSAGE.contains("storage", ignoreCase = true))
-    }
-
     // ── Health Connect unavailable wording ────────────────────────────
 
     @Test

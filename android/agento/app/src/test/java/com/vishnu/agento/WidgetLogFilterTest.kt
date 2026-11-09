@@ -15,8 +15,8 @@ class WidgetLogFilterTest {
     @Test
     fun `parse drop logs survive the diagnostics filter`() {
         assertTrue(TaskWidget.widgetLine("W/TasksApi: dropped 2 unparseable task row(s) in list response"))
-        assertTrue(TaskWidget.widgetLine("W/ChatApi: dropped 1 unparseable catalog row(s) in inventory response"))
-        assertTrue(TaskWidget.widgetLine("W/ApprovalsApi: approvals body has no array"))
+        assertTrue(TaskWidget.widgetLine("W/TaskSyncWorker: task surface refresh failed"))
+        assertTrue(TaskWidget.widgetLine("W/SyncRunner: sync failed"))
     }
 
     @Test

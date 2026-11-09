@@ -23,8 +23,7 @@ import androidx.work.WorkManager
  * Deliberately NOT here (operator-set by design, see documentation.md):
  * money/health retention windows, gateway turn/inventory timeouts, and the
  * profile prompt. Health-sync failures stay in-app status text (there is no
- * system notification for them to gate). `tts_auto` predates this section:
- * the chat bar keeps its toggle and this section surfaces the same key.
+ * system notification for them to gate).
  */
 object BehaviourSettings {
 
@@ -204,35 +203,10 @@ object BehaviourSettings {
     fun ttsPctLabelFor(key: String, pct: Long): String = "${coerceImport(key, pct)}%"
 
     // ── Notification kinds ───────────────────────────────────────────────
-    // The shared skipped-not-queued clause, spelled once: the master copy
-    // and the kind copy below must never drift apart again.
-    const val SKIPPED_NOT_QUEUED = "Runs from while off are skipped, not queued."
-    // The master switch (notify_reply_done, default on) keeps its exact
-    // meaning: off silences everything, as today. Each kind below defaults
-    // on and applies only while the master is on, so an install that never
-    // opens the section — and an opted-out one — behaves exactly like 5.12.0.
-    const val KEY_NOTIFY_FAILED = "notify_reply_failed"
-    const val KEY_NOTIFY_INSTRUCT = "notify_instruct_saved"
-
-    fun notifyFailed(ctx: Context): Boolean =
-        ChatNotifications.isEnabled(ctx) && prefs(ctx).getBoolean(KEY_NOTIFY_FAILED, true)
-
-    fun notifyInstruct(ctx: Context): Boolean =
-        ChatNotifications.isEnabled(ctx) && prefs(ctx).getBoolean(KEY_NOTIFY_INSTRUCT, true)
-
-    fun notifyFailedRaw(ctx: Context): Boolean =
-        prefs(ctx).getBoolean(KEY_NOTIFY_FAILED, true)
-
-    fun notifyInstructRaw(ctx: Context): Boolean =
-        prefs(ctx).getBoolean(KEY_NOTIFY_INSTRUCT, true)
-
-    fun setNotifyFailed(ctx: Context, on: Boolean) {
-        prefs(ctx).edit { putBoolean(KEY_NOTIFY_FAILED, on) }
-    }
-
-    fun setNotifyInstruct(ctx: Context, on: Boolean) {
-        prefs(ctx).edit { putBoolean(KEY_NOTIFY_INSTRUCT, on) }
-    }
+    // Reminder and update notifications carry their own switches: reminders
+    // on/off lives in TaskReminders (surfaced in this section), the update
+    // poll notify toggle lives below. No per-kind gates remain here since
+    // #493 removed the chat reply alerts they gated.
 
     // ── App update checks (#366) ─────────────────────────────────────────
     // Startup check is on and the periodic poll is daily, so an install
@@ -316,15 +290,10 @@ object BehaviourSettings {
         return if (startup) "$periodic Plus once on startup." else periodic
     }
 
-    // ── Auto-read (surfaced here; the chat bar keeps its toggle) ─────────
-    const val KEY_TTS_AUTO = "tts_auto"
-
-    fun ttsAuto(ctx: Context): Boolean =
-        prefs(ctx).getBoolean(KEY_TTS_AUTO, false)
-
-    fun setTtsAuto(ctx: Context, on: Boolean) {
-        prefs(ctx).edit { putBoolean(KEY_TTS_AUTO, on) }
-    }
+    // ── Auto-read (retired with chat in #493) ────────────────────────────
+    // `tts_auto` once surfaced the chat bar's auto-read toggle here. The
+    // chat bar is gone, so the key is no longer read or written; a stale
+    // copy in an old backup is skipped on import like any unknown key.
 
     /** Hub one-liner: how many knobs differ from their defaults. */
     fun customCount(ctx: Context): Int = customCount(
@@ -336,18 +305,15 @@ object BehaviourSettings {
         voice = ttsVoice(ctx),
         ratePct = ttsRatePct(ctx),
         pitchPct = ttsPitchPct(ctx),
-        kindFailed = notifyFailedRaw(ctx),
-        kindInstruct = notifyInstructRaw(ctx),
         remindersOn = TaskReminders.isEnabled(ctx),
-        autoRead = ttsAuto(ctx),
         updateHours = updateIntervalHours(ctx),
         updateStartup = updateStartup(ctx),
         updateNotify = updateNotify(ctx),
     )
 
     /** Pure deviation count, JVM-pinned: every knob that differs from its
-     * default, including the surfaced-but-pre-existing switches (enabling
-     * reminders or auto-read elsewhere still counts — deliberate, and the
+     * default, including the surfaced-but-pre-existing reminder switch
+     * (enabling reminders elsewhere still counts — deliberate, and the
      * hub copy says "custom", not "changed here"). */
     fun customCount(
         syncHours: Long,
@@ -358,10 +324,7 @@ object BehaviourSettings {
         voice: String,
         ratePct: Long,
         pitchPct: Long,
-        kindFailed: Boolean,
-        kindInstruct: Boolean,
         remindersOn: Boolean,
-        autoRead: Boolean,
         // #366 append-only: existing callers (and the pinned test helper)
         // keep compiling, and the defaults match the getters so "nothing
         // configured" still counts zero.
@@ -391,12 +354,9 @@ object BehaviourSettings {
         if (voice.trim().isNotEmpty()) n++
         if (rp != DEFAULT_TTS_PCT) n++
         if (pp != DEFAULT_TTS_PCT) n++
-        if (!kindFailed) n++
-        if (!kindInstruct) n++
-        // Surfaced-but-pre-existing keys count too: enabling either is a
+        // Surfaced-but-pre-existing key counts too: enabling it is a
         // deliberate behaviour change made in this section.
         if (remindersOn) n++
-        if (autoRead) n++
         // Update checks (#366): each knob is independently meaningful, so
         // no mootness folding here — a weekly cadence with a startup check
         // is two deliberate picks, not one.

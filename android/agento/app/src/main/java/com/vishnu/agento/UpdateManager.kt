@@ -36,7 +36,7 @@ data class AppRelease(
  * Issue #6: check-then-install updater. Reads `/releases/latest` from the
  * GitHub API, compares against the installed build, streams the release APK
  * to cache, and fires the platform installer. No new dependencies —
- * OkHttp (already used by ChatApi) plus org.json.
+ * OkHttp plus org.json.
  */
 object UpdateManager {
 
