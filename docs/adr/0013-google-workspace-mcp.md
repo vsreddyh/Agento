@@ -21,8 +21,9 @@ The issue was blocked on five decisions. They are now:
 1. **Account** — one mailbox, configured by `USER_GOOGLE_EMAIL`; nothing in
    code assumes which address.
 2. **OAuth client** — a **Desktop app** client (human-created). A desktop
-   client accepts any loopback redirect, so `http://localhost:8000/oauth2callback`
-   needs no registration in GCP; a Web-app client would need an exact URI and
+   client accepts any loopback redirect, so `http://localhost:<port>/oauth2callback`
+   (port 8000 unless `WORKSPACE_MCP_PORT` says otherwise) needs no registration in
+   GCP; a Web-app client would need an exact URI and
    is the wrong shape for a single headless user.
 3. **Install** — a repo-local venv at `.workspace-mcp/venv` (git-ignored),
    pinned version, behind `scripts/workspace-mcp.sh`. Not `uvx` (a package

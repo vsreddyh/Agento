@@ -108,7 +108,7 @@ Measured (`podman system df` + image sizes), not guessed:
   OAuth callback, bound to `127.0.0.1` (loopback) by the host process T3 spawns —
   the launcher scrubs `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/
   `WORKSPACE_EXTERNAL_URL`, so this claim does not depend on the shell it starts
-  in. It is reached only through an SSH forward during first-run consent
-  (`ssh -L 8000:localhost:8000 <host>`, using the callback port on both sides).
-  Never open it to the internet.
+  in. It is reached only through an SSH forward during first-run consent —
+  `ssh -L <port>:localhost:<port> <host>` with `<port>` = 8000 (the default) or
+  `$WORKSPACE_MCP_PORT`. Never open it to the internet.
 - SSH on 22 (restrict source IPs / use key auth).
