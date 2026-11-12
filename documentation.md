@@ -76,7 +76,7 @@ Nothing in that table is committed: `clean` never touches `.workspace-mcp/`, and
 **One-time Google Cloud setup (human-only)**
 
 1. Create a Google Cloud project, enable the **Gmail API** (nothing else is in scope).
-2. Configure the OAuth consent screen and create an OAuth client of type **Desktop app**. A desktop client accepts any loopback redirect, so `http://localhost:8000/oauth2callback` needs no registration — do not pick "Web application", which would require an exact URI.
+2. Configure the OAuth consent screen and create an OAuth client of type **Desktop app**. A desktop client accepts any loopback redirect, so `http://localhost:<port>/oauth2callback` needs no registration (`8000` by default, or your `WORKSPACE_MCP_PORT`) — do not pick "Web application", which would require an exact URI.
 3. Leave the publishing status on **Testing** and add the account as a test user. That avoids Google's verification/CASA assessment for the restricted `gmail.readonly` scope, at the cost of a **7-day refresh-token lifetime** — expect to re-consent roughly weekly (below). Publishing the app instead means the full assessment.
 4. Paste the client id + secret into the root `.env`, set `USER_GOOGLE_EMAIL`, then restart T3/opencode (the process env is captured at start, so a running agent keeps the old values).
 
@@ -105,7 +105,7 @@ source scripts/lib/common.sh && load_root_env && ./scripts/workspace-mcp.sh
 
 With the vars loaded it opens stdio and waits for a client (that is the point — there is no mail to print and no consent URL until an MCP client calls a tool), so the real proof is a read through T3: ask for mail, complete consent once, ask again. `opencode mcp list` shows the server once T3 has been restarted with the new env.
 
-The bind is loopback because the launcher scrubs `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/`WORKSPACE_EXTERNAL_URL`; verified against 2.4.2 with `PORT=9999` in the environment, which still yields `127.0.0.1:8000` and a redirect of `http://localhost:8000/oauth2callback`.
+The bind is loopback because the launcher scrubs `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/`WORKSPACE_EXTERNAL_URL`; verified against 2.4.2 at the default port with `PORT=9999` in the environment, which still yields `127.0.0.1:8000` and a redirect of `http://localhost:8000/oauth2callback` (with `WORKSPACE_MCP_PORT=9000` both become 9000 — `PORT` never wins).
 
 ### LLM connection
 
