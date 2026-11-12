@@ -84,7 +84,7 @@ Nothing in that table is committed: `clean` never touches `.workspace-mcp/`, and
 
 The callback listener binds loopback on the host — `127.0.0.1:8000` by default, or `127.0.0.1:$WORKSPACE_MCP_PORT` when that is set — so a laptop browser reaches it through an SSH forward:
 
-1. `ssh -L 8000:localhost:8000 <host>` and keep that session open — both numbers are the callback port, so substitute `$WORKSPACE_MCP_PORT` on both sides if it is set.
+1. `ssh -L 8000:127.0.0.1:8000 <host>` and keep that session open — both numbers are the callback port, so substitute `$WORKSPACE_MCP_PORT` on both sides if it is set. The remote side is spelled `127.0.0.1`, not `localhost`: the listener is IPv4 loopback, and a remote `localhost` that resolves to `::1` first would forward to `[::1]:8000` and be refused.
 2. Ask the agent for mail (e.g. "search my unread mail"). The tool call does not fail hard: it returns an **Authorization URL** for that account.
 3. Open the URL on the laptop, sign in as `USER_GOOGLE_EMAIL`, approve. The browser is redirected to `http://localhost:<port>/oauth2callback`, the forward hands it to the host, and the page reports success.
 4. Repeat the request. The token is now cached; later calls neither prompt nor print a URL.
