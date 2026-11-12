@@ -335,7 +335,12 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	flat := strings.Join(strings.Fields(strings.ReplaceAll(string(raw), "\\\n", " ")), " ")
 	for _, want := range []string{
 		"unset WORKSPACE_MCP_HOST WORKSPACE_MCP_BASE_URI WORKSPACE_EXTERNAL_URL",
+		"unset WORKSPACE_MCP_HTTP_PORT",
 		"unset WORKSPACE_MCP_TOOLS WORKSPACE_MCP_TOOL_TIER WORKSPACE_MCP_READ_ONLY WORKSPACE_MCP_PERMISSIONS",
+		// The callback port and its redirect must stay one derived value: an
+		// inherited GOOGLE_OAUTH_REDIRECT_URI would point at a port the
+		// operator is not forwarding.
+		`export GOOGLE_OAUTH_REDIRECT_URI="http://localhost:$WORKSPACE_MCP_PORT/oauth2callback"`,
 	} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("launcher is missing %q — deleting it lets an inherited env var widen the documented loopback-only, Gmail-only surface", want)

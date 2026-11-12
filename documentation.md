@@ -89,7 +89,7 @@ The callback listener binds loopback (`127.0.0.1:8000`) on the host, so a laptop
 3. Open the URL on the laptop, sign in as `USER_GOOGLE_EMAIL`, approve. The browser is redirected to `http://localhost:8000/oauth2callback`, the forward hands it to the host, and the page reports success.
 4. Repeat the request. The token is now cached; later calls neither prompt nor print a URL.
 
-The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. Set `WORKSPACE_MCP_PORT` in `.env` to change the port (and then forward that one).
+The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. `WORKSPACE_MCP_PORT` in `.env` changes the port; `opencode.json` passes only the three credential keys, so that value reaches the launcher through T3's own environment — restart T3/opencode after editing it, then forward the new port.
 
 **Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR`, in which case delete there:
 

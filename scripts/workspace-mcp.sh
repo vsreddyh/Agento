@@ -64,8 +64,11 @@ chmod 700 "$WORKSPACE_MCP_CREDENTIALS_DIR"
 # makes the server honour this port: without it, PORT beats
 # WORKSPACE_MCP_PORT in the upstream resolver and the redirect could land
 # somewhere else (verified against 2.4.2: PORT=9999 still yields 8000 here).
+# Assigned outright, not `${VAR:-...}`: an inherited redirect URI would then
+# point somewhere other than WORKSPACE_MCP_PORT, which is the one knob the
+# documentation tells the operator to turn.
 export WORKSPACE_MCP_PORT="${WORKSPACE_MCP_PORT:-8000}"
-export GOOGLE_OAUTH_REDIRECT_URI="${GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:$WORKSPACE_MCP_PORT/oauth2callback}"
+export GOOGLE_OAUTH_REDIRECT_URI="http://localhost:$WORKSPACE_MCP_PORT/oauth2callback"
 # oauthlib refuses a plain-http redirect without this; the loopback hop is the
 # operator's own SSH forward, never the open network.
 export OAUTHLIB_INSECURE_TRANSPORT=1
@@ -75,7 +78,10 @@ export OAUTHLIB_INSECURE_TRANSPORT=1
 # env in 2.4.2 — WORKSPACE_MCP_TOOLS/READ_ONLY/TOOL_TIER/PERMISSIONS are only
 # consulted when their flag is absent — but the bind host and external URL are
 # env-only, and the documentation makes a loopback-only claim).
+# WORKSPACE_MCP_HTTP_PORT is env-only too: in stdio mode it adds a second,
+# unauthenticated loopback HTTP listener serving the same tools.
 unset WORKSPACE_MCP_HOST WORKSPACE_MCP_BASE_URI WORKSPACE_EXTERNAL_URL
+unset WORKSPACE_MCP_HTTP_PORT
 unset WORKSPACE_MCP_TOOLS WORKSPACE_MCP_TOOL_TIER WORKSPACE_MCP_READ_ONLY \
     WORKSPACE_MCP_PERMISSIONS
 
