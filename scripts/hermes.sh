@@ -185,12 +185,21 @@ ensure_podman() {
 }
 
 ensure_python() {
+    # 3.10 is the floor because the Google Workspace MCP server
+    # (scripts/build-workspace-mcp.sh) needs it; nothing else here does.
     if command -v python3 &>/dev/null &&
-        python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
-        info "python3 $(python3 --version 2>&1 | sed 's/Python //') available."
+        python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+        # `-m venv` needs the distro's venv module (python3-venv on Debian/
+        # Ubuntu), which is a separate package from the interpreter.
+        if python3 -m venv --help &>/dev/null; then
+            info "python3 $(python3 --version 2>&1 | sed 's/Python //') available."
+            return 0
+        fi
+        warn "python3 has no venv module — installing python3-venv (workspace-mcp needs it)."
+        pkg_install python3-venv || warn "python3-venv install failed — the Gmail MCP server stays unavailable."
         return 0
     fi
-    warn "python3 >= 3.9 not found — installing python3 + pip (host tooling)."
+    warn "python3 >= 3.10 not found — installing python3 + pip (host tooling)."
     pkg_install python3 python3-pip python3-venv \
         || { warn "python install failed — install python3 manually."; return 1; }
     info "python3 installed: $(python3 --version 2>&1)."

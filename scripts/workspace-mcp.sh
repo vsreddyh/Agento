@@ -48,20 +48,33 @@ fi
 # Token cache location. Override only to point at a store outside this
 # checkout; the default is runtime state and git-ignored.
 export WORKSPACE_MCP_CREDENTIALS_DIR="${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}"
+# The cache holds refresh tokens: 0600 files / 0700 dirs, set BEFORE the
+# directory below is created.
+umask 077
+mkdir -p "$WORKSPACE_MCP_CREDENTIALS_DIR"
+
 # Pinned loopback callback port. The consent redirect is
 # http://localhost:<port>/oauth2callback, which a Desktop-app OAuth client
 # accepts on any loopback port, so nothing has to be registered in GCP. The
 # port is fixed (not auto-fallback) because the headless procedure forwards
-# exactly this port over SSH.
+# exactly this port over SSH. Setting GOOGLE_OAUTH_REDIRECT_URI is also what
+# makes the server honour this port: without it, PORT beats
+# WORKSPACE_MCP_PORT in the upstream resolver and the redirect could land
+# somewhere else (verified against 2.4.2: PORT=9999 still yields 8000 here).
 export WORKSPACE_MCP_PORT="${WORKSPACE_MCP_PORT:-8000}"
 export GOOGLE_OAUTH_REDIRECT_URI="${GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:$WORKSPACE_MCP_PORT/oauth2callback}"
 # oauthlib refuses a plain-http redirect without this; the loopback hop is the
 # operator's own SSH forward, never the open network.
 export OAUTHLIB_INSECURE_TRANSPORT=1
 
-mkdir -p "$WORKSPACE_MCP_CREDENTIALS_DIR"
-# The cache holds refresh tokens: keep new files 0600 / dirs 0700.
-umask 077
+# Scrub settings that could widen what is documented here, so a stray shell
+# variable cannot contradict this launcher (the CLI flags below win over the
+# env in 2.4.2 — WORKSPACE_MCP_TOOLS/READ_ONLY/TOOL_TIER/PERMISSIONS are only
+# consulted when their flag is absent — but the bind host and external URL are
+# env-only, and the documentation makes a loopback-only claim).
+unset WORKSPACE_MCP_HOST WORKSPACE_MCP_BASE_URI WORKSPACE_EXTERNAL_URL
+unset WORKSPACE_MCP_TOOLS WORKSPACE_MCP_TOOL_TIER WORKSPACE_MCP_READ_ONLY \
+    WORKSPACE_MCP_PERMISSIONS
 
 exec "$MCP_BIN" \
     --transport stdio \

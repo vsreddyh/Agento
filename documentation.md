@@ -93,7 +93,9 @@ The callback listener lives inside the spawned server process, so finish consent
 
 **Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete `.workspace-mcp/credentials/*.json`, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing).
 
-**Check it works**: `./scripts/workspace-mcp.sh` exits with the exact missing setting if credentials or the venv are absent; a real read is the proof — `opencode mcp list` shows the server once T3 is restarted with the new env.
+**Check it works**: with no `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` set, `./scripts/workspace-mcp.sh` exits 1 naming the missing setting; otherwise it opens stdio and waits for a client, so the real proof is a read through T3 — ask for mail, complete consent once, ask again. `opencode mcp list` shows the server once T3 has been restarted with the new env.
+
+The bind is loopback because the launcher scrubs `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/`WORKSPACE_EXTERNAL_URL`; verified against 2.4.2 with `PORT=9999` in the environment, which still yields `127.0.0.1:8000` and a redirect of `http://localhost:8000/oauth2callback`.
 
 ### LLM connection
 

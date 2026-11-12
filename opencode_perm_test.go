@@ -292,30 +292,24 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	if len(argv) == 0 {
 		t.Fatalf(`%s: no exec "$MCP_BIN" line found`, launcher)
 	}
-	got := " " + strings.Join(strings.Fields(strings.Join(argv, " ")), " ") + " "
+	fields := strings.Fields(strings.Join(argv, " "))
 
-	// mustHave keeps the surface at the three verified read tools:
-	// search_gmail_messages, get_gmail_message_content and
-	// get_gmail_messages_content_batch.
-	mustHave := []string{
-		"--transport stdio",
+	// Exact sequence, not substring: `--tools gmail drive` would satisfy a
+	// Contains check for "--tools gmail" but must not pass.
+	want := []string{
+		`exec`, `"$MCP_BIN"`,
+		"--transport", "stdio",
 		"--single-user",
 		"--read-only",
-		"--tools gmail",
-		"--tool-tier core",
+		"--tools", "gmail",
+		"--tool-tier", "core",
 	}
-	for _, want := range mustHave {
-		if !strings.Contains(got, want) {
-			t.Errorf("launcher argv %q lost %q — the read-only Gmail surface is a decision (#515)", strings.TrimSpace(got), want)
-		}
+	if len(fields) != len(want) {
+		t.Fatalf("launcher argv = %q, want exactly %q", fields, want)
 	}
-	// Nothing here may widen the surface. --permissions grants per-service
-	// levels (gmail:send is one), and MCP_ENABLE_OAUTH21 turns the launcher
-	// into a multi-user HTTP server instead of a single-user stdio one.
-	mustNotHave := []string{"--permissions", "send", "delete", "MCP_ENABLE_OAUTH21"}
-	for _, banned := range mustNotHave {
-		if strings.Contains(strings.ToLower(got), strings.ToLower(banned)) {
-			t.Errorf("launcher argv %q carries %q — writes need `ask` rules in opencode.json and expectedAsk updated in the same change", strings.TrimSpace(got), banned)
+	for i := range want {
+		if fields[i] != want[i] {
+			t.Fatalf("launcher argv = %q, want exactly %q", fields, want)
 		}
 	}
 }

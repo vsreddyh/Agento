@@ -61,4 +61,6 @@ chmod 700 "$ROOT/.workspace-mcp/credentials" # holds refresh tokens
 echo "installed .workspace-mcp/venv/bin/workspace-mcp ($("$VENV/bin/python" -c \
     'import importlib.metadata as m; print(m.version("workspace-mcp"))'))"
 echo "next: set GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET / USER_GOOGLE_EMAIL in .env,"
-echo "      then run ./scripts/workspace-mcp.sh — first run needs one-time consent (see documentation.md)"
+echo "      restart T3/opencode, then ask the agent for mail — the first call returns the consent"
+echo "      URL (documentation.md → \"Google Workspace (Gmail)\"). Running the launcher by hand"
+echo "      only opens stdio and waits; it has no mail or URL to show without an MCP client."
