@@ -17,6 +17,14 @@ package agento_test
 // (`create_account`/`archive_account`), every `delete_*`, destructive
 // rewrites (`fix_last_*`), prunes that delete. The harness cannot
 // see arguments, so even a counting prune with dry_run=true prompts.
+//
+// Servers registered under `cmd/*` are not the whole agent surface: the
+// `workspace-mcp` entry in opencode.json runs an external Python server
+// (#515) whose tools this file cannot enumerate. Its surface is pinned by
+// TestWorkspaceMCPSurfaceStaysReadOnly instead — read-only Gmail only, so
+// no write/send tool exists to gate. That is the reason it adds no `ask`
+// rule here, and the reason enabling a write means editing that launcher
+// and this file together.
 
 import (
 	"encoding/json"
@@ -227,4 +235,87 @@ func TestEveryToolClassified(t *testing.T) {
 		}
 	}
 	t.Logf("classified %d registered tools", n)
+}
+
+// TestWorkspaceMCPSurfaceStaysReadOnly pins the one server whose tools
+// registeredTools cannot see: the external Python `workspace-mcp` (#515).
+// Its narrow, write-free surface is a property of the launcher's argv, so
+// the launcher is the thing under test:
+//
+//   - read-only Gmail only (`--single-user --read-only --tools gmail
+//     --tool-tier core` over stdio) means no send, delete, draft or label
+//     tool exists, which is why it contributes no `ask` pattern above.
+//   - Enabling a write/send tool therefore requires editing this launcher.
+//     The test fails until the author states the change here and, in the
+//     same commit, adds the matching `ask` rules to opencode.json (and
+//     expectedAsk above).
+//
+// Only the exec argv is inspected, never the comments around it: comments
+// explain these flags and must not be able to satisfy the test.
+func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
+	const launcher = "scripts/workspace-mcp.sh"
+	raw, err := os.ReadFile(launcher)
+	if err != nil {
+		t.Fatalf("%s: %v — opencode.json's `workspace-mcp` entry runs this launcher", launcher, err)
+	}
+
+	// opencode.json must still point at the launcher this test pins, or the
+	// pin guards nothing.
+	var cfg struct {
+		MCP struct {
+			Servers map[string]struct {
+				Command []string `json:"command"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	rawCfg, err := os.ReadFile("opencode.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rawCfg, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	server, ok := cfg.MCP.Servers["workspace-mcp"]
+	if !ok {
+		t.Fatalf("opencode.json has no `workspace-mcp` server entry")
+	}
+	if len(server.Command) != 1 || server.Command[0] != "./"+launcher {
+		t.Fatalf("workspace-mcp command = %q, want [\"./%s\"]", server.Command, launcher)
+	}
+
+	var argv []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if argv != nil || strings.Contains(line, `exec "$MCP_BIN"`) {
+			argv = append(argv, strings.TrimSuffix(strings.TrimSpace(line), `\`))
+		}
+	}
+	if len(argv) == 0 {
+		t.Fatalf(`%s: no exec "$MCP_BIN" line found`, launcher)
+	}
+	got := " " + strings.Join(strings.Fields(strings.Join(argv, " ")), " ") + " "
+
+	// mustHave keeps the surface at the three verified read tools:
+	// search_gmail_messages, get_gmail_message_content and
+	// get_gmail_messages_content_batch.
+	mustHave := []string{
+		"--transport stdio",
+		"--single-user",
+		"--read-only",
+		"--tools gmail",
+		"--tool-tier core",
+	}
+	for _, want := range mustHave {
+		if !strings.Contains(got, want) {
+			t.Errorf("launcher argv %q lost %q — the read-only Gmail surface is a decision (#515)", strings.TrimSpace(got), want)
+		}
+	}
+	// Nothing here may widen the surface. --permissions grants per-service
+	// levels (gmail:send is one), and MCP_ENABLE_OAUTH21 turns the launcher
+	// into a multi-user HTTP server instead of a single-user stdio one.
+	mustNotHave := []string{"--permissions", "send", "delete", "MCP_ENABLE_OAUTH21"}
+	for _, banned := range mustNotHave {
+		if strings.Contains(strings.ToLower(got), strings.ToLower(banned)) {
+			t.Errorf("launcher argv %q carries %q — writes need `ask` rules in opencode.json and expectedAsk updated in the same change", strings.TrimSpace(got), banned)
+		}
+	}
 }

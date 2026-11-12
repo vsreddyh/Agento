@@ -104,4 +104,8 @@ Measured (`podman system df` + image sizes), not guessed:
 - `:8001` (health-api) stays published for direct access and debugging — restrict
   it with a firewall or reverse proxy if the host is public (`HEALTH_HOST_PORT`
   remaps the host side).
+- `:8000` is **not** published. It is the Gmail MCP OAuth callback, bound to
+  `127.0.0.1` inside the host process that T3 spawns, and reached only through
+  an SSH forward (`ssh -L 8000:localhost:8000 <host>`) during first-run consent.
+  Never open it to the internet — `WORKSPACE_MCP_PORT` moves it if 8000 is taken.
 - SSH on 22 (restrict source IPs / use key auth).

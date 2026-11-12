@@ -9,7 +9,9 @@ set -euo pipefail
 # this script. init self-installs the host tools it needs (curl, podman +
 # podman-compose, python3, cron), builds the images, seeds the single root .env
 # and installs the retention cron. Only git + sudo must pre-exist. All env lives
-# in the root .env.
+# in the root .env. init also installs the external Google Workspace MCP server
+# (`scripts/build-workspace-mcp.sh`, repo-local venv); the Go MCP binaries are
+# `scripts/build-mcps.sh`, run separately.
 # NOTE: container harness only — this script never installs the opencode CLI.
 #
 # The name is left over from when the agent host was the Hermes gateway.
@@ -37,7 +39,7 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env, set up host tools (curl, podman, python, cron), install retention cron
+  init       Build images, seed the root .env, set up host tools (curl, podman, python, cron), install the MCP servers and retention cron
   start      Start the whole container stack (health-api, proxy, retention)
   stop       Stop the container stack
   restart    Recreate containers in place (up --build --force-recreate)
@@ -224,6 +226,15 @@ cmd_init() {
     ensure_podman || true
     ensure_python || true
     ensure_cron || true
+
+    # The one external MCP server — Google Workspace (Gmail), #515 — installs
+    # into a git-ignored repo-local venv instead of `bin/`. It is not needed by
+    # the container stack, so a failed pip install (offline host, no
+    # python3-venv) warns here and leaves init green; scripts/workspace-mcp.sh
+    # then refuses to start with the same instruction.
+    info "Installing the Google Workspace (Gmail) MCP server..."
+    bash "$SCRIPTS_DIR/build-workspace-mcp.sh" 2>&1 | sed 's/^/  /' \
+        || warn "workspace-mcp install failed — re-run ./scripts/build-workspace-mcp.sh (agent Gmail stays unavailable until then)."
 
     info "Building container images (health-api, retention)..."
     podman_compose -f "$COMPOSE" build 2>&1 || { error "podman-compose build failed."; exit 1; }
