@@ -154,7 +154,8 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   different cwd breaks every server command. The Gmail server needs its own
   one-time install: `./scripts/build-workspace-mcp.sh` (init runs it) writes
   `.workspace-mcp/venv`; `scripts/workspace-mcp.sh` then refuses to start until
-  `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` are in `.env`.
+  `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL`
+  are set in `.env`.
 - The Google Workspace entry is read-only Gmail on purpose: three read tools,
   `gmail.readonly` scope, no send/delete/draft/label writes. `opencode mcp list`
   reflects the RUNNING T3 process, so restart T3 after editing those `.env`

@@ -346,4 +346,16 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 			t.Errorf("launcher is missing %q — deleting it lets an inherited env var widen the documented loopback-only, Gmail-only surface", want)
 		}
 	}
+
+	// The pinned upstream version is part of the surface: the flags above were
+	// verified against it, so a version change must be deliberate (bump this
+	// expectation in the same commit) rather than an env override.
+	const installer = "scripts/build-workspace-mcp.sh"
+	rawInstaller, err := os.ReadFile(installer)
+	if err != nil {
+		t.Fatalf("%s: %v", installer, err)
+	}
+	if !strings.Contains(string(rawInstaller), `WORKSPACE_MCP_VERSION="2.4.2"`) {
+		t.Errorf(`%s must pin WORKSPACE_MCP_VERSION="2.4.2" outright — an override installs an unreviewed upstream behind this launcher's flags`, installer)
+	}
 }

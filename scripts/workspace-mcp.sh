@@ -44,6 +44,14 @@ if [[ -z "${GOOGLE_OAUTH_CLIENT_ID:-}" || -z "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]
     echo "  Put them in the root .env (see .env.example) and restart T3/opencode." >&2
     exit 1
 fi
+# The same goes for the account (#515 decision 1): it is what makes this a
+# single mailbox, and it is the consent login_hint. Without it the server
+# starts and consent binds whatever account the browser happens to use.
+if [[ -z "${USER_GOOGLE_EMAIL:-}" || "${USER_GOOGLE_EMAIL}" == "you@example.com" ]]; then
+    echo "workspace-mcp: USER_GOOGLE_EMAIL is empty or still the .env.example placeholder." >&2
+    echo "  Set it to the one mailbox the agent reads in the root .env, then restart T3/opencode." >&2
+    exit 1
+fi
 
 # Token cache location. Override only to point at a store outside this
 # checkout; the default is runtime state and git-ignored.
@@ -55,6 +63,8 @@ export WORKSPACE_MCP_CREDENTIALS_DIR="${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.wo
 umask 077
 mkdir -p "$WORKSPACE_MCP_CREDENTIALS_DIR"
 chmod 700 "$WORKSPACE_MCP_CREDENTIALS_DIR"
+# Same for token files restored from a backup or written before this umask.
+chmod 600 "$WORKSPACE_MCP_CREDENTIALS_DIR"/*.json 2>/dev/null || true
 
 # Pinned loopback callback port. The consent redirect is
 # http://localhost:<port>/oauth2callback, which a Desktop-app OAuth client

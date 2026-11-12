@@ -91,9 +91,10 @@ The callback listener binds loopback on the host — `127.0.0.1:8000` by default
 
 The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. `WORKSPACE_MCP_PORT` in `.env` changes the port; `opencode.json` passes only the three credential keys, so that value reaches the launcher through T3's own environment — restart T3/opencode after editing it, then forward the new port.
 
-**Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR`, in which case delete there:
+**Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR`, in which case delete there — load the root `.env` first so the override is visible:
 
 ```bash
+source scripts/lib/common.sh && load_root_env
 rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-.workspace-mcp/credentials}/"*.json
 ```
 

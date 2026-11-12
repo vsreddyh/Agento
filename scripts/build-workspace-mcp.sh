@@ -22,7 +22,10 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 VENV="$ROOT/.workspace-mcp/venv"
 PYTHON="${PYTHON:-python3}"
-WORKSPACE_MCP_VERSION="${WORKSPACE_MCP_VERSION:-2.4.2}"
+# Pinned outright, not `${VAR:-...}`: an env override would install an
+# unreviewed upstream version behind the flags this repo verified and
+# TestWorkspaceMCPSurfaceStaysReadOnly pins. Bump it here (and in that test).
+WORKSPACE_MCP_VERSION="2.4.2"
 
 if ! command -v "$PYTHON" &>/dev/null; then
     echo "build-workspace-mcp: $PYTHON not found (./scripts/hermes.sh init installs python3)." >&2
