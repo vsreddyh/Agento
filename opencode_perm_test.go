@@ -347,6 +347,29 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 		}
 	}
 
+	// The fail-fast placeholders are the ones .env.example ships, so a
+	// copied-but-unedited .env is caught here rather than at Google's consent
+	// screen. Pinned together so changing one side cannot silently disable it.
+	rawExample, err := os.ReadFile(".env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "USER_GOOGLE_EMAIL"} {
+		placeholder := ""
+		for _, line := range strings.Split(string(rawExample), "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), key+"="); ok {
+				placeholder = rest
+				break
+			}
+		}
+		if placeholder == "" {
+			t.Fatalf(".env.example has no %s= placeholder line", key)
+		}
+		if !strings.Contains(string(raw), placeholder) {
+			t.Errorf("launcher does not reject the .env.example %s placeholder %q — a copied .env would start the server with it", key, placeholder)
+		}
+	}
+
 	// The pinned upstream version is part of the surface: the flags above were
 	// verified against it, so a version change must be deliberate (bump this
 	// expectation in the same commit) rather than an env override.

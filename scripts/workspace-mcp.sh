@@ -37,19 +37,25 @@ if [[ ! -x "$MCP_BIN" ]]; then
     exit 1
 fi
 
-# Fail fast instead of starting a server that can never finish consent: the
-# OAuth client id/secret are the human-only step (#515 decision 2).
-if [[ -z "${GOOGLE_OAUTH_CLIENT_ID:-}" || -z "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]]; then
-    echo "workspace-mcp: GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET are empty." >&2
-    echo "  Put them in the root .env (see .env.example) and restart T3/opencode." >&2
-    exit 1
+# Fail fast instead of starting a server that can never finish consent. The
+# client id/secret (#515 decision 2) are the human-only step and the account
+# (decision 1) is the consent login_hint — without it the server starts and
+# consent binds whatever account the browser happens to use. The placeholder
+# values are the ones in .env.example, so a copied-but-unedited .env is caught
+# here instead of failing at Google's consent screen.
+missing=()
+if [[ -z "${GOOGLE_OAUTH_CLIENT_ID:-}" || "${GOOGLE_OAUTH_CLIENT_ID}" == "000000000000-xxxxxxxxxxxxxxxx.apps.googleusercontent.com" ]]; then
+    missing+=("GOOGLE_OAUTH_CLIENT_ID")
 fi
-# The same goes for the account (#515 decision 1): it is what makes this a
-# single mailbox, and it is the consent login_hint. Without it the server
-# starts and consent binds whatever account the browser happens to use.
+if [[ -z "${GOOGLE_OAUTH_CLIENT_SECRET:-}" || "${GOOGLE_OAUTH_CLIENT_SECRET}" == "GOCSPX-..." ]]; then
+    missing+=("GOOGLE_OAUTH_CLIENT_SECRET")
+fi
 if [[ -z "${USER_GOOGLE_EMAIL:-}" || "${USER_GOOGLE_EMAIL}" == "you@example.com" ]]; then
-    echo "workspace-mcp: USER_GOOGLE_EMAIL is empty or still the .env.example placeholder." >&2
-    echo "  Set it to the one mailbox the agent reads in the root .env, then restart T3/opencode." >&2
+    missing+=("USER_GOOGLE_EMAIL")
+fi
+if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "workspace-mcp: ${missing[*]} unset or still the .env.example placeholder." >&2
+    echo "  Fill in the root .env (see .env.example), then restart T3/opencode." >&2
     exit 1
 fi
 
