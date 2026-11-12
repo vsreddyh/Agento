@@ -39,7 +39,7 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env, set up host tools (curl, podman, python, cron), install the MCP servers and retention cron
+  init       Build images, seed the root .env, set up host tools (curl, podman, python, cron), install the Gmail MCP server and retention cron
   start      Start the whole container stack (health-api, proxy, retention)
   stop       Stop the container stack
   restart    Recreate containers in place (up --build --force-recreate)

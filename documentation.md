@@ -82,11 +82,11 @@ Nothing in that table is committed: `clean` never touches `.workspace-mcp/`, and
 
 **Headless first-run consent**
 
-The callback listener binds loopback (`127.0.0.1:8000`) on the host, so a laptop browser reaches it through an SSH forward:
+The callback listener binds loopback on the host — `127.0.0.1:8000` by default, or `127.0.0.1:$WORKSPACE_MCP_PORT` when that is set — so a laptop browser reaches it through an SSH forward:
 
-1. `ssh -L 8000:localhost:8000 <host>` and keep that session open.
+1. `ssh -L 8000:localhost:8000 <host>` and keep that session open (both numbers are the callback port; use `$WORKSPACE_MCP_PORT` on both sides if it is set).
 2. Ask the agent for mail (e.g. "search my unread mail"). The tool call does not fail hard: it returns an **Authorization URL** for that account.
-3. Open the URL on the laptop, sign in as `USER_GOOGLE_EMAIL`, approve. The browser is redirected to `http://localhost:8000/oauth2callback`, the forward hands it to the host, and the page reports success.
+3. Open the URL on the laptop, sign in as `USER_GOOGLE_EMAIL`, approve. The browser is redirected to `http://localhost:<port>/oauth2callback`, the forward hands it to the host, and the page reports success.
 4. Repeat the request. The token is now cached; later calls neither prompt nor print a URL.
 
 The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. `WORKSPACE_MCP_PORT` in `.env` changes the port; `opencode.json` passes only the three credential keys, so that value reaches the launcher through T3's own environment — restart T3/opencode after editing it, then forward the new port.

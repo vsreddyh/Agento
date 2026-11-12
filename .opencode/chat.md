@@ -65,7 +65,8 @@ instead of round-tripping one at a time.
   out of scope instead of promising it. Auth is one-time consent; a very
   first call returns an **Authorization URL** in its result instead of mail —
   relay it and point at `documentation.md` → "Google Workspace (Gmail)" (it
-  needs an SSH forward of port 8000 to finish). Tokens expire weekly while
+  needs an SSH forward of the callback port — 8000 unless
+  `WORKSPACE_MCP_PORT` is set — to finish). Tokens expire weekly while
   the OAuth app sits in Testing, and the same URL-relay is the re-consent
   path.
 
