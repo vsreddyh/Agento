@@ -91,9 +91,19 @@ The callback listener binds loopback (`127.0.0.1:8000`) on the host, so a laptop
 
 The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. Set `WORKSPACE_MCP_PORT` in `.env` to change the port (and then forward that one).
 
-**Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete `.workspace-mcp/credentials/*.json`, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing).
+**Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR`, in which case delete there:
 
-**Check it works**: with no `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` set, `./scripts/workspace-mcp.sh` exits 1 naming the missing setting; otherwise it opens stdio and waits for a client, so the real proof is a read through T3 — ask for mail, complete consent once, ask again. `opencode mcp list` shows the server once T3 has been restarted with the new env.
+```bash
+rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-.workspace-mcp/credentials}/"*.json
+```
+
+**Check it works**: the launcher reads the two secrets from its process environment, so load the root `.env` first, or the check reports them missing even when `.env` is right:
+
+```bash
+source scripts/lib/common.sh && load_root_env && ./scripts/workspace-mcp.sh
+```
+
+With the vars loaded it opens stdio and waits for a client (that is the point — there is no mail to print and no consent URL until an MCP client calls a tool), so the real proof is a read through T3: ask for mail, complete consent once, ask again. `opencode mcp list` shows the server once T3 has been restarted with the new env.
 
 The bind is loopback because the launcher scrubs `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/`WORKSPACE_EXTERNAL_URL`; verified against 2.4.2 with `PORT=9999` in the environment, which still yields `127.0.0.1:8000` and a redirect of `http://localhost:8000/oauth2callback`.
 

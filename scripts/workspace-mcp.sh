@@ -49,9 +49,12 @@ fi
 # checkout; the default is runtime state and git-ignored.
 export WORKSPACE_MCP_CREDENTIALS_DIR="${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}"
 # The cache holds refresh tokens: 0600 files / 0700 dirs, set BEFORE the
-# directory below is created.
+# directory below is created, and re-applied after, so a directory left at a
+# looser mode (created by an older launcher, a manual mkdir, or a restore) is
+# repaired rather than silently kept — upstream only probes writability.
 umask 077
 mkdir -p "$WORKSPACE_MCP_CREDENTIALS_DIR"
+chmod 700 "$WORKSPACE_MCP_CREDENTIALS_DIR"
 
 # Pinned loopback callback port. The consent redirect is
 # http://localhost:<port>/oauth2callback, which a Desktop-app OAuth client

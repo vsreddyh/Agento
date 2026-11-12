@@ -260,11 +260,15 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	}
 
 	// opencode.json must still point at the launcher this test pins, or the
-	// pin guards nothing.
+	// pin guards nothing — and its `environment` block must inject nothing
+	// beyond the three credentials. An extra key (`WORKSPACE_MCP_TOOLS`,
+	// `WORKSPACE_MCP_BASE_URI`, `PORT`, ...) would reach the server without
+	// passing through the launcher's scrub below.
 	var cfg struct {
 		MCP struct {
 			Servers map[string]struct {
-				Command []string `json:"command"`
+				Command     []string          `json:"command"`
+				Environment map[string]string `json:"environment"`
 			} `json:"servers"`
 		} `json:"mcp"`
 	}
@@ -281,6 +285,15 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	}
 	if len(server.Command) != 1 || server.Command[0] != "./"+launcher {
 		t.Fatalf("workspace-mcp command = %q, want [\"./%s\"]", server.Command, launcher)
+	}
+	wantEnv := []string{"GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "USER_GOOGLE_EMAIL"}
+	var gotEnv []string
+	for k := range server.Environment {
+		gotEnv = append(gotEnv, k)
+	}
+	sort.Strings(gotEnv)
+	if strings.Join(gotEnv, ",") != strings.Join(wantEnv, ",") {
+		t.Fatalf("workspace-mcp environment = %q, want exactly %q", gotEnv, wantEnv)
 	}
 
 	var argv []string
@@ -310,6 +323,22 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	for i := range want {
 		if fields[i] != want[i] {
 			t.Fatalf("launcher argv = %q, want exactly %q", fields, want)
+		}
+	}
+
+	// The loopback-only claim in documentation.md / vps.md rests on these
+	// scrubs, not on the argv: the stdio OAuth callback binds the hostname
+	// from WORKSPACE_MCP_BASE_URI, so an inherited 0.0.0.0 would publish the
+	// callback (and the attachment route) while the flags above stayed green.
+	// Pinned as text because there is nothing else to pin — script scrubs are
+	// not observable from a Go test without spawning a listener.
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(string(raw), "\\\n", " ")), " ")
+	for _, want := range []string{
+		"unset WORKSPACE_MCP_HOST WORKSPACE_MCP_BASE_URI WORKSPACE_EXTERNAL_URL",
+		"unset WORKSPACE_MCP_TOOLS WORKSPACE_MCP_TOOL_TIER WORKSPACE_MCP_READ_ONLY WORKSPACE_MCP_PERMISSIONS",
+	} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("launcher is missing %q — deleting it lets an inherited env var widen the documented loopback-only, Gmail-only surface", want)
 		}
 	}
 }
