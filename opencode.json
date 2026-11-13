@@ -50,6 +50,15 @@
           "MONGODB_URI": "{env:MONGODB_URI}",
           "MONGODB_DB": "{env:MONGODB_DB}"
         }
+      },
+      "workspace-mcp": {
+        "type": "local",
+        "command": ["./scripts/workspace-mcp.sh"],
+        "environment": {
+          "GOOGLE_OAUTH_CLIENT_ID": "{env:GOOGLE_OAUTH_CLIENT_ID}",
+          "GOOGLE_OAUTH_CLIENT_SECRET": "{env:GOOGLE_OAUTH_CLIENT_SECRET}",
+          "USER_GOOGLE_EMAIL": "{env:USER_GOOGLE_EMAIL}"
+        }
       }
     }
   },

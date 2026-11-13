@@ -17,6 +17,14 @@ package agento_test
 // (`create_account`/`archive_account`), every `delete_*`, destructive
 // rewrites (`fix_last_*`), prunes that delete. The harness cannot
 // see arguments, so even a counting prune with dry_run=true prompts.
+//
+// Servers registered under `cmd/*` are not the whole agent surface: the
+// `workspace-mcp` entry in opencode.json runs an external Python server
+// (#515) whose tools this file cannot enumerate. Its surface is pinned by
+// TestWorkspaceMCPSurfaceStaysReadOnly instead — read-only Gmail only, so
+// no write/send tool exists to gate. That is the reason it adds no `ask`
+// rule here, and the reason enabling a write means editing that launcher
+// and this file together.
 
 import (
 	"encoding/json"
@@ -227,4 +235,150 @@ func TestEveryToolClassified(t *testing.T) {
 		}
 	}
 	t.Logf("classified %d registered tools", n)
+}
+
+// TestWorkspaceMCPSurfaceStaysReadOnly pins the one server whose tools
+// registeredTools cannot see: the external Python `workspace-mcp` (#515).
+// Its narrow, write-free surface is a property of the launcher's argv, so
+// the launcher is the thing under test:
+//
+//   - read-only Gmail only (`--single-user --read-only --tools gmail
+//     --tool-tier core` over stdio) means no send, delete, draft or label
+//     tool exists, which is why it contributes no `ask` pattern above.
+//   - Enabling a write/send tool therefore requires editing this launcher.
+//     The test fails until the author states the change here and, in the
+//     same commit, adds the matching `ask` rules to opencode.json (and
+//     expectedAsk above).
+//
+// Only the exec argv is inspected, never the comments around it: comments
+// explain these flags and must not be able to satisfy the test.
+func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
+	const launcher = "scripts/workspace-mcp.sh"
+	raw, err := os.ReadFile(launcher)
+	if err != nil {
+		t.Fatalf("%s: %v — opencode.json's `workspace-mcp` entry runs this launcher", launcher, err)
+	}
+
+	// opencode.json must still point at the launcher this test pins, or the
+	// pin guards nothing — and its `environment` block must inject nothing
+	// beyond the three credentials. An extra key (`WORKSPACE_MCP_TOOLS`,
+	// `WORKSPACE_MCP_BASE_URI`, `PORT`, ...) would reach the server without
+	// passing through the launcher's scrub below.
+	var cfg struct {
+		MCP struct {
+			Servers map[string]struct {
+				Command     []string          `json:"command"`
+				Environment map[string]string `json:"environment"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	rawCfg, err := os.ReadFile("opencode.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rawCfg, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	server, ok := cfg.MCP.Servers["workspace-mcp"]
+	if !ok {
+		t.Fatalf("opencode.json has no `workspace-mcp` server entry")
+	}
+	if len(server.Command) != 1 || server.Command[0] != "./"+launcher {
+		t.Fatalf("workspace-mcp command = %q, want [\"./%s\"]", server.Command, launcher)
+	}
+	wantEnv := []string{"GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "USER_GOOGLE_EMAIL"}
+	var gotEnv []string
+	for k := range server.Environment {
+		gotEnv = append(gotEnv, k)
+	}
+	sort.Strings(gotEnv)
+	if strings.Join(gotEnv, ",") != strings.Join(wantEnv, ",") {
+		t.Fatalf("workspace-mcp environment = %q, want exactly %q", gotEnv, wantEnv)
+	}
+
+	var argv []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if argv != nil || strings.Contains(line, `exec "$MCP_BIN"`) {
+			argv = append(argv, strings.TrimSuffix(strings.TrimSpace(line), `\`))
+		}
+	}
+	if len(argv) == 0 {
+		t.Fatalf(`%s: no exec "$MCP_BIN" line found`, launcher)
+	}
+	fields := strings.Fields(strings.Join(argv, " "))
+
+	// Exact sequence, not substring: `--tools gmail drive` would satisfy a
+	// Contains check for "--tools gmail" but must not pass.
+	want := []string{
+		`exec`, `"$MCP_BIN"`,
+		"--transport", "stdio",
+		"--single-user",
+		"--read-only",
+		"--tools", "gmail",
+		"--tool-tier", "core",
+	}
+	if len(fields) != len(want) {
+		t.Fatalf("launcher argv = %q, want exactly %q", fields, want)
+	}
+	for i := range want {
+		if fields[i] != want[i] {
+			t.Fatalf("launcher argv = %q, want exactly %q", fields, want)
+		}
+	}
+
+	// The loopback-only claim in documentation.md / vps.md rests on these
+	// scrubs, not on the argv: the stdio OAuth callback binds the hostname
+	// from WORKSPACE_MCP_BASE_URI, so an inherited 0.0.0.0 would publish the
+	// callback (and the attachment route) while the flags above stayed green.
+	// Pinned as text because there is nothing else to pin — script scrubs are
+	// not observable from a Go test without spawning a listener.
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(string(raw), "\\\n", " ")), " ")
+	for _, want := range []string{
+		"unset WORKSPACE_MCP_HOST WORKSPACE_MCP_BASE_URI WORKSPACE_EXTERNAL_URL",
+		"unset WORKSPACE_MCP_HTTP_PORT",
+		"unset WORKSPACE_MCP_TOOLS WORKSPACE_MCP_TOOL_TIER WORKSPACE_MCP_READ_ONLY WORKSPACE_MCP_PERMISSIONS",
+		// The callback port and its redirect must stay one derived value: an
+		// inherited GOOGLE_OAUTH_REDIRECT_URI would point at a port the
+		// operator is not forwarding.
+		`export GOOGLE_OAUTH_REDIRECT_URI="http://localhost:$WORKSPACE_MCP_PORT/oauth2callback"`,
+	} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("launcher is missing %q — deleting it lets an inherited env var widen the documented loopback-only, Gmail-only surface", want)
+		}
+	}
+
+	// The fail-fast placeholders are the ones .env.example ships, so a
+	// copied-but-unedited .env is caught here rather than at Google's consent
+	// screen. Pinned together so changing one side cannot silently disable it.
+	rawExample, err := os.ReadFile(".env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "USER_GOOGLE_EMAIL"} {
+		placeholder := ""
+		for _, line := range strings.Split(string(rawExample), "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), key+"="); ok {
+				placeholder = rest
+				break
+			}
+		}
+		if placeholder == "" {
+			t.Fatalf(".env.example has no %s= placeholder line", key)
+		}
+		if !strings.Contains(string(raw), placeholder) {
+			t.Errorf("launcher does not reject the .env.example %s placeholder %q — a copied .env would start the server with it", key, placeholder)
+		}
+	}
+
+	// The pinned upstream version is part of the surface: the flags above were
+	// verified against it, so a version change must be deliberate (bump this
+	// expectation in the same commit) rather than an env override.
+	const installer = "scripts/build-workspace-mcp.sh"
+	rawInstaller, err := os.ReadFile(installer)
+	if err != nil {
+		t.Fatalf("%s: %v", installer, err)
+	}
+	if !strings.Contains(string(rawInstaller), `WORKSPACE_MCP_VERSION="2.4.2"`) {
+		t.Errorf(`%s must pin WORKSPACE_MCP_VERSION="2.4.2" outright — an override installs an unreviewed upstream behind this launcher's flags`, installer)
+	}
 }

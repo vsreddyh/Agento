@@ -9,7 +9,9 @@ set -euo pipefail
 # this script. init self-installs the host tools it needs (curl, podman +
 # podman-compose, python3, cron), builds the images, seeds the single root .env
 # and installs the retention cron. Only git + sudo must pre-exist. All env lives
-# in the root .env.
+# in the root .env. init also installs the external Google Workspace MCP server
+# (`scripts/build-workspace-mcp.sh`, repo-local venv); the Go MCP binaries are
+# `scripts/build-mcps.sh`, run separately.
 # NOTE: container harness only — this script never installs the opencode CLI.
 #
 # The name is left over from when the agent host was the Hermes gateway.
@@ -37,7 +39,7 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env, set up host tools (curl, podman, python, cron), install retention cron
+  init       Build images, seed the root .env, set up host tools (curl, podman, python, cron), install the Gmail MCP server and retention cron
   start      Start the whole container stack (health-api, proxy, retention)
   stop       Stop the container stack
   restart    Recreate containers in place (up --build --force-recreate)
@@ -183,12 +185,21 @@ ensure_podman() {
 }
 
 ensure_python() {
+    # 3.10 is the floor because the Google Workspace MCP server
+    # (scripts/build-workspace-mcp.sh) needs it; nothing else here does.
     if command -v python3 &>/dev/null &&
-        python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
-        info "python3 $(python3 --version 2>&1 | sed 's/Python //') available."
+        python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+        # `-m venv` needs the distro's venv module (python3-venv on Debian/
+        # Ubuntu), which is a separate package from the interpreter.
+        if python3 -m venv --help &>/dev/null; then
+            info "python3 $(python3 --version 2>&1 | sed 's/Python //') available."
+            return 0
+        fi
+        warn "python3 has no venv module — installing python3-venv (workspace-mcp needs it)."
+        pkg_install python3-venv || warn "python3-venv install failed — the Gmail MCP server stays unavailable."
         return 0
     fi
-    warn "python3 >= 3.9 not found — installing python3 + pip (host tooling)."
+    warn "python3 >= 3.10 not found — installing python3 + pip (host tooling)."
     pkg_install python3 python3-pip python3-venv \
         || { warn "python install failed — install python3 manually."; return 1; }
     info "python3 installed: $(python3 --version 2>&1)."
@@ -224,6 +235,15 @@ cmd_init() {
     ensure_podman || true
     ensure_python || true
     ensure_cron || true
+
+    # The one external MCP server — Google Workspace (Gmail), #515 — installs
+    # into a git-ignored repo-local venv instead of `bin/`. It is not needed by
+    # the container stack, so a failed pip install (offline host, no
+    # python3-venv) warns here and leaves init green; scripts/workspace-mcp.sh
+    # then refuses to start with the same instruction.
+    info "Installing the Google Workspace (Gmail) MCP server..."
+    bash "$SCRIPTS_DIR/build-workspace-mcp.sh" 2>&1 | sed 's/^/  /' \
+        || warn "workspace-mcp install failed — re-run ./scripts/build-workspace-mcp.sh (agent Gmail stays unavailable until then)."
 
     info "Building container images (health-api, retention)..."
     podman_compose -f "$COMPOSE" build 2>&1 || { error "podman-compose build failed."; exit 1; }

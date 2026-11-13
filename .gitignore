@@ -145,3 +145,11 @@ __pycache__/
 
 # browser runtime state (page dumps, console logs)
 .playwright-mcp/
+
+# ────────────────────────────────────────────────────────
+# Google Workspace (Gmail) MCP server (#515) — repo-local Python venv
+# (scripts/build-workspace-mcp.sh) plus the OAuth token cache
+# (WORKSPACE_MCP_CREDENTIALS_DIR). Runtime state holding refresh tokens:
+# never committed, and never recreated from git.
+# ────────────────────────────────────────────────────────
+/.workspace-mcp/

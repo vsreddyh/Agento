@@ -104,4 +104,13 @@ Measured (`podman system df` + image sizes), not guessed:
 - `:8001` (health-api) stays published for direct access and debugging — restrict
   it with a firewall or reverse proxy if the host is public (`HEALTH_HOST_PORT`
   remaps the host side).
+- `:8000` (or `$WORKSPACE_MCP_PORT`) is **not** published. It is the Gmail MCP
+  OAuth callback, bound to `127.0.0.1` (loopback) by the host process T3 spawns —
+  the launcher scrubs `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/
+  `WORKSPACE_EXTERNAL_URL`, so this claim does not depend on the shell it starts
+  in. It is reached only through an SSH forward during first-run consent —
+  `ssh -L <port>:127.0.0.1:<port> <host>` with `<port>` = 8000 (the default) or
+  `$WORKSPACE_MCP_PORT` — `127.0.0.1` on the remote side, because a remote
+  `localhost` that resolves to `::1` first would miss the IPv4 listener. Never
+  open it to the internet.
 - SSH on 22 (restrict source IPs / use key auth).

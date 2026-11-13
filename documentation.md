@@ -30,6 +30,7 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
                                                           /health ──┘
   T3/opencode (host) ──► bin/{task-manager,project-manager,miser-money,
                               cookbook,health-check,reports} ──► MongoDB Atlas
+                       └─► scripts/workspace-mcp.sh (venv, Gmail read-only)
 
   Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -46,9 +47,66 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
 The agent runs on the host, not in a container. T3 discovers `opencode.json` by walking up from its working directory, so **the repo root must be the cwd** — that is also what the `./bin/<server>` commands in `mcp.servers` resolve against.
 
 - Build the servers with `./scripts/build-mcps.sh` (static `CGO_ENABLED=0` binaries into git-ignored `bin/`). Kept servers: `task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`.
+- One server is not built from this repo: `workspace-mcp` (Google Workspace/Gmail, read-only) runs from a git-ignored Python venv via [`scripts/workspace-mcp.sh`](scripts/workspace-mcp.sh). Install it with `./scripts/build-workspace-mcp.sh` — or `./scripts/hermes.sh init`, which does it too. See [Google Workspace (Gmail)](#google-workspace-gmail) below.
 - Secrets reach the servers through the process environment, never the committed file: each entry passes `{env:MONGODB_URI}` / `{env:MONGODB_DB}` through. Source those from the single root `.env` with the safe loader before launching T3 — `source scripts/lib/common.sh && load_root_env` (parsed, never `source .env`: a pasted Atlas URI carries `&` query params and secrets may hold `$`/backticks, which bare sourcing mangles or executes).
 - No secret is written into git; `.env` stays git-ignored.
 - The persona and shared skills live in `.opencode/chat.md` and `.opencode/skills/`; `opencode.json`'s `instructions` entry loads the former.
+
+### Google Workspace (Gmail)
+
+The one non-Go MCP server (#515): [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (MIT), pinned in `scripts/build-workspace-mcp.sh` and installed into the git-ignored `.workspace-mcp/venv`. `scripts/workspace-mcp.sh` launches it over stdio with a deliberately fixed, write-free surface:
+
+```
+--single-user --read-only --tools gmail --tool-tier core
+```
+
+That is **three read tools and nothing else**: `search_gmail_messages`, `get_gmail_message_content`, `get_gmail_messages_content_batch`. `--read-only` requests only read scopes (`gmail.readonly`, `openid`, `email`, `profile`), so there is no send, no delete, no draft and no label mutation to confirm — which is why it contributes no `ask` rule to `opencode.json`. `TestWorkspaceMCPSurfaceStaysReadOnly` (`opencode_perm_test.go`) pins those flags; enabling a write tool means editing the launcher **and** adding matching `ask` rules in the same change. This is a real mailbox surface, unrelated to the app's own ∃-Mail (`reports`).
+
+**Where the credentials live**
+
+| What | Where |
+| --- | --- |
+| OAuth client id + secret | root `.env` (`GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`) — git-ignored |
+| Account the agent reads | root `.env` (`USER_GOOGLE_EMAIL`), also sent as the consent `login_hint` |
+| Refresh-token cache | `.workspace-mcp/credentials/` (mode 0700, git-ignored) |
+| Venv | `.workspace-mcp/venv/` (git-ignored) |
+
+Nothing in that table is committed: `clean` never touches `.workspace-mcp/`, and a fresh clone does not contain it. It is runtime state, recreated by `./scripts/build-workspace-mcp.sh` plus one consent.
+
+**One-time Google Cloud setup (human-only)**
+
+1. Create a Google Cloud project, enable the **Gmail API** (nothing else is in scope).
+2. Configure the OAuth consent screen and create an OAuth client of type **Desktop app**. A desktop client accepts any loopback redirect, so `http://localhost:<port>/oauth2callback` needs no registration (`8000` by default, or your `WORKSPACE_MCP_PORT`) — do not pick "Web application", which would require an exact URI. Leave **Use this client for an AI-powered agent** unchecked: it is a self-declaration that grants no scopes and changes no consent, and it only gates Google's *hosted* Workspace MCP endpoints — this server calls the Gmail REST API with your own client, so it is not required. Tick it on a **separate** client only if you later want Workspace-admin agent policies or plan to use Google's hosted MCP servers; the flag cannot be changed on an existing client after Nov 12, 2026.
+3. Leave the publishing status on **Testing** and add the account as a test user. That avoids Google's verification/CASA assessment for the restricted `gmail.readonly` scope, at the cost of a **7-day refresh-token lifetime** — expect to re-consent roughly weekly (below). Publishing the app instead means the full assessment.
+4. Paste the client id + secret into the root `.env`, set `USER_GOOGLE_EMAIL`, then restart T3/opencode (the process env is captured at start, so a running agent keeps the old values).
+
+**Headless first-run consent**
+
+The callback listener binds loopback on the host — `127.0.0.1:8000` by default, or `127.0.0.1:$WORKSPACE_MCP_PORT` when that is set — so a laptop browser reaches it through an SSH forward:
+
+1. `ssh -L 8000:127.0.0.1:8000 <host>` and keep that session open — both numbers are the callback port, so substitute `$WORKSPACE_MCP_PORT` on both sides if it is set. The remote side is spelled `127.0.0.1`, not `localhost`: the listener is IPv4 loopback, and a remote `localhost` that resolves to `::1` first would forward to `[::1]:8000` and be refused.
+2. Ask the agent for mail (e.g. "search my unread mail"). The tool call does not fail hard: it returns an **Authorization URL** for that account.
+3. Open the URL on the laptop, sign in as `USER_GOOGLE_EMAIL`, approve. The browser is redirected to `http://localhost:<port>/oauth2callback`, the forward hands it to the host, and the page reports success.
+4. Repeat the request. The token is now cached; later calls neither prompt nor print a URL.
+
+The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. `WORKSPACE_MCP_PORT` in `.env` changes the port; `opencode.json` passes only the three credential keys, so that value reaches the launcher through T3's own environment — restart T3/opencode after editing it, then forward the new port.
+
+**Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR`, in which case delete there — load the root `.env` first so the override is visible:
+
+```bash
+source scripts/lib/common.sh && load_root_env
+rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-.workspace-mcp/credentials}/"*.json
+```
+
+**Check it works**: the launcher reads the two secrets from its process environment, so load the root `.env` first, or the check reports them missing even when `.env` is right:
+
+```bash
+source scripts/lib/common.sh && load_root_env && ./scripts/workspace-mcp.sh
+```
+
+With the vars loaded it opens stdio and waits for a client (that is the point — there is no mail to print and no consent URL until an MCP client calls a tool), so the real proof is a read through T3: ask for mail, complete consent once, ask again. `opencode mcp list` shows the server once T3 has been restarted with the new env.
+
+The bind is loopback because the launcher scrubs `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/`WORKSPACE_EXTERNAL_URL`; verified against 2.4.2 at the default port with `PORT=9999` in the environment, which still yields `127.0.0.1:8000` and a redirect of `http://localhost:8000/oauth2callback` (with `WORKSPACE_MCP_PORT=9000` both become 9000 — `PORT` never wins).
 
 ### LLM connection
 
@@ -65,6 +123,7 @@ All container management is orchestrated through [`scripts/hermes.sh`](scripts/h
 2. Builds the `health-api` and `retention` images.
 3. Initializes root `.env` from `.env.example` if not already present.
 4. Installs the daily data retention cron job (runs daily at 03:00) and the sysmon sampler.
+5. Installs the Google Workspace/Gmail MCP server into `.workspace-mcp/venv` (`./scripts/build-workspace-mcp.sh`). A failure warns instead of aborting — the container stack does not need it.
 
 ### `start`
 1. Starts the compose stack in detached mode, rebuilding changed layers and
@@ -231,6 +290,8 @@ Upgrading with an existing database (e.g. a separate dev database): deleting the
 1. Add `cmd/<name>/` and `internal/<name>/` (stdio MCP server, Mongo-backed).
 2. Add the server to `SERVERS` in `scripts/build-mcps.sh` and to `mcp.servers` in `opencode.json` with the Mongo env passthrough.
 3. Run `./scripts/build-mcps.sh`, then confirm with `opencode mcp list` from the repo root.
+
+An external (non-Go) server follows the `workspace-mcp` pattern instead: an installer script that pins the upstream version into a git-ignored directory, a launcher script named in `mcp.servers`, its credentials in the root `.env`, and — if it can write anything — `ask` rules plus a pin like `TestWorkspaceMCPSurfaceStaysReadOnly`.
 
 ### Adding a skill
 Put the skill directory containing `SKILL.md` under `.opencode/skills/<name>/` and commit it. T3/opencode discovers that tree; `opencode.json` only needs the `instructions` entry that loads the persona.

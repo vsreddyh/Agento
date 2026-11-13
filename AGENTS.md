@@ -11,7 +11,8 @@
   recovered from git, so it is left on disk. NEVER commit runtime state: only
   edit source files (scripts, compose, code, docs). Check `git status` before staging and leave
   state files (`.pid`, `.heartbeat`, `logs/`, `*.db*`, `cache/`,
-  `.curator_state` churn) uncommitted.
+  `.curator_state` churn, `.workspace-mcp/` — Gmail venv + OAuth refresh
+  tokens) uncommitted.
 - Read-only live inspection is always fine: `podman ps/logs`,
   `scripts/hermes.sh status`, reading logs/config, `curl` against
   localhost ports.
@@ -34,7 +35,9 @@ the SAME single compose file against Atlas. There is no agent service in it.
 
 The agent runs **on the host in T3/opencode**, configured by `opencode.json`
 and `.opencode/`, with the six kept MCP servers built from this repo
-(`./scripts/build-mcps.sh` → `bin/<server>`) reading the same Atlas database.
+(`./scripts/build-mcps.sh` → `bin/<server>`) reading the same Atlas database,
+plus one external read-only Gmail server (`workspace-mcp`) from a repo-local
+Python venv.
 
 ```
 Agento (Android) ──► proxy (:8080 compose default — APP_PORT remaps)
@@ -82,6 +85,20 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   persona loaded through `instructions`, and `.opencode/skills/` holds the
   shared skills. `./scripts/build-mcps.sh` builds the binaries into git-ignored
   `bin/`.
+- Google Workspace (Gmail), #515: the seventh entry, `workspace-mcp`, is the
+  upstream Python server (`taylorwilsdon/google_workspace_mcp`, pinned in
+  `scripts/build-workspace-mcp.sh`) in the git-ignored `.workspace-mcp/venv/`,
+  launched by `scripts/workspace-mcp.sh` with
+  `--single-user --read-only --tools gmail --tool-tier core`. That is three
+  read tools (`search_gmail_messages`, `get_gmail_message_content`,
+  `get_gmail_messages_content_batch`) and **no write/send/delete surface at
+  all** — do not promise, add or re-enable mail writes without `ask` rules and
+  the matching update to `TestWorkspaceMCPSurfaceStaysReadOnly`, which pins the
+  flags. Creds: `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`/
+  `USER_GOOGLE_EMAIL` in the root `.env`; refresh tokens in
+  `.workspace-mcp/credentials/` (0700). Procedure, 7-day re-consent and the
+  headless SSH-forward first run: `documentation.md` → "Google Workspace
+  (Gmail)".
 - LLM: T3/opencode talks directly to OpenCode Go
   (`https://opencode.ai/zen/go/v1`); one `OPENCODE_API_KEY` in the root `.env`.
   No proxy container and no in-repo model config.
@@ -134,6 +151,14 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   it is inert on a host that never had one.
 - Build the MCP binaries before launching T3/opencode: `./scripts/build-mcps.sh`
   writes `bin/<server>`, and `opencode.json` runs them from the repo root — a
-  different cwd breaks every server command.
+  different cwd breaks every server command. The Gmail server needs its own
+  one-time install: `./scripts/build-workspace-mcp.sh` (init runs it) writes
+  `.workspace-mcp/venv`; `scripts/workspace-mcp.sh` then refuses to start until
+  `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL`
+  are set in `.env`.
+- The Google Workspace entry is read-only Gmail on purpose: three read tools,
+  `gmail.readonly` scope, no send/delete/draft/label writes. `opencode mcp list`
+  reflects the RUNNING T3 process, so restart T3 after editing those `.env`
+  keys — the env is captured at start, and a stale listing shows the old state.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
 - Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service.

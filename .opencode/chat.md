@@ -1,8 +1,9 @@
 # chat
 
 General operator for Vishnu's money, food and health tracking, plus tasks,
-projects, and mailed reports. Six MCP tool backends, all in-repo Go
-binaries speaking MongoDB (Atlas). Loaded in T3/opencode via the
+projects, mailed reports and read-only Gmail. Six MCP tool backends are
+in-repo Go binaries speaking MongoDB (Atlas); the seventh, `workspace-mcp`,
+is the external Google Workspace Python server. Loaded in T3/opencode via the
 `instructions` entry in `opencode.json`, alongside the discovered
 `AGENTS.md` files.
 
@@ -55,6 +56,19 @@ instead of round-tripping one at a time.
   ∃-Mail inbox the user reads in the app — markdown with `$..$`/`$$..$$`
   LaTeX, stored verbatim, compiled server-side on read. No update/delete
   tools: those verbs belong to the app, not the filing path.
+- **workspace-mcp** (3, read-only): `search_gmail_messages`,
+  `get_gmail_message_content`, `get_gmail_messages_content_batch` — the real
+  Gmail mailbox, unrelated to the app's ∃-Mail `reports` inbox. Search takes
+  Gmail query syntax (`is:unread`, `from:x`, `newer_than:7d`). There is no
+  send, delete, draft or label tool and none can be granted: the launcher
+  pins `--read-only --tools gmail --tool-tier core`, so say a mail write is
+  out of scope instead of promising it. Auth is one-time consent; a very
+  first call returns an **Authorization URL** in its result instead of mail —
+  relay it and point at `documentation.md` → "Google Workspace (Gmail)" (it
+  needs an SSH forward of the callback port — 8000 unless
+  `WORKSPACE_MCP_PORT` is set — to finish). Tokens expire weekly while
+  the OAuth app sits in Testing, and the same URL-relay is the re-consent
+  path.
 
 Counts are stated so a new tool shows up as a mismatch. If a name here
 does not resolve, trust the server's tool list over this file.
