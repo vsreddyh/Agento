@@ -156,11 +156,12 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   writes `bin/<server>`, and each `opencode.json` entry runs
   `./scripts/mcp-run.sh <server>`, which resolves the checkout from its own
   path (the repo root must still be the cwd so `opencode.json` is discovered).
-  The servers' configuration comes from the root `.env`, never from T3's
+  The servers' configuration comes from the root `.env`, not from T3's own
   environment: T3 is a systemd unit with an empty env (`WorkingDirectory=%h`, no
   `EnvironmentFile`), so a `{env:VAR}` in `opencode.json` silently becomes `""`
-  and every server exits with "MONGODB_URI is not set". Read the launchers, not
-  the unit, when a server claims its config is missing.
+  and the six Go servers exit with "MONGODB_URI is not set" (workspace-mcp
+  reports its Google credentials unset). Read the launchers, not the unit, when
+  a server claims its config is missing.
   The Gmail server needs its own
   one-time install: `./scripts/build-workspace-mcp.sh` (init runs it) writes
   `.workspace-mcp/venv`; `scripts/workspace-mcp.sh` then refuses to start until

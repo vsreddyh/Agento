@@ -385,8 +385,9 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 // TestMCPServersLoadTheirOwnEnv pins the launch path, not just the servers.
 // T3/opencode runs from a systemd unit whose environment is empty, so the
 // `{env:MONGODB_URI}` / `{env:MONGODB_DB}` blocks this file used to carry
-// expanded to "" and all seven servers started with "MONGODB_URI is not set"
-// (2026-11-14). The repo owns its secrets, so the launcher owns them too:
+// expanded to "" and the six Go servers exited with "MONGODB_URI is not set"
+// (2026-11-14; workspace-mcp reported its Google credentials unset). The repo
+// owns its secrets, so the launcher owns them too:
 //
 //   - each of the six Go servers runs ./scripts/mcp-run.sh <server>, which
 //     fills MONGODB_URI/MONGODB_DB from the root .env and execs bin/<server>

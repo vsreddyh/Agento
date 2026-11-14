@@ -27,8 +27,9 @@
 # USER_GOOGLE_EMAIL are read from the root .env right here. They do NOT come
 # from opencode's `{env:...}` substitution: T3/opencode runs from a systemd
 # unit with an empty environment, so that substitution expands to "" and the
-# server would start with nothing (the failure that made every server report
-# "not set" on 2026-11-14). The OAuth token cache stays in the git-ignored
+# server would start with nothing (the failure that made every server start
+# unconfigured on 2026-11-14; this one reports its Google credentials unset). The
+# OAuth token cache stays in the git-ignored
 # `.workspace-mcp/credentials/`. First-run consent is headless — see
 # documentation.md, "Google Workspace (Gmail)".
 set -euo pipefail
@@ -43,13 +44,14 @@ fi
 
 # Read the credentials from the root .env (parsed, never sourced — see
 # scripts/lib/common.sh). A value already in the environment wins, so a
-# one-off override still works; only these four keys are read from .env, so
+# one-off override still works. The five keys are exactly the ones this
+# launcher consumes (credentials, callback port, token-cache override), so
 # PASSWORD and the provider key are not pulled in here (whatever T3 itself
 # inherited is still passed through by exec below).
 # shellcheck source=scripts/lib/common.sh
 . "$REPO/scripts/lib/common.sh"
 load_root_env_fill GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
-    USER_GOOGLE_EMAIL WORKSPACE_MCP_PORT
+    USER_GOOGLE_EMAIL WORKSPACE_MCP_PORT WORKSPACE_MCP_CREDENTIALS_DIR
 
 # Fail fast instead of starting a server that can never finish consent. The
 # client id/secret (#515 decision 2) are the human-only step and the account
