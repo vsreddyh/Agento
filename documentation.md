@@ -94,7 +94,7 @@ The callback listener binds loopback on the host — `127.0.0.1:8000` by default
 3. Open the URL on the laptop, sign in as `USER_GOOGLE_EMAIL`, approve. The browser is redirected to `http://localhost:<port>/oauth2callback`, the forward hands it to the host, and the page reports success.
 4. Repeat the request. The token is now cached; later calls neither prompt nor print a URL.
 
-The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. `WORKSPACE_MCP_PORT` changes the port: set it in the root `.env` or export it (an exported value wins, like the credentials), then reload the MCP servers (or restart T3/opencode) — a launcher reads its inputs once, when it spawns — and forward the new port.
+The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. `WORKSPACE_MCP_PORT` changes the port: set it in the root `.env` or export it (an exported value wins, like the credentials), then reload the MCP servers (or restart T3/opencode) — a launcher reads its inputs once, when it spawns — and forward the new port. That port is the **only** knob: the launcher assigns `GOOGLE_OAUTH_REDIRECT_URI` from it outright, so an inherited or exported redirect URI (say, one left over from a registered GCP URI) is discarded rather than honoured.
 
 **Re-consent** — after the 7-day expiry, or to switch mailbox: delete the cache and respawn the MCP servers (reload, or restart T3/opencode), then repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR` — in `.env` (the launcher reads it, like the port) or in the environment; give an absolute path, since a parsed `.env` never expands `~`/`$HOME` (the launcher refuses those instead of creating a literal `~` directory). Delete where you pointed it:
 
@@ -104,7 +104,7 @@ source scripts/lib/common.sh && load_root_env_fill WORKSPACE_MCP_CREDENTIALS_DIR
 rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}/"*.json
 ```
 
-(`$REPO` is the checkout root the loader resolves from this script's path; the `source` line is relative, so run the snippet from the repo root. `load_root_env_fill`, not `load_root_env`, so an exported override wins here exactly as it does in the launcher.)
+(`$REPO` is the checkout root the loader resolves from this script's path; the `source` line is relative, so run the snippet from the repo root. `load_root_env_fill`, not `load_root_env`, so an exported override wins — but only one visible to this shell: a `fill` sees its own environment, so if the launcher gets `WORKSPACE_MCP_CREDENTIALS_DIR` from an export rather than from `.env`, export it here too or the `rm` deletes a different directory and re-consent loops.)
 
 **Check it works**: the launcher parses the root `.env` itself, so there is no pre-load step — run it bare:
 

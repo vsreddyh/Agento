@@ -9,12 +9,12 @@ REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
 # Apply the single root .env to the shell environment (no per-profile .env).
 # NOTE: parsed, never sourced — sourcing would execute $(...)/backticks in
-# values as shell code. Only plain `KEY=value` lines are accepted (optional
-# leading `export`, single/double-quoted values unquoted). Whole-line comments
-# and blank lines are skipped; an INLINE comment is not stripped — `FOO=bar #
-# baz` yields the value `bar # baz` — so keep annotations on their own line
-# (a `#` inside a URL fragment stays part of the value, which is why this is
-# a documentation rule rather than a stripper).
+# values as shell code. `KEY=value`, `KEY = value` and a leading `export` are
+# all accepted; a quoted value is taken verbatim and an unquoted one is
+# trimmed. Whole-line comments and blank lines are skipped; an INLINE comment
+# is not stripped — `FOO=bar # baz` yields `bar # baz` — so keep annotations
+# on their own line (a `#` inside a URL fragment stays part of the value,
+# which is why this is a documentation rule rather than a stripper).
 #
 #   _env_file_apply overwrite [KEY...]  every key (or only KEY...) wins
 #   _env_file_apply fill      [KEY...]  only keys that are unset or empty
@@ -38,7 +38,7 @@ _env_file_apply() {
         [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
         line="${line#export }"
         line="${line#"${line%%[![:space:]]*}"}"
-        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]] || continue
         key="${BASH_REMATCH[1]}"
         val="${BASH_REMATCH[2]}"
         if [[ ${#only[@]} -gt 0 ]]; then
@@ -49,11 +49,16 @@ _env_file_apply() {
             [[ "$wanted" == 0 ]] || continue
         fi
         [[ "$mode" == "fill" && -n "${!key:-}" ]] && continue
-        # unquote matching single/double quotes
+        # unquote matching single/double quotes; an unquoted value is trimmed
+        # (dotenv semantics) so `KEY=  value` is not a value with spaces and a
+        # fail-fast comparison cannot be dodged by an indent
         if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
             val="${val:1:-1}"
         elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
             val="${val:1:-1}"
+        else
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
         fi
         printf -v "$key" '%s' "$val"
         export "${key?}"
