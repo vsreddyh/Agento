@@ -38,7 +38,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 | `.opencode/chat.md` | The operator persona and per-server rules |
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |
-| `scripts/mcp-run.sh` | Launches one built server with `MONGODB_URI`/`MONGODB_DB` loaded from the root `.env` (that is what `opencode.json` runs) |
+| `scripts/mcp-run.sh` | Launches one built server with `MONGODB_URI`/`MONGODB_DB` loaded from the root `.env` (that is what `opencode.json` runs); an already-exported value wins over the file |
 | `scripts/build-workspace-mcp.sh` | Installs the Google Workspace/Gmail MCP server into the git-ignored `.workspace-mcp/venv` (also run by `init`) |
 
 ---

@@ -96,7 +96,7 @@ The callback listener binds loopback on the host — `127.0.0.1:8000` by default
 
 The callback listener lives inside the spawned server process, so finish consent **while that T3 session is running** — if the process restarted in between, just make the request again for a fresh URL. `WORKSPACE_MCP_PORT` in the root `.env` changes the port: the launcher reads it from there along with the credentials. Reload the MCP servers (or restart T3/opencode) after editing it — a launcher reads `.env` once, when it spawns — then forward the new port.
 
-**Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR` — in `.env` (the launcher reads it, like the port) or in the environment; delete where you pointed it:
+**Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR` — in `.env` (the launcher reads it, like the port) or in the environment; give an absolute path, since a parsed `.env` never expands `~`/`$HOME` (the launcher refuses those instead of creating a literal `~` directory). Delete where you pointed it:
 
 ```bash
 # from the repo root (the source path is relative); $REPO comes from the loader

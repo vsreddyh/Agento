@@ -76,7 +76,16 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 
 # Token cache location. Override only to point at a store outside this
-# checkout; the default is runtime state and git-ignored.
+# checkout; the default is runtime state and git-ignored. The value comes from
+# .env (parsed, never sourced) or the environment, so `~`/`$HOME` are NEVER
+# expanded — refuse them instead of silently creating a literal "~" directory
+# and caching tokens somewhere the re-consent cleanup will not find.
+case "${WORKSPACE_MCP_CREDENTIALS_DIR:-}" in
+    *'~'* | *'$'*)
+        echo "workspace-mcp: WORKSPACE_MCP_CREDENTIALS_DIR=$WORKSPACE_MCP_CREDENTIALS_DIR is not expanded (.env values are parsed, not sourced) — use an absolute path." >&2
+        exit 1
+        ;;
+esac
 export WORKSPACE_MCP_CREDENTIALS_DIR="${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}"
 # The cache holds refresh tokens: 0600 files / 0700 dirs, set BEFORE the
 # directory below is created, and re-applied after, so a directory left at a

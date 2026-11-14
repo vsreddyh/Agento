@@ -163,13 +163,15 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   `EnvironmentFile`), so a `{env:VAR}` in `opencode.json` silently becomes `""`
   and the six Go servers exit with "MONGODB_URI is not set" (workspace-mcp
   reports its Google credentials unset). Read the launchers, not the unit, when
-  a server claims its config is missing.
+  a server claims its config is missing. A variable T3 did inherit still passes
+  through the launchers, and for `fill` it wins over `.env`.
   The Gmail server needs its own
   one-time install: `./scripts/build-workspace-mcp.sh` (init runs it) writes
   `.workspace-mcp/venv`; `scripts/workspace-mcp.sh` then refuses to start until
   `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL`
-  are set in `.env` (it reads that file itself, like `mcp-run.sh` does for the
-  two Mongo variables).
+  are set in `.env` or exported in the environment (the launcher reads the file
+  itself, like `mcp-run.sh` does for the two Mongo variables, and an exported
+  value wins).
 - The Google Workspace entry is read-only Gmail on purpose: three read tools,
   `gmail.readonly` scope, no send/delete/draft/label writes. `opencode mcp list`
   reflects the RUNNING T3 process, so reload the MCP servers (or restart T3)
