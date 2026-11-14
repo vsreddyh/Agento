@@ -55,9 +55,12 @@ load_root_env_fill GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
 
 # A non-numeric or out-of-range port would otherwise surface as
 # `http://localhost:abc/oauth2callback` at the consent screen instead of here.
-if [[ ! "${WORKSPACE_MCP_PORT:-}" =~ ^[0-9]+$ ]] \
-    || (( 10#${WORKSPACE_MCP_PORT} < 1 || 10#${WORKSPACE_MCP_PORT} > 65535 )); then
-    echo "workspace-mcp: WORKSPACE_MCP_PORT=${WORKSPACE_MCP_PORT:-<empty>} is not a TCP port (1-65535)." >&2
+# Empty is fine: the launcher defaults it to 8000, so a .env that leaves the
+# key commented out (the .env.example default) is valid.
+if [[ -n "${WORKSPACE_MCP_PORT:-}" ]] \
+    && { [[ ! "$WORKSPACE_MCP_PORT" =~ ^[0-9]+$ ]] \
+        || (( 10#$WORKSPACE_MCP_PORT < 1 || 10#$WORKSPACE_MCP_PORT > 65535 )); }; then
+    echo "workspace-mcp: WORKSPACE_MCP_PORT=$WORKSPACE_MCP_PORT is not a TCP port (1-65535)." >&2
     exit 1
 fi
 

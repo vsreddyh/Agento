@@ -11,11 +11,11 @@ REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # NOTE: parsed, never sourced — sourcing would execute $(...)/backticks in
 # values as shell code. `KEY=value`, `KEY = value` and a leading `export` are
 # all accepted; a quoted value is taken verbatim and an unquoted one is
-# trimmed. Whole-line comments and blank lines are skipped; an INLINE comment
-# is not stripped — `FOO=bar # baz` yields `bar # baz`, and `FOO="bar" # baz`
-# opens a quote the comment prevents from closing, so it warns — keep
-# annotations on their own line (a `#` inside a URL fragment stays part of the
-# value, which is why this is a warning rather than a stripper).
+# trimmed. Whole-line comments and blank lines are skipped, and so is an
+# inline comment — whitespace followed by `#` (`FOO=bar # baz` → `bar`,
+# `FOO="bar" # baz` → `bar`). A `#` with no whitespace before it is part of
+# the value, so a URL fragment (`.../db#frag`) survives, and a fully quoted
+# value is taken verbatim.
 #
 #   _env_file_apply overwrite [KEY...]  every key (or only KEY...) wins
 #   _env_file_apply fill      [KEY...]  only keys that are unset or empty
@@ -55,20 +55,22 @@ _env_file_apply() {
         # dotenv-trimmed while a quoted one keeps its interior verbatim
         val="${val#"${val%%[![:space:]]*}"}"
         val="${val%"${val##*[![:space:]]}"}"
-        # `KEY="value" # note` opens a quote that the trailing comment then
-        # prevents from closing: the quotes and the comment would be loaded
-        # verbatim and quietly fail every downstream check. Inline comments are
-        # unsupported, so say it out loud instead of loading it silently.
+        # Inline comment: whitespace then `#` is stripped (`FOO=bar # note` →
+        # `bar`), which also rescues `FOO="bar" # note`. A `#` with no
+        # whitespace before it stays part of the value, so a URL fragment
+        # survives; a fully quoted value is taken verbatim.
+        if [[ "$val" == *[[:space:]]"#"* ]] \
+            && ! { [[ "${#val}" -ge 2 ]] \
+                && { [[ "${val:0:1}" == '"' && "${val: -1}" == '"' ]] || [[ "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; }; }; then
+            val="${val%%[[:space:]]#*}"
+            val="${val%"${val##*[![:space:]]}"}"
+        fi
+        # A value that still opens a quote it never closes would be loaded with
+        # the quote in it and quietly fail every downstream check.
         if [[ "${val:0:1}" == '"' || "${val:0:1}" == "'" ]]; then
             if [[ "${val:0:1}" != "${val: -1}" || "${#val}" -lt 2 ]]; then
-                echo "common.sh: $REPO/.env: KEY=${key} opens a quote it never closes — inline comments are not supported; put the comment on its own line (the value is used verbatim)" >&2
+                echo "common.sh: $REPO/.env: KEY=${key} opens a quote it never closes — the value is used verbatim and will fail downstream" >&2
             fi
-        fi
-        # `KEY=value # note` has no quote to warn about, and the comment simply
-        # becomes part of the value: a decorated Atlas URI then bypasses the
-        # launcher's placeholder check and fails at Atlas with a mangled URI.
-        if [[ "$val" == *" #"* || "$val" == *$'\t#'* ]]; then
-            echo "common.sh: $REPO/.env: KEY=${key} looks like it has an inline comment — put the comment on its own line; the value is used verbatim and this will fail downstream" >&2
         fi
         if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
             val="${val:1:-1}"
