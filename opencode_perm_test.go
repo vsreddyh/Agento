@@ -395,16 +395,18 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 //     Google credentials plus the callback-port/token-cache overrides the
 //     same way (pinned by TestWorkspaceMCPSurfaceStaysReadOnly)
 //
-// `{env:` must not come back: it reads like configuration, works only when
-// someone happens to start T3 from an exported shell, and otherwise passes
-// empty strings — a silent break, not a startup error.
+// `{env:` must not come back: under T3's empty systemd unit it expands to
+// "", which a launcher's `fill` then treats as unset and replaces anyway —
+// dead weight for the keys it covers, and a silent unconfigured start (no
+// error, wrong database) for any key it does not: a new server added without
+// a launcher, or a variable a launcher does not list.
 func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 	raw, err := os.ReadFile("opencode.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), "{env:") {
-		t.Error("opencode.json uses `{env:...}` again — T3's systemd unit has no environment, so it expands to \"\" and the server starts unconfigured; the launchers read the root .env instead")
+		t.Error("opencode.json uses `{env:...}` again — under T3's empty systemd unit it expands to \"\", the launchers fill from .env anyway, and any key a launcher does not cover starts unconfigured with no error; name the launcher instead")
 	}
 
 	var cfg struct {

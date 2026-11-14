@@ -42,7 +42,7 @@ Python venv.
 ```
 Agento (Android) ──► proxy (:8080 compose default — APP_PORT remaps)
                        └─► /api/* + /health → health-api (:8001 compose default — HEALTH_HOST_PORT remaps)
-T3/opencode (host) ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check,reports}
+T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check,reports}
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired story/resumes checkouts, unmanaged)
 ```
