@@ -49,16 +49,15 @@ _env_file_apply() {
             [[ "$wanted" == 0 ]] || continue
         fi
         [[ "$mode" == "fill" && -n "${!key:-}" ]] && continue
-        # unquote matching single/double quotes; an unquoted value is trimmed
-        # (dotenv semantics) so `KEY=  value` is not a value with spaces and a
-        # fail-fast comparison cannot be dodged by an indent
+        # trim, then unquote matching single/double quotes: trimming first is
+        # what makes `KEY=  "value"` work, and it means an unquoted value is
+        # dotenv-trimmed while a quoted one keeps its interior verbatim
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
         if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
             val="${val:1:-1}"
         elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
             val="${val:1:-1}"
-        else
-            val="${val#"${val%%[![:space:]]*}"}"
-            val="${val%"${val##*[![:space:]]}"}"
         fi
         printf -v "$key" '%s' "$val"
         export "${key?}"

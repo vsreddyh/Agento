@@ -183,4 +183,4 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   after editing those `.env` keys — a launcher reads `.env` once, when it
   spawns, and a stale listing keeps showing the old state.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
-- Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service. The mechanism differs: an **exported** value wins for the MCP launchers (`load_root_env_fill`), while `./scripts/hermes.sh` (compose) and `retention.sh`/`sysmon.sh` use `load_root_env`, where `.env` wins — see documentation.md → "Development Mode Isolation".
+- Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service. The mechanism differs: an **exported** value wins for the MCP launchers (`load_root_env_fill`), while `./scripts/hermes.sh` (compose) and `./scripts/retention.sh`/`./scripts/sysmon.sh` use `load_root_env`, where `.env` wins — see documentation.md → "Development Mode Isolation".
