@@ -133,7 +133,7 @@ podman-compose --env-file .env -f docker/docker-compose.yml logs -f health-api  
 
 ## Development Mode
 
-All services read the same root `.env`, so a dev checkout just points `MONGODB_URI` at a separate Atlas database (or a throwaway `MONGODB_DB` name) — no local MongoDB container, no profile switching. Which direction wins depends on the entry point: an **exported** value beats `.env` for the MCP servers, while `./scripts/hermes.sh` (compose) lets `.env` win — [documentation.md → Development Mode Isolation](documentation.md#development-mode-isolation).
+All services read the same root `.env`, so a dev checkout just points `MONGODB_URI` at a separate Atlas database (or a throwaway `MONGODB_DB` name) — no local MongoDB container, no profile switching. Which direction wins depends on the entry point: an **exported** value beats `.env` for the MCP servers, while `./scripts/hermes.sh` / `retention.sh` / `sysmon.sh` let `.env` win — [documentation.md → Development Mode Isolation](documentation.md#development-mode-isolation).
 
 ---
 
