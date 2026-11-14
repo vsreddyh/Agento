@@ -85,9 +85,11 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   root `.env` and execs `bin/<server>`; `.opencode/chat.md` is the
   persona loaded through `instructions`, and `.opencode/skills/` holds the
   shared skills. `./scripts/build-mcps.sh` builds the binaries into git-ignored
-  `bin/`. T3 supplies **no** environment (it runs from a systemd unit), so
-  `{env:VAR}` in `opencode.json` expands to `""` — the launchers read `.env`
-  themselves and `TestMCPServersLoadTheirOwnEnv` pins that.
+  `bin/`. T3 supplies no environment of its own (it runs from a systemd unit),
+  so `{env:VAR}` in `opencode.json` expands to `""` — the launchers read `.env`
+  themselves and `TestMCPServersLoadTheirOwnEnv` pins that. Anything T3 did
+  inherit is still passed through, so start it from a clean shell if that
+  matters.
 - Google Workspace (Gmail), #515: the seventh entry, `workspace-mcp`, is the
   upstream Python server (`taylorwilsdon/google_workspace_mcp`, pinned in
   `scripts/build-workspace-mcp.sh`) in the git-ignored `.workspace-mcp/venv/`,
@@ -174,4 +176,4 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   after editing those `.env` keys — a launcher reads `.env` once, when it
   spawns, and a stale listing keeps showing the old state.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
-- Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service.
+- Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service. The mechanism differs: an **exported** value wins for the MCP launchers (`load_root_env_fill`), while `./scripts/hermes.sh` (compose) and `retention.sh`/`sysmon.sh` use `load_root_env`, where `.env` wins — see documentation.md → "Development Mode Isolation".

@@ -42,7 +42,7 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
 - **health-api**: Go service (`cmd/health-api/main.go`, net/http) on container port `:8000` (compose default host publish `:8001`, `HEALTH_HOST_PORT` remaps the host side). Serves sync, tasks, projects, files and ∃-Mail reports, and writes them to MongoDB.
 - **proxy**: nginx single entrypoint (`:8080` compose default, `APP_PORT` remaps; `docker/proxy/nginx.conf`) — routes `/api/*` and `/health` → health-api. The app's one Server URL points here.
 - **retention**: one-shot retention job executing the `retention` Go binary (`cmd/retention/main.go`) via cron or on stack start.
-- **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched.
+- **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched (see [Development Mode Isolation](#development-mode-isolation) for which of an exported variable or `.env` wins, per entry point).
 
 ---
 
@@ -99,11 +99,12 @@ The callback listener lives inside the spawned server process, so finish consent
 **Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR` — in `.env` (the launcher reads it, like the port) or in the environment; delete where you pointed it:
 
 ```bash
+# from the repo root (the source path is relative); $REPO comes from the loader
 source scripts/lib/common.sh && load_root_env_fill WORKSPACE_MCP_CREDENTIALS_DIR
-rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-.workspace-mcp/credentials}/"*.json
+rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}/"*.json
 ```
 
-(`load_root_env_fill`, not `load_root_env`, so an exported override wins here exactly as it does in the launcher.)
+(`$REPO` is absolute, so this deletes where the launcher looks even from another cwd; `load_root_env_fill`, not `load_root_env`, so an exported override wins here exactly as it does in the launcher.)
 
 **Check it works**: the launcher parses the root `.env` itself, so there is no pre-load step — run it bare:
 
@@ -255,7 +256,10 @@ curl http://<host>:8080/api/tasks/changes -H "Authorization: Bearer <PASSWORD>"
 
 ## Development Mode Isolation
 
-There is no local MongoDB service — every environment (dev included) uses the Atlas `MONGODB_URI`. Isolate development by pointing `MONGODB_URI`/`MONGODB_DB` at a separate throwaway database.
+There is no local MongoDB service — every environment (dev included) uses the Atlas `MONGODB_URI`. Isolate development by pointing `MONGODB_URI`/`MONGODB_DB` at a separate throwaway database, but mind **which direction wins**, because it differs per entry point:
+
+- **MCP servers** (`scripts/mcp-run.sh`, `scripts/workspace-mcp.sh`) load with `load_root_env_fill`: a value already **exported** in the environment wins over the file. So `export MONGODB_DB=agento_dev` in the shell that starts T3 redirects the agent.
+- **Compose and the orchestrator scripts** (`scripts/hermes.sh`, `retention.sh`, `sysmon.sh`) load with `load_root_env`, where the **file wins**. Exporting a throwaway `MONGODB_URI` there does nothing — edit `.env` (or point a separate checkout at a separate `.env`).
 
 ---
 
