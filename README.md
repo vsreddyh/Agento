@@ -36,7 +36,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Piece | What it is |
 |---|---|
-| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and only an inherited variable (from whatever shell started T3) can still reach a server |
+| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and a variable inherited from whatever shell started T3 still reaches a server (beating the `.env` value for the keys a launcher fills) |
 | `.opencode/chat.md` | The operator persona and per-server rules |
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |

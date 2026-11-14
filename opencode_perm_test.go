@@ -397,9 +397,10 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 //
 // `{env:` must not come back: under T3's empty systemd unit it expands to
 // "", which a launcher's `fill` then treats as unset and replaces anyway —
-// dead weight for the keys it covers, and a silent unconfigured start (no
-// error, wrong database) for any key it does not: a new server added without
-// a launcher, or a variable a launcher does not list.
+// dead weight for the keys it covers, and for a key no launcher covers the
+// empty value is indistinguishable from unset to the Go server (which is the
+// loud missing-config failure, not a silent fallback). The ban is about not
+// bypassing the launcher that reads .env, not about a rescue.
 func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 	raw, err := os.ReadFile("opencode.json")
 	if err != nil {
