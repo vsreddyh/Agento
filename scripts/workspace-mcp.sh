@@ -52,6 +52,8 @@ fi
 . "$REPO/scripts/lib/common.sh"
 load_root_env_fill GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
     USER_GOOGLE_EMAIL WORKSPACE_MCP_PORT WORKSPACE_MCP_CREDENTIALS_DIR
+trim_env_keys GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
+    USER_GOOGLE_EMAIL WORKSPACE_MCP_PORT WORKSPACE_MCP_CREDENTIALS_DIR
 
 # A non-numeric or out-of-range port would otherwise surface as
 # `http://localhost:abc/oauth2callback` at the consent screen instead of here.

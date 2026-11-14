@@ -166,9 +166,10 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   reported its Google credentials unset). That is the bug the launchers fixed:
   they fill from `.env` when the environment has no value, so an empty `{env:}`
   no longer stops a covered key — which is exactly why `{env:}` stays banned
-  rather than merely broken (a key a launcher does not cover would start
-  unconfigured with no error). Read the launchers, not the unit, when a server
-  claims its config is missing. A variable T3 did inherit still passes through
+  rather than merely broken: for a key no launcher covers, empty is
+  indistinguishable from unset, so a required key fails loudly and an optional
+  one silently takes its default. Read the launchers, not the unit, when a
+  server claims its config is missing. A variable T3 did inherit still passes through
   the launchers, and for `fill` it wins over `.env`.
   The Gmail server needs its own
   one-time install: `./scripts/build-workspace-mcp.sh` (init runs it) writes

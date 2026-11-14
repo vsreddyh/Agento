@@ -89,6 +89,21 @@ load_root_env() {
     _env_file_apply overwrite
 }
 
+# Trim the surrounding whitespace of the named variables. The parser trims
+# values it reads, but an already-exported one arrives verbatim, so a padded
+# export would defeat a launcher's `-z`/placeholder checks; launchers call this
+# after filling.
+trim_env_keys() {
+    local k v
+    for k in "$@"; do
+        v="${!k:-}"
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
+        printf -v "$k" '%s' "$v"
+        export "${k?}"
+    done
+}
+
 # Load only the named keys, and only where the environment has no value yet.
 # `load_root_env_fill` rather than `load_root_env` is what the MCP launchers
 # call, so a server has a value for the keys it names. It only fills — it
