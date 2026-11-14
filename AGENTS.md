@@ -81,10 +81,13 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
    `gateway/` config are gone; `gateway/` on disk is untracked runtime state only.
 - Agent: `opencode.json` wires the six kept MCP servers (`task-manager`,
   `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) to
-  `./bin/<server>` with the two Mongo env vars; `.opencode/chat.md` is the
+  `./scripts/mcp-run.sh <server>`, which loads the two Mongo variables from the
+  root `.env` and execs `bin/<server>`; `.opencode/chat.md` is the
   persona loaded through `instructions`, and `.opencode/skills/` holds the
   shared skills. `./scripts/build-mcps.sh` builds the binaries into git-ignored
-  `bin/`.
+  `bin/`. T3 supplies **no** environment (it runs from a systemd unit), so
+  `{env:VAR}` in `opencode.json` expands to `""` — the launchers read `.env`
+  themselves and `TestMCPServersLoadTheirOwnEnv` pins that.
 - Google Workspace (Gmail), #515: the seventh entry, `workspace-mcp`, is the
   upstream Python server (`taylorwilsdon/google_workspace_mcp`, pinned in
   `scripts/build-workspace-mcp.sh`) in the git-ignored `.workspace-mcp/venv/`,
@@ -150,15 +153,24 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
 - A leftover `hermes-gateway` systemd unit is best-effort stopped by `stop`;
   it is inert on a host that never had one.
 - Build the MCP binaries before launching T3/opencode: `./scripts/build-mcps.sh`
-  writes `bin/<server>`, and `opencode.json` runs them from the repo root — a
-  different cwd breaks every server command. The Gmail server needs its own
+  writes `bin/<server>`, and each `opencode.json` entry runs
+  `./scripts/mcp-run.sh <server>`, which resolves the checkout from its own
+  path (the repo root must still be the cwd so `opencode.json` is discovered).
+  The servers' configuration comes from the root `.env`, never from T3's
+  environment: T3 is a systemd unit with an empty env (`WorkingDirectory=%h`, no
+  `EnvironmentFile`), so a `{env:VAR}` in `opencode.json` silently becomes `""`
+  and every server exits with "MONGODB_URI is not set". Read the launchers, not
+  the unit, when a server claims its config is missing.
+  The Gmail server needs its own
   one-time install: `./scripts/build-workspace-mcp.sh` (init runs it) writes
   `.workspace-mcp/venv`; `scripts/workspace-mcp.sh` then refuses to start until
   `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL`
-  are set in `.env`.
+  are set in `.env` (it reads that file itself, like `mcp-run.sh` does for the
+  two Mongo variables).
 - The Google Workspace entry is read-only Gmail on purpose: three read tools,
   `gmail.readonly` scope, no send/delete/draft/label writes. `opencode mcp list`
-  reflects the RUNNING T3 process, so restart T3 after editing those `.env`
-  keys — the env is captured at start, and a stale listing shows the old state.
+  reflects the RUNNING T3 process, so reload the MCP servers (or restart T3)
+  after editing those `.env` keys — a launcher reads `.env` once, when it
+  spawns, and a stale listing keeps showing the old state.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
 - Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service.

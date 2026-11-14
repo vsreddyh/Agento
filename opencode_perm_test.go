@@ -260,10 +260,10 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	}
 
 	// opencode.json must still point at the launcher this test pins, or the
-	// pin guards nothing — and its `environment` block must inject nothing
-	// beyond the three credentials. An extra key (`WORKSPACE_MCP_TOOLS`,
-	// `WORKSPACE_MCP_BASE_URI`, `PORT`, ...) would reach the server without
-	// passing through the launcher's scrub below.
+	// pin guards nothing — and it must pass no `environment` at all: the
+	// launcher reads the root .env itself, so any key here (an inherited
+	// `WORKSPACE_MCP_TOOLS`, `WORKSPACE_MCP_BASE_URI`, `PORT`, ...) would
+	// reach the server without passing through the launcher's scrub below.
 	var cfg struct {
 		MCP struct {
 			Servers map[string]struct {
@@ -286,14 +286,13 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	if len(server.Command) != 1 || server.Command[0] != "./"+launcher {
 		t.Fatalf("workspace-mcp command = %q, want [\"./%s\"]", server.Command, launcher)
 	}
-	wantEnv := []string{"GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "USER_GOOGLE_EMAIL"}
 	var gotEnv []string
 	for k := range server.Environment {
 		gotEnv = append(gotEnv, k)
 	}
 	sort.Strings(gotEnv)
-	if strings.Join(gotEnv, ",") != strings.Join(wantEnv, ",") {
-		t.Fatalf("workspace-mcp environment = %q, want exactly %q", gotEnv, wantEnv)
+	if len(gotEnv) != 0 {
+		t.Fatalf("workspace-mcp environment = %q, want none — the launcher reads the root .env itself", gotEnv)
 	}
 
 	var argv []string
@@ -380,5 +379,93 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	}
 	if !strings.Contains(string(rawInstaller), `WORKSPACE_MCP_VERSION="2.4.2"`) {
 		t.Errorf(`%s must pin WORKSPACE_MCP_VERSION="2.4.2" outright — an override installs an unreviewed upstream behind this launcher's flags`, installer)
+	}
+}
+
+// TestMCPServersLoadTheirOwnEnv pins the launch path, not just the servers.
+// T3/opencode runs from a systemd unit whose environment is empty, so the
+// `{env:MONGODB_URI}` / `{env:MONGODB_DB}` blocks this file used to carry
+// expanded to "" and all seven servers started with "MONGODB_URI is not set"
+// (2026-11-14). The repo owns its secrets, so the launcher owns them too:
+//
+//   - each of the six Go servers runs ./scripts/mcp-run.sh <server>, which
+//     fills MONGODB_URI/MONGODB_DB from the root .env and execs bin/<server>
+//   - workspace-mcp runs ./scripts/workspace-mcp.sh, which reads the three
+//     Google credentials the same way (pinned by
+//     TestWorkspaceMCPSurfaceStaysReadOnly)
+//
+// `{env:` must not come back: it reads like configuration, works only when
+// someone happens to start T3 from an exported shell, and otherwise passes
+// empty strings — a silent break, not a startup error.
+func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
+	raw, err := os.ReadFile("opencode.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "{env:") {
+		t.Error("opencode.json uses `{env:...}` again — T3's systemd unit has no environment, so it expands to \"\" and the server starts unconfigured; the launchers read the root .env instead")
+	}
+
+	var cfg struct {
+		MCP struct {
+			Servers map[string]struct {
+				Command     []string          `json:"command"`
+				Environment map[string]string `json:"environment"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		"cookbook":        {"./scripts/mcp-run.sh", "cookbook"},
+		"health-check":    {"./scripts/mcp-run.sh", "health-check"},
+		"miser-money":     {"./scripts/mcp-run.sh", "miser-money"},
+		"project-manager": {"./scripts/mcp-run.sh", "project-manager"},
+		"reports":         {"./scripts/mcp-run.sh", "reports"},
+		"task-manager":    {"./scripts/mcp-run.sh", "task-manager"},
+		"workspace-mcp":   {"./scripts/workspace-mcp.sh"},
+	}
+	if len(cfg.MCP.Servers) != len(want) {
+		t.Errorf("opencode.json registers %d servers, want %d — a new server needs a .env-reading launcher here too", len(cfg.MCP.Servers), len(want))
+	}
+	for name, cmd := range want {
+		server, ok := cfg.MCP.Servers[name]
+		if !ok {
+			t.Errorf("opencode.json has no `%s` server entry", name)
+			continue
+		}
+		if strings.Join(server.Command, " ") != strings.Join(cmd, " ") {
+			t.Errorf("%s command = %q, want %q", name, server.Command, cmd)
+		}
+		if len(server.Environment) != 0 {
+			t.Errorf("%s passes environment %v — the launcher reads the root .env, and a key here would bypass it", name, server.Environment)
+		}
+	}
+
+	// Both launchers must take their values through the shared loader, and
+	// only the keys their server needs: .env also holds PASSWORD and the
+	// provider key, which no MCP server has any use for.
+	for _, f := range []string{"scripts/mcp-run.sh", "scripts/workspace-mcp.sh"} {
+		rawScript, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		flat := strings.Join(strings.Fields(strings.ReplaceAll(string(rawScript), "\\\n", " ")), " ")
+		if !strings.Contains(flat, "scripts/lib/common.sh") {
+			t.Errorf("%s does not source scripts/lib/common.sh — the .env must be parsed, never `source`d (a pasted value can contain `$(...)`)", f)
+		}
+		if !strings.Contains(flat, "load_root_env_fill") {
+			t.Errorf("%s does not call load_root_env_fill — the server then depends on the environment T3 does not provide", f)
+		}
+	}
+
+	rawRun, err := os.ReadFile("scripts/mcp-run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runFlat := strings.Join(strings.Fields(strings.ReplaceAll(string(rawRun), "\\\n", " ")), " ")
+	if !strings.Contains(runFlat, "load_root_env_fill MONGODB_URI MONGODB_DB") {
+		t.Error("scripts/mcp-run.sh must load exactly MONGODB_URI and MONGODB_DB — widening this leaks PASSWORD/the provider key into every server")
 	}
 }

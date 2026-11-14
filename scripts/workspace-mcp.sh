@@ -2,7 +2,8 @@
 # Launcher for the Google Workspace (Gmail) MCP server (#515).
 #
 # `opencode.json` runs this script as the `workspace-mcp` local server, the
-# same way it runs the repo's own `./bin/<server>` binaries. The server
+# same way it runs `./scripts/mcp-run.sh <server>` for the repo's own
+# `bin/<server>` binaries. The server
 # itself is the upstream Python package (taylorwilsdon/google_workspace_mcp,
 # MIT), installed into the git-ignored `.workspace-mcp/venv` by
 # `scripts/build-workspace-mcp.sh` — never vendored, never committed.
@@ -23,8 +24,11 @@
 # TestWorkspaceMCPSurfaceStaysReadOnly (opencode_perm_test.go) fails.
 #
 # Credentials: GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET /
-# USER_GOOGLE_EMAIL arrive from the root .env through opencode's
-# `{env:...}` substitution. The OAuth token cache stays in the git-ignored
+# USER_GOOGLE_EMAIL are read from the root .env right here. They do NOT come
+# from opencode's `{env:...}` substitution: T3/opencode runs from a systemd
+# unit with an empty environment, so that substitution expands to "" and the
+# server would start with nothing (the failure that made every server report
+# "not set" on 2026-11-14). The OAuth token cache stays in the git-ignored
 # `.workspace-mcp/credentials/`. First-run consent is headless — see
 # documentation.md, "Google Workspace (Gmail)".
 set -euo pipefail
@@ -36,6 +40,15 @@ if [[ ! -x "$MCP_BIN" ]]; then
     echo "workspace-mcp is not installed: run ./scripts/build-workspace-mcp.sh (or ./scripts/hermes.sh init)." >&2
     exit 1
 fi
+
+# Read the credentials from the root .env (parsed, never sourced — see
+# scripts/lib/common.sh). A value already in the environment wins, so a
+# one-off override still works; only these four keys are taken, so PASSWORD
+# and the provider key never reach this process.
+# shellcheck source=scripts/lib/common.sh
+. "$REPO/scripts/lib/common.sh"
+load_root_env_fill GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
+    USER_GOOGLE_EMAIL WORKSPACE_MCP_PORT
 
 # Fail fast instead of starting a server that can never finish consent. The
 # client id/secret (#515 decision 2) are the human-only step and the account

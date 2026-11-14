@@ -28,9 +28,12 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
                                                   │
   Agento (Android) ──► proxy (:8080 compose default) ──► /api/* ──► health-api ──┘
                                                           /health ──┘
-  T3/opencode (host) ──► bin/{task-manager,project-manager,miser-money,
-                              cookbook,health-check,reports} ──► MongoDB Atlas
+  T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,
+                              project-manager,miser-money,cookbook,
+                              health-check,reports} ──► MongoDB Atlas
                        └─► scripts/workspace-mcp.sh (venv, Gmail read-only)
+
+  Both launchers read the root .env themselves (T3 supplies no environment).
 
   Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -44,11 +47,12 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
 
 ## Agent Surface (T3/opencode)
 
-The agent runs on the host, not in a container. T3 discovers `opencode.json` by walking up from its working directory, so **the repo root must be the cwd** — that is also what the `./bin/<server>` commands in `mcp.servers` resolve against.
+The agent runs on the host, not in a container. T3 discovers `opencode.json` by walking up from its working directory, so **the repo root must be the cwd** for the config (and its relative `./scripts/...` launcher commands) to be found. The launchers themselves resolve the checkout from their own path, so a server no longer depends on where it was started.
 
 - Build the servers with `./scripts/build-mcps.sh` (static `CGO_ENABLED=0` binaries into git-ignored `bin/`). Kept servers: `task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`.
 - One server is not built from this repo: `workspace-mcp` (Google Workspace/Gmail, read-only) runs from a git-ignored Python venv via [`scripts/workspace-mcp.sh`](scripts/workspace-mcp.sh). Install it with `./scripts/build-workspace-mcp.sh` — or `./scripts/hermes.sh init`, which does it too. See [Google Workspace (Gmail)](#google-workspace-gmail) below.
-- Secrets reach the servers through the process environment, never the committed file: each entry passes `{env:MONGODB_URI}` / `{env:MONGODB_DB}` through. Source those from the single root `.env` with the safe loader before launching T3 — `source scripts/lib/common.sh && load_root_env` (parsed, never `source .env`: a pasted Atlas URI carries `&` query params and secrets may hold `$`/backticks, which bare sourcing mangles or executes).
+- **Each server loads its own environment from the root `.env`** — nothing is passed in by T3. Every `mcp.servers` entry runs a launcher ([`scripts/mcp-run.sh <server>`](scripts/mcp-run.sh) for the six Go servers, `scripts/workspace-mcp.sh` for Gmail), and the launcher fills only the keys its server needs (`MONGODB_URI`, `MONGODB_DB`; the three Google credentials for Gmail) through the shared loader in `scripts/lib/common.sh`: parsed, never `source .env` (a pasted Atlas URI carries `&` query params and a secret may hold `$`/backticks, which bare sourcing mangles or executes). A variable already set in the environment wins, so pointing a session at a throwaway Atlas database still works, and `.env` holds no secrets for a server that never asked for them (`PASSWORD` and the provider key are never handed to an MCP process). Do **not** reintroduce `{env:VAR}` in `opencode.json`: T3 runs from a systemd unit with an empty environment, so it expands to `""` and every server starts unconfigured — `TestMCPServersLoadTheirOwnEnv` pins this.
+
 - No secret is written into git; `.env` stays git-ignored.
 - The persona and shared skills live in `.opencode/chat.md` and `.opencode/skills/`; `opencode.json`'s `instructions` entry loads the former.
 

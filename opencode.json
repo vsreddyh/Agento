@@ -5,60 +5,31 @@
     "servers": {
       "cookbook": {
         "type": "local",
-        "command": ["./bin/cookbook"],
-        "environment": {
-          "MONGODB_URI": "{env:MONGODB_URI}",
-          "MONGODB_DB": "{env:MONGODB_DB}"
-        }
+        "command": ["./scripts/mcp-run.sh", "cookbook"]
       },
       "health-check": {
         "type": "local",
-        "command": ["./bin/health-check"],
-        "environment": {
-          "MONGODB_URI": "{env:MONGODB_URI}",
-          "MONGODB_DB": "{env:MONGODB_DB}"
-        }
+        "command": ["./scripts/mcp-run.sh", "health-check"]
       },
       "miser-money": {
         "type": "local",
-        "command": ["./bin/miser-money"],
-        "environment": {
-          "MONGODB_URI": "{env:MONGODB_URI}",
-          "MONGODB_DB": "{env:MONGODB_DB}"
-        }
+        "command": ["./scripts/mcp-run.sh", "miser-money"]
       },
       "project-manager": {
         "type": "local",
-        "command": ["./bin/project-manager"],
-        "environment": {
-          "MONGODB_URI": "{env:MONGODB_URI}",
-          "MONGODB_DB": "{env:MONGODB_DB}"
-        }
+        "command": ["./scripts/mcp-run.sh", "project-manager"]
       },
       "reports": {
         "type": "local",
-        "command": ["./bin/reports"],
-        "environment": {
-          "MONGODB_URI": "{env:MONGODB_URI}",
-          "MONGODB_DB": "{env:MONGODB_DB}"
-        }
+        "command": ["./scripts/mcp-run.sh", "reports"]
       },
       "task-manager": {
         "type": "local",
-        "command": ["./bin/task-manager"],
-        "environment": {
-          "MONGODB_URI": "{env:MONGODB_URI}",
-          "MONGODB_DB": "{env:MONGODB_DB}"
-        }
+        "command": ["./scripts/mcp-run.sh", "task-manager"]
       },
       "workspace-mcp": {
         "type": "local",
-        "command": ["./scripts/workspace-mcp.sh"],
-        "environment": {
-          "GOOGLE_OAUTH_CLIENT_ID": "{env:GOOGLE_OAUTH_CLIENT_ID}",
-          "GOOGLE_OAUTH_CLIENT_SECRET": "{env:GOOGLE_OAUTH_CLIENT_SECRET}",
-          "USER_GOOGLE_EMAIL": "{env:USER_GOOGLE_EMAIL}"
-        }
+        "command": ["./scripts/workspace-mcp.sh"]
       }
     }
   },

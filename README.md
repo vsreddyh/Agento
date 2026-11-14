@@ -33,10 +33,11 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Piece | What it is |
 |---|---|
-| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`), each running `./bin/<server>` with the two Mongo env vars, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh` |
+| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves — T3 passes no environment |
 | `.opencode/chat.md` | The operator persona and per-server rules |
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |
+| `scripts/mcp-run.sh` | Launches one built server with `MONGODB_URI`/`MONGODB_DB` loaded from the root `.env` (that is what `opencode.json` runs) |
 | `scripts/build-workspace-mcp.sh` | Installs the Google Workspace/Gmail MCP server into the git-ignored `.workspace-mcp/venv` (also run by `init`) |
 
 ---
