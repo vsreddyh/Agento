@@ -15,8 +15,9 @@
 #
 # A real MONGODB_URI/MONGODB_DB in the environment still wins, so pointing a
 # session at a throwaway Atlas database (documentation.md, dev isolation)
-# keeps working. Only those two keys are read: `.env` also holds PASSWORD and
-# the provider key, which no MCP server needs.
+# keeps working. Only those two keys are read from `.env`: PASSWORD and the
+# provider key are not pulled in here (anything T3 itself inherited still
+# passes through the exec below).
 #
 # stdio is the MCP transport here: every diagnostic goes to stderr, never
 # stdout.

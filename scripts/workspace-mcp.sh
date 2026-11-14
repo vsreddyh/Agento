@@ -43,8 +43,9 @@ fi
 
 # Read the credentials from the root .env (parsed, never sourced — see
 # scripts/lib/common.sh). A value already in the environment wins, so a
-# one-off override still works; only these four keys are taken, so PASSWORD
-# and the provider key never reach this process.
+# one-off override still works; only these four keys are read from .env, so
+# PASSWORD and the provider key are not pulled in here (whatever T3 itself
+# inherited is still passed through by exec below).
 # shellcheck source=scripts/lib/common.sh
 . "$REPO/scripts/lib/common.sh"
 load_root_env_fill GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
