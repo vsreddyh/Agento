@@ -71,7 +71,7 @@ if [[ -z "${USER_GOOGLE_EMAIL:-}" || "${USER_GOOGLE_EMAIL}" == "you@example.com"
 fi
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "workspace-mcp: ${missing[*]} unset or still the .env.example placeholder." >&2
-    echo "  Fill in the root .env (see .env.example), then restart T3/opencode." >&2
+    echo "  Fill in the root .env (see .env.example), then reload the MCP servers (or restart T3/opencode)." >&2
     exit 1
 fi
 

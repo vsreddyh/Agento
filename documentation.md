@@ -33,7 +33,8 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
                               health-check,reports} ──► MongoDB Atlas
                        └─► scripts/workspace-mcp.sh (venv, Gmail read-only)
 
-  Both launchers read the root .env themselves (T3 supplies no environment).
+  Both launchers read the root .env themselves (T3 supplies no configuration
+  of its own, though an inherited shell variable still passes through).
 
   Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -98,9 +99,11 @@ The callback listener lives inside the spawned server process, so finish consent
 **Re-consent** — after the 7-day expiry, or to switch mailbox: stop T3, delete the cache, restart, and repeat the four steps above (change `USER_GOOGLE_EMAIL` first if the account is changing). The cache is `.workspace-mcp/credentials/` unless you set `WORKSPACE_MCP_CREDENTIALS_DIR` — in `.env` (the launcher reads it, like the port) or in the environment; delete where you pointed it:
 
 ```bash
-source scripts/lib/common.sh && load_root_env
+source scripts/lib/common.sh && load_root_env_fill WORKSPACE_MCP_CREDENTIALS_DIR
 rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-.workspace-mcp/credentials}/"*.json
 ```
+
+(`load_root_env_fill`, not `load_root_env`, so an exported override wins here exactly as it does in the launcher.)
 
 **Check it works**: the launcher parses the root `.env` itself, so there is no pre-load step — run it bare:
 

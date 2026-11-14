@@ -10,8 +10,11 @@ REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # Apply the single root .env to the shell environment (no per-profile .env).
 # NOTE: parsed, never sourced — sourcing would execute $(...)/backticks in
 # values as shell code. Only plain `KEY=value` lines are accepted (optional
-# leading `export`, single/double-quoted values unquoted); everything else
-# (comments, blank lines, multiline values, inline comments) is skipped.
+# leading `export`, single/double-quoted values unquoted). Whole-line comments
+# and blank lines are skipped; an INLINE comment is not stripped — `FOO=bar #
+# baz` yields the value `bar # baz` — so keep annotations on their own line
+# (a `#` inside a URL fragment stays part of the value, which is why this is
+# a documentation rule rather than a stripper).
 #
 #   _env_file_apply overwrite [KEY...]  every key (or only KEY...) wins
 #   _env_file_apply fill      [KEY...]  only keys that are unset or empty
@@ -65,8 +68,8 @@ load_root_env() {
 
 # Load only the named keys, and only where the environment has no value yet.
 # `load_root_env_fill` rather than `load_root_env` is what the MCP launchers
-# call so a server gets the two Mongo variables and nothing else — .env also
-# holds PASSWORD and the provider key, which no MCP server needs.
+# call so a server gets exactly the keys it names and nothing else — .env also
+# holds PASSWORD and the provider key, which no MCP server has any use for.
 load_root_env_fill() {
     [[ $# -gt 0 ]] || return 0
     _env_file_apply fill "$@"

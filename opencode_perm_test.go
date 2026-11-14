@@ -392,8 +392,8 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 //   - each of the six Go servers runs ./scripts/mcp-run.sh <server>, which
 //     fills MONGODB_URI/MONGODB_DB from the root .env and execs bin/<server>
 //   - workspace-mcp runs ./scripts/workspace-mcp.sh, which reads the three
-//     Google credentials the same way (pinned by
-//     TestWorkspaceMCPSurfaceStaysReadOnly)
+//     Google credentials plus the callback-port/token-cache overrides the
+//     same way (pinned by TestWorkspaceMCPSurfaceStaysReadOnly)
 //
 // `{env:` must not come back: it reads like configuration, works only when
 // someone happens to start T3 from an exported shell, and otherwise passes
