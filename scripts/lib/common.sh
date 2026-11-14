@@ -69,8 +69,10 @@ load_root_env() {
 
 # Load only the named keys, and only where the environment has no value yet.
 # `load_root_env_fill` rather than `load_root_env` is what the MCP launchers
-# call so a server gets exactly the keys it names and nothing else — .env also
-# holds PASSWORD and the provider key, which no MCP server has any use for.
+# call, so a server has a value for the keys it names. It only fills — it
+# never unsets anything, so whatever the parent process already exported
+# (PASSWORD, the provider key, ...) still reaches the server through `exec`;
+# starting T3 from a clean shell is what keeps that out.
 load_root_env_fill() {
     [[ $# -gt 0 ]] || return 0
     _env_file_apply fill "$@"

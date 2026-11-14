@@ -17,6 +17,8 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
   T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,
                               project-manager,miser-money,cookbook,
                               health-check,reports} ──► MongoDB Atlas
+                       └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv
+                              (read-only Gmail)
 
   Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```

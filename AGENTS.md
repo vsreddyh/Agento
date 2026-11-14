@@ -43,6 +43,7 @@ Python venv.
 Agento (Android) ──► proxy (:8080 compose default — APP_PORT remaps)
                        └─► /api/* + /health → health-api (:8001 compose default — HEALTH_HOST_PORT remaps)
 T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check,reports}
+                       └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv (read-only Gmail)
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired story/resumes checkouts, unmanaged)
 ```
@@ -160,11 +161,15 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   path (the repo root must still be the cwd so `opencode.json` is discovered).
   The servers' configuration comes from the root `.env`, not from T3's own
   environment: T3 is a systemd unit with an empty env (`WorkingDirectory=%h`, no
-  `EnvironmentFile`), so a `{env:VAR}` in `opencode.json` silently becomes `""`
-  and the six Go servers exit with "MONGODB_URI is not set" (workspace-mcp
-  reports its Google credentials unset). Read the launchers, not the unit, when
-  a server claims its config is missing. A variable T3 did inherit still passes
-  through the launchers, and for `fill` it wins over `.env`.
+  `EnvironmentFile`), so a `{env:VAR}` in `opencode.json` expanded to `""` and
+  the six Go servers exited with "MONGODB_URI is not set" (workspace-mcp
+  reported its Google credentials unset). That is the bug the launchers fixed:
+  they fill from `.env` when the environment has no value, so an empty `{env:}`
+  no longer stops a covered key — which is exactly why `{env:}` stays banned
+  rather than merely broken (a key a launcher does not cover would start
+  unconfigured with no error). Read the launchers, not the unit, when a server
+  claims its config is missing. A variable T3 did inherit still passes through
+  the launchers, and for `fill` it wins over `.env`.
   The Gmail server needs its own
   one-time install: `./scripts/build-workspace-mcp.sh` (init runs it) writes
   `.workspace-mcp/venv`; `scripts/workspace-mcp.sh` then refuses to start until
