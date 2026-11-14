@@ -64,6 +64,12 @@ _env_file_apply() {
                 echo "common.sh: $REPO/.env: KEY=${key} opens a quote it never closes — inline comments are not supported; put the comment on its own line (the value is used verbatim)" >&2
             fi
         fi
+        # `KEY=value # note` has no quote to warn about, and the comment simply
+        # becomes part of the value: a decorated Atlas URI then bypasses the
+        # launcher's placeholder check and fails at Atlas with a mangled URI.
+        if [[ "$val" == *" #"* || "$val" == *$'\t#'* ]]; then
+            echo "common.sh: $REPO/.env: KEY=${key} looks like it has an inline comment — put the comment on its own line; the value is used verbatim and this will fail downstream" >&2
+        fi
         if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
             val="${val:1:-1}"
         elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then

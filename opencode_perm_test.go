@@ -464,35 +464,36 @@ func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 		}
 	}
 
+	// Exact token lists, not substrings: `load_root_env_fill MONGODB_URI
+	// MONGODB_DB PASSWORD` contains the substring but hands every one of the
+	// six servers a key none of them needs, so widening either launcher must
+	// fail here.
 	rawRun, err := os.ReadFile("scripts/mcp-run.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Exact token list, not a substring: `load_root_env_fill MONGODB_URI
-	// MONGODB_DB PASSWORD` contains the substring but hands every one of the
-	// six servers a key none of them needs.
-	var calls [][]string
-	var logical string
-	for _, l := range strings.Split(string(rawRun), "\n") {
-		trimmed := strings.TrimSpace(l)
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		logical += strings.TrimSuffix(trimmed, "\\") + " "
-		if strings.HasSuffix(trimmed, "\\") {
-			continue
-		}
-		if fields := strings.Fields(logical); len(fields) > 0 && fields[0] == "load_root_env_fill" {
-			calls = append(calls, fields)
-		}
-		logical = ""
+	rawWs, err := os.ReadFile("scripts/workspace-mcp.sh")
+	if err != nil {
+		t.Fatal(err)
 	}
-	wantKeys := []string{"load_root_env_fill", "MONGODB_URI", "MONGODB_DB"}
-	if len(calls) != 1 {
-		t.Fatalf("scripts/mcp-run.sh has %d load_root_env_fill calls, want exactly 1", len(calls))
-	}
-	if strings.Join(calls[0], " ") != strings.Join(wantKeys, " ") {
-		t.Errorf("scripts/mcp-run.sh loads %q, want exactly %q — widening this leaks PASSWORD/the provider key into every server", calls[0], wantKeys)
+	for _, tc := range []struct {
+		file string
+		raw  []byte
+		want []string
+	}{
+		{"scripts/mcp-run.sh", rawRun,
+			[]string{"load_root_env_fill", "MONGODB_URI", "MONGODB_DB"}},
+		{"scripts/workspace-mcp.sh", rawWs,
+			[]string{"load_root_env_fill", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
+				"USER_GOOGLE_EMAIL", "WORKSPACE_MCP_PORT", "WORKSPACE_MCP_CREDENTIALS_DIR"}},
+	} {
+		calls := envFillCalls(tc.raw)
+		if len(calls) != 1 {
+			t.Fatalf("%s has %d load_root_env_fill calls, want exactly 1", tc.file, len(calls))
+		}
+		if strings.Join(calls[0], " ") != strings.Join(tc.want, " ") {
+			t.Errorf("%s loads %q, want exactly %q — widening this leaks keys the server never asked for", tc.file, calls[0], tc.want)
+		}
 	}
 
 	// Same fail-fast discipline as the Gmail launcher: a copied-but-unedited
@@ -514,4 +515,26 @@ func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 	if !strings.Contains(string(rawRun), placeholder) {
 		t.Errorf("scripts/mcp-run.sh does not reject the .env.example MONGODB_URI placeholder %q — a copied .env would fail at Atlas instead", placeholder)
 	}
+}
+
+// envFillCalls returns the argument list of every load_root_env_fill call in
+// a launcher, joining backslash continuations and ignoring comments.
+func envFillCalls(raw []byte) [][]string {
+	var calls [][]string
+	var logical string
+	for _, l := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		logical += strings.TrimSuffix(trimmed, "\\") + " "
+		if strings.HasSuffix(trimmed, "\\") {
+			continue
+		}
+		if fields := strings.Fields(logical); len(fields) > 0 && fields[0] == "load_root_env_fill" {
+			calls = append(calls, fields)
+		}
+		logical = ""
+	}
+	return calls
 }
