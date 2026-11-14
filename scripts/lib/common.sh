@@ -11,11 +11,13 @@ REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # NOTE: parsed, never sourced — sourcing would execute $(...)/backticks in
 # values as shell code. `KEY=value`, `KEY = value` and a leading `export` are
 # all accepted; a quoted value is taken verbatim and an unquoted one is
-# trimmed. Whole-line comments and blank lines are skipped, and so is an
-# inline comment — whitespace followed by `#` (`FOO=bar # baz` → `bar`,
-# `FOO="bar" # baz` → `bar`). A `#` with no whitespace before it is part of
-# the value, so a URL fragment (`.../db#frag`) survives, and a fully quoted
-# value is taken verbatim.
+# trimmed, and a quoted value keeps its interior verbatim (`KEY="  a  "`).
+# Whole-line comments and blank lines are skipped, and so is an inline comment:
+# in an unquoted value whitespace followed by `#` starts it (`FOO=bar # baz` →
+# `bar`), while a quoted value runs to its closing quote and the rest of the
+# line is dropped (`FOO="a # b" # note` → `a # b`). A `#` with no whitespace
+# before it stays part of the value, so a URL fragment (`.../db#frag`)
+# survives.
 #
 #   _env_file_apply overwrite [KEY...]  every key (or only KEY...) wins
 #   _env_file_apply fill      [KEY...]  only keys that are unset or empty
@@ -31,7 +33,7 @@ _env_file_apply() {
     shift || true
     local -a only=("$@")
     [[ -f "$REPO/.env" ]] || return 0
-    local line key val k wanted
+    local line key val k wanted q rest
     while IFS= read -r line || [[ -n "$line" ]]; do
         # trim leading/trailing whitespace
         line="${line#"${line%%[![:space:]]*}"}"
@@ -50,32 +52,28 @@ _env_file_apply() {
             [[ "$wanted" == 0 ]] || continue
         fi
         [[ "$mode" == "fill" && -n "${!key:-}" ]] && continue
-        # trim, then unquote matching single/double quotes: trimming first is
-        # what makes `KEY=  "value"` work, and it means an unquoted value is
-        # dotenv-trimmed while a quoted one keeps its interior verbatim
+        # trim first, so `KEY=  value` and `KEY = "value"` both work
         val="${val#"${val%%[![:space:]]*}"}"
         val="${val%"${val##*[![:space:]]}"}"
-        # Inline comment: whitespace then `#` is stripped (`FOO=bar # note` →
-        # `bar`), which also rescues `FOO="bar" # note`. A `#` with no
-        # whitespace before it stays part of the value, so a URL fragment
-        # survives; a fully quoted value is taken verbatim.
-        if [[ "$val" == *[[:space:]]"#"* ]] \
-            && ! { [[ "${#val}" -ge 2 ]] \
-                && { [[ "${val:0:1}" == '"' && "${val: -1}" == '"' ]] || [[ "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; }; }; then
-            val="${val%%[[:space:]]#*}"
-            val="${val%"${val##*[![:space:]]}"}"
-        fi
-        # A value that still opens a quote it never closes would be loaded with
-        # the quote in it and quietly fail every downstream check.
         if [[ "${val:0:1}" == '"' || "${val:0:1}" == "'" ]]; then
-            if [[ "${val:0:1}" != "${val: -1}" || "${#val}" -lt 2 ]]; then
+            # Quoted: take the quoted run verbatim and drop whatever follows the
+            # closing quote, which is how `KEY="a # b" # note` keeps `a # b`
+            # (a comment inside the quotes belongs to the value). A quote that
+            # never closes is used as-is, with a warning — it would otherwise be
+            # loaded with the quote in it and fail every downstream check.
+            q="${val:0:1}"
+            rest="${val:1}"
+            if [[ "$rest" == *"$q"* ]]; then
+                val="${rest%%"$q"*}"
+            else
                 echo "common.sh: $REPO/.env: KEY=${key} opens a quote it never closes — the value is used verbatim and will fail downstream" >&2
             fi
-        fi
-        if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
-            val="${val:1:-1}"
-        elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
-            val="${val:1:-1}"
+        elif [[ "$val" == *[[:space:]]"#"* ]]; then
+            # Unquoted: whitespace followed by `#` starts a comment. A `#` with
+            # no whitespace before it stays (a URL fragment is part of the
+            # value), so this cannot silently eat a URI's `#fragment`.
+            val="${val%%[[:space:]]#*}"
+            val="${val%"${val##*[![:space:]]}"}"
         fi
         printf -v "$key" '%s' "$val"
         export "${key?}"
