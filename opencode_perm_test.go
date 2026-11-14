@@ -447,8 +447,8 @@ func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 	}
 
 	// Both launchers must take their values through the shared loader, and
-	// only the keys their server needs: .env also holds PASSWORD and the
-	// provider key, which no MCP server has any use for.
+	// name only the keys their server needs (fill never unsets, so an
+	// inherited PASSWORD/provider key still passes through `exec`).
 	for _, f := range []string{"scripts/mcp-run.sh", "scripts/workspace-mcp.sh"} {
 		rawScript, err := os.ReadFile(f)
 		if err != nil {

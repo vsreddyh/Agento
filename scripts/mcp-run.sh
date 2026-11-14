@@ -52,7 +52,7 @@ fi
 load_root_env_fill MONGODB_URI MONGODB_DB
 
 if [[ -z "${MONGODB_URI:-}" ]]; then
-    echo "mcp-run.sh: MONGODB_URI is empty — put it in $REPO/.env (see .env.example)." >&2
+    echo "mcp-run.sh: MONGODB_URI is empty — put it in $REPO/.env or export it (see .env.example)." >&2
     exit 1
 fi
 
