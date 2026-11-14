@@ -21,10 +21,10 @@ REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 #
 # `fill` exists for the MCP launch path (scripts/mcp-run.sh,
 # scripts/workspace-mcp.sh): the servers are started by T3/opencode, whose
-# environment is empty on this host, so the .env is the only source there —
-# and a real variable in the environment (a throwaway MONGODB_URI for dev
-# isolation, say) still wins over the file, because `fill` treats empty as
-# unset and leaves a non-empty value alone.
+# environment is empty on this host, so `.env` supplies whatever the
+# environment does not — a real variable in it (a throwaway MONGODB_URI for
+# dev isolation, say) still wins, because `fill` treats empty as unset and
+# leaves a non-empty value alone.
 _env_file_apply() {
     local mode="${1:-overwrite}"
     shift || true

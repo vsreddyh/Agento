@@ -467,8 +467,50 @@ func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runFlat := strings.Join(strings.Fields(strings.ReplaceAll(string(rawRun), "\\\n", " ")), " ")
-	if !strings.Contains(runFlat, "load_root_env_fill MONGODB_URI MONGODB_DB") {
-		t.Error("scripts/mcp-run.sh must load exactly MONGODB_URI and MONGODB_DB — widening this leaks PASSWORD/the provider key into every server")
+	// Exact token list, not a substring: `load_root_env_fill MONGODB_URI
+	// MONGODB_DB PASSWORD` contains the substring but hands every one of the
+	// six servers a key none of them needs.
+	var calls [][]string
+	var logical string
+	for _, l := range strings.Split(string(rawRun), "\n") {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		logical += strings.TrimSuffix(trimmed, "\\") + " "
+		if strings.HasSuffix(trimmed, "\\") {
+			continue
+		}
+		if fields := strings.Fields(logical); len(fields) > 0 && fields[0] == "load_root_env_fill" {
+			calls = append(calls, fields)
+		}
+		logical = ""
+	}
+	wantKeys := []string{"load_root_env_fill", "MONGODB_URI", "MONGODB_DB"}
+	if len(calls) != 1 {
+		t.Fatalf("scripts/mcp-run.sh has %d load_root_env_fill calls, want exactly 1", len(calls))
+	}
+	if strings.Join(calls[0], " ") != strings.Join(wantKeys, " ") {
+		t.Errorf("scripts/mcp-run.sh loads %q, want exactly %q — widening this leaks PASSWORD/the provider key into every server", calls[0], wantKeys)
+	}
+
+	// Same fail-fast discipline as the Gmail launcher: a copied-but-unedited
+	// .env must be caught here, not at Atlas.
+	rawExample, err := os.ReadFile(".env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	placeholder := ""
+	for _, l := range strings.Split(string(rawExample), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(l), "MONGODB_URI="); ok {
+			placeholder = rest
+			break
+		}
+	}
+	if placeholder == "" {
+		t.Fatal(".env.example has no MONGODB_URI= placeholder line")
+	}
+	if !strings.Contains(string(rawRun), placeholder) {
+		t.Errorf("scripts/mcp-run.sh does not reject the .env.example MONGODB_URI placeholder %q — a copied .env would fail at Atlas instead", placeholder)
 	}
 }

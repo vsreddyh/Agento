@@ -104,7 +104,7 @@ source scripts/lib/common.sh && load_root_env_fill WORKSPACE_MCP_CREDENTIALS_DIR
 rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}/"*.json
 ```
 
-(`$REPO` is absolute, so this deletes where the launcher looks even from another cwd; `load_root_env_fill`, not `load_root_env`, so an exported override wins here exactly as it does in the launcher.)
+(`$REPO` is the checkout root the loader resolves from this script's path; the `source` line is relative, so run the snippet from the repo root. `load_root_env_fill`, not `load_root_env`, so an exported override wins here exactly as it does in the launcher.)
 
 **Check it works**: the launcher parses the root `.env` itself, so there is no pre-load step — run it bare:
 
@@ -299,7 +299,7 @@ Upgrading with an existing database (e.g. a separate dev database): deleting the
 
 ### Adding an MCP server
 1. Add `cmd/<name>/` and `internal/<name>/` (stdio MCP server, Mongo-backed).
-2. Add the server to `SERVERS` in `scripts/build-mcps.sh`, and to `mcp.servers` in `opencode.json` as `"command": ["./scripts/mcp-run.sh", "<name>"]` — **no `environment` block**: `mcp-run.sh` fills `MONGODB_URI`/`MONGODB_DB` from the root `.env` (any extra key the server needs goes in that launcher's `load_root_env_fill` list and nowhere else). `{env:VAR}` expands to `""` under T3's empty systemd environment and `TestMCPServersLoadTheirOwnEnv` rejects it.
+2. Add the server to `SERVERS` in `scripts/build-mcps.sh`, and to `mcp.servers` in `opencode.json` as `"command": ["./scripts/mcp-run.sh", "<name>"]` — **no `environment` block**: `mcp-run.sh` fills `MONGODB_URI`/`MONGODB_DB` from the root `.env`. A server that needs any other key gets its own launcher script (the way `scripts/workspace-mcp.sh` does it), not a wider list in the shared `mcp-run.sh` — `TestMCPServersLoadTheirOwnEnv` pins that list to exactly those two keys, because one wrapper serves all six servers. `{env:VAR}` expands to `""` under T3's empty systemd environment and the same test rejects it.
 3. Run `./scripts/build-mcps.sh`, then confirm with `opencode mcp list` from the repo root.
 
 An external (non-Go) server follows the `workspace-mcp` pattern instead: an installer script that pins the upstream version into a git-ignored directory, a launcher script named in `mcp.servers`, its credentials in the root `.env`, and — if it can write anything — `ask` rules plus a pin like `TestWorkspaceMCPSurfaceStaysReadOnly`.

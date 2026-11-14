@@ -55,5 +55,12 @@ if [[ -z "${MONGODB_URI:-}" ]]; then
     echo "mcp-run.sh: MONGODB_URI is empty — put it in $REPO/.env or export it (see .env.example)." >&2
     exit 1
 fi
+# Reject the .env.example placeholder, like the Gmail launcher does for its
+# three keys: a copied-but-unedited .env otherwise gets as far as a cryptic
+# Atlas DNS/auth failure instead of saying what is wrong.
+if [[ "$MONGODB_URI" == "mongodb+srv://user:pass@cluster0.example.mongodb.net/" ]]; then
+    echo "mcp-run.sh: MONGODB_URI is still the .env.example placeholder — put the real Atlas URI in $REPO/.env or export it." >&2
+    exit 1
+fi
 
 exec "$bin"
