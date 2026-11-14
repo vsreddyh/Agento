@@ -2,7 +2,8 @@
 # Launcher for the Google Workspace (Gmail) MCP server (#515).
 #
 # `opencode.json` runs this script as the `workspace-mcp` local server, the
-# same way it runs the repo's own `./bin/<server>` binaries. The server
+# same way it runs `./scripts/mcp-run.sh <server>` for the repo's own
+# `bin/<server>` binaries. The server
 # itself is the upstream Python package (taylorwilsdon/google_workspace_mcp,
 # MIT), installed into the git-ignored `.workspace-mcp/venv` by
 # `scripts/build-workspace-mcp.sh` — never vendored, never committed.
@@ -23,8 +24,12 @@
 # TestWorkspaceMCPSurfaceStaysReadOnly (opencode_perm_test.go) fails.
 #
 # Credentials: GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET /
-# USER_GOOGLE_EMAIL arrive from the root .env through opencode's
-# `{env:...}` substitution. The OAuth token cache stays in the git-ignored
+# USER_GOOGLE_EMAIL are read from the root .env right here. They do NOT come
+# from opencode's `{env:...}` substitution: T3/opencode runs from a systemd
+# unit with an empty environment, so that substitution expands to "" and the
+# server would start with nothing (the failure that made every server start
+# unconfigured on 2026-11-14; this one reports its Google credentials unset). The
+# OAuth token cache stays in the git-ignored
 # `.workspace-mcp/credentials/`. First-run consent is headless — see
 # documentation.md, "Google Workspace (Gmail)".
 set -euo pipefail
@@ -34,6 +39,30 @@ MCP_BIN="$REPO/.workspace-mcp/venv/bin/workspace-mcp"
 
 if [[ ! -x "$MCP_BIN" ]]; then
     echo "workspace-mcp is not installed: run ./scripts/build-workspace-mcp.sh (or ./scripts/hermes.sh init)." >&2
+    exit 1
+fi
+
+# Read the credentials from the root .env (parsed, never sourced — see
+# scripts/lib/common.sh). A value already in the environment wins, so a
+# one-off override still works. The five keys are exactly the ones this
+# launcher consumes (credentials, callback port, token-cache override), so
+# PASSWORD and the provider key are not pulled in here (whatever T3 itself
+# inherited is still passed through by exec below).
+# shellcheck source=scripts/lib/common.sh
+. "$REPO/scripts/lib/common.sh"
+load_root_env_fill GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
+    USER_GOOGLE_EMAIL WORKSPACE_MCP_PORT WORKSPACE_MCP_CREDENTIALS_DIR
+trim_env_keys GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
+    USER_GOOGLE_EMAIL WORKSPACE_MCP_PORT WORKSPACE_MCP_CREDENTIALS_DIR
+
+# A non-numeric or out-of-range port would otherwise surface as
+# `http://localhost:abc/oauth2callback` at the consent screen instead of here.
+# Empty is fine: the launcher defaults it to 8000, so a .env that leaves the
+# key commented out (the .env.example default) is valid.
+if [[ -n "${WORKSPACE_MCP_PORT:-}" ]] \
+    && { [[ ! "$WORKSPACE_MCP_PORT" =~ ^[0-9]+$ ]] \
+        || (( 10#$WORKSPACE_MCP_PORT < 1 || 10#$WORKSPACE_MCP_PORT > 65535 )); }; then
+    echo "workspace-mcp: WORKSPACE_MCP_PORT=$WORKSPACE_MCP_PORT is not a TCP port (1-65535)." >&2
     exit 1
 fi
 
@@ -55,12 +84,29 @@ if [[ -z "${USER_GOOGLE_EMAIL:-}" || "${USER_GOOGLE_EMAIL}" == "you@example.com"
 fi
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "workspace-mcp: ${missing[*]} unset or still the .env.example placeholder." >&2
-    echo "  Fill in the root .env (see .env.example), then restart T3/opencode." >&2
+    echo "  Fill in the root .env (see .env.example) or export them, then reload the MCP servers (or restart T3/opencode)." >&2
     exit 1
 fi
 
 # Token cache location. Override only to point at a store outside this
-# checkout; the default is runtime state and git-ignored.
+# checkout; the default is runtime state and git-ignored. The value comes from
+# .env (parsed, never sourced) or the environment, so NOTHING in it is
+# expanded: refuse a value containing `~` or `$` (a "~" would be a literal
+# directory name) and require an absolute path, otherwise `mkdir -p` would
+# resolve against T3's cwd and the cache would move with the working directory.
+if [[ -n "${WORKSPACE_MCP_CREDENTIALS_DIR:-}" ]]; then
+    case "$WORKSPACE_MCP_CREDENTIALS_DIR" in
+        *'~'* | *'$'*)
+            echo "workspace-mcp: WORKSPACE_MCP_CREDENTIALS_DIR=$WORKSPACE_MCP_CREDENTIALS_DIR is not expanded (.env values are parsed, not sourced) — use a plain absolute path without ~ or \$." >&2
+            exit 1
+            ;;
+        /*) ;;
+        *)
+            echo "workspace-mcp: WORKSPACE_MCP_CREDENTIALS_DIR=$WORKSPACE_MCP_CREDENTIALS_DIR must be an absolute path (it is resolved against the process cwd otherwise)." >&2
+            exit 1
+            ;;
+    esac
+fi
 export WORKSPACE_MCP_CREDENTIALS_DIR="${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}"
 # The cache holds refresh tokens: 0600 files / 0700 dirs, set BEFORE the
 # directory below is created, and re-applied after, so a directory left at a

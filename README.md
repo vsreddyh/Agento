@@ -14,8 +14,11 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
                                                   │
   Agento (Android) ──► proxy (:8080 compose default) ──► /api/* ──► health-api ──┘
                                                           /health ──┘
-  T3/opencode (host) ──► bin/{task-manager,project-manager,miser-money,
-                              cookbook,health-check,reports} ──► MongoDB Atlas
+  T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,
+                              project-manager,miser-money,cookbook,
+                              health-check,reports} ──► MongoDB Atlas
+                       └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv
+                              (read-only Gmail)
 
   Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -33,10 +36,11 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Piece | What it is |
 |---|---|
-| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`), each running `./bin/<server>` with the two Mongo env vars, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh` |
+| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and a variable inherited from whatever shell started T3 still reaches a server (beating the `.env` value for the keys a launcher fills) |
 | `.opencode/chat.md` | The operator persona and per-server rules |
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |
+| `scripts/mcp-run.sh` | Launches one built server with `MONGODB_URI`/`MONGODB_DB` loaded from the root `.env` (that is what `opencode.json` runs); an already-exported value wins over the file |
 | `scripts/build-workspace-mcp.sh` | Installs the Google Workspace/Gmail MCP server into the git-ignored `.workspace-mcp/venv` (also run by `init`) |
 
 ---
@@ -129,7 +133,7 @@ podman-compose --env-file .env -f docker/docker-compose.yml logs -f health-api  
 
 ## Development Mode
 
-All services read the same root `.env`, so a dev checkout just points `MONGODB_URI` at a separate Atlas database (or a throwaway `MONGODB_DB` name) — no local MongoDB container, no profile switching.
+All services read the same root `.env`, so a dev checkout just points `MONGODB_URI` at a separate Atlas database (or a throwaway `MONGODB_DB` name) — no local MongoDB container, no profile switching. Which direction wins depends on the entry point: an **exported** value beats `.env` for the MCP servers, while `./scripts/hermes.sh` / `./scripts/retention.sh` / `./scripts/sysmon.sh` let `.env` win — [documentation.md → Development Mode Isolation](documentation.md#development-mode-isolation).
 
 ---
 
@@ -225,5 +229,6 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
     ├── build-mcps.sh        # Builds the kept MCP binaries into bin/
     ├── build-workspace-mcp.sh  # Installs the Gmail MCP server into .workspace-mcp/venv
     ├── workspace-mcp.sh        # Launches it (read-only Gmail) for opencode.json
+    ├── mcp-run.sh           # Launches one built MCP server with .env loaded from the root
     └── sysmon.sh            # Resource metrics monitoring script
 ```
