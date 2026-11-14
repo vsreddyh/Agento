@@ -229,5 +229,6 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
     ├── build-mcps.sh        # Builds the kept MCP binaries into bin/
     ├── build-workspace-mcp.sh  # Installs the Gmail MCP server into .workspace-mcp/venv
     ├── workspace-mcp.sh        # Launches it (read-only Gmail) for opencode.json
+    ├── mcp-run.sh           # Launches one built MCP server with .env loaded from the root
     └── sysmon.sh            # Resource metrics monitoring script
 ```
