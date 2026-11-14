@@ -14,8 +14,9 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
                                                   │
   Agento (Android) ──► proxy (:8080 compose default) ──► /api/* ──► health-api ──┘
                                                           /health ──┘
-  T3/opencode (host) ──► bin/{task-manager,project-manager,miser-money,
-                              cookbook,health-check,reports} ──► MongoDB Atlas
+  T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,
+                              project-manager,miser-money,cookbook,
+                              health-check,reports} ──► MongoDB Atlas
 
   Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -33,7 +34,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Piece | What it is |
 |---|---|
-| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves — T3 passes no environment of its own |
+| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and only an inherited variable (from whatever shell started T3) can still reach a server |
 | `.opencode/chat.md` | The operator persona and per-server rules |
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |

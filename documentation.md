@@ -82,7 +82,7 @@ Nothing in that table is committed: `clean` never touches `.workspace-mcp/`, and
 1. Create a Google Cloud project, enable the **Gmail API** (nothing else is in scope).
 2. Configure the OAuth consent screen and create an OAuth client of type **Desktop app**. A desktop client accepts any loopback redirect, so `http://localhost:<port>/oauth2callback` needs no registration (`8000` by default, or your `WORKSPACE_MCP_PORT`) — do not pick "Web application", which would require an exact URI. Leave **Use this client for an AI-powered agent** unchecked: it is a self-declaration that grants no scopes and changes no consent, and it only gates Google's *hosted* Workspace MCP endpoints — this server calls the Gmail REST API with your own client, so it is not required. Tick it on a **separate** client only if you later want Workspace-admin agent policies or plan to use Google's hosted MCP servers; the flag cannot be changed on an existing client after Nov 12, 2026.
 3. Leave the publishing status on **Testing** and add the account as a test user. That avoids Google's verification/CASA assessment for the restricted `gmail.readonly` scope, at the cost of a **7-day refresh-token lifetime** — expect to re-consent roughly weekly (below). Publishing the app instead means the full assessment.
-4. Paste the client id + secret into the root `.env`, set `USER_GOOGLE_EMAIL`, then restart T3/opencode (the process env is captured at start, so a running agent keeps the old values).
+4. Paste the client id + secret into the root `.env`, set `USER_GOOGLE_EMAIL`, then reload the MCP servers (or restart T3/opencode): the launcher parses `.env` when it spawns, so a running server keeps the values it started with.
 
 **Headless first-run consent**
 
@@ -292,7 +292,7 @@ Upgrading with an existing database (e.g. a separate dev database): deleting the
 
 ### Adding an MCP server
 1. Add `cmd/<name>/` and `internal/<name>/` (stdio MCP server, Mongo-backed).
-2. Add the server to `SERVERS` in `scripts/build-mcps.sh` and to `mcp.servers` in `opencode.json` with the Mongo env passthrough.
+2. Add the server to `SERVERS` in `scripts/build-mcps.sh`, and to `mcp.servers` in `opencode.json` as `"command": ["./scripts/mcp-run.sh", "<name>"]` — **no `environment` block**: `mcp-run.sh` fills `MONGODB_URI`/`MONGODB_DB` from the root `.env` (any extra key the server needs goes in that launcher's `load_root_env_fill` list and nowhere else). `{env:VAR}` expands to `""` under T3's empty systemd environment and `TestMCPServersLoadTheirOwnEnv` rejects it.
 3. Run `./scripts/build-mcps.sh`, then confirm with `opencode mcp list` from the repo root.
 
 An external (non-Go) server follows the `workspace-mcp` pattern instead: an installer script that pins the upstream version into a git-ignored directory, a launcher script named in `mcp.servers`, its credentials in the root `.env`, and — if it can write anything — `ask` rules plus a pin like `TestWorkspaceMCPSurfaceStaysReadOnly`.
