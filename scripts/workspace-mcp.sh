@@ -77,15 +77,23 @@ fi
 
 # Token cache location. Override only to point at a store outside this
 # checkout; the default is runtime state and git-ignored. The value comes from
-# .env (parsed, never sourced) or the environment, so `~`/`$HOME` are NEVER
-# expanded — refuse them instead of silently creating a literal "~" directory
-# and caching tokens somewhere the re-consent cleanup will not find.
-case "${WORKSPACE_MCP_CREDENTIALS_DIR:-}" in
-    *'~'* | *'$'*)
-        echo "workspace-mcp: WORKSPACE_MCP_CREDENTIALS_DIR=$WORKSPACE_MCP_CREDENTIALS_DIR is not expanded (.env values are parsed, not sourced) — use an absolute path." >&2
-        exit 1
-        ;;
-esac
+# .env (parsed, never sourced) or the environment, so NOTHING in it is
+# expanded: refuse a value containing `~` or `$` (a "~" would be a literal
+# directory name) and require an absolute path, otherwise `mkdir -p` would
+# resolve against T3's cwd and the cache would move with the working directory.
+if [[ -n "${WORKSPACE_MCP_CREDENTIALS_DIR:-}" ]]; then
+    case "$WORKSPACE_MCP_CREDENTIALS_DIR" in
+        *'~'* | *'$'*)
+            echo "workspace-mcp: WORKSPACE_MCP_CREDENTIALS_DIR=$WORKSPACE_MCP_CREDENTIALS_DIR is not expanded (.env values are parsed, not sourced) — use a plain absolute path without ~ or \$." >&2
+            exit 1
+            ;;
+        /*) ;;
+        *)
+            echo "workspace-mcp: WORKSPACE_MCP_CREDENTIALS_DIR=$WORKSPACE_MCP_CREDENTIALS_DIR must be an absolute path (it is resolved against the process cwd otherwise)." >&2
+            exit 1
+            ;;
+    esac
+fi
 export WORKSPACE_MCP_CREDENTIALS_DIR="${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}"
 # The cache holds refresh tokens: 0600 files / 0700 dirs, set BEFORE the
 # directory below is created, and re-applied after, so a directory left at a
