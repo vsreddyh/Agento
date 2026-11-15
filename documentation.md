@@ -77,7 +77,8 @@ What that means in practice: **mark read/unread** (`remove_label_ids: ["UNREAD"]
 | --- | --- |
 | `send_gmail_message`, `draft_gmail_message` | `--disabled-tools` — Google accepts `gmail.modify` for `users.messages.send` and `users.drafts.create`, so the scope *does* permit them |
 | `manage_gmail_label` | `--disabled-tools` — `gmail.labels` comes with `organize` |
-| `manage_gmail_filter`, `list_gmail_filters` | `--disabled-tools` plus the un-requested settings scope |
+| `manage_gmail_filter` | `--disabled-tools` plus the un-requested settings scope |
+| `list_gmail_filters` | not in the block list — it is held back by the un-requested settings scope, which is why it never registers at this permission level |
 | permanent delete | the missing full-mail scope (`mail.google.com`) — no tool requests it |
 
 So the disabled list is load-bearing, not belt-and-braces: `TestWorkspaceMCPWriteSurfaceStaysNarrow` pins it for exactly that reason.

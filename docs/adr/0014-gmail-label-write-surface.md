@@ -57,7 +57,10 @@ flip.
   decision and state the count and query.
 - Read-only is gone as a *claim*; the ADR-0013 language ("only reads", "no
   write/send/delete surface at all") no longer holds and is superseded here.
-  The scopes are still narrow enough that send/draft/filters cannot be
-  reached without a further decision, which would be ADR-0015.
+  The remaining barrier is uneven and must not be described as scope-only:
+  filters and permanent delete are unreachable through missing scopes, while
+  send, draft and label management are stopped by the `--disabled-tools` list
+  (see Defence above). Reaching any of them is an ADR-0015 decision, not a flag
+  flip.
 - The 7-day Testing-mode refresh-token expiry is unchanged, so re-consent
   cadence stays weekly.
