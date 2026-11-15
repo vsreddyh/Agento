@@ -33,9 +33,11 @@ archive, trash and custom labels.
    list, the absence of `--read-only`, and the presence of both `ask` patterns
    (`workspaceMCPWriteTools` in `opencode_perm_test.go`).
 
-Defence in depth is deliberate: even if a future upstream version renamed a
-tool out of the block list, the token carries no scope that could send, draft,
-manage filters or permanently delete.
+Defence in depth is deliberate, with one honest gap: the token carries no
+scope that could send, draft, manage filters or permanently delete, so those
+stay unreachable even if a future upstream version renamed a tool out of the
+block list. Label *management* is the exception — `gmail.labels` comes with
+`organize` — so `manage_gmail_label` is held back by the block list alone.
 
 ## Consequences
 

@@ -7,9 +7,10 @@
 # runs both. `scripts/workspace-mcp.sh` is the launcher opencode.json calls;
 # it refuses to start until this has run.
 #
-# Why a pin: the launcher's flags (--single-user --read-only --tools gmail
-# --tool-tier core) and the three-tool surface they produce were verified
-# against this version, and
+# Why a pin: the launcher's flags (--single-user --permissions gmail:organize
+# --tool-tier complete, with send/draft/label-management/filter blocked) and the
+# eight-read-plus-two-write surface they produce were verified against this
+# version, and
 # TestWorkspaceMCPWriteSurfaceStaysNarrow (opencode_perm_test.go) pins them.
 # Bump WORKSPACE_MCP_VERSION deliberately, then re-check the tool list.
 #
