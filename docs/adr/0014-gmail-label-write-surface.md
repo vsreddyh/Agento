@@ -33,11 +33,17 @@ archive, trash and custom labels.
    list, the absence of `--read-only`, and the presence of both `ask` patterns
    (`workspaceMCPWriteTools` in `opencode_perm_test.go`).
 
-Defence in depth is deliberate, with one honest gap: the token carries no
-scope that could send, draft, manage filters or permanently delete, so those
-stay unreachable even if a future upstream version renamed a tool out of the
-block list. Label *management* is the exception — `gmail.labels` comes with
-`organize` — so `manage_gmail_label` is held back by the block list alone.
+Defence in depth is weaker than it looks, and the block list is load-bearing:
+Google accepts `gmail.modify` for `users.messages.send` and
+`users.drafts.create`, and `gmail.labels` arrives with `organize`, so **send,
+draft and label management are held back by `--disabled-tools` alone**. Only
+filter management (settings scope) and permanent delete (`mail.google.com`)
+are unreachable because no scope is granted. The residual risk is therefore
+real and worth stating: possession of the refresh token plus any code path
+that registers the tool would be enough to send mail from this account. That is
+why the disabled list and `TestWorkspaceMCPWriteSurfaceStaysNarrow` are the
+control, and why re-enabling send is an ADR-level decision rather than a flag
+flip.
 
 ## Consequences
 

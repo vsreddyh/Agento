@@ -71,7 +71,16 @@ The one non-Go MCP server (#515): [taylorwilsdon/google_workspace_mcp](https://g
 - `modify_gmail_message_labels` — add/remove labels on one message
 - `batch_modify_gmail_message_labels` — the same for up to 1000 message ids per call, or per conversation via `thread_ids`, with a read-back that reports what actually changed
 
-What that means in practice: **mark read/unread** (`remove_label_ids: ["UNREAD"]`), **archive** (`remove INBOX`), **move to trash** (`add TRASH`), apply or clear custom labels. What does not exist here: send, draft, filter management, label management and permanent delete. Send, draft, filter management and label management are blocked by `--disabled-tools`; the un-requested scopes (`gmail.send`, `gmail.compose`, settings) would refuse send/draft/filters even if a block were missed — label management is the exception, since `gmail.labels` is granted for `organize`, so that one rests on the block list alone.
+What that means in practice: **mark read/unread** (`remove_label_ids: ["UNREAD"]`), **archive** (`remove INBOX`), **move to trash** (`add TRASH`), apply or clear custom labels. What does not exist here: send, draft, filter management, label management and permanent delete. Be precise about **why** each is absent, because the scopes are not the barrier for most of them:
+
+| Tool | Held back by |
+| --- | --- |
+| `send_gmail_message`, `draft_gmail_message` | `--disabled-tools` — Google accepts `gmail.modify` for `users.messages.send` and `users.drafts.create`, so the scope *does* permit them |
+| `manage_gmail_label` | `--disabled-tools` — `gmail.labels` comes with `organize` |
+| `manage_gmail_filter`, `list_gmail_filters` | `--disabled-tools` plus the un-requested settings scope |
+| permanent delete | the missing full-mail scope (`mail.google.com`) — no tool requests it |
+
+So the disabled list is load-bearing, not belt-and-braces: `TestWorkspaceMCPWriteSurfaceStaysNarrow` pins it for exactly that reason.
 
 Both write tools are `ask`-gated in `opencode.json` (`*modify_gmail_message_labels*`, `*batch_modify_gmail_message_labels*`), so every mail mutation prompts with its scope before it runs. `TestWorkspaceMCPWriteSurfaceStaysNarrow` (`opencode_perm_test.go`) pins the flags, the disabled list and the two gated tools; widening the surface means editing the launcher, the `ask` rules and that test in the same change. This is a real mailbox surface, unrelated to the app's own ∃-Mail (`reports`).
 

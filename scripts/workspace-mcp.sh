@@ -12,22 +12,26 @@
 #   --permissions gmail:organize  requests gmail.readonly + gmail.labels +
 #                   gmail.modify, i.e. read mail and change *labels* (read /
 #                   unread, archive, move to trash, custom labels). It does NOT
-#                   request compose, send, settings or the full mail scope, so
-#                   send, draft, filter management and permanent delete are
-#                   unreachable, and label management is blocked by the flag
-#                   below — on top of the ask rules opencode.json carries for
-#                   the two write tools. `gmail:organize` is the least level that can
-#                   mark a message read; `gmail:readonly` cannot.
+#                   request settings or the full mail scope, so filter
+#                   management and permanent delete are unreachable. It also
+#                   does not request gmail.send/gmail.compose — but Google
+#                   accepts gmail.modify for users.messages.send and
+#                   users.drafts.create, so send and draft are held back by
+#                   `--disabled-tools` below, not by the scope. That list is
+#                   load-bearing: never drop an entry without a new ADR.
+#                   `gmail:organize` is the least level that can mark a message
+#                   read; `gmail:readonly` cannot.
 #   --tool-tier complete  the eight read/utility tools (search, message and
 #                   thread content, attachments, label list,
 #                   start_google_auth) plus modify_gmail_message_labels and
 #                   batch_modify_gmail_message_labels.
 #   --disabled-tools  blocks every other write tool the wrapper would otherwise
 #                   register at this tier: send, draft, label management and
-#                   filters. Belt and braces: the un-requested scopes would
-#                   also refuse send/draft/filters, but label *management*
-#                   needs gmail.labels — which organize grants — so that one
-#                   rests on this list alone.
+#                   filters. This is the real barrier for three of the four:
+#                   gmail.modify covers send/draft and gmail.labels covers
+#                   label management. Only filters (settings scope) are also
+#                   refused by the missing scope. Pinned by
+#                   TestWorkspaceMCPWriteSurfaceStaysNarrow.
 #   --single-user   one mailbox, one client: credentials come from the
 #                   credentials directory below, not a per-session mapping.
 #   --transport stdio  matches every other server in this stack (one client).

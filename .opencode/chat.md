@@ -72,7 +72,9 @@ instead of round-tripping one at a time.
   manage filters or labels (creating, updating, applying, deleting or renaming
   them), or permanently delete — the launcher asks only for `gmail:organize`
   (readonly + labels + modify) and blocks the rest, so say those are out of
-  scope instead of promising them. Both write tools
+  scope instead of promising them. Note that `gmail.modify` would technically
+  allow send — the block list is what stops it, so never re-enable a write tool
+  without a new ADR. Both write tools
   are `ask`-gated: state the scope when the prompt appears (which ids, which
   label) and never batch more than the user asked for.
 

@@ -186,9 +186,11 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
 - The Google Workspace entry is deliberately narrow: `gmail:organize` scopes
   (readonly + labels + modify) and only the two label-modification tools as
   writes — no send, draft, filter-management, label-management or
-  permanent-delete surface is registered. Send/draft/filters/permanent-delete
-  are unreachable because no such scope is requested; label management rests on
-  `--disabled-tools` alone (`gmail.labels` comes with `organize`). Both write
+  permanent-delete surface is registered. Filters and permanent delete are
+  unreachable through missing scopes; send, draft and label management rest on
+  `--disabled-tools` alone (`gmail.modify` is accepted for
+  `users.messages.send`/`users.drafts.create`, and `gmail.labels` comes with
+  `organize`) — so never drop an entry there without a new ADR. Both write
   tools prompt. `opencode mcp list` reflects the RUNNING T3 process, so
   reload the MCP servers (or restart T3) after editing those `.env` keys — a
   launcher reads `.env` once, when it spawns, and a stale listing keeps showing
