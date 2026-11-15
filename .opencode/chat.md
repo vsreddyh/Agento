@@ -69,9 +69,10 @@ instead of round-tripping one at a time.
   What the write tools can do: add/remove **labels**, i.e. mark read/unread
   (`remove_label_ids: ["UNREAD"]`), archive (`remove INBOX`), move to trash
   (`add TRASH`) and apply custom labels. What they cannot do: send, draft,
-  create filters, delete a label, or permanently delete — the launcher asks
-  only for `gmail:organize` (readonly + labels + modify) and blocks the rest,
-  so say those are out of scope instead of promising them. Both write tools
+  manage filters or labels (creating/deleting/renaming them), or permanently
+  delete — the launcher asks only for `gmail:organize` (readonly + labels +
+  modify) and blocks the rest, so say those are out of scope instead of
+  promising them. Both write tools
   are `ask`-gated: state the scope when the prompt appears (which ids, which
   label) and never batch more than the user asked for.
 

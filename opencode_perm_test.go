@@ -279,11 +279,12 @@ func TestEveryToolClassified(t *testing.T) {
 //     and permanent delete are unreachable; label *management* needs
 //     gmail.labels, so it is held back by the disabled list alone.
 //     `gmail:organize` is the least level that can mark a message read.
-//   - `--tool-tier complete` registers the read tools plus the two label
-//     modification tools, and `--disabled-tools` blocks the send/draft/
-//     label-management/filter tools the tier would otherwise include. The
-//     resulting list was verified over MCP stdio: search, message/thread
-//     content, attachments, label list, modify and batch modify.
+//   - `--tool-tier complete` registers the eight read/utility tools plus the
+//     two label modification tools, and `--disabled-tools` blocks the send/
+//     draft/label-management/filter tools the tier would otherwise include.
+//     The resulting list was verified over MCP stdio: search, message and
+//     thread content, attachments, label list, start_google_auth, modify and
+//     batch modify.
 //   - Those two write tools carry `ask` rules (expectedAsk and
 //     workspaceMCPWriteTools above). Widening either — a broader permission
 //     level, another tier, or un-blocking send — fails here until the author
