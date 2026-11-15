@@ -31,7 +31,7 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
   T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,
                               project-manager,miser-money,cookbook,
                               health-check,reports} ──► MongoDB Atlas
-                       └─► scripts/workspace-mcp.sh (venv, Gmail read-only)
+                       └─► scripts/workspace-mcp.sh (venv, Gmail: read + labels)
 
   Both launchers read the root .env themselves (T3 supplies no configuration
   of its own, though an inherited shell variable still passes through).

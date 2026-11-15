@@ -36,7 +36,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Piece | What it is |
 |---|---|
-| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (Gmail: read + label changes, no send) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and a variable inherited from whatever shell started T3 still reaches a server (beating the `.env` value for the keys a launcher fills) |
+| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (Gmail: read + label changes — no send, draft, filter/label management or permanent delete) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and a variable inherited from whatever shell started T3 still reaches a server (beating the `.env` value for the keys a launcher fills) |
 | `.opencode/chat.md` | The operator persona and per-server rules |
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |
@@ -81,7 +81,7 @@ and unmanaged.)
 - **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai), for T3/opencode on the host.
 - **Android App Password**: `PASSWORD` (single bearer credential for sync; generate with `openssl rand -hex 32`).
 - **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook/tasks/projects/reports.
-- **Google Workspace (optional)**: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL` from a Google Cloud **Desktop app** OAuth client with the Gmail API enabled. Read-only Gmail for the agent; setup and the headless consent steps are in [`documentation.md`](documentation.md#google-workspace-gmail).
+- **Google Workspace (optional)**: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL` from a Google Cloud **Desktop app** OAuth client with the Gmail API enabled. Gmail for the agent — read plus label changes (mark read/unread, archive, trash), no send/draft/filters/permanent-delete; setup and the headless consent steps are in [`documentation.md`](documentation.md#google-workspace-gmail).
 - (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password. Retired with the agent container: every `PI_*` variable and `VPS_SSH_DIR`.)
 
 ### Network & Firewall Ports
