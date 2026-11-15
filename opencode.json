@@ -43,6 +43,8 @@
     "*fix_last*": "ask",
     "*prune_old*": "ask",
     "*log_transaction*": "ask",
-    "*log_text*": "ask"
+    "*log_text*": "ask",
+    "*modify_gmail_message_labels*": "ask",
+    "*batch_modify_gmail_message_labels*": "ask"
   }
 }

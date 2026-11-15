@@ -9,19 +9,36 @@
 # `scripts/build-workspace-mcp.sh` — never vendored, never committed.
 #
 # The surface is deliberately narrow and pinned here, not in opencode.json:
-#   --read-only     requests only read scopes (gmail.readonly + openid/email/
-#                   profile) and disables every tool that needs a write scope,
-#                   so there is no send, delete or label mutation to gate.
-#   --tools gmail   one service. No Calendar/Drive/Docs surface.
-#   --tool-tier core  the three read tools: search_gmail_messages,
-#                   get_gmail_message_content, get_gmail_messages_content_batch.
+#   --permissions gmail:organize  requests gmail.readonly + gmail.labels +
+#                   gmail.modify, i.e. read mail and change *labels* (read /
+#                   unread, archive, move to trash, custom labels). It does NOT
+#                   request settings or the full mail scope, so filter
+#                   management and permanent delete are unreachable. It also
+#                   does not request gmail.send/gmail.compose — but Google
+#                   accepts gmail.modify for users.messages.send and
+#                   users.drafts.create, so send and draft are held back by
+#                   `--disabled-tools` below, not by the scope. That list is
+#                   load-bearing: never drop an entry without a new ADR.
+#                   `gmail:organize` is the least level that can mark a message
+#                   read; `gmail:readonly` cannot.
+#   --tool-tier complete  the eight read/utility tools (search, message and
+#                   thread content, attachments, label list,
+#                   start_google_auth) plus modify_gmail_message_labels and
+#                   batch_modify_gmail_message_labels.
+#   --disabled-tools  blocks every other write tool the wrapper would otherwise
+#                   register at this tier: send, draft, label management and
+#                   filters. This is the real barrier for three of the four:
+#                   gmail.modify covers send/draft and gmail.labels covers
+#                   label management. Only filters (settings scope) are also
+#                   refused by the missing scope. Pinned by
+#                   TestWorkspaceMCPWriteSurfaceStaysNarrow.
 #   --single-user   one mailbox, one client: credentials come from the
 #                   credentials directory below, not a per-session mapping.
 #   --transport stdio  matches every other server in this stack (one client).
 #
-# Enabling a write/send tool is a deliberate change: flip the flags here AND
-# add matching `ask` rules to opencode.json, or
-# TestWorkspaceMCPSurfaceStaysReadOnly (opencode_perm_test.go) fails.
+# Widening this is a deliberate change: flip the flags here AND add matching
+# `ask` rules to opencode.json, or TestWorkspaceMCPWriteSurfaceStaysNarrow
+# (opencode_perm_test.go) fails.
 #
 # Credentials: GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET /
 # USER_GOOGLE_EMAIL are read from the root .env right here. They do NOT come
@@ -29,9 +46,10 @@
 # unit with an empty environment, so that substitution expands to "" and the
 # server would start with nothing (the failure that made every server start
 # unconfigured on 2026-11-14; this one reports its Google credentials unset). The
-# OAuth token cache stays in the git-ignored
-# `.workspace-mcp/credentials/`. First-run consent is headless — see
-# documentation.md, "Google Workspace (Gmail)".
+# OAuth token cache stays in the git-ignored `.workspace-mcp/credentials/`.
+# The first call after a scope change returns an Authorization URL instead of
+# mail — that is the consent step, see documentation.md,
+# "Google Workspace (Gmail)".
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -136,20 +154,25 @@ export GOOGLE_OAUTH_REDIRECT_URI="http://localhost:$WORKSPACE_MCP_PORT/oauth2cal
 export OAUTHLIB_INSECURE_TRANSPORT=1
 
 # Scrub settings that could widen what is documented here, so a stray shell
-# variable cannot contradict this launcher (the CLI flags below win over the
-# env in 2.4.2 — WORKSPACE_MCP_TOOLS/READ_ONLY/TOOL_TIER/PERMISSIONS are only
-# consulted when their flag is absent — but the bind host and external URL are
-# env-only, and the documentation makes a loopback-only claim).
+# variable cannot contradict this launcher. WORKSPACE_MCP_PERMISSIONS,
+# TOOL_TIER and DISABLED_TOOLS are also passed as flags, so unsetting the env
+# keeps the two out of conflict. WORKSPACE_MCP_TOOLS and WORKSPACE_MCP_READ_ONLY
+# are ignored by 2.4.2 whenever --permissions is present (it warns and drops
+# them), and the unset means they are never even considered. The bind host and
+# external URL are env-only and not flag-guarded, which is why they are scrubbed
+# too: the documentation makes a loopback-only claim.
 # WORKSPACE_MCP_HTTP_PORT is env-only too: in stdio mode it adds a second,
 # unauthenticated loopback HTTP listener serving the same tools.
 unset WORKSPACE_MCP_HOST WORKSPACE_MCP_BASE_URI WORKSPACE_EXTERNAL_URL
 unset WORKSPACE_MCP_HTTP_PORT
 unset WORKSPACE_MCP_TOOLS WORKSPACE_MCP_TOOL_TIER WORKSPACE_MCP_READ_ONLY \
-    WORKSPACE_MCP_PERMISSIONS
+    WORKSPACE_MCP_PERMISSIONS WORKSPACE_MCP_DISABLED_TOOLS
 
+# --disabled-tools last: its nargs="+" would otherwise swallow following flags.
 exec "$MCP_BIN" \
     --transport stdio \
     --single-user \
-    --read-only \
-    --tools gmail \
-    --tool-tier core
+    --permissions gmail:organize \
+    --tool-tier complete \
+    --disabled-tools send_gmail_message draft_gmail_message \
+        manage_gmail_label manage_gmail_filter

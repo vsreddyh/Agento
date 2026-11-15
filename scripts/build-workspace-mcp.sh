@@ -7,10 +7,11 @@
 # runs both. `scripts/workspace-mcp.sh` is the launcher opencode.json calls;
 # it refuses to start until this has run.
 #
-# Why a pin: the launcher's flags (--single-user --read-only --tools gmail
-# --tool-tier core) and the three-tool surface they produce were verified
-# against this version, and
-# TestWorkspaceMCPSurfaceStaysReadOnly (opencode_perm_test.go) pins them.
+# Why a pin: the launcher's flags (--single-user --permissions gmail:organize
+# --tool-tier complete, with send/draft/label-management/filter blocked) and the
+# eight-read-plus-two-write surface they produce were verified against this
+# version, and
+# TestWorkspaceMCPWriteSurfaceStaysNarrow (opencode_perm_test.go) pins them.
 # Bump WORKSPACE_MCP_VERSION deliberately, then re-check the tool list.
 #
 # No secrets here: the OAuth client id/secret and the token cache live in the
@@ -24,7 +25,7 @@ VENV="$ROOT/.workspace-mcp/venv"
 PYTHON="${PYTHON:-python3}"
 # Pinned outright, not `${VAR:-...}`: an env override would install an
 # unreviewed upstream version behind the flags this repo verified and
-# TestWorkspaceMCPSurfaceStaysReadOnly pins. Bump it here (and in that test).
+# TestWorkspaceMCPWriteSurfaceStaysNarrow pins. Bump it here (and in that test).
 WORKSPACE_MCP_VERSION="2.4.2"
 
 if ! command -v "$PYTHON" &>/dev/null; then

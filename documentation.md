@@ -31,7 +31,7 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
   T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,
                               project-manager,miser-money,cookbook,
                               health-check,reports} ──► MongoDB Atlas
-                       └─► scripts/workspace-mcp.sh (venv, Gmail read-only)
+                       └─► scripts/workspace-mcp.sh (venv, Gmail: read + labels)
 
   Both launchers read the root .env themselves (T3 supplies no configuration
   of its own, though an inherited shell variable still passes through).
@@ -51,7 +51,7 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
 The agent runs on the host, not in a container. T3 discovers `opencode.json` by walking up from its working directory, and the relative `./scripts/...` commands in `mcp.servers` resolve against that same directory, so **the repo root must be the cwd** — start T3 anywhere else and no server starts. Once a launcher is running, its own `.env`/`bin/` lookup no longer depends on the cwd: each one resolves the checkout from its own path.
 
 - Build the servers with `./scripts/build-mcps.sh` (static `CGO_ENABLED=0` binaries into git-ignored `bin/`). Kept servers: `task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`.
-- One server is not built from this repo: `workspace-mcp` (Google Workspace/Gmail, read-only) runs from a git-ignored Python venv via [`scripts/workspace-mcp.sh`](scripts/workspace-mcp.sh). Install it with `./scripts/build-workspace-mcp.sh` — or `./scripts/hermes.sh init`, which does it too. See [Google Workspace (Gmail)](#google-workspace-gmail) below.
+- One server is not built from this repo: `workspace-mcp` (Google Workspace/Gmail: read + label changes) runs from a git-ignored Python venv via [`scripts/workspace-mcp.sh`](scripts/workspace-mcp.sh). Install it with `./scripts/build-workspace-mcp.sh` — or `./scripts/hermes.sh init`, which does it too. See [Google Workspace (Gmail)](#google-workspace-gmail) below.
 - **Each server loads its own environment from the root `.env`** — T3 passes no configuration of its own (it runs from an empty systemd unit; anything it inherited still passes through the launchers, which is why a `.env` value only fills a gap). Every `mcp.servers` entry runs a launcher ([`scripts/mcp-run.sh <server>`](scripts/mcp-run.sh) for the six Go servers, `scripts/workspace-mcp.sh` for Gmail), and the launcher fills only the keys its server needs (`MONGODB_URI`, `MONGODB_DB`; the three Google credentials plus `WORKSPACE_MCP_PORT` and `WORKSPACE_MCP_CREDENTIALS_DIR` for Gmail) through the shared loader in `scripts/lib/common.sh`: parsed, never `source .env` (a pasted Atlas URI carries `&` query params and a secret may hold `$`/backticks, which bare sourcing mangles or executes). In the launchers a variable already exported in the environment wins, so pointing a session at a throwaway Atlas database works — note that `./scripts/hermes.sh`, `./scripts/retention.sh` and `./scripts/sysmon.sh` are the other way round (they load with `load_root_env`, where the file wins), so exporting a throwaway `MONGODB_URI` does not redirect compose, a retention run or sysmon. `.env` holds more than the servers need — `PASSWORD`, the provider key and the compose ports stay there too; the launchers simply do not read them, so a server only sees such a value if it was inherited from whatever started T3 (start T3 from a clean shell if that matters). Do **not** reintroduce `{env:VAR}` in `opencode.json`: under T3's empty systemd environment it expands to `""`, which a launcher then treats as unset and fills anyway, so it buys nothing for the keys a launcher covers — and for a key no launcher covers the empty value is indistinguishable from unset: a required key fails loudly, an optional one silently takes its default (`MONGODB_DB`→`hermes` in the Go servers, the callback port→`8000` in the launcher), which is the quiet failure to watch for. `TestMCPServersLoadTheirOwnEnv` pins this.
 
 - No secret is written into git; `.env` stays git-ignored.
@@ -59,13 +59,31 @@ The agent runs on the host, not in a container. T3 discovers `opencode.json` by 
 
 ### Google Workspace (Gmail)
 
-The one non-Go MCP server (#515): [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (MIT), pinned in `scripts/build-workspace-mcp.sh` and installed into the git-ignored `.workspace-mcp/venv`. `scripts/workspace-mcp.sh` launches it over stdio with a deliberately fixed, write-free surface:
+The one non-Go MCP server (#515): [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (MIT), pinned in `scripts/build-workspace-mcp.sh` and installed into the git-ignored `.workspace-mcp/venv`. `scripts/workspace-mcp.sh` launches it over stdio with a deliberately fixed, narrow surface:
 
 ```
---single-user --read-only --tools gmail --tool-tier core
+--single-user --permissions gmail:organize --tool-tier complete
+--disabled-tools send_gmail_message draft_gmail_message manage_gmail_label manage_gmail_filter
 ```
 
-That is **three read tools and nothing else**: `search_gmail_messages`, `get_gmail_message_content`, `get_gmail_messages_content_batch`. `--read-only` requests only read scopes (`gmail.readonly`, `openid`, `email`, `profile`), so there is no send, no delete, no draft and no label mutation to confirm — which is why it contributes no `ask` rule to `opencode.json`. `TestWorkspaceMCPSurfaceStaysReadOnly` (`opencode_perm_test.go`) pins those flags; enabling a write tool means editing the launcher **and** adding matching `ask` rules in the same change. This is a real mailbox surface, unrelated to the app's own ∃-Mail (`reports`).
+`--permissions gmail:organize` adds exactly three Gmail scopes — `gmail.readonly`, `gmail.labels` and `gmail.modify` — on top of the base `openid`/`email`/`profile` ones, which is the least that can mark a message read (`gmail.readonly` cannot). The verified tool list is eight read/utility tools (`search_gmail_messages`, `get_gmail_message_content`, `get_gmail_messages_content_batch`, `get_gmail_thread_content`, `get_gmail_threads_content_batch`, `get_gmail_attachment_content`, `list_gmail_labels`, `start_google_auth`) plus **exactly two write tools**, both label modifications:
+
+- `modify_gmail_message_labels` — add/remove labels on one message
+- `batch_modify_gmail_message_labels` — the same for up to 1000 message ids per call, or per conversation via `thread_ids`, with a read-back that reports what actually changed
+
+What that means in practice: **mark read/unread** (`remove_label_ids: ["UNREAD"]`), **archive** (`remove INBOX`), **move to trash** (`add TRASH`), apply or clear custom labels. What does not exist here: send, draft, filter management, label management and permanent delete. Be precise about **why** each is absent, because the scopes are not the barrier for most of them:
+
+| Tool | Held back by |
+| --- | --- |
+| `send_gmail_message`, `draft_gmail_message` | `--disabled-tools` — Google accepts `gmail.modify` for `users.messages.send` and `users.drafts.create`, so the scope *does* permit them |
+| `manage_gmail_label` | `--disabled-tools` — `gmail.labels` comes with `organize` |
+| `manage_gmail_filter` | `--disabled-tools` plus the un-requested settings scope |
+| `list_gmail_filters` | not in the block list — it is held back by the un-requested settings scope, which is why it never registers at this permission level |
+| permanent delete | the missing full-mail scope (`mail.google.com`) — no tool requests it |
+
+So the disabled list is load-bearing, not belt-and-braces: `TestWorkspaceMCPWriteSurfaceStaysNarrow` pins it for exactly that reason.
+
+Both write tools are `ask`-gated in `opencode.json` (`*modify_gmail_message_labels*`, `*batch_modify_gmail_message_labels*`), so every mail mutation prompts with its scope before it runs. `TestWorkspaceMCPWriteSurfaceStaysNarrow` (`opencode_perm_test.go`) pins the flags, the disabled list and the two gated tools; widening the surface means editing the launcher, the `ask` rules and that test in the same change. This is a real mailbox surface, unrelated to the app's own ∃-Mail (`reports`).
 
 **Where the credentials live**
 
@@ -82,7 +100,7 @@ Nothing in that table is committed: `clean` never touches `.workspace-mcp/`, and
 
 1. Create a Google Cloud project, enable the **Gmail API** (nothing else is in scope).
 2. Configure the OAuth consent screen and create an OAuth client of type **Desktop app**. A desktop client accepts any loopback redirect, so `http://localhost:<port>/oauth2callback` needs no registration (`8000` by default, or your `WORKSPACE_MCP_PORT`) — do not pick "Web application", which would require an exact URI. Leave **Use this client for an AI-powered agent** unchecked: it is a self-declaration that grants no scopes and changes no consent, and it only gates Google's *hosted* Workspace MCP endpoints — this server calls the Gmail REST API with your own client, so it is not required. Tick it on a **separate** client only if you later want Workspace-admin agent policies or plan to use Google's hosted MCP servers; the flag cannot be changed on an existing client after Nov 12, 2026.
-3. Leave the publishing status on **Testing** and add the account as a test user. That avoids Google's verification/CASA assessment for the restricted `gmail.readonly` scope, at the cost of a **7-day refresh-token lifetime** — expect to re-consent roughly weekly (below). Publishing the app instead means the full assessment.
+3. Leave the publishing status on **Testing** and add the account as a test user. That avoids Google's verification/CASA assessment for the restricted Gmail scopes it asks for (`gmail.readonly` and `gmail.modify`, both restricted; `gmail.labels` is not), at the cost of a **7-day refresh-token lifetime** — expect to re-consent roughly weekly (below). Publishing the app instead means the full assessment.
 4. Put the client id + secret and `USER_GOOGLE_EMAIL` into the root `.env` — or export any of the three for a one-off test, since for the launchers an exported value wins over the file — then reload the MCP servers (or restart T3/opencode): the launcher parses `.env` when it spawns, so a running server keeps the values it started with.
 
 **Headless first-run consent**
@@ -116,7 +134,7 @@ rm -f "${WORKSPACE_MCP_CREDENTIALS_DIR:-$REPO/.workspace-mcp/credentials}/"*.jso
 
 It refuses a malformed `WORKSPACE_MCP_PORT` first, then names whichever of the three credentials (`GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `USER_GOOGLE_EMAIL`) is missing or still the `.env.example` placeholder, and finally checks the token-cache directory (absolute, with no `~`/`$`). With all of those satisfied it opens stdio and waits for a client (that is the point — there is no mail to print and no consent URL until an MCP client calls a tool), so the real proof is a read through T3: ask for mail, complete consent once, ask again. `opencode mcp list` shows the server once the MCP servers have respawned (reload, or restart T3/opencode) — an edit to `.env` needs a respawn because the launcher reads it at spawn time.
 
-The bind is loopback because the launcher scrubs every env-only knob that could widen it — `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/`WORKSPACE_EXTERNAL_URL`, the extra unauthenticated listener `WORKSPACE_MCP_HTTP_PORT`, and the tool-surface overrides `WORKSPACE_MCP_TOOLS`/`WORKSPACE_MCP_TOOL_TIER`/`WORKSPACE_MCP_READ_ONLY`/`WORKSPACE_MCP_PERMISSIONS` (the CLI flags above win where they exist, but the host/URL/HTTP-port are env-only); setting any of them outside the file has no effect. Verified against 2.4.2 at the default port with `PORT=9999` in the environment, which still yields `127.0.0.1:8000` and a redirect of `http://localhost:8000/oauth2callback` (with `WORKSPACE_MCP_PORT=9000` both become 9000 — `PORT` never wins).
+The bind is loopback because the launcher scrubs every env-only knob that could widen it — `WORKSPACE_MCP_HOST`/`WORKSPACE_MCP_BASE_URI`/`WORKSPACE_EXTERNAL_URL`, the extra unauthenticated listener `WORKSPACE_MCP_HTTP_PORT`, and the five tool-surface variables `WORKSPACE_MCP_TOOLS`/`WORKSPACE_MCP_TOOL_TIER`/`WORKSPACE_MCP_READ_ONLY`/`WORKSPACE_MCP_PERMISSIONS`/`WORKSPACE_MCP_DISABLED_TOOLS`. For `PERMISSIONS`/`TOOL_TIER`/`DISABLED_TOOLS` the flags below are what take effect and the unset keeps the two out of conflict; `TOOLS` and `READ_ONLY` are ignored by 2.4.2 while `--permissions` is present (it warns and drops them), and the unset means they are never considered at all. The host/URL knobs are the ones with no flag and no permission-mode protection, so their unset is load-bearing (the CLI flags above win where they exist, but the host/URL/HTTP-port are env-only); setting any of them outside the file has no effect. Verified against 2.4.2 at the default port with `PORT=9999` in the environment, which still yields `127.0.0.1:8000` and a redirect of `http://localhost:8000/oauth2callback` (with `WORKSPACE_MCP_PORT=9000` both become 9000 — `PORT` never wins).
 
 ### LLM connection
 
@@ -304,7 +322,7 @@ Upgrading with an existing database (e.g. a separate dev database): deleting the
 2. Add the server to `SERVERS` in `scripts/build-mcps.sh`, and to `mcp.servers` in `opencode.json` as `"command": ["./scripts/mcp-run.sh", "<name>"]` — **no `environment` block**: `mcp-run.sh` fills `MONGODB_URI`/`MONGODB_DB` from the root `.env`. A server that needs any other key gets its own launcher script (the way `scripts/workspace-mcp.sh` does it), not a wider list in the shared `mcp-run.sh` — `TestMCPServersLoadTheirOwnEnv` pins that list to exactly those two keys, because one wrapper serves all six servers. `{env:VAR}` expands to `""` under T3's empty systemd environment and the same test rejects it.
 3. Run `./scripts/build-mcps.sh`, then confirm with `opencode mcp list` from the repo root.
 
-An external (non-Go) server follows the `workspace-mcp` pattern instead: an installer script that pins the upstream version into a git-ignored directory, a launcher script named in `mcp.servers`, its credentials in the root `.env`, and — if it can write anything — `ask` rules plus a pin like `TestWorkspaceMCPSurfaceStaysReadOnly`.
+An external (non-Go) server follows the `workspace-mcp` pattern instead: an installer script that pins the upstream version into a git-ignored directory, a launcher script named in `mcp.servers`, its credentials in the root `.env`, and — if it can write anything — `ask` rules plus a pin like `TestWorkspaceMCPWriteSurfaceStaysNarrow`.
 
 ### Adding a skill
 Put the skill directory containing `SKILL.md` under `.opencode/skills/<name>/` and commit it. T3/opencode discovers that tree; `opencode.json` only needs the `instructions` entry that loads the persona.
