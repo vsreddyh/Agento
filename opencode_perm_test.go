@@ -21,10 +21,10 @@ package agento_test
 // Servers registered under `cmd/*` are not the whole agent surface: the
 // `workspace-mcp` entry in opencode.json runs an external Python server
 // (#515) whose tools this file cannot enumerate. Its surface is pinned by
-// TestWorkspaceMCPSurfaceStaysReadOnly instead — read-only Gmail only, so
-// no write/send tool exists to gate. That is the reason it adds no `ask`
-// rule here, and the reason enabling a write means editing that launcher
-// and this file together.
+// TestWorkspaceMCPWriteSurfaceStaysNarrow instead — Gmail read tools plus
+// exactly two label-modification tools, which are `ask`-covered here via
+// workspaceMCPWriteTools. Widening it means editing that launcher and this
+// file together.
 
 import (
 	"encoding/json"
@@ -39,12 +39,24 @@ import (
 // Object values like external_directory are boundaries, not tool rules.
 var expectedAsk = []string{
 	"*archive_account*",
+	"*batch_modify_gmail_message_labels*",
 	"*create_account*",
 	"*delete*",
 	"*fix_last*",
 	"*log_text*",
 	"*log_transaction*",
+	"*modify_gmail_message_labels*",
 	"*prune_old*",
+}
+
+// workspaceMCPWriteTools is the external Gmail server's write surface: the two
+// label-modification tools its launcher exposes (--permissions gmail:organize).
+// registeredTools cannot see them — that server is Python — so they are named
+// here for the coverage checks below and pinned against the launcher argv by
+// TestWorkspaceMCPWriteSurfaceStaysNarrow.
+var workspaceMCPWriteTools = []string{
+	"modify_gmail_message_labels",
+	"batch_modify_gmail_message_labels",
 }
 
 // freeTools names every registered tool that runs free by policy. A tool
@@ -231,28 +243,53 @@ func TestEveryToolClassified(t *testing.T) {
 			}
 		}
 		if !hit {
+			for _, tool := range workspaceMCPWriteTools {
+				for _, c := range candidates("workspace-mcp", tool) {
+					if matchGlob(p, c) {
+						hit = true
+					}
+				}
+			}
+		}
+		if !hit {
 			t.Errorf("`ask` pattern %q matches no gated tool (stale, or prompts for a call that runs free)", p)
 		}
 	}
-	t.Logf("classified %d registered tools", n)
+	// The Gmail write tools are the whole reason this file knows about an
+	// external server: each one must be gated, or a mail mutation would run
+	// unprompted.
+	for _, tool := range workspaceMCPWriteTools {
+		if !coveredByAsk(patterns, "workspace-mcp", tool) {
+			t.Errorf("workspace-mcp/%s is not ask-covered — a mail write must prompt", tool)
+		}
+	}
+	t.Logf("classified %d registered tools + %d Gmail write tools", n, len(workspaceMCPWriteTools))
 }
 
-// TestWorkspaceMCPSurfaceStaysReadOnly pins the one server whose tools
+// TestWorkspaceMCPWriteSurfaceStaysNarrow pins the one server whose tools
 // registeredTools cannot see: the external Python `workspace-mcp` (#515).
-// Its narrow, write-free surface is a property of the launcher's argv, so
-// the launcher is the thing under test:
+// Its surface is a property of the launcher's argv, so the launcher is the
+// thing under test:
 //
-//   - read-only Gmail only (`--single-user --read-only --tools gmail
-//     --tool-tier core` over stdio) means no send, delete, draft or label
-//     tool exists, which is why it contributes no `ask` pattern above.
-//   - Enabling a write/send tool therefore requires editing this launcher.
-//     The test fails until the author states the change here and, in the
-//     same commit, adds the matching `ask` rules to opencode.json (and
-//     expectedAsk above).
+//   - `--permissions gmail:organize` requests exactly gmail.readonly +
+//     gmail.labels + gmail.modify: read mail and change labels (read/unread,
+//     archive, trash, custom labels). No compose, send, settings or full-mail
+//     scope is requested, so there is no send, no draft and no permanent
+//     delete — `gmail:organize` is the least level that can mark a message
+//     read.
+//   - `--tool-tier complete` registers the read tools plus the two label
+//     modification tools, and `--disabled-tools` blocks the send/draft/
+//     label-management/filter tools the tier would otherwise include. The
+//     resulting list was verified over MCP stdio: search, message/thread
+//     content, attachments, label list, modify and batch modify.
+//   - Those two write tools carry `ask` rules (expectedAsk and
+//     workspaceMCPWriteTools above). Widening either — a broader permission
+//     level, another tier, or un-blocking send — fails here until the author
+//     states the change in this test and gates the new tools.
 //
 // Only the exec argv is inspected, never the comments around it: comments
 // explain these flags and must not be able to satisfy the test.
-func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
+func TestWorkspaceMCPWriteSurfaceStaysNarrow(t *testing.T) {
 	const launcher = "scripts/workspace-mcp.sh"
 	raw, err := os.ReadFile(launcher)
 	if err != nil {
@@ -312,9 +349,11 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 		`exec`, `"$MCP_BIN"`,
 		"--transport", "stdio",
 		"--single-user",
-		"--read-only",
-		"--tools", "gmail",
-		"--tool-tier", "core",
+		"--permissions", "gmail:organize",
+		"--tool-tier", "complete",
+		"--disabled-tools",
+		"send_gmail_message", "draft_gmail_message",
+		"manage_gmail_label", "manage_gmail_filter",
 	}
 	if len(fields) != len(want) {
 		t.Fatalf("launcher argv = %q, want exactly %q", fields, want)
@@ -322,6 +361,16 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	for i := range want {
 		if fields[i] != want[i] {
 			t.Fatalf("launcher argv = %q, want exactly %q", fields, want)
+		}
+	}
+	if strings.Contains(strings.Join(fields, " "), "--read-only") {
+		t.Error("launcher passes --read-only again, which would disable the label tools this test's `ask` rules gate")
+	}
+	// The two write tools must actually be reachable at this tier: if a future
+	// upstream moves them out of `complete`, the ask rules would gate nothing.
+	for _, tool := range workspaceMCPWriteTools {
+		if strings.Contains(strings.Join(fields, " "), tool) {
+			t.Errorf("%s is blocked by the launcher's own --disabled-tools", tool)
 		}
 	}
 
@@ -393,7 +442,7 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 //     fills MONGODB_URI/MONGODB_DB from the root .env and execs bin/<server>
 //   - workspace-mcp runs ./scripts/workspace-mcp.sh, which reads the three
 //     Google credentials plus the callback-port/token-cache overrides the
-//     same way (pinned by TestWorkspaceMCPSurfaceStaysReadOnly)
+//     same way (pinned by TestWorkspaceMCPWriteSurfaceStaysNarrow)
 //
 // `{env:` must not come back: under T3's empty systemd unit it expands to
 // "", which a launcher's `fill` then treats as unset and replaces anyway —

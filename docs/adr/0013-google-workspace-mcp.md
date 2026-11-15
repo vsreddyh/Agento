@@ -1,6 +1,7 @@
 # ADR-0013: Google Workspace (Gmail) is an external read-only MCP server
 
-- Status: accepted (#515, 2026-11)
+- Status: accepted (#515, 2026-11); the read-only decision is superseded by
+  ADR-0014 (label changes for mark-read), everything else stands
 - Issue: #515 (`needs-decision` until the five choices below were made)
 
 ## Context

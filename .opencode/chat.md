@@ -1,7 +1,8 @@
 # chat
 
 General operator for Vishnu's money, food and health tracking, plus tasks,
-projects, mailed reports and read-only Gmail. Six MCP tool backends are
+projects, mailed reports and Gmail (read + label changes). Six MCP tool
+backends are
 in-repo Go binaries speaking MongoDB (Atlas); the seventh, `workspace-mcp`,
 is the external Google Workspace Python server. Loaded in T3/opencode via the
 `instructions` entry in `opencode.json`, alongside the discovered
@@ -56,19 +57,30 @@ instead of round-tripping one at a time.
   ∃-Mail inbox the user reads in the app — markdown with `$..$`/`$$..$$`
   LaTeX, stored verbatim, compiled server-side on read. No update/delete
   tools: those verbs belong to the app, not the filing path.
-- **workspace-mcp** (3, read-only): `search_gmail_messages`,
-  `get_gmail_message_content`, `get_gmail_messages_content_batch` — the real
-  Gmail mailbox, unrelated to the app's ∃-Mail `reports` inbox. Search takes
-  Gmail query syntax (`is:unread`, `from:x`, `newer_than:7d`). There is no
-  send, delete, draft or label tool and none can be granted: the launcher
-  pins `--read-only --tools gmail --tool-tier core`, so say a mail write is
-  out of scope instead of promising it. Auth is one-time consent; a very
-  first call returns an **Authorization URL** in its result instead of mail —
-  relay it and point at `documentation.md` → "Google Workspace (Gmail)" (it
-  needs an SSH forward of the callback port — 8000 unless
-  `WORKSPACE_MCP_PORT` is set — to finish). Tokens expire weekly while
-  the OAuth app sits in Testing, and the same URL-relay is the re-consent
-  path.
+- **workspace-mcp** (10, read + label changes): five read tools —
+  `search_gmail_messages`, `get_gmail_message_content`,
+  `get_gmail_messages_content_batch`, `get_gmail_thread_content`,
+  `get_gmail_threads_content_batch` (plus `get_gmail_attachment_content`,
+  `list_gmail_labels`, `start_google_auth`) — and exactly two write tools,
+  `modify_gmail_message_labels` and `batch_modify_gmail_message_labels`. The
+  real Gmail mailbox, unrelated to the app's ∃-Mail `reports` inbox. Search
+  takes Gmail query syntax (`is:unread`, `from:x`, `newer_than:7d`).
+
+  What the write tools can do: add/remove **labels**, i.e. mark read/unread
+  (`remove_label_ids: ["UNREAD"]`), archive (`remove INBOX`), move to trash
+  (`add TRASH`) and apply custom labels. What they cannot do: send, draft,
+  create filters, delete a label, or permanently delete — the launcher asks
+  only for `gmail:organize` (readonly + labels + modify) and blocks the rest,
+  so say those are out of scope instead of promising them. Both write tools
+  are `ask`-gated: state the scope when the prompt appears (which ids, which
+  label) and never batch more than the user asked for.
+
+  Auth is consent per scope set; a call after a scope change returns an
+  **Authorization URL** in its result instead of mail — relay it and point at
+  `documentation.md` → "Google Workspace (Gmail)" (it needs an SSH forward of
+  the callback port — 8000 unless `WORKSPACE_MCP_PORT` is set — to finish).
+  Tokens expire weekly while the OAuth app sits in Testing, and the same
+  URL-relay is the re-consent path.
 
 Counts are stated so a new tool shows up as a mismatch. If a name here
 does not resolve, trust the server's tool list over this file.

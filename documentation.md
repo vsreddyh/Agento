@@ -59,13 +59,21 @@ The agent runs on the host, not in a container. T3 discovers `opencode.json` by 
 
 ### Google Workspace (Gmail)
 
-The one non-Go MCP server (#515): [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (MIT), pinned in `scripts/build-workspace-mcp.sh` and installed into the git-ignored `.workspace-mcp/venv`. `scripts/workspace-mcp.sh` launches it over stdio with a deliberately fixed, write-free surface:
+The one non-Go MCP server (#515): [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (MIT), pinned in `scripts/build-workspace-mcp.sh` and installed into the git-ignored `.workspace-mcp/venv`. `scripts/workspace-mcp.sh` launches it over stdio with a deliberately fixed, narrow surface:
 
 ```
---single-user --read-only --tools gmail --tool-tier core
+--single-user --permissions gmail:organize --tool-tier complete
+--disabled-tools send_gmail_message draft_gmail_message manage_gmail_label manage_gmail_filter
 ```
 
-That is **three read tools and nothing else**: `search_gmail_messages`, `get_gmail_message_content`, `get_gmail_messages_content_batch`. `--read-only` requests only read scopes (`gmail.readonly`, `openid`, `email`, `profile`), so there is no send, no delete, no draft and no label mutation to confirm — which is why it contributes no `ask` rule to `opencode.json`. `TestWorkspaceMCPSurfaceStaysReadOnly` (`opencode_perm_test.go`) pins those flags; enabling a write tool means editing the launcher **and** adding matching `ask` rules in the same change. This is a real mailbox surface, unrelated to the app's own ∃-Mail (`reports`).
+`--permissions gmail:organize` asks for exactly three scopes — `gmail.readonly`, `gmail.labels` and `gmail.modify` — which is the least that can mark a message read (`gmail.readonly` cannot). The verified tool list is eight read/utility tools (`search_gmail_messages`, `get_gmail_message_content`, `get_gmail_messages_content_batch`, `get_gmail_thread_content`, `get_gmail_threads_content_batch`, `get_gmail_attachment_content`, `list_gmail_labels`, `start_google_auth`) plus **exactly two write tools**, both label modifications:
+
+- `modify_gmail_message_labels` — add/remove labels on one message
+- `batch_modify_gmail_message_labels` — the same for up to 1000 message ids per call, or per conversation via `thread_ids`, with a read-back that reports what actually changed
+
+What that means in practice: **mark read/unread** (`remove_label_ids: ["UNREAD"]`), **archive** (`remove INBOX`), **move to trash** (`add TRASH`), apply or clear custom labels. What does not exist here: send, draft, filter management, label management and permanent delete — `--disabled-tools` blocks the first four the tier would otherwise register, and the un-requested scopes would refuse them anyway.
+
+Both write tools are `ask`-gated in `opencode.json` (`*modify_gmail_message_labels*`, `*batch_modify_gmail_message_labels*`), so every mail mutation prompts with its scope before it runs. `TestWorkspaceMCPWriteSurfaceStaysNarrow` (`opencode_perm_test.go`) pins the flags, the disabled list and the two gated tools; widening the surface means editing the launcher, the `ask` rules and that test in the same change. This is a real mailbox surface, unrelated to the app's own ∃-Mail (`reports`).
 
 **Where the credentials live**
 
@@ -304,7 +312,7 @@ Upgrading with an existing database (e.g. a separate dev database): deleting the
 2. Add the server to `SERVERS` in `scripts/build-mcps.sh`, and to `mcp.servers` in `opencode.json` as `"command": ["./scripts/mcp-run.sh", "<name>"]` — **no `environment` block**: `mcp-run.sh` fills `MONGODB_URI`/`MONGODB_DB` from the root `.env`. A server that needs any other key gets its own launcher script (the way `scripts/workspace-mcp.sh` does it), not a wider list in the shared `mcp-run.sh` — `TestMCPServersLoadTheirOwnEnv` pins that list to exactly those two keys, because one wrapper serves all six servers. `{env:VAR}` expands to `""` under T3's empty systemd environment and the same test rejects it.
 3. Run `./scripts/build-mcps.sh`, then confirm with `opencode mcp list` from the repo root.
 
-An external (non-Go) server follows the `workspace-mcp` pattern instead: an installer script that pins the upstream version into a git-ignored directory, a launcher script named in `mcp.servers`, its credentials in the root `.env`, and — if it can write anything — `ask` rules plus a pin like `TestWorkspaceMCPSurfaceStaysReadOnly`.
+An external (non-Go) server follows the `workspace-mcp` pattern instead: an installer script that pins the upstream version into a git-ignored directory, a launcher script named in `mcp.servers`, its credentials in the root `.env`, and — if it can write anything — `ask` rules plus a pin like `TestWorkspaceMCPWriteSurfaceStaysNarrow`.
 
 ### Adding a skill
 Put the skill directory containing `SKILL.md` under `.opencode/skills/<name>/` and commit it. T3/opencode discovers that tree; `opencode.json` only needs the `instructions` entry that loads the persona.

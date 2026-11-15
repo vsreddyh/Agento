@@ -18,7 +18,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
                               project-manager,miser-money,cookbook,
                               health-check,reports} ──► MongoDB Atlas
                        └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv
-                              (read-only Gmail)
+                              (Gmail: read + label changes)
 
   Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```
@@ -36,7 +36,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Piece | What it is |
 |---|---|
-| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (read-only Gmail) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and a variable inherited from whatever shell started T3 still reaches a server (beating the `.env` value for the keys a launcher fills) |
+| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (Gmail: read + label changes, no send) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and a variable inherited from whatever shell started T3 still reaches a server (beating the `.env` value for the keys a launcher fills) |
 | `.opencode/chat.md` | The operator persona and per-server rules |
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |
@@ -228,7 +228,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
     ├── retention.sh         # Retention execution wrapper
     ├── build-mcps.sh        # Builds the kept MCP binaries into bin/
     ├── build-workspace-mcp.sh  # Installs the Gmail MCP server into .workspace-mcp/venv
-    ├── workspace-mcp.sh        # Launches it (read-only Gmail) for opencode.json
+    ├── workspace-mcp.sh        # Launches it (Gmail: read + label changes) for opencode.json
     ├── mcp-run.sh           # Launches one built MCP server with .env loaded from the root
     └── sysmon.sh            # Resource metrics monitoring script
 ```

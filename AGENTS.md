@@ -36,14 +36,14 @@ the SAME single compose file against Atlas. There is no agent service in it.
 The agent runs **on the host in T3/opencode**, configured by `opencode.json`
 and `.opencode/`, with the six kept MCP servers built from this repo
 (`./scripts/build-mcps.sh` → `bin/<server>`) reading the same Atlas database,
-plus one external read-only Gmail server (`workspace-mcp`) from a repo-local
+plus one external Gmail server (`workspace-mcp`: read + label changes) from a repo-local
 Python venv.
 
 ```
 Agento (Android) ──► proxy (:8080 compose default — APP_PORT remaps)
                        └─► /api/* + /health → health-api (:8001 compose default — HEALTH_HOST_PORT remaps)
 T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check,reports}
-                       └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv (read-only Gmail)
+                       └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv (Gmail: read + labels)
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired story/resumes checkouts, unmanaged)
 ```
@@ -95,12 +95,16 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   upstream Python server (`taylorwilsdon/google_workspace_mcp`, pinned in
   `scripts/build-workspace-mcp.sh`) in the git-ignored `.workspace-mcp/venv/`,
   launched by `scripts/workspace-mcp.sh` with
-  `--single-user --read-only --tools gmail --tool-tier core`. That is three
-  read tools (`search_gmail_messages`, `get_gmail_message_content`,
-  `get_gmail_messages_content_batch`) and **no write/send/delete surface at
-  all** — do not promise, add or re-enable mail writes without `ask` rules and
-  the matching update to `TestWorkspaceMCPSurfaceStaysReadOnly`, which pins the
-  flags. Creds: `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`/
+  `--single-user --permissions gmail:organize --tool-tier complete` and
+  `--disabled-tools` covering send/draft/label-management/filters. The verified
+  tool list is eight read/utility tools plus **exactly two write tools**,
+  `modify_gmail_message_labels` and `batch_modify_gmail_message_labels` —
+  label changes only: mark read/unread, archive, trash, custom labels. No
+  send, no draft, no filter management and no permanent delete: `gmail:organize`
+  asks only for readonly + labels + modify. Both write tools carry `ask` rules;
+  widening this (a broader permission level, a lower tier block, un-blocking
+  send) needs the matching update to `TestWorkspaceMCPWriteSurfaceStaysNarrow`,
+  which pins the flags. Creds: `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`/
   `USER_GOOGLE_EMAIL` in the root `.env`; refresh tokens in
   `.workspace-mcp/credentials/` (0700). Procedure, 7-day re-consent and the
   headless SSH-forward first run: `documentation.md` → "Google Workspace
@@ -178,10 +182,12 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   are set in `.env` or exported in the environment (the launcher reads the file
   itself, like `mcp-run.sh` does for the two Mongo variables, and an exported
   value wins).
-- The Google Workspace entry is read-only Gmail on purpose: three read tools,
-  `gmail.readonly` scope, no send/delete/draft/label writes. `opencode mcp list`
-  reflects the RUNNING T3 process, so reload the MCP servers (or restart T3)
-  after editing those `.env` keys — a launcher reads `.env` once, when it
-  spawns, and a stale listing keeps showing the old state.
+- The Google Workspace entry is deliberately narrow: `gmail:organize` scopes
+  (readonly + labels + modify) and only the two label tools as writes — no
+  send, draft, filter or permanent-delete surface exists to grant, and both
+  write tools prompt. `opencode mcp list` reflects the RUNNING T3 process, so
+  reload the MCP servers (or restart T3) after editing those `.env` keys — a
+  launcher reads `.env` once, when it spawns, and a stale listing keeps showing
+  the old state.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
 - Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service. The mechanism differs: an **exported** value wins for the MCP launchers (`load_root_env_fill`), while `./scripts/hermes.sh` (compose) and `./scripts/retention.sh`/`./scripts/sysmon.sh` use `load_root_env`, where `.env` wins — see documentation.md → "Development Mode Isolation".
