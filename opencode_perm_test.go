@@ -283,9 +283,9 @@ func TestEveryToolClassified(t *testing.T) {
 //     `gmail:organize` is the least level that can mark a message read.
 //   - `--tool-tier complete` registers the eight read/utility tools plus the
 //     two label modification tools, and `--disabled-tools` blocks the send,
-//     draft and label-management tools the tier would otherwise include
-//     (`list_gmail_filters` is not on that list — the unrequested settings
-//     scope keeps it out).
+//     draft, label-management and filter-management tools the tier would
+//     otherwise include (`list_gmail_filters` is not on that list — the
+//     unrequested settings scope keeps it out).
 //     The resulting list was verified over MCP stdio: search, message and
 //     thread content, attachments, label list, start_google_auth, modify and
 //     batch modify.

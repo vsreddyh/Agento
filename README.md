@@ -81,7 +81,7 @@ and unmanaged.)
 - **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai), for T3/opencode on the host.
 - **Android App Password**: `PASSWORD` (single bearer credential for sync; generate with `openssl rand -hex 32`).
 - **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook/tasks/projects/reports.
-- **Google Workspace (optional)**: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL` from a Google Cloud **Desktop app** OAuth client with the Gmail API enabled. Gmail for the agent — read plus label changes (mark read/unread, archive, trash), no send/draft/filters/permanent-delete; setup and the headless consent steps are in [`documentation.md`](documentation.md#google-workspace-gmail).
+- **Google Workspace (optional)**: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL` from a Google Cloud **Desktop app** OAuth client with the Gmail API enabled. Gmail for the agent — read plus label changes (mark read/unread, archive, trash), no send, draft, filter management, label management or permanent delete; setup and the headless consent steps are in [`documentation.md`](documentation.md#google-workspace-gmail).
 - (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password. Retired with the agent container: every `PI_*` variable and `VPS_SSH_DIR`.)
 
 ### Network & Firewall Ports
