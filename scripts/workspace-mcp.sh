@@ -13,9 +13,10 @@
 #                   gmail.modify, i.e. read mail and change *labels* (read /
 #                   unread, archive, move to trash, custom labels). It does NOT
 #                   request compose, send, settings or the full mail scope, so
-#                   there is no send, no draft and no permanent delete to gate —
-#                   on top of the ask rules opencode.json carries for the two
-#                   write tools. `gmail:organize` is the least level that can
+#                   send, draft, filter management and permanent delete are
+#                   unreachable, and label management is blocked by the flag
+#                   below — on top of the ask rules opencode.json carries for
+#                   the two write tools. `gmail:organize` is the least level that can
 #                   mark a message read; `gmail:readonly` cannot.
 #   --tool-tier complete  the eight read/utility tools (search, message and
 #                   thread content, attachments, label list,

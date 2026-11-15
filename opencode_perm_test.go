@@ -275,9 +275,10 @@ func TestEveryToolClassified(t *testing.T) {
 //     gmail.readonly + gmail.labels + gmail.modify, on top of the base
 //     openid/email/profile — so the token can read mail and change labels
 //     (read/unread, archive, trash, custom labels) and nothing else. No
-//     compose, send, settings or full-mail scope is requested, so send, draft
-//     and permanent delete are unreachable; label *management* needs
-//     gmail.labels, so it is held back by the disabled list alone.
+//     compose, send, settings or full-mail scope is requested, so send, draft,
+//     filter management and permanent delete are unreachable; label
+//     *management* needs gmail.labels, so it is held back by the disabled list
+//     alone.
 //     `gmail:organize` is the least level that can mark a message read.
 //   - `--tool-tier complete` registers the eight read/utility tools plus the
 //     two label modification tools, and `--disabled-tools` blocks the send/
