@@ -260,10 +260,10 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	}
 
 	// opencode.json must still point at the launcher this test pins, or the
-	// pin guards nothing — and its `environment` block must inject nothing
-	// beyond the three credentials. An extra key (`WORKSPACE_MCP_TOOLS`,
-	// `WORKSPACE_MCP_BASE_URI`, `PORT`, ...) would reach the server without
-	// passing through the launcher's scrub below.
+	// pin guards nothing — and it must pass no `environment` at all: the
+	// launcher reads the root .env itself, so any key here (an inherited
+	// `WORKSPACE_MCP_TOOLS`, `WORKSPACE_MCP_BASE_URI`, `PORT`, ...) would
+	// reach the server without passing through the launcher's scrub below.
 	var cfg struct {
 		MCP struct {
 			Servers map[string]struct {
@@ -286,14 +286,13 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	if len(server.Command) != 1 || server.Command[0] != "./"+launcher {
 		t.Fatalf("workspace-mcp command = %q, want [\"./%s\"]", server.Command, launcher)
 	}
-	wantEnv := []string{"GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "USER_GOOGLE_EMAIL"}
 	var gotEnv []string
 	for k := range server.Environment {
 		gotEnv = append(gotEnv, k)
 	}
 	sort.Strings(gotEnv)
-	if strings.Join(gotEnv, ",") != strings.Join(wantEnv, ",") {
-		t.Fatalf("workspace-mcp environment = %q, want exactly %q", gotEnv, wantEnv)
+	if len(gotEnv) != 0 {
+		t.Fatalf("workspace-mcp environment = %q, want none — the launcher reads the root .env itself", gotEnv)
 	}
 
 	var argv []string
@@ -381,4 +380,161 @@ func TestWorkspaceMCPSurfaceStaysReadOnly(t *testing.T) {
 	if !strings.Contains(string(rawInstaller), `WORKSPACE_MCP_VERSION="2.4.2"`) {
 		t.Errorf(`%s must pin WORKSPACE_MCP_VERSION="2.4.2" outright — an override installs an unreviewed upstream behind this launcher's flags`, installer)
 	}
+}
+
+// TestMCPServersLoadTheirOwnEnv pins the launch path, not just the servers.
+// T3/opencode runs from a systemd unit whose environment is empty, so the
+// `{env:MONGODB_URI}` / `{env:MONGODB_DB}` blocks this file used to carry
+// expanded to "" and the six Go servers exited with "MONGODB_URI is not set"
+// (2026-11-14; workspace-mcp reported its Google credentials unset). The repo
+// owns its secrets, so the launcher owns them too:
+//
+//   - each of the six Go servers runs ./scripts/mcp-run.sh <server>, which
+//     fills MONGODB_URI/MONGODB_DB from the root .env and execs bin/<server>
+//   - workspace-mcp runs ./scripts/workspace-mcp.sh, which reads the three
+//     Google credentials plus the callback-port/token-cache overrides the
+//     same way (pinned by TestWorkspaceMCPSurfaceStaysReadOnly)
+//
+// `{env:` must not come back: under T3's empty systemd unit it expands to
+// "", which a launcher's `fill` then treats as unset and replaces anyway —
+// dead weight for the keys it covers, and for a key no launcher covers the
+// empty value is indistinguishable from unset to the Go server: a required
+// key fails loudly, an optional one defaults. The ban is about not bypassing
+// the launcher that reads .env, not about a rescue.
+func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
+	raw, err := os.ReadFile("opencode.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "{env:") {
+		t.Error("opencode.json uses `{env:...}` again — under T3's empty systemd unit it expands to \"\", the launchers fill from .env anyway, and for a key no launcher covers the empty value is indistinguishable from unset (required keys fail loudly, optional ones default); name the launcher instead")
+	}
+
+	var cfg struct {
+		MCP struct {
+			Servers map[string]struct {
+				Command     []string          `json:"command"`
+				Environment map[string]string `json:"environment"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		"cookbook":        {"./scripts/mcp-run.sh", "cookbook"},
+		"health-check":    {"./scripts/mcp-run.sh", "health-check"},
+		"miser-money":     {"./scripts/mcp-run.sh", "miser-money"},
+		"project-manager": {"./scripts/mcp-run.sh", "project-manager"},
+		"reports":         {"./scripts/mcp-run.sh", "reports"},
+		"task-manager":    {"./scripts/mcp-run.sh", "task-manager"},
+		"workspace-mcp":   {"./scripts/workspace-mcp.sh"},
+	}
+	if len(cfg.MCP.Servers) != len(want) {
+		t.Errorf("opencode.json registers %d servers, want %d — a new server needs a .env-reading launcher here too", len(cfg.MCP.Servers), len(want))
+	}
+	for name, cmd := range want {
+		server, ok := cfg.MCP.Servers[name]
+		if !ok {
+			t.Errorf("opencode.json has no `%s` server entry", name)
+			continue
+		}
+		if strings.Join(server.Command, " ") != strings.Join(cmd, " ") {
+			t.Errorf("%s command = %q, want %q", name, server.Command, cmd)
+		}
+		if len(server.Environment) != 0 {
+			t.Errorf("%s passes environment %v — the launcher reads the root .env, and a key here would bypass it", name, server.Environment)
+		}
+	}
+
+	// Both launchers must take their values through the shared loader, and
+	// name only the keys their server needs (fill never unsets, so an
+	// inherited PASSWORD/provider key still passes through `exec`).
+	for _, f := range []string{"scripts/mcp-run.sh", "scripts/workspace-mcp.sh"} {
+		rawScript, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		flat := strings.Join(strings.Fields(strings.ReplaceAll(string(rawScript), "\\\n", " ")), " ")
+		if !strings.Contains(flat, "scripts/lib/common.sh") {
+			t.Errorf("%s does not source scripts/lib/common.sh — the .env must be parsed, never `source`d (a pasted value can contain `$(...)`)", f)
+		}
+		if !strings.Contains(flat, "load_root_env_fill") {
+			t.Errorf("%s does not call load_root_env_fill — the server then depends on the environment T3 does not provide", f)
+		}
+	}
+
+	// Exact token lists, not substrings: `load_root_env_fill MONGODB_URI
+	// MONGODB_DB PASSWORD` contains the substring but hands every one of the
+	// six servers a key none of them needs, so widening either launcher must
+	// fail here.
+	rawRun, err := os.ReadFile("scripts/mcp-run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawWs, err := os.ReadFile("scripts/workspace-mcp.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		file string
+		raw  []byte
+		want []string
+	}{
+		{"scripts/mcp-run.sh", rawRun,
+			[]string{"load_root_env_fill", "MONGODB_URI", "MONGODB_DB"}},
+		{"scripts/workspace-mcp.sh", rawWs,
+			[]string{"load_root_env_fill", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
+				"USER_GOOGLE_EMAIL", "WORKSPACE_MCP_PORT", "WORKSPACE_MCP_CREDENTIALS_DIR"}},
+	} {
+		calls := envFillCalls(tc.raw)
+		if len(calls) != 1 {
+			t.Fatalf("%s has %d load_root_env_fill calls, want exactly 1", tc.file, len(calls))
+		}
+		if strings.Join(calls[0], " ") != strings.Join(tc.want, " ") {
+			t.Errorf("%s loads %q, want exactly %q — widening this leaks keys the server never asked for", tc.file, calls[0], tc.want)
+		}
+	}
+
+	// Same fail-fast discipline as the Gmail launcher: a copied-but-unedited
+	// .env must be caught here, not at Atlas.
+	rawExample, err := os.ReadFile(".env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	placeholder := ""
+	for _, l := range strings.Split(string(rawExample), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(l), "MONGODB_URI="); ok {
+			placeholder = rest
+			break
+		}
+	}
+	if placeholder == "" {
+		t.Fatal(".env.example has no MONGODB_URI= placeholder line")
+	}
+	if !strings.Contains(string(rawRun), placeholder) {
+		t.Errorf("scripts/mcp-run.sh does not reject the .env.example MONGODB_URI placeholder %q — a copied .env would fail at Atlas instead", placeholder)
+	}
+}
+
+// envFillCalls returns the argument list of every load_root_env_fill call in
+// a launcher, joining backslash continuations and ignoring comments.
+func envFillCalls(raw []byte) [][]string {
+	var calls [][]string
+	var logical string
+	for _, l := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		logical += strings.TrimSuffix(trimmed, "\\") + " "
+		if strings.HasSuffix(trimmed, "\\") {
+			continue
+		}
+		if fields := strings.Fields(logical); len(fields) > 0 && fields[0] == "load_root_env_fill" {
+			calls = append(calls, fields)
+		}
+		logical = ""
+	}
+	return calls
 }

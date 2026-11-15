@@ -42,7 +42,8 @@ Python venv.
 ```
 Agento (Android) ──► proxy (:8080 compose default — APP_PORT remaps)
                        └─► /api/* + /health → health-api (:8001 compose default — HEALTH_HOST_PORT remaps)
-T3/opencode (host) ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check,reports}
+T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check,reports}
+                       └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv (read-only Gmail)
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired story/resumes checkouts, unmanaged)
 ```
@@ -81,10 +82,15 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
    `gateway/` config are gone; `gateway/` on disk is untracked runtime state only.
 - Agent: `opencode.json` wires the six kept MCP servers (`task-manager`,
   `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) to
-  `./bin/<server>` with the two Mongo env vars; `.opencode/chat.md` is the
+  `./scripts/mcp-run.sh <server>`, which loads the two Mongo variables from the
+  root `.env` and execs `bin/<server>`; `.opencode/chat.md` is the
   persona loaded through `instructions`, and `.opencode/skills/` holds the
   shared skills. `./scripts/build-mcps.sh` builds the binaries into git-ignored
-  `bin/`.
+  `bin/`. T3 supplies no environment of its own (it runs from a systemd unit),
+  so `{env:VAR}` in `opencode.json` expands to `""` — the launchers read `.env`
+  themselves and `TestMCPServersLoadTheirOwnEnv` pins that. Anything T3 did
+  inherit is still passed through, so start it from a clean shell if that
+  matters.
 - Google Workspace (Gmail), #515: the seventh entry, `workspace-mcp`, is the
   upstream Python server (`taylorwilsdon/google_workspace_mcp`, pinned in
   `scripts/build-workspace-mcp.sh`) in the git-ignored `.workspace-mcp/venv/`,
@@ -150,15 +156,32 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
 - A leftover `hermes-gateway` systemd unit is best-effort stopped by `stop`;
   it is inert on a host that never had one.
 - Build the MCP binaries before launching T3/opencode: `./scripts/build-mcps.sh`
-  writes `bin/<server>`, and `opencode.json` runs them from the repo root — a
-  different cwd breaks every server command. The Gmail server needs its own
+  writes `bin/<server>`, and each `opencode.json` entry runs
+  `./scripts/mcp-run.sh <server>`, which resolves the checkout from its own
+  path (the repo root must still be the cwd so `opencode.json` is discovered).
+  The servers' configuration comes from the root `.env`, not from T3's own
+  environment: T3 is a systemd unit with an empty env (`WorkingDirectory=%h`, no
+  `EnvironmentFile`), so a `{env:VAR}` in `opencode.json` expanded to `""` and
+  the six Go servers exited with "MONGODB_URI is not set" (workspace-mcp
+  reported its Google credentials unset). That is the bug the launchers fixed:
+  they fill from `.env` when the environment has no value, so an empty `{env:}`
+  no longer stops a covered key — which is exactly why `{env:}` stays banned
+  rather than merely broken: for a key no launcher covers, empty is
+  indistinguishable from unset, so a required key fails loudly and an optional
+  one silently takes its default. Read the launchers, not the unit, when a
+  server claims its config is missing. A variable T3 did inherit still passes through
+  the launchers, and for `fill` it wins over `.env`.
+  The Gmail server needs its own
   one-time install: `./scripts/build-workspace-mcp.sh` (init runs it) writes
   `.workspace-mcp/venv`; `scripts/workspace-mcp.sh` then refuses to start until
   `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL`
-  are set in `.env`.
+  are set in `.env` or exported in the environment (the launcher reads the file
+  itself, like `mcp-run.sh` does for the two Mongo variables, and an exported
+  value wins).
 - The Google Workspace entry is read-only Gmail on purpose: three read tools,
   `gmail.readonly` scope, no send/delete/draft/label writes. `opencode mcp list`
-  reflects the RUNNING T3 process, so restart T3 after editing those `.env`
-  keys — the env is captured at start, and a stale listing shows the old state.
+  reflects the RUNNING T3 process, so reload the MCP servers (or restart T3)
+  after editing those `.env` keys — a launcher reads `.env` once, when it
+  spawns, and a stale listing keeps showing the old state.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
-- Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service.
+- Dev isolation = point `MONGODB_URI`/`MONGODB_DB` at a separate throwaway Atlas database — there is no local MongoDB service. The mechanism differs: an **exported** value wins for the MCP launchers (`load_root_env_fill`), while `./scripts/hermes.sh` (compose) and `./scripts/retention.sh`/`./scripts/sysmon.sh` use `load_root_env`, where `.env` wins — see documentation.md → "Development Mode Isolation".
