@@ -22,8 +22,10 @@
 #                   and batch_modify_gmail_message_labels.
 #   --disabled-tools  blocks every other write tool the wrapper would otherwise
 #                   register at this tier: send, draft, label management and
-#                   filters. Belt and braces — the missing scopes would also
-#                   refuse them — but it keeps the tool list honest.
+#                   filters. Belt and braces: the un-requested scopes would
+#                   also refuse send/draft/filters, but label *management*
+#                   needs gmail.labels — which organize grants — so that one
+#                   rests on this list alone.
 #   --single-user   one mailbox, one client: credentials come from the
 #                   credentials directory below, not a per-session mapping.
 #   --transport stdio  matches every other server in this stack (one client).
