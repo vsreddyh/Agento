@@ -154,13 +154,13 @@ export GOOGLE_OAUTH_REDIRECT_URI="http://localhost:$WORKSPACE_MCP_PORT/oauth2cal
 export OAUTHLIB_INSECURE_TRANSPORT=1
 
 # Scrub settings that could widen what is documented here, so a stray shell
-# variable cannot contradict this launcher. Two kinds of knob are involved:
-# WORKSPACE_MCP_TOOLS and WORKSPACE_MCP_READ_ONLY have NO flag below (we pass
-# --permissions instead), so this `unset` is the only thing stopping an
-# exported value from widening the surface; PERMISSIONS/TOOL_TIER/DISABLED_TOOLS
-# are passed as flags, and unsetting their env keeps the two out of conflict.
-# The bind host and external URL are env-only too, and the documentation makes
-# a loopback-only claim.
+# variable cannot contradict this launcher. WORKSPACE_MCP_PERMISSIONS,
+# TOOL_TIER and DISABLED_TOOLS are also passed as flags, so unsetting the env
+# keeps the two out of conflict. WORKSPACE_MCP_TOOLS and WORKSPACE_MCP_READ_ONLY
+# are ignored by 2.4.2 whenever --permissions is present (it warns and drops
+# them), and the unset means they are never even considered. The bind host and
+# external URL are env-only and not flag-guarded, which is why they are scrubbed
+# too: the documentation makes a loopback-only claim.
 # WORKSPACE_MCP_HTTP_PORT is env-only too: in stdio mode it adds a second,
 # unauthenticated loopback HTTP listener serving the same tools.
 unset WORKSPACE_MCP_HOST WORKSPACE_MCP_BASE_URI WORKSPACE_EXTERNAL_URL
