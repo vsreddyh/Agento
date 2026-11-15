@@ -271,12 +271,14 @@ func TestEveryToolClassified(t *testing.T) {
 // Its surface is a property of the launcher's argv, so the launcher is the
 // thing under test:
 //
-//   - `--permissions gmail:organize` requests exactly gmail.readonly +
-//     gmail.labels + gmail.modify: read mail and change labels (read/unread,
-//     archive, trash, custom labels). No compose, send, settings or full-mail
-//     scope is requested, so there is no send, no draft and no permanent
-//     delete — `gmail:organize` is the least level that can mark a message
-//     read.
+//   - `--permissions gmail:organize` adds exactly three Gmail scopes —
+//     gmail.readonly + gmail.labels + gmail.modify, on top of the base
+//     openid/email/profile — so the token can read mail and change labels
+//     (read/unread, archive, trash, custom labels) and nothing else. No
+//     compose, send, settings or full-mail scope is requested, so send, draft
+//     and permanent delete are unreachable; label *management* needs
+//     gmail.labels, so it is held back by the disabled list alone.
+//     `gmail:organize` is the least level that can mark a message read.
 //   - `--tool-tier complete` registers the read tools plus the two label
 //     modification tools, and `--disabled-tools` blocks the send/draft/
 //     label-management/filter tools the tier would otherwise include. The

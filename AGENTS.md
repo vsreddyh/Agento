@@ -100,8 +100,9 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   tool list is eight read/utility tools plus **exactly two write tools**,
   `modify_gmail_message_labels` and `batch_modify_gmail_message_labels` —
   label changes only: mark read/unread, archive, trash, custom labels. No
-  send, no draft, no filter management and no permanent delete: `gmail:organize`
-  asks only for readonly + labels + modify. Both write tools carry `ask` rules;
+  send, no draft, no filter management, no label management and no permanent
+  delete: `gmail:organize` asks only for readonly + labels + modify (label
+  management rests on the disabled-tools list, which is why it is pinned). Both write tools carry `ask` rules;
   widening this (a broader permission level, a lower tier block, un-blocking
   send) needs the matching update to `TestWorkspaceMCPWriteSurfaceStaysNarrow`,
   which pins the flags. Creds: `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`/

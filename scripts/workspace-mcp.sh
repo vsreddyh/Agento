@@ -17,9 +17,10 @@
 #                   on top of the ask rules opencode.json carries for the two
 #                   write tools. `gmail:organize` is the least level that can
 #                   mark a message read; `gmail:readonly` cannot.
-#   --tool-tier complete  the read tools (search, message/thread content,
-#                   attachments, label list) plus modify_gmail_message_labels
-#                   and batch_modify_gmail_message_labels.
+#   --tool-tier complete  the eight read/utility tools (search, message and
+#                   thread content, attachments, label list,
+#                   start_google_auth) plus modify_gmail_message_labels and
+#                   batch_modify_gmail_message_labels.
 #   --disabled-tools  blocks every other write tool the wrapper would otherwise
 #                   register at this tier: send, draft, label management and
 #                   filters. Belt and braces: the un-requested scopes would
