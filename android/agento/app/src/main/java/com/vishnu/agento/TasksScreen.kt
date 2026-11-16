@@ -141,6 +141,10 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var draggingId by remember { mutableStateOf<String?>(null) }
     var dragDelta by remember { mutableFloatStateOf(0f) }
     var dragMoved by remember { mutableStateOf(false) }
+    // Where the last successful swap put the dragged row: the drop replays
+    // that relation onto the server's complete section order.
+    var dragTargetId by remember { mutableStateOf<String?>(null) }
+    var dragAfterTarget by remember { mutableStateOf(false) }
 
     fun fail(e: Throwable) {
         toasts.toast(serverDetail(e.message ?: e.javaClass.simpleName), ToastKind.Error)
@@ -272,16 +276,11 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             toast("Sort by Manual to reorder projects")
             return
         }
-        // Reorder needs the complete section; past the server's 500-row cap
-        // the board we hold may be truncated, so refuse instead of sending
-        // a partial list the server would reject.
-        if (projects.size >= 500) {
-            toast("Board too large to reorder (500-row limit)")
-            return
-        }
         draggingId = id
         dragDelta = 0f
         dragMoved = false
+        dragTargetId = null
+        dragAfterTarget = false
     }
 
     fun dragMove(dy: Float) {
@@ -312,6 +311,8 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         next.add(to, id)
         manualOrder = next
         dragMoved = true
+        dragTargetId = targetId
+        dragAfterTarget = to > from
         // Keep the card under the finger: after the move its layout slot is
         // the target's old slot (moving up) or the target's old bottom
         // minus our height (moving down).
@@ -330,13 +331,34 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         if (!dragMoved) return
         dragMoved = false
         val status = projects.firstOrNull { it.id == id }?.let { normalizeStatus(it.status) } ?: return
-        val ids = manualOrder.filter { pid ->
+        val targetId = dragTargetId
+        val afterTarget = dragAfterTarget
+        val localIds = manualOrder.filter { pid ->
             projects.firstOrNull { it.id == pid }
                 ?.let { normalizeStatus(it.status) == status } == true
         }
-        if (ids.size < 2) return
+        if (localIds.size < 2) return
         busy = true
         scope.launch {
+            // Reorder needs the complete section and the loaded board is
+            // capped (500), so fetch this section directly and replay the
+            // local move on the server order. A section over the cap still
+            // fails server-side (the server refuses a partial list) and
+            // surfaces as a toast instead of silently reordering.
+            val base = api.list(status, limit = 500).getOrNull()?.map { it.id } ?: localIds
+            val ids = base.toMutableList()
+            val movedFrom = ids.indexOf(id)
+            if (targetId != null && movedFrom >= 0 && targetId != id) {
+                ids.removeAt(movedFrom)
+                val targetNow = ids.indexOf(targetId)
+                if (targetNow >= 0) {
+                    ids.add(if (afterTarget) targetNow + 1 else targetNow, id)
+                } else {
+                    // Target vanished from the server's section: the local
+                    // order is the only remaining hint.
+                    ids.add(id)
+                }
+            }
             api.reorder(status, ids).fold(
                 onSuccess = { refreshTick++ },
                 onFailure = { e ->

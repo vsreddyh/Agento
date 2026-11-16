@@ -208,8 +208,8 @@ func TestManualOrderAndReorder(t *testing.T) {
 	}
 }
 
-// Rows written before #519 have no position and must sort after positioned
-// rows instead of leading the board.
+// A row with no position (a pre-#519 write that lands after the startup
+// backfill) must sort after positioned rows, never lead the board.
 func TestLegacyRowsWithoutPositionSortLast(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -290,5 +290,64 @@ func TestStatusChangeReslotsToEnd(t *testing.T) {
 	}
 	if got := projectIDs(rows); !reflect.DeepEqual(got, []string{first["id"].(string), id}) {
 		t.Fatalf("status change must append: got %v", got)
+	}
+}
+
+// #519 review: pre-#519 rows are backfilled so a later create appends after
+// them instead of jumping above them, and the backfill is idempotent.
+func TestBackfillPositionsSlotsLegacyRowsLast(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	positioned, err := s.Create(ctx, "positioned", "Todo", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	now := time.Now().UTC()
+	insert := func(name string, age time.Duration) string {
+		ts := primitive.NewDateTimeFromTime(now.Add(-age))
+		res, err := s.projects.InsertOne(ctx, bson.M{
+			"name": name, "status": "Todo", "note": "",
+			"createdAt": ts, "updatedAt": ts,
+		})
+		if err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+		return res.InsertedID.(primitive.ObjectID).Hex()
+	}
+	newer := insert("legacy newer", time.Hour)
+	older := insert("legacy older", 2*time.Hour)
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	rows, err := s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := []string{positioned["id"].(string), newer, older}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, want) {
+		t.Fatalf("backfilled order: got %v, want %v", got, want)
+	}
+	// A create now lands after every backfilled row.
+	appended, err := s.Create(ctx, "appended", "Todo", "")
+	if err != nil {
+		t.Fatalf("Create after backfill: %v", err)
+	}
+	rows, err = s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List after create: %v", err)
+	}
+	if got := projectIDs(rows); len(got) != 4 || got[3] != appended["id"] {
+		t.Fatalf("create must append after legacy rows: got %v", got)
+	}
+	// Idempotent: a second run keeps the assigned order.
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema again: %v", err)
+	}
+	again, err := s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List after second backfill: %v", err)
+	}
+	if got := projectIDs(again); !reflect.DeepEqual(got, projectIDs(rows)) {
+		t.Fatalf("backfill must be idempotent: got %v", got)
 	}
 }

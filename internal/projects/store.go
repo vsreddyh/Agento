@@ -81,15 +81,18 @@ func FromEnv() (*Store, error) {
 	return New(uri, db)
 }
 
-// EnsureSchema creates the query indexes (idempotent). No TTL: projects
-// are permanent.
+// EnsureSchema creates the query indexes (idempotent) and backfills
+// positions for pre-#519 rows. No TTL: projects are permanent.
 func (s *Store) EnsureSchema(ctx context.Context) error {
 	_, err := s.projects.Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
 		{Keys: bson.D{{Key: "status", Value: 1}}, Options: options.Index().SetName("status_1")},
 		{Keys: bson.D{{Key: "updatedAt", Value: -1}}, Options: options.Index().SetName("updatedAt_-1")},
 		{Keys: bson.D{{Key: "position", Value: 1}}, Options: options.Index().SetName("position_1")},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return s.backfillPositions(ctx)
 }
 
 // CheckStatus rejects values outside the fixed set (empty = default Todo).
@@ -152,10 +155,9 @@ func (s *Store) Create(ctx context.Context, name, status, note string) (map[stri
 	return toDoc(doc), nil
 }
 
-// nextPosition returns one step past the current highest position (1000 on
-// an empty board). Two concurrent creates can pick the same value; the
-// updatedAt tiebreak keeps the list deterministic until the next reorder.
-func (s *Store) nextPosition(ctx context.Context) (int64, error) {
+// highestPosition returns the current maximum position (0 on an empty
+// board).
+func (s *Store) highestPosition(ctx context.Context) (int64, error) {
 	var last struct {
 		Position int64 `bson:"position"`
 	}
@@ -168,16 +170,71 @@ func (s *Store) nextPosition(ctx context.Context) (int64, error) {
 	if err != nil && err != mongoDrv.ErrNoDocuments {
 		return 0, err
 	}
-	return last.Position + positionStep, nil
+	return last.Position, nil
+}
+
+// nextPosition returns one step past the current highest position (1000 on
+// an empty board). Two concurrent creates can pick the same value; the
+// updatedAt tiebreak keeps the list deterministic until the next reorder.
+func (s *Store) nextPosition(ctx context.Context) (int64, error) {
+	max, err := s.highestPosition(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return max + positionStep, nil
+}
+
+// backfillPositions slots rows written before #519 after every positioned
+// row, in their previous visible order (newest first). Without it a new
+// project would jump above the legacy rows in its section instead of
+// appending. No-op once every row has a position; idempotent.
+func (s *Store) backfillPositions(ctx context.Context) error {
+	cur, err := s.projects.Find(ctx,
+		bson.M{"position": bson.M{"$exists": false}},
+		options.Find().
+			SetSort(bson.D{{Key: "updatedAt", Value: -1}}).
+			SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	defer cur.Close(ctx)
+	var ids []primitive.ObjectID
+	for cur.Next(ctx) {
+		var doc struct {
+			ID primitive.ObjectID `bson:"_id"`
+		}
+		if err := cur.Decode(&doc); err != nil {
+			return err
+		}
+		ids = append(ids, doc.ID)
+	}
+	if err := cur.Err(); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	base, err := s.highestPosition(ctx)
+	if err != nil {
+		return err
+	}
+	for i, oid := range ids {
+		if _, err := s.projects.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{
+			"$set": bson.M{"position": base + int64(i+1)*positionStep},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // List returns projects filtered by status ("" or "all" = everything) with
 // optional case-insensitive name/note search, in the board order the app
 // renders: status rank (Ongoing, Testing, Blocked, Paused, Todo, Done),
-// then position ascending, then most recently updated. Rows written before
-// #519 have no position and sort after every positioned row in their
-// section. limit caps rows after ordering: <=0 defaults to DefaultLimit,
-// above MaxLimit clamps down.
+// then position ascending, then most recently updated. A row with no
+// position (only reachable mid-backfill) sorts after every positioned row
+// in its section. limit caps rows after ordering: <=0 defaults to
+// DefaultLimit, above MaxLimit clamps down.
 func (s *Store) List(ctx context.Context, status, search string, limit int) ([]map[string]any, error) {
 	filt := bson.M{}
 	if status = strings.TrimSpace(status); status != "" && !strings.EqualFold(status, "all") {

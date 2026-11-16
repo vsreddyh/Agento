@@ -29,8 +29,9 @@ app renders as the end of their status section; a status change re-slots the
 row the same way, so it appends to the new section instead of inheriting the
 old slot. `list_projects` returns the board order the phone shows: status
 rank (Ongoing, Testing, Blocked, Paused, Todo, Done), then `position`, then
-newest. Rows created before #519 have no `position` and sort after every
-positioned row in their section.
+newest. Rows written before #519 are backfilled with positions at startup
+(`EnsureSchema`), after every already-positioned row and in their previous
+newest-first order, so the board never has an unpositioned tail.
 
 ### Key invariants
 
