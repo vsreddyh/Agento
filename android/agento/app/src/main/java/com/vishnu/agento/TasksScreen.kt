@@ -272,6 +272,13 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             toast("Sort by Manual to reorder projects")
             return
         }
+        // Reorder needs the complete section; past the server's 500-row cap
+        // the board we hold may be truncated, so refuse instead of sending
+        // a partial list the server would reject.
+        if (projects.size >= 500) {
+            toast("Board too large to reorder (500-row limit)")
+            return
+        }
         draggingId = id
         dragDelta = 0f
         dragMoved = false

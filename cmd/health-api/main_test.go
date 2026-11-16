@@ -437,4 +437,13 @@ func TestProjectReorderGuard(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("reorder route: got %d (%s)", w.Code, w.Body.String())
 	}
+	// The trailing-slash form must hit the same handler, not the item
+	// handler (which would treat "reorder" as a project id).
+	req = httptest.NewRequest(http.MethodPost, "/api/projects/reorder/", strings.NewReader(`{"status":"Todo"}`))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("reorder trailing slash: got %d (%s)", w.Code, w.Body.String())
+	}
 }

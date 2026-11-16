@@ -175,6 +175,12 @@ func projectItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
 		return
 	}
+	// /api/projects/reorder/ normalizes to the id "reorder"; it is the
+	// collection verb, not a project.
+	if parts[0] == "reorder" {
+		reorderProjects(w, r)
+		return
+	}
 	id := parts[0]
 	switch r.Method {
 	case http.MethodGet:
@@ -324,7 +330,8 @@ func projectsRoot(w http.ResponseWriter, r *http.Request) {
 func registerProjects(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects", projectsRoot)
 	// Exact pattern wins over the /api/projects/ subtree: reorder is a
-	// collection verb, never a project id.
+	// collection verb, never a project id. projectItem also dispatches the
+	// trailing-slash form, which lands there as the id "reorder".
 	mux.HandleFunc("/api/projects/reorder", reorderProjects)
 	mux.HandleFunc("/api/projects/", projectItem)
 }
