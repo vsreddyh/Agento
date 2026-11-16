@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.0.0]
+- **BREAKING: Blocked status removed (#527).** The project board has five
+  statuses again — Ongoing → Testing → Paused → Todo → Done. Rows that were
+  `Blocked` read as `Paused` (legacy `blocked` / `block` / `stuck` /
+  `on hold` normalize to `Paused`), and the server rejects `Blocked` on
+  create/update/list instead of storing it.
+
 ## [8.1.0]
 - **Projects board rework (#519).** Statuses are now collapsible sections
   (Ongoing → Testing → Blocked → Paused → Todo → Done) instead of a filter

@@ -22,7 +22,7 @@ internal const val PROJECTS_SHAPE_ERROR =
 
 /** One project row from the shared `projects` collection, served by
  * health-api (`/api/projects`) and managed by the agent over the
- * project-manager MCP. Status is one of Todo/Ongoing/Testing/Blocked/Paused/Done. */
+ * project-manager MCP. Status is one of Todo/Ongoing/Testing/Paused/Done. */
 data class ServerProject(
     val id: String = "",
     val name: String = "",
@@ -174,7 +174,7 @@ class ProjectsApi(context: Context) {
 
     private fun password(): String = ServerEndpoint.password(prefs)
 
-    /** Lists projects by status (`Todo|Ongoing|Testing|Blocked|Paused|Done|all`, default
+    /** Lists projects by status (`Todo|Ongoing|Testing|Paused|Done|all`, default
      * all); unknown statuses fail fast. `search` matches name/note. `limit`
      * caps rows (server default 200, max 500). */
     suspend fun list(status: String = "all", search: String = "", limit: Int = 200): Result<List<ServerProject>> =
