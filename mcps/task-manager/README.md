@@ -13,8 +13,8 @@ store, same validation — see `cmd/health-api/main.go`).
 | `list_tasks` | List by state open/done/all, overdue-only, or search. Every argument is optional (state=open, limit=200) |
 | `get_task` | Fetch one task by id |
 | `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and repeat_rule `""` with no structured key clears the whole rule (one-shot) |
-| `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge; always reports `rollover`. A rollover that cannot be minted aborts the completion (task stays open, error names the field) |
-| `skip_task` | Skip the occurrence without claiming the work was done (retained 3 days like a completion; `reopen_task` restores it); structured repeats roll over server-side like `complete_task` (same abort rule) |
+| `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge; always reports `rollover`. A rollover that cannot be minted aborts the completion where transactions are available (task stays open, error names the field); without transactions it succeeds with `rollover: failed` + `needs_attention` |
+| `skip_task` | Skip the occurrence without claiming the work was done (retained 3 days like a completion; `reopen_task` restores it); structured repeats roll over server-side like `complete_task` (same abort rule — and same no-transaction legacy) |
 | `reopen_task` | Reopen a completed or skipped task (cancels expiry) |
 | `delete_task` | Permanently delete |
 | `duplicate_task` | Copy a task 1:1 into a new open task (fresh id, no completion/skip marker, no rollover link) — the postpone primitive: duplicate, clear the copy's repeat, `skip_task` the original, move the copy |

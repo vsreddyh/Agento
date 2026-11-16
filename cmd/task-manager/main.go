@@ -466,7 +466,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
-		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, call skip_task instead. A STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over: the completion and the next occurrence commit atomically and `next` is returned — do not create it yourself. A rollover that cannot be minted ABORTS the completion (the task stays open and the error names the field — fix it and retry). A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
+		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, call skip_task instead. A STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over: the completion and the next occurrence commit atomically and `next` is returned — do not create it yourself. A rollover that cannot be minted ABORTS the completion where transactions are available (the task stays open and the error names the field — fix it and retry); without transactions it succeeds with `rollover: failed` + `needs_attention` on the done task. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, in.ID)
 			if err != nil {
@@ -501,7 +501,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
-		Description: "Skip the current occurrence WITHOUT claiming the work was done (retained 3 days like a completion, then auto-deleted; `reopen_task` restores it). Call when the work did NOT happen: a STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over atomically like complete_task and the next occurrence is returned as `next` — do not create it yourself (a rollover that cannot be minted aborts the skip, the task stays open). A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task the same way as after a custom completion."},
+		Description: "Skip the current occurrence WITHOUT claiming the work was done (retained 3 days like a completion, then auto-deleted; `reopen_task` restores it). Call when the work did NOT happen: a STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over atomically like complete_task and the next occurrence is returned as `next` — do not create it yourself (a rollover that cannot be minted aborts the skip where transactions are available — the task stays open; without transactions it succeeds with `rollover: failed` + `needs_attention`). A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task the same way as after a custom completion."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, in.ID, in.Reason)
 			if err != nil {
