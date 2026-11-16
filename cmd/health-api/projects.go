@@ -18,7 +18,7 @@ import (
 
 // listProjects serves the app's Projects screen: the user's projects from
 // the shared `projects` collection (the same rows the agent manages over
-// the project-manager MCP). `?status=Todo|Ongoing|Testing|Blocked|Paused|Done|all`
+// the project-manager MCP). `?status=Todo|Ongoing|Testing|Paused|Done|all`
 // (default all), `?search=` matches name/note, `?limit=` caps rows
 // (default 200, max 500).
 func listProjects(w http.ResponseWriter, r *http.Request) {
@@ -175,10 +175,14 @@ func projectItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
 		return
 	}
-	// /api/projects/reorder/ normalizes to the id "reorder"; it is the
-	// collection verb, not a project.
+	// /api/projects/reorder/ and /api/projects/move/ normalize to the ids
+	// "reorder" and "move"; they are the collection verbs, not projects.
 	if parts[0] == "reorder" {
 		reorderProjects(w, r)
+		return
+	}
+	if parts[0] == "move" {
+		moveProjects(w, r)
 		return
 	}
 	id := parts[0]
@@ -325,13 +329,70 @@ func projectsRoot(w http.ResponseWriter, r *http.Request) {
 	listProjects(w, r)
 }
 
+// moveProjects relocates one project inside its status section (#527):
+// body {"status":"Todo","id":"<id>","before":"<anchor>"} or
+// {"status":"Todo","id":"<id>","after":"<anchor>"} — exactly one anchor.
+// Unlike reorder it never needs the whole section, so sections over the
+// 500-row cap stay movable. updatedAt is untouched, like reorder.
+func moveProjects(w http.ResponseWriter, r *http.Request) {
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "/api/projects/move accepts POST"})
+		return
+	}
+	fields, ok := decodeProjectBody(w, r)
+	if !ok {
+		return
+	}
+	// Like reorder, move has no sensible default section: an omitted or
+	// typo'd status must 422, never silently move inside Todo.
+	status, _ := fields["status"].(string)
+	if strings.TrimSpace(status) == "" {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "status is required"})
+		return
+	}
+	id, _ := fields["id"].(string)
+	if strings.TrimSpace(id) == "" {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "id is required"})
+		return
+	}
+	before, _ := fields["before"].(string)
+	after, _ := fields["after"].(string)
+	if (strings.TrimSpace(before) == "") == (strings.TrimSpace(after) == "") {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "exactly one of before/after is required"})
+		return
+	}
+	store, ok := projectStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	anchor := before
+	isAfter := false
+	if strings.TrimSpace(after) != "" {
+		anchor = after
+		isAfter = true
+	}
+	if err := store.Move(ctx, status, id, anchor, isAfter); err != nil {
+		writeProjectErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, bson.M{"ok": true})
+}
+
 // registerProjects wires this domain's routes. One function per file so main stays a
 // list of domains, not a list of paths (#171).
 func registerProjects(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects", projectsRoot)
-	// Exact pattern wins over the /api/projects/ subtree: reorder is a
-	// collection verb, never a project id. projectItem also dispatches the
-	// trailing-slash form, which lands there as the id "reorder".
+	// Exact patterns win over the /api/projects/ subtree: reorder and move
+	// are collection verbs, never project ids. projectItem also dispatches
+	// the trailing-slash forms, which land there as those ids.
 	mux.HandleFunc("/api/projects/reorder", reorderProjects)
+	mux.HandleFunc("/api/projects/move", moveProjects)
 	mux.HandleFunc("/api/projects/", projectItem)
 }

@@ -447,3 +447,60 @@ func TestProjectReorderGuard(t *testing.T) {
 		t.Fatalf("reorder trailing slash: got %d (%s)", w.Code, w.Body.String())
 	}
 }
+
+// #527 move: single-row verb, guarded before any MongoDB touch.
+func TestProjectMoveGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// No token → 401.
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/move", strings.NewReader(`{"status":"Todo","id":"a","before":"b"}`))
+	w := httptest.NewRecorder()
+	moveProjects(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token: got %d", w.Code)
+	}
+	// Wrong method names the route with Allow, after auth.
+	req = httptest.NewRequest(http.MethodGet, "/api/projects/move", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	moveProjects(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get: got %d (%s), want 405", w.Code, w.Body.String())
+	}
+	if allow := w.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow: got %q, want POST", allow)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "/api/projects/move accepts POST") {
+		t.Fatalf("405 must name the route, got %s", body)
+	}
+	// Malformed bodies and anchor/shape errors fail before the store opens.
+	for _, body := range []string{
+		`{oops`,
+		`{"status":"Todo","id":"a"}`,
+		`{"status":"Todo","before":"b"}`,
+		`{"status":"  ","id":"a","before":"b"}`,
+		`{"status":"Todo","id":"  ","before":"b"}`,
+		`{"status":"Todo","id":"a","before":"b","after":"c"}`,
+		`{"status":"Todo","id":"a","before":" "}`,
+	} {
+		req = httptest.NewRequest(http.MethodPost, "/api/projects/move", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w = httptest.NewRecorder()
+		moveProjects(w, req)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: got %d (%s)", body, w.Code, w.Body.String())
+		}
+	}
+	// The exact route wins over the /api/projects/ item handler, and the
+	// trailing-slash form hits the same handler.
+	mux := http.NewServeMux()
+	registerProjects(mux)
+	for _, target := range []string{"/api/projects/move", "/api/projects/move/"} {
+		req = httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"status":"Todo","id":"a"}`))
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("move route %s: got %d (%s)", target, w.Code, w.Body.String())
+		}
+	}
+}

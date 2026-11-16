@@ -7,6 +7,7 @@
 //	mongo insert <collection> <doc-json>
 //	mongo insert-many <collection> <docs-json-array>
 //	mongo upsert <collection> <filter-json> <update-json>
+//	mongo update <collection> <filter-json> <set-json>
 //	mongo delete <collection> <filter-json>
 //	mongo drop <collection>
 //	mongo aggregate <collection> <pipeline-json>
@@ -64,7 +65,7 @@ func stringifyIDs(docs []bson.M) {
 
 func run() int {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: mongo <get|count|insert|insert-many|upsert|delete|drop|aggregate> <collection> [json...]")
+		fmt.Fprintln(os.Stderr, "usage: mongo <get|count|insert|insert-many|upsert|update|delete|drop|aggregate> <collection> [json...]")
 		return 2
 	}
 	cmd, collection, args := os.Args[1], os.Args[2], os.Args[3:]
@@ -200,6 +201,32 @@ func run() int {
 			upserted = mongo.IDString(res.UpsertedID)
 		}
 		return out(bson.M{"matched": res.MatchedCount, "upserted": upserted})
+
+	case "update":
+		if len(args) < 2 {
+			return fail("update requires <filter-json> <set-json>", 2)
+		}
+		fv, code := loadJSON(args[0])
+		if code != 0 {
+			return code
+		}
+		uv, code := loadJSON(args[1])
+		if code != 0 {
+			return code
+		}
+		fm, ok := toDoc(fv)
+		if !ok {
+			return fail("filter must be a JSON object", 3)
+		}
+		um, ok := toDoc(uv)
+		if !ok {
+			return fail("set must be a JSON object", 3)
+		}
+		res, err := col.UpdateMany(ctx, fm, bson.M{"$set": um})
+		if err != nil {
+			return fail(err.Error(), 1)
+		}
+		return out(bson.M{"matched": res.MatchedCount, "modified": res.ModifiedCount})
 
 	case "delete":
 		if len(args) < 1 {

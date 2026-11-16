@@ -1,7 +1,7 @@
 // Command project-manager is the project board MCP server.
 //
 // Storage: MongoDB (projects collection). One doc per project with name,
-// status (Todo | Ongoing | Testing | Blocked | Paused | Done), note,
+// status (Todo | Ongoing | Testing | Paused | Done), note,
 // position (manual board order), createdAt, updatedAt.
 // Projects are permanent (no TTL) and shared with the app's Projects tab
 // over /api/projects (see cmd/health-api/projects.go).
@@ -82,7 +82,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "project-manager", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_project",
-		Description: "Create a project. name required; status Todo (default) | Ongoing | Testing | Blocked | Paused | Done; note free-form. New projects append to the end of their status section."},
+		Description: "Create a project. name required; status Todo (default) | Ongoing | Testing | Paused | Done; note free-form. New projects append to the end of their status section."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Create(ctx, in.Name, in.Status, in.Note)
 			if err != nil {
@@ -92,7 +92,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_projects",
-		Description: "List projects in board order (status, then manual position). status Todo | Ongoing | Testing | Blocked | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
+		Description: "List projects in board order (status, then manual position). status Todo | Ongoing | Testing | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listProjectsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.List(ctx, in.Status, in.Search, in.Limit)
 			if err != nil {
