@@ -6,7 +6,15 @@
 //	mongo count <collection> [filter-json]
 //	mongo insert <collection> <doc-json>
 //	mongo insert-many <collection> <docs-json-array>
-//	mongo upsert <collection> <filter-json> <update-json>
+//	mongo upsert <collection> <filter-json> <set-json>
+//	(upserts ONE doc: UpdateOne with $set, creating it when absent — not a
+//	migration verb; see update for many-row rewrites)
+//	mongo update <collection> <filter-json> <set-json>
+//	(updates every match: UpdateMany with $set — the second arg is plain
+//	fields, NOT a full update doc, so '{"status":"Paused"}', never
+//	'{"$set":{"status":"Paused"}}'; the same plain-fields rule holds for
+//	upsert. Migration example:
+//	mongo update projects '{"status":"Blocked"}' '{"status":"Paused"}')
 //	mongo delete <collection> <filter-json>
 //	mongo drop <collection>
 //	mongo aggregate <collection> <pipeline-json>
@@ -62,9 +70,21 @@ func stringifyIDs(docs []bson.M) {
 	}
 }
 
+// dollarKey reports a top-level operator key ($set, $inc, ...) in a doc
+// that must hold plain fields: update/upsert wrap the doc in $set
+// themselves, so an operator key here would double-wrap into garbage.
+func dollarKey(doc bson.M) string {
+	for k := range doc {
+		if strings.HasPrefix(k, "$") {
+			return k
+		}
+	}
+	return ""
+}
+
 func run() int {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: mongo <get|count|insert|insert-many|upsert|delete|drop|aggregate> <collection> [json...]")
+		fmt.Fprintln(os.Stderr, "usage: mongo <get|count|insert|insert-many|upsert|update|delete|drop|aggregate> <collection> [json...]")
 		return 2
 	}
 	cmd, collection, args := os.Args[1], os.Args[2], os.Args[3:]
@@ -173,7 +193,7 @@ func run() int {
 
 	case "upsert":
 		if len(args) < 2 {
-			return fail("upsert requires <filter-json> <update-json>", 2)
+			return fail("upsert requires <filter-json> <set-json>", 2)
 		}
 		fv, code := loadJSON(args[0])
 		if code != 0 {
@@ -189,7 +209,10 @@ func run() int {
 		}
 		um, ok := toDoc(uv)
 		if !ok {
-			return fail("update must be a JSON object", 3)
+			return fail("set must be a JSON object", 3)
+		}
+		if bad := dollarKey(um); bad != "" {
+			return fail("upsert takes plain fields (got operator key '"+bad+"')", 3)
 		}
 		res, err := col.UpdateOne(ctx, fm, bson.M{"$set": um}, options.Update().SetUpsert(true))
 		if err != nil {
@@ -200,6 +223,35 @@ func run() int {
 			upserted = mongo.IDString(res.UpsertedID)
 		}
 		return out(bson.M{"matched": res.MatchedCount, "upserted": upserted})
+
+	case "update":
+		if len(args) < 2 {
+			return fail("update requires <filter-json> <set-json>", 2)
+		}
+		fv, code := loadJSON(args[0])
+		if code != 0 {
+			return code
+		}
+		uv, code := loadJSON(args[1])
+		if code != 0 {
+			return code
+		}
+		fm, ok := toDoc(fv)
+		if !ok {
+			return fail("filter must be a JSON object", 3)
+		}
+		um, ok := toDoc(uv)
+		if !ok {
+			return fail("set must be a JSON object", 3)
+		}
+		if bad := dollarKey(um); bad != "" {
+			return fail("update takes plain fields (got operator key '"+bad+"')", 3)
+		}
+		res, err := col.UpdateMany(ctx, fm, bson.M{"$set": um})
+		if err != nil {
+			return fail(err.Error(), 1)
+		}
+		return out(bson.M{"matched": res.MatchedCount, "modified": res.ModifiedCount})
 
 	case "delete":
 		if len(args) < 1 {

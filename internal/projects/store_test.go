@@ -243,6 +243,262 @@ func TestLegacyRowsWithoutPositionSortLast(t *testing.T) {
 	}
 }
 
+// #527: slot math is pure so the gap logic is pinned without a database.
+func TestSlotPosition(t *testing.T) {
+	i64 := func(v int64) *int64 { return &v }
+	cases := []struct {
+		name    string
+		prev    *int64
+		next    *int64
+		wantPos int64
+		wantOK  bool
+	}{
+		{"both open ends with step", nil, nil, 1000, true},
+		{"front slots one step before", nil, i64(2000), 1000, true},
+		{"back slots one step after", i64(2000), nil, 3000, true},
+		{"middle takes the midpoint", i64(1000), i64(2000), 1500, true},
+		{"odd gap floors", i64(1000), i64(2001), 1500, true},
+		{"gap of two still slots", i64(1000), i64(1002), 1001, true},
+		{"adjacent positions exhaust the gap", i64(1000), i64(1001), 0, false},
+		{"equal positions exhaust the gap", i64(1000), i64(1000), 0, false},
+		{"negative slots stay ordered", i64(-2000), i64(-1000), -1500, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pos, ok := slotPosition(c.prev, c.next, 1000)
+			if ok != c.wantOK || (ok && pos != c.wantPos) {
+				t.Fatalf("slotPosition = (%d, %v), want (%d, %v)", pos, ok, c.wantPos, c.wantOK)
+			}
+		})
+	}
+}
+
+// #527: Blocked is gone from the lifecycle — the store must reject it on
+// every verb instead of silently aliasing it to something else.
+func TestBlockedStatusRejected(t *testing.T) {
+	if _, err := CheckStatus("Blocked"); err == nil {
+		t.Fatal("CheckStatus(Blocked) must fail")
+	}
+	if _, err := CheckStatus("blocked"); err == nil {
+		t.Fatal("CheckStatus(blocked) must fail")
+	}
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.Create(ctx, "x", "Blocked", ""); err == nil {
+		t.Fatal("Create with Blocked must fail")
+	}
+	if _, err := s.List(ctx, "Blocked", "", 0); err == nil {
+		t.Fatal("List with Blocked must fail")
+	}
+	if err := s.Reorder(ctx, "Blocked", []string{"abc"}); err == nil {
+		t.Fatal("Reorder with Blocked must fail")
+	}
+	doc, err := s.Create(ctx, "movable", "Todo", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.Move(ctx, "Blocked", doc["id"].(string), doc["id"].(string), false); err == nil {
+		t.Fatal("Move with Blocked must fail")
+	}
+	if _, err := s.Update(ctx, doc["id"].(string), map[string]any{"status": "Blocked"}); err == nil {
+		t.Fatal("Update to Blocked must fail")
+	}
+}
+
+// #527: the atomic counter must hand out distinct positions under
+// concurrent creates — the old read-max-then-+1000 collided here.
+func TestConcurrentCreatesDistinctPositions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	const n = 20
+	type result struct {
+		pos any
+		err error
+	}
+	out := make(chan result, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			doc, err := s.Create(ctx, "race", "Todo", "")
+			if err != nil {
+				out <- result{err: err}
+				return
+			}
+			out <- result{pos: doc["position"]}
+		}(i)
+	}
+	seen := map[int64]bool{}
+	for i := 0; i < n; i++ {
+		r := <-out
+		if r.err != nil {
+			t.Fatalf("concurrent Create: %v", r.err)
+		}
+		pos, ok := r.pos.(int64)
+		if !ok {
+			t.Fatalf("position is %T, want int64", r.pos)
+		}
+		if seen[pos] {
+			t.Fatalf("duplicate position %d under concurrency", pos)
+		}
+		seen[pos] = true
+	}
+}
+
+// #527: Move relocates one row without the whole section.
+func TestMoveOrdersSection(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	var ids []string
+	for _, name := range []string{"one", "two", "three"} {
+		doc, err := s.Create(ctx, name, "Todo", "")
+		if err != nil {
+			t.Fatalf("Create %s: %v", name, err)
+		}
+		ids = append(ids, doc["id"].(string))
+	}
+	before, err := s.Get(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	// Move the last row before the first.
+	if err := s.Move(ctx, "Todo", ids[2], ids[0], false); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	rows, err := s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, []string{ids[2], ids[0], ids[1]}) {
+		t.Fatalf("move before: got %v", got)
+	}
+	after, err := s.Get(ctx, ids[2])
+	if err != nil {
+		t.Fatalf("Get after move: %v", err)
+	}
+	if before["updatedAt"] != after["updatedAt"] {
+		t.Fatalf("move must not bump updatedAt: %v -> %v", before["updatedAt"], after["updatedAt"])
+	}
+	// Move the first row after the last.
+	if err := s.Move(ctx, "Todo", ids[2], ids[1], true); err != nil {
+		t.Fatalf("Move after: %v", err)
+	}
+	rows, err = s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, []string{ids[0], ids[1], ids[2]}) {
+		t.Fatalf("move after: got %v", got)
+	}
+	// Same id twice is an idempotent no-op — but only after the ids parse
+	// and prove membership, so unknown rows never answer ok:true.
+	if err := s.Move(ctx, "Todo", ids[0], ids[0], false); err != nil {
+		t.Fatalf("self move: %v", err)
+	}
+	if err := s.Move(ctx, "Todo", "not-hex", "not-hex", false); err == nil {
+		t.Fatal("self move with bad hex must fail")
+	}
+	unknown := primitive.NewObjectID().Hex()
+	if err := s.Move(ctx, "Todo", unknown, unknown, false); err == nil {
+		t.Fatal("self move with unknown ids must fail")
+	}
+	// Unknown ids, cross-status anchors and bad statuses fail.
+	if err := s.Move(ctx, "Todo", "000000000000000000000000", ids[0], false); err == nil {
+		t.Fatal("unknown id must fail")
+	}
+	if err := s.Move(ctx, "Todo", ids[0], "000000000000000000000000", false); err == nil {
+		t.Fatal("unknown anchor must fail")
+	}
+	done, err := s.Create(ctx, "done-row", "Done", "")
+	if err != nil {
+		t.Fatalf("Create done: %v", err)
+	}
+	if err := s.Move(ctx, "Todo", ids[0], done["id"].(string), false); err == nil {
+		t.Fatal("cross-status anchor must fail")
+	}
+	if err := s.Move(ctx, "Todo", "", ids[0], false); err == nil {
+		t.Fatal("blank id must fail")
+	}
+}
+
+// #527: when repeated moves exhaust an integer gap, Move compacts the
+// section (full rewrite as an internal step) and still lands the row.
+func TestMoveCompactsExhaustedGap(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	mk := func(name, status string, pos int64) string {
+		now := primitive.NewDateTimeFromTime(time.Now().UTC())
+		res, err := s.projects.InsertOne(ctx, bson.M{
+			"name": name, "status": status, "note": "",
+			"position": pos, "createdAt": now, "updatedAt": now,
+		})
+		if err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+		return res.InsertedID.(primitive.ObjectID).Hex()
+	}
+	a := mk("a", "Todo", 1000)
+	b := mk("b", "Todo", 1001) // adjacent: no integer between
+	c := mk("c", "Todo", 5000)
+	if err := s.Move(ctx, "Todo", c, b, false); err != nil {
+		t.Fatalf("Move into exhausted gap: %v", err)
+	}
+	rows, err := s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, []string{a, c, b}) {
+		t.Fatalf("compacted move order: got %v", got)
+	}
+}
+
+// #527 review: a tail move must consume the atomic counter, or the next
+// Create $incs into the same position (sequential move-then-create
+// duplicate — no concurrency needed).
+func TestMoveTailThenCreateDistinct(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	var ids []string
+	for _, name := range []string{"a", "b", "c"} {
+		doc, err := s.Create(ctx, name, "Todo", "")
+		if err != nil {
+			t.Fatalf("Create %s: %v", name, err)
+		}
+		ids = append(ids, doc["id"].(string))
+	}
+	if err := s.Move(ctx, "Todo", ids[0], ids[2], true); err != nil {
+		t.Fatalf("Move to tail: %v", err)
+	}
+	fourth, err := s.Create(ctx, "d", "Todo", "")
+	if err != nil {
+		t.Fatalf("Create after tail move: %v", err)
+	}
+	rows, err := s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := []string{ids[1], ids[2], ids[0], fourth["id"].(string)}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tail move then create: got %v, want %v", got, want)
+	}
+	seen := map[int64]bool{}
+	for _, row := range rows {
+		var pos int64
+		switch v := row["position"].(type) {
+		case int64:
+			pos = v
+		case int32:
+			pos = int64(v)
+		case float64:
+			pos = int64(v)
+		default:
+			t.Fatalf("position is %T, want int64", row["position"])
+		}
+		if seen[pos] {
+			t.Fatalf("duplicate position %d after move-then-create", pos)
+		}
+		seen[pos] = true
+	}
+}
+
 func projectIDs(rows []map[string]any) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
