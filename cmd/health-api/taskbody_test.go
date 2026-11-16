@@ -42,6 +42,41 @@ func TestDefaultDecodeStillRejectsAnEmptyBody(t *testing.T) {
 	}
 }
 
+// This list is ALSO the MCP transport's contract: tasks.FingerprintFields is
+// the list the MCP create path fingerprints with, and taskFingerprint above
+// delegates to tasks.Fingerprint. The two must stay identical — two lists is
+// how `repeat_rule` went missing once — and CI pins this list against the
+// app's TASK_CREATE_KEYS by reading this exact block statically, so the
+// literal stays here rather than becoming an alias (an alias is invisible
+// to the awk and fails the "could not read both create key sets" gate).
+func TestFingerprintListsMatchStore(t *testing.T) {
+	if !equalStrings(taskCreateFields, tasks.FingerprintFields) {
+		t.Errorf("taskCreateFields = %q, want tasks.FingerprintFields = %q — one list per transport is the defect this pins",
+			taskCreateFields, tasks.FingerprintFields)
+	}
+	if len(trimmedForFingerprint) != len(tasks.FingerprintTrimmed) {
+		t.Fatalf("trimmedForFingerprint has %d keys, tasks.FingerprintTrimmed has %d — the alias drifted",
+			len(trimmedForFingerprint), len(tasks.FingerprintTrimmed))
+	}
+	for k := range tasks.FingerprintTrimmed {
+		if !trimmedForFingerprint[k] {
+			t.Errorf("trimmedForFingerprint missing %q", k)
+		}
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // Every body key the create path reads must change the idempotency fingerprint.
 //
 // This is the drift guard for taskCreateFields. `repeat_rule` was genuinely missing —

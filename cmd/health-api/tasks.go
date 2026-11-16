@@ -361,18 +361,28 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 // back.
 
 // taskCreateFields is every body key the create path READS, and therefore every key
-// the idempotency fingerprint must cover. Aliased to the store package's list so
-// the HTTP and MCP create paths share one rule: two lists is how `repeat_rule`
-// went missing once, and the digest disagreed with the store about sameness.
+// the idempotency fingerprint must cover.
 //
-// `TestFingerprintCoversEveryConsumedField` walks this list and asserts each field
-// changes the digest. When a field is added to the create path, add it in
-// internal/tasks (FingerprintFields) — not here.
-var taskCreateFields = tasks.FingerprintFields
+// It is a literal list (not an alias) because CI reads it statically: the
+// android-apk workflow awks this exact `var taskCreateFields = []string{...}`
+// block and diffs it against the app's TASK_CREATE_KEYS (#185). A field added,
+// renamed or dropped on one side without the other must fail there.
+//
+// It must ALSO equal tasks.FingerprintFields — the fingerprint the MCP create
+// path shares — and TestFingerprintListsMatchStore pins that: two lists is how
+// `repeat_rule` went missing once (consumed, stored, but unhashed, so two
+// creates differing only in custom text replayed each other).
+var taskCreateFields = []string{
+	"name", "speak_name", "description", "due_date", "due_time",
+	"estimated_minutes", "parallelable",
+	"repeat_every", "repeat_unit", "repeat_days", "repeat_custom", "repeat_rule",
+}
 
 // trimmedForFingerprint is the subset of taskCreateFields the create path TrimSpaces
-// before storing. Aliased to the store package's map for the same reason as above:
-// one rule, shared by both transports. See tasks.FingerprintTrimmed.
+// before storing. Aliased to the store package's map: unlike taskCreateFields,
+// nothing external reads this one statically, so the alias keeps the two
+// transports on one rule with no second list to drift. TestFingerprintListsMatchStore
+// pins the alias. See tasks.FingerprintTrimmed for the semantics.
 var trimmedForFingerprint = tasks.FingerprintTrimmed
 
 // taskFingerprint digests a create body so a reused Idempotency-Key can be told

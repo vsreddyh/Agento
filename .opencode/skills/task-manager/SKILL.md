@@ -40,7 +40,13 @@ On `complete_task`, read `rollover`:
 - `none` — one-shot. Do nothing.
 - `custom` — YOU create the next occurrence: copy all fields verbatim, advance
   only `due_date` per the rule. Keep `due_time` unless the rule names a time.
-- `exhausted`/`failed` — repeat stopped (see `needs_attention`). Tell the user; do not silently recreate.
+- `exhausted` — structured but ran past the rollover ceiling (see
+  `needs_attention`). Tell the user; do not silently recreate.
+- `failed` — the rollover could not be minted. On this deployment (Atlas,
+  transactions available) the completion/skip ABORTS instead: the task stays
+  open and the call returns an error naming the field — fix the field and
+  retry. Only where transactions are unavailable does it complete with
+  `rollover: failed` + `needs_attention`; then tell the user loudly.
 
 Ambiguous rule: ask the user for the next due date, never guess. Empty
 `due_time` (`""` on old tasks): ask for a time, never invent one — `create_task`
@@ -67,7 +73,7 @@ rejects it.
 ## Change log
 
 `task_history` reads the change log: every create, update, complete, skip,
-reopen and delete, with `op`, `task_id`, `source` and `at`. It is kept 90
+reopen, delete and duplicate, with `op`, `task_id`, `source` and `at`. It is kept 90
 days, so it still answers for a task that was completed and auto-deleted
 after 3 days.
 
@@ -75,7 +81,7 @@ Use it when the user asks what happened to a task, or when a task changed
 without the agent doing it. Every argument is optional: `task_id` (one
 task — the 24-character hex id `create_task` returned), `op`
 (comma-separated: create, update, delete, complete, skip, reopen,
-duplicate — `duplicate` appears only for duplicates made through a batch),
+duplicate),
 `since` (INCLUSIVE RFC3339 timestamp, fractional seconds
 accepted, e.g. `2026-10-21T00:00:00Z`; a `+02:00` offset is fine as it
 is, because this is a tool argument and not a query string), `limit`
@@ -98,8 +104,13 @@ There is no "postpone" verb. To move ONE occurrence to a new date/time
 without disturbing the rest of the schedule:
 
 1. `duplicate_task` the target task (the copy keeps every field).
-2. Clear the copy's repeat condition (edit the copy to a one-shot), so it
-   never rolls over itself.
+2. Clear the copy's repeat FIRST, before moving it: update the copy with
+   `repeat_rule: ""` and none of `repeat_every`/`repeat_unit`/`repeat_days`/
+   `repeat_custom` set — that exact shape is the documented one-shot clear.
+   (Sending e.g. `repeat_every: 0` alone does NOT clear: it counts as a
+   structured key, so the old unit/days survive and the copy rolls over
+   itself. And a days-copy still requires its due date to be one of its
+   days, so an uncleared copy can 422 the move.)
 3. `skip_task` the original occurrence (the work did NOT happen on the old
    date; the series stays intact and rolls as usual).
 4. Move the copy to a date/time slot that doesn't disturb the rest of the
