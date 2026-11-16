@@ -79,4 +79,50 @@ class ProjectsApiTest {
         assertEquals(listOf("b"), out.map { it.id })
         assertEquals("", out.single().note)
     }
+
+    // #519: the manual board order is status rank, then stored position,
+    // then newest-updated. Missing/invalid positions read as null so a
+    // legacy row can never masquerade as the top of the board.
+    @Test
+    fun `position parses from the row and reads null when absent`() {
+        val out = parseProjectList(
+            """{"projects":[
+                {"id":"a","name":"A","position":2000},
+                {"id":"b","name":"B"},
+                {"id":"c","name":"C","position":null},
+                {"id":"d","name":"D","position":"oops"}
+            ]}""",
+        )
+        assertEquals(listOf(2000L, null, null, null), out.map { it.position })
+    }
+
+    @Test
+    fun `manual order groups by status rank then position then recency`() {
+        val rows = listOf(
+            project("todo-legacy", "Todo", null, "2026-01-03T00:00:00Z"),
+            project("todo-second", "Todo", 2000, "2026-01-01T00:00:00Z"),
+            project("todo-first", "Todo", 1000, "2026-01-01T00:00:00Z"),
+            project("ongoing", "Ongoing", null, "2026-01-01T00:00:00Z"),
+            project("done", "Done", null, "2026-01-05T00:00:00Z"),
+        )
+        assertEquals(
+            listOf("ongoing", "todo-first", "todo-second", "todo-legacy", "done"),
+            manualProjectOrder(rows),
+        )
+    }
+
+    @Test
+    fun `manual sort keeps rows missing from the order last`() {
+        val rows = listOf(
+            project("known", "Todo", null, "2026-01-01T00:00:00Z"),
+            project("fresh", "Todo", null, "2026-01-02T00:00:00Z"),
+        )
+        assertEquals(
+            listOf("known", "fresh"),
+            sortProjectsManually(rows, listOf("known")).map { it.id },
+        )
+    }
+
+    private fun project(id: String, status: String, position: Long?, updatedAt: String) =
+        ServerProject(id = id, name = id, status = status, updatedAt = updatedAt, position = position)
 }

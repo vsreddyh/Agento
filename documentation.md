@@ -263,7 +263,7 @@ The custom Android app (`android/agento/`) uses ONE Server URL + Password — th
 |---|---|
 | `POST /api/health/sync` | Health Connect batch upsert |
 | `/api/tasks`, `/api/tasks/batch`, `/api/tasks/mutations`, `/api/tasks/changes` | Task CRUD, batch, audit log and change counter |
-| `/api/projects` | Project board CRUD |
+| `/api/projects`, `POST /api/projects/reorder` | Project board CRUD + manual order (per status section) |
 | `/api/files`, `/api/files/upload`, `/api/files/download` | The Files tab shelf over `exports/` |
 | `/api/reports` | ∃-Mail inbox (markdown + LaTeX) |
 | `/health`, `/health/` | Liveness probe (unauthenticated) |

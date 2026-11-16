@@ -30,6 +30,9 @@ data class ServerProject(
     val note: String = "",
     val createdAt: String = "",
     val updatedAt: String = "",
+    /** Manual board order (#519), ascending; null on rows written before
+     * the field existed, which sort after every positioned row. */
+    val position: Long? = null,
 )
 
 /** Parses an RFC3339 instant (server timestamps) to epoch millis for
@@ -63,6 +66,11 @@ internal fun parseProject(o: JSONObject): ServerProject? {
     if (id.isEmpty()) return null
     val name = optJsonStr(o, "name")
     if (name.isEmpty()) return null
+    // Position is a JSON number on new servers; anything else (absent,
+    // null, a string from a hand-edited row) reads as "no manual position"
+    // so it falls back to the updatedAt ordering instead of 0, which is
+    // below every assigned position and would silently pin it to the top.
+    val position = (o.opt("position") as? Number)?.toLong()
     return ServerProject(
         id = id,
         name = name,
@@ -70,6 +78,35 @@ internal fun parseProject(o: JSONObject): ServerProject? {
         note = optJsonStr(o, "note"),
         createdAt = optJsonStr(o, "createdAt"),
         updatedAt = optJsonStr(o, "updatedAt"),
+        position = position,
+    )
+}
+
+/** Default manual board order (#519): status rank first (the board groups
+ * by status), then the stored position, then newest-updated. Pure so the
+ * ordering rule is unit-tested without a server. */
+internal fun manualProjectOrder(list: List<ServerProject>): List<String> =
+    list.sortedWith(
+        compareBy<ServerProject>(
+            { taskRank(normalizeStatus(it.status)) },
+            { it.position ?: Long.MAX_VALUE },
+            { -projectTimeMs(it.updatedAt) },
+        )
+    ).map { it.id }
+
+/** Projects in the persisted manual order, rows missing from [order] (a
+ * just-created project before the reload) last. */
+internal fun sortProjectsManually(
+    list: List<ServerProject>,
+    order: List<String>,
+): List<ServerProject> {
+    val rank = order.withIndex().associate { (i, id) -> id to i }
+    return list.sortedWith(
+        compareBy<ServerProject>(
+            { rank[it.id] ?: Int.MAX_VALUE },
+            { taskRank(normalizeStatus(it.status)) },
+            { -projectTimeMs(it.updatedAt) },
+        )
     )
 }
 
@@ -185,6 +222,24 @@ class ProjectsApi(context: Context) {
         if (note != null) body.put("note", note)
         call("PATCH", "/api/projects/$clean", body).map { parseOne(it) }
     }
+
+    /** Rewrites the manual order of one status section (#519). The server
+     * rejects ids that no longer carry [status] or that are unknown. */
+    suspend fun reorder(status: String, ids: List<String>): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val clean = ids.map { it.trim() }.filter { it.isNotEmpty() }
+            val st = status.trim()
+            if (st.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Missing status"))
+            }
+            if (clean.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Missing project ids"))
+            }
+            val body = JSONObject()
+                .put("status", st)
+                .put("ids", org.json.JSONArray(clean))
+            call("POST", "/api/projects/reorder", body).map { }
+        }
 
     /** Permanently deletes a project. */
     suspend fun delete(id: String): Result<Unit> =
