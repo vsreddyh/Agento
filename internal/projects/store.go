@@ -4,7 +4,7 @@
 // Ongoing | Testing | Blocked | Paused | Done), note, position, createdAt,
 // updatedAt. Projects are permanent (no TTL, no retention pruning) and
 // shared with the app's Projects tab over /api/projects (see
-// cmd/health-api/main.go) and the project-manager MCP server (see
+// cmd/health-api/projects.go) and the project-manager MCP server (see
 // cmd/project-manager/main.go).
 //
 // position is the manual board order (#519): ascending, spaced

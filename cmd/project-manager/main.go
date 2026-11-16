@@ -4,7 +4,7 @@
 // status (Todo | Ongoing | Testing | Blocked | Paused | Done), note,
 // position (manual board order), createdAt, updatedAt.
 // Projects are permanent (no TTL) and shared with the app's Projects tab
-// over /api/projects (see cmd/health-api/main.go).
+// over /api/projects (see cmd/health-api/projects.go).
 // Runs over stdio for MCP clients.
 package main
 

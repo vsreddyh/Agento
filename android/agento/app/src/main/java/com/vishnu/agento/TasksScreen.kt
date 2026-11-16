@@ -219,10 +219,15 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 // The server is the source of truth for manual order; a
                 // drag's local mutation is replaced by the persisted result.
                 manualOrder = manualProjectOrder(it)
-                // Section counts are computed from these rows, so a
-                // truncated board must not look complete.
+                // Section counts are computed from these rows, so a board
+                // at the server cap is called out as possibly truncated —
+                // the list response carries no total, so an exactly-full
+                // board is also covered.
                 if (it.size >= PROJECT_LIST_CAP) {
-                    toast("Showing the first $PROJECT_LIST_CAP projects", ToastKind.Info)
+                    toast(
+                        "Board may be truncated at $PROJECT_LIST_CAP projects",
+                        ToastKind.Info,
+                    )
                 }
             },
             onFailure = { e ->
