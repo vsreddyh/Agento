@@ -334,8 +334,9 @@ func projectsRoot(w http.ResponseWriter, r *http.Request) {
 // {"status":"Todo","id":"<id>","after":"<anchor>"} — exactly one anchor.
 // Callers never send the whole section (the server still reads the section
 // to slot the row, but nothing over the wire grows with it), so sections
-// over the 500-row reorder cap stay movable. updatedAt is untouched, like
-// reorder.
+// over the 500-row reorder cap stay movable for single rows — except a gap
+// exhausted past the cap, which fails instead of compacting. updatedAt is
+// untouched, like reorder.
 func moveProjects(w http.ResponseWriter, r *http.Request) {
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})

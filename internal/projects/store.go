@@ -318,6 +318,7 @@ func (s *Store) List(ctx context.Context, status, search string, limit int) ([]m
 			{Key: "_statusRank", Value: 1},
 			{Key: "_manualOrder", Value: 1},
 			{Key: "updatedAt", Value: -1},
+			{Key: "_id", Value: 1},
 		}}},
 		{{Key: "$limit", Value: int64(mongostore.ClampLimit(limit, DefaultLimit, MaxLimit))}},
 		{{Key: "$unset", Value: bson.A{"_statusRank", "_manualOrder"}}},
@@ -553,13 +554,15 @@ func slotPosition(prev, next *int64, step int64) (pos int64, ok bool) {
 	}
 }
 
-// sectionOrder returns one status section as (id, position) pairs in board
-// order: position ascending, rows missing a position (only reachable
-// mid-backfill) last, _id hex as the deterministic tiebreak.
+// sectionOrder returns one status section as (id, position) pairs in the
+// same order List renders it: position ascending, rows missing a position
+// (only reachable mid-backfill) last, then newest-updated, then _id hex
+// as the deterministic final tiebreak — so an anchor picked from the phone
+// order slots against the neighbor the user actually sees.
 func (s *Store) sectionOrder(ctx context.Context, status string) ([]primitive.ObjectID, []int64, error) {
 	cur, err := s.projects.Find(ctx,
 		bson.M{"status": status},
-		options.Find().SetProjection(bson.M{"_id": 1, "position": 1}))
+		options.Find().SetProjection(bson.M{"_id": 1, "position": 1, "updatedAt": 1}))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -567,23 +570,28 @@ func (s *Store) sectionOrder(ctx context.Context, status string) ([]primitive.Ob
 	type row struct {
 		id  primitive.ObjectID
 		pos *int64
+		upd primitive.DateTime
 	}
 	var rows []row
 	for cur.Next(ctx) {
 		var doc struct {
 			ID  primitive.ObjectID `bson:"_id"`
 			Pos *int64             `bson:"position"`
+			Upd primitive.DateTime `bson:"updatedAt"`
 		}
 		if err := cur.Decode(&doc); err != nil {
 			return nil, nil, err
 		}
-		rows = append(rows, row{id: doc.ID, pos: doc.Pos})
+		rows = append(rows, row{id: doc.ID, pos: doc.Pos, upd: doc.Upd})
 	}
 	if err := cur.Err(); err != nil {
 		return nil, nil, err
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].pos == nil && rows[j].pos == nil {
+			if rows[i].upd != rows[j].upd {
+				return rows[i].upd > rows[j].upd
+			}
 			return rows[i].id.Hex() < rows[j].id.Hex()
 		}
 		if rows[i].pos == nil {
@@ -594,6 +602,9 @@ func (s *Store) sectionOrder(ctx context.Context, status string) ([]primitive.Ob
 		}
 		if *rows[i].pos != *rows[j].pos {
 			return *rows[i].pos < *rows[j].pos
+		}
+		if rows[i].upd != rows[j].upd {
+			return rows[i].upd > rows[j].upd
 		}
 		return rows[i].id.Hex() < rows[j].id.Hex()
 	})
@@ -615,7 +626,8 @@ func (s *Store) sectionOrder(ctx context.Context, status string) ([]primitive.Ob
 // the moved row is written — callers never send the whole section —
 // slotted into the sparse gap between its new neighbors. When repeated
 // moves exhaust an integer gap the section is compacted first (the old
-// full rewrite, now an internal step rather than the API). updatedAt is
+// full rewrite, now an internal step subject to the same 500-row cap);
+// a gap exhausted past the cap fails loudly. updatedAt is
 // deliberately untouched, like Reorder.
 func (s *Store) Move(ctx context.Context, status, id, anchor string, after bool) error {
 	status, err := CheckStatus(status)

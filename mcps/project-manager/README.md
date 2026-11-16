@@ -54,7 +54,8 @@ newest-first order, so the board never has an unpositioned tail.
   read it completely. `POST /api/projects/move` with
   `{"status":"Todo","id":"…","before":"…"}` (or `"after"`) moves one row
   without the whole section — exactly one anchor — so oversized sections
-  stay movable; repeated moves into one gap compact that section first.
+  stay movable for single rows; a gap exhausted past 500 rows fails instead
+  of compacting (`section too large to compact`).
 - **Shared board:** the app's Projects tab reads/writes the same rows
   (see `.opencode/skills/project-manager/SKILL.md`); local `tasks.json` is gone.
 

@@ -193,7 +193,7 @@ func run() int {
 
 	case "upsert":
 		if len(args) < 2 {
-			return fail("upsert requires <filter-json> <update-json>", 2)
+			return fail("upsert requires <filter-json> <set-json>", 2)
 		}
 		fv, code := loadJSON(args[0])
 		if code != 0 {
@@ -209,10 +209,10 @@ func run() int {
 		}
 		um, ok := toDoc(uv)
 		if !ok {
-			return fail("update must be a JSON object", 3)
+			return fail("set must be a JSON object", 3)
 		}
 		if bad := dollarKey(um); bad != "" {
-			return fail("update takes plain fields (got operator key '"+bad+"')", 3)
+			return fail("upsert takes plain fields (got operator key '"+bad+"')", 3)
 		}
 		res, err := col.UpdateOne(ctx, fm, bson.M{"$set": um}, options.Update().SetUpsert(true))
 		if err != nil {
