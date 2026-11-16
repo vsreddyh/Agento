@@ -32,7 +32,13 @@ import (
 // `duplicate_task` tool record it. A future store-level caller MUST record
 // the mutation itself, or the copy will exist with no row in the change log:
 // the "changed without a record" the log exists to prevent.
-func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error) {
+//
+// source IS recorded on the copy itself (#530): `toDoc` documents `source`
+// as the only record of which caller wrote a row, and a copy whose doc says
+// "unknown" while its log row names the caller reintroduces the exact
+// create-time disagreement (audit log says mcp, document blank) that
+// CreateWithKey closed — just on a different verb.
+func (s *Store) Duplicate(ctx context.Context, id, source string) (map[string]any, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
 		return nil, badID(id)
@@ -98,10 +104,12 @@ func (s *Store) Duplicate(ctx context.Context, id string) (map[string]any, error
 		}
 	}
 	doc, _, err := s.CreateWithKey(ctx, name, description, dueDate, dueTime,
-		&mins, repeatFromDoc(cur), &parallel, speakName, "", "", "")
-	// No idempotency key, source, or fingerprint: a duplicate is a NEW
+		&mins, repeatFromDoc(cur), &parallel, speakName, "", strings.TrimSpace(source), "")
+	// No idempotency key or fingerprint: a duplicate is a NEW
 	// write by definition, so it must never dedupe against — or replay as
-	// — any previous task.
+	// — any previous task. Source IS carried (see the doc comment): the
+	// copy is a row like any other, and "unknown" would disagree with its
+	// log row.
 	if err != nil {
 		return nil, err
 	}

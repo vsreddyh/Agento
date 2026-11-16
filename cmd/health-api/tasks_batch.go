@@ -146,7 +146,7 @@ func batchTasks(w http.ResponseWriter, r *http.Request) {
 	// domain, so a timeout bump cannot leave one route behind.
 	ctx, cancel := context.WithTimeout(r.Context(), tasks.RequestBudget)
 	defer cancel()
-	results, err := store.Batch(ctx, ops)
+	results, err := store.Batch(ctx, ops, requestSource(r))
 	if err != nil {
 		writeBatchErr(w, err)
 		return

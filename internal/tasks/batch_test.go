@@ -57,7 +57,7 @@ func TestBatchCompletesAllAtomically(t *testing.T) {
 		{Op: "complete", ID: ids[1]},
 		{Op: "complete", ID: ids[2]},
 	}
-	res, err := s.Batch(ctx, ops)
+	res, err := s.Batch(ctx, ops, "test")
 	if err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBatchAbortsOnUnknownId(t *testing.T) {
 		{Op: "complete", ID: a},
 		{Op: "complete", ID: primitive.NewObjectID().Hex()},
 		{Op: "skip", ID: b, Reason: "busy"},
-	})
+	}, "test")
 	if err == nil {
 		t.Fatal("unknown id must fail the batch")
 	}
@@ -122,7 +122,7 @@ func TestBatchAbortsOnStaleRevision(t *testing.T) {
 	_, err := s.Batch(ctx, []BatchOp{
 		{Op: "complete", ID: a},
 		{Op: "update", ID: b, Fields: map[string]any{"due_date": "2026-11-03", "expected_revision": 0}},
-	})
+	}, "test")
 	if err == nil {
 		t.Fatal("stale revision must fail the batch")
 	}
@@ -176,7 +176,7 @@ func TestBatchValidationRejectsBadEnvelopes(t *testing.T) {
 		},
 	}
 	for name, ops := range cases {
-		if _, err := s.Batch(ctx, ops); err == nil {
+		if _, err := s.Batch(ctx, ops, "test"); err == nil {
 			t.Fatalf("%s: must fail", name)
 		}
 	}
@@ -184,7 +184,7 @@ func TestBatchValidationRejectsBadEnvelopes(t *testing.T) {
 	for i := 0; i < BatchMaxOps+1; i++ {
 		huge = append(huge, BatchOp{Op: "complete", ID: id})
 	}
-	if _, err := s.Batch(ctx, huge); err == nil {
+	if _, err := s.Batch(ctx, huge, "test"); err == nil {
 		t.Fatal("over-cap batch must fail")
 	} else if !strings.Contains(err.Error(), "50") {
 		t.Fatalf("cap error must name the cap, got %v", err)
@@ -204,7 +204,7 @@ func TestBatchSkipRollsOverInside(t *testing.T) {
 	ctx := context.Background()
 	id := mkBatchTask(t, s, "daily", Repeat{Every: 1, Unit: "days"})
 	before := revisionOf(t, s)
-	res, err := s.Batch(ctx, []BatchOp{{Op: "skip", ID: id, Reason: "busy"}})
+	res, err := s.Batch(ctx, []BatchOp{{Op: "skip", ID: id, Reason: "busy"}}, "test")
 	if err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestBatchRolloverFailureAborts(t *testing.T) {
 	_, err := s.Batch(ctx, []BatchOp{
 		{Op: "complete", ID: good},
 		{Op: "complete", ID: broken},
-	})
+	}, "test")
 	if err == nil {
 		t.Fatal("rollover failure must abort the batch")
 	}
@@ -258,7 +258,7 @@ func TestBatchMoveUpdatesDueDates(t *testing.T) {
 	res, err := s.Batch(ctx, []BatchOp{
 		{Op: "update", ID: a, Fields: map[string]any{"due_date": "2026-12-01"}},
 		{Op: "update", ID: b, Fields: map[string]any{"due_date": "2026-12-01"}},
-	})
+	}, "test")
 	if err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestBatchNoOpUpdateSkipsBump(t *testing.T) {
 	before := revisionOf(t, s)
 	res, err := s.Batch(ctx, []BatchOp{
 		{Op: "update", ID: id, Fields: map[string]any{"expected_revision": rev}},
-	})
+	}, "test")
 	if err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestBatchIgnoresEmptyExtras(t *testing.T) {
 		{Op: "complete", ID: a, Fields: map[string]any{}},
 		{Op: "skip", ID: b, Reason: "   "},
 		{Op: "complete", ID: c, Fields: map[string]any{"due_date": nil}},
-	})
+	}, "test")
 	if err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestBatchNormalizesOpAndId(t *testing.T) {
 	id := mkBatchTask(t, s, "bulk-a", Repeat{})
 	// Transport trims, but a direct store caller may not: padded op names
 	// and ids must mean the same as trimmed ones.
-	res, err := s.Batch(ctx, []BatchOp{{Op: "  complete  ", ID: "  " + id + "  "}})
+	res, err := s.Batch(ctx, []BatchOp{{Op: "  complete  ", ID: "  " + id + "  "}}, "test")
 	if err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestBatchNormalizesTheReasonAtTheSeam(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	id := mkBatchTask(t, s, "bulk-a", Repeat{})
-	if _, err := s.Batch(ctx, []BatchOp{{Op: "skip", ID: id, Reason: "  travelling  "}}); err != nil {
+	if _, err := s.Batch(ctx, []BatchOp{{Op: "skip", ID: id, Reason: "  travelling  "}}, "test"); err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
 	var doc bson.M

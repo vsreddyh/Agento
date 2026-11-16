@@ -9,10 +9,10 @@ store, same validation — see `cmd/health-api/main.go`).
 
 | Tool | Purpose |
 |---|---|
-| `create_task` | Create an open task. Required: name, description, due_date, due_time, estimated_minutes, parallelable (ask the user for missing fields — never invent them). Optional: the four repeat keys (absent = one-shot), speak_name, idempotency_key (safe retries: same key + same body replays with `replayed: true`) |
+| `create_task` | Create an open task. Required: name, description, due_date, due_time, estimated_minutes, parallelable (ask the user for missing fields — never invent them). Optional: the five repeat keys (repeat_every/repeat_unit/repeat_days/repeat_custom/repeat_rule; absent = one-shot), speak_name, idempotency_key (safe retries: same key + same body replays with `replayed: true`) |
 | `list_tasks` | List by state open/done/all, overdue-only, or search. Every argument is optional (state=open, limit=200) |
 | `get_task` | Fetch one task by id |
-| `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and empty repeat_rule clears the rule |
+| `update_task` | Edit fields. Only `id` is required — every other field is nil-safe, and repeat_rule `""` with no structured key clears the whole rule (one-shot) |
 | `complete_task` | Mark done (3-day retention starts); echoes repeat_rule + follow-up nudge; always reports `rollover`. A rollover that cannot be minted aborts the completion (task stays open, error names the field) |
 | `skip_task` | Skip the occurrence without claiming the work was done (retained 3 days like a completion; `reopen_task` restores it); structured repeats roll over server-side like `complete_task` (same abort rule) |
 | `reopen_task` | Reopen a completed or skipped task (cancels expiry) |

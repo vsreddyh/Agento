@@ -141,6 +141,26 @@ type duplicateTaskInput struct {
 	ID string `json:"id"`
 }
 
+// customEcho is the custom-repeat echo both resolve verbs return: the rule
+// back plus the follow_up instruction. One helper so complete_task and
+// skip_task cannot drift — and so both doors emit repeat_days as [] rather
+// than null (the HTTP door does the same in customRolloverEcho; a null on
+// one door and an array on the other is a parity break for anyone diffing
+// the two).
+func customEcho(rep tasks.Repeat) map[string]any {
+	days := rep.Days
+	if days == nil {
+		days = []string{}
+	}
+	return map[string]any{
+		"repeat_every":  rep.Every,
+		"repeat_unit":   rep.Unit,
+		"repeat_days":   days,
+		"repeat_custom": rep.Custom,
+		"repeat_rule":   rep.Text,
+		"follow_up":     "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required.",
+	}
+}
 // taskHistoryInput filters the change log. Every field is optional: the whole
 // log is the default reading of the question, and a caller that wants one
 // task's history sends task_id.
@@ -468,12 +488,10 @@ func main() {
 				out["next"] = next
 			case rollover == tasks.RolloverCustom:
 				// Custom: only the caller can compute the next date.
-				out["repeat_every"] = rep.Every
-				out["repeat_unit"] = rep.Unit
-				out["repeat_days"] = rep.Days
-				out["repeat_custom"] = rep.Custom
-				out["repeat_rule"] = rep.Text
-				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
+				// Shared echo (customEcho): same keys as the HTTP door.
+				for k, v := range customEcho(rep) {
+					out[k] = v
+				}
 			case rollover.NeedsAttention():
 				// Say it in the response instead of leaving it in a log line: the
 				// repeat has stopped, and only the user can restart it.
@@ -504,12 +522,10 @@ func main() {
 				out["next"] = next
 			case rollover == tasks.RolloverCustom:
 				// Custom: only the caller can compute the next date.
-				out["repeat_every"] = rep.Every
-				out["repeat_unit"] = rep.Unit
-				out["repeat_days"] = rep.Days
-				out["repeat_custom"] = rep.Custom
-				out["repeat_rule"] = rep.Text
-				out["follow_up"] = "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via create_task with the SAME repeat keys (" + repeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute; change due_time only if the rule itself names a different time, otherwise a drifting time is a bug; all create_task fields except the repeat are required."
+				// Shared echo (customEcho): same keys as the HTTP door.
+				for k, v := range customEcho(rep) {
+					out[k] = v
+				}
 			case rollover.NeedsAttention():
 				// Say it in the response instead of leaving it in a log line: the
 				// repeat has stopped, and only the user can restart it.
@@ -563,7 +579,7 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "duplicate_task",
 		Description: "Copy a task 1:1 (open, done or skipped) into a new open task: fresh id and revision, no completion or skip marker, no rollover back-link. Carries name, description, voice phrase, due date/time, estimated minutes, the whole recurrence and parallelable — edit the copy afterwards (e.g. clear its repeat for a one-shot postpone)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in duplicateTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			doc, err := store.Duplicate(ctx, in.ID)
+			doc, err := store.Duplicate(ctx, in.ID, mcpSource)
 			if err != nil {
 				return fail(err)
 			}

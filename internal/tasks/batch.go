@@ -191,7 +191,14 @@ func (s *Store) transact(ctx context.Context, fn func(ctx context.Context) error
 // an unknown op, and an over-cap batch are rejected before any write.
 // Envelope-level rejections (empty, over-cap) carry Index -1: they name no
 // op, and the client toasts the detail without an item number.
-func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, error) {
+//
+// source names the caller for rows this batch mints itself — today only the
+// duplicate's copy (#530: a copy whose doc says "unknown" while its log row
+// names the caller disagrees with itself, the same defect CreateWithKey
+// closed for creates). Mutations the batch does not mint (completes, skips,
+// updates) keep their own docs; their log rows are written by the transport,
+// which is also where source usually comes from.
+func (s *Store) Batch(ctx context.Context, ops []BatchOp, source string) ([]BatchItemResult, error) {
 	if len(ops) == 0 {
 		return nil, &BatchOpError{Index: -1,
 			Err: fail("batch is empty: send 1-%d ops", BatchMaxOps)}
@@ -370,7 +377,7 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				// change, and the log must not claim one.
 				res.Detail = UpdateFieldNames(fields)
 			case "duplicate":
-				res.Task, err = s.Duplicate(nb, srcID)
+				res.Task, err = s.Duplicate(nb, srcID, source)
 				res.Rollover = RolloverNone
 				// The audit detail names the SOURCE the copy came from.
 				// The row the log gets is about the copy (its id is the

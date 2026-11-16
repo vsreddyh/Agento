@@ -476,9 +476,11 @@ func getTask(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, doc)
 }
 
-// updateTask applies a partial edit (only sent keys change; empty
-// repeat_rule clears the rule — same semantics as the agent's update_task).
-// Omit all four repeat keys to leave the recurrence alone; the rule is
+// updateTask applies a partial edit (only sent keys change; sending
+// repeat_rule "" with no structured key clears the whole rule (one-shot) —
+// same semantics as the agent's update_task).
+// Omit all five repeat keys (repeat_every/repeat_unit/repeat_days/
+// repeat_custom/repeat_rule) to leave the recurrence alone; the rule is
 // never inferred from an empty value. expected_revision is the
 // optimistic-concurrency guard: when present it must match the stored
 // revision or the edit is rejected with 409 instead of overwriting.
