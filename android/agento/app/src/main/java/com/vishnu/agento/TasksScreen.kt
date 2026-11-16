@@ -302,7 +302,11 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         dragDelta += dy
         val info = listState.layoutInfo
         val dragged = info.visibleItemsInfo.firstOrNull { it.key == cardKey(id) } ?: return
-        val status = projects.firstOrNull { it.id == id }?.let { normalizeStatus(it.status) } ?: return
+        // Reorder is per stored status (#527 transition): the Paused visual
+        // section can hold stored Paused + unmigrated stored Blocked rows,
+        // but the server's full-section reorder is exact-status, so a drag
+        // must stay inside its own stored section, not the normalized one.
+        val stored = projects.firstOrNull { it.id == id }?.status ?: return
         // The dragged card's visual centre relative to the list: its layout
         // slot is fixed, the finger offset lives in dragDelta.
         val centre = dragged.offset + dragDelta + dragged.size / 2f
@@ -311,9 +315,9 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
             if (!key.startsWith(CARD_KEY_PREFIX) || key == cardKey(id)) return@firstOrNull false
             val other = projects.firstOrNull { it.id == key.removePrefix(CARD_KEY_PREFIX) }
                 ?: return@firstOrNull false
-            // Drags stay inside one section; crossing statuses is an edit,
-            // not a reorder.
-            normalizeStatus(other.status) == status &&
+            // Drags stay inside one stored section; crossing statuses is an
+            // edit, not a reorder.
+            other.status.equals(stored, ignoreCase = true) &&
                 centre >= item.offset && centre <= item.offset + item.size
         } ?: return
         val targetId = (target.key as String).removePrefix(CARD_KEY_PREFIX)
@@ -344,12 +348,15 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         dragDelta = 0f
         if (!dragMoved) return
         dragMoved = false
-        val status = projects.firstOrNull { it.id == id }?.let { normalizeStatus(it.status) } ?: return
+        // Same stored-section rule as dragMove (#527 transition): list +
+        // reorder the dragged row's stored status so unmigrated Blocked rows
+        // reorder their own section instead of failing against Paused.
+        val status = projects.firstOrNull { it.id == id }?.status ?: return
         val targetId = dragTargetId
         val afterTarget = dragAfterTarget
         val localIds = manualOrder.filter { pid ->
             projects.firstOrNull { it.id == pid }
-                ?.let { normalizeStatus(it.status) == status } == true
+                ?.let { it.status.equals(status, ignoreCase = true) } == true
         }
         if (localIds.size < 2) return
         busy = true
