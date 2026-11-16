@@ -332,8 +332,10 @@ func projectsRoot(w http.ResponseWriter, r *http.Request) {
 // moveProjects relocates one project inside its status section (#527):
 // body {"status":"Todo","id":"<id>","before":"<anchor>"} or
 // {"status":"Todo","id":"<id>","after":"<anchor>"} — exactly one anchor.
-// Unlike reorder it never needs the whole section, so sections over the
-// 500-row cap stay movable. updatedAt is untouched, like reorder.
+// Callers never send the whole section (the server still reads the section
+// to slot the row, but nothing over the wire grows with it), so sections
+// over the 500-row reorder cap stay movable. updatedAt is untouched, like
+// reorder.
 func moveProjects(w http.ResponseWriter, r *http.Request) {
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})

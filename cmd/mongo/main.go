@@ -6,12 +6,14 @@
 //	mongo count <collection> [filter-json]
 //	mongo insert <collection> <doc-json>
 //	mongo insert-many <collection> <docs-json-array>
-//	mongo upsert <collection> <filter-json> <update-json>
-//	(upserts one doc: UpdateOne with $set, creating it when absent)
+//	mongo upsert <collection> <filter-json> <set-json>
+//	(upserts ONE doc: UpdateOne with $set, creating it when absent — not a
+//	migration verb; see update for many-row rewrites)
 //	mongo update <collection> <filter-json> <set-json>
 //	(updates every match: UpdateMany with $set — the second arg is plain
 //	fields, NOT a full update doc, so '{"status":"Paused"}', never
-//	'{"$set":{"status":"Paused"}}'. Migration example:
+//	'{"$set":{"status":"Paused"}}'; the same plain-fields rule holds for
+//	upsert. Migration example:
 //	mongo update projects '{"status":"Blocked"}' '{"status":"Paused"}')
 //	mongo delete <collection> <filter-json>
 //	mongo drop <collection>

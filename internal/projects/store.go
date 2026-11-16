@@ -697,30 +697,44 @@ func (s *Store) Move(ctx context.Context, status, id, anchor string, after bool)
 			prev = &restPos[at-1]
 		}
 	}
-	if pos, ok := slotPosition(prev, next, positionStep); ok {
-		res, err := s.projects.UpdateOne(ctx,
-			bson.M{"_id": oid, "status": status},
-			bson.M{"$set": bson.M{"position": pos}},
-		)
+	// A tail append must come from the counter, not prev+step: the counter
+	// is the only source that never reissues, and a direct prev+step would
+	// collide with the next Create's $inc (#527 review). Other slots sit
+	// at or below the max, so future counter values always land past them.
+	pos := int64(0)
+	if next == nil && prev != nil {
+		var err error
+		pos, err = s.nextPosition(ctx)
 		if err != nil {
 			return err
 		}
-		if res.MatchedCount == 0 {
-			return fail("project '%s' changed status during move", id)
-		}
-		return nil
-	}
-	// Gap exhausted: compact the section with the row already in its new
-	// slot, so the move and the compaction land together.
-	ordered := make([]primitive.ObjectID, 0, len(rest)+1)
-	if after {
-		ordered = append(ordered, rest[:at+1]...)
-		ordered = append(ordered, oid)
-		ordered = append(ordered, rest[at+1:]...)
 	} else {
-		ordered = append(ordered, rest[:at]...)
-		ordered = append(ordered, oid)
-		ordered = append(ordered, rest[at:]...)
+		var ok bool
+		if pos, ok = slotPosition(prev, next, positionStep); !ok {
+			// Gap exhausted: compact the section with the row already in
+			// its new slot, so the move and the compaction land together.
+			ordered := make([]primitive.ObjectID, 0, len(rest)+1)
+			if after {
+				ordered = append(ordered, rest[:at+1]...)
+				ordered = append(ordered, oid)
+				ordered = append(ordered, rest[at+1:]...)
+			} else {
+				ordered = append(ordered, rest[:at]...)
+				ordered = append(ordered, oid)
+				ordered = append(ordered, rest[at:]...)
+			}
+			return s.writePositions(ctx, status, ordered, "move")
+		}
 	}
-	return s.writePositions(ctx, status, ordered, "move")
+	res, err := s.projects.UpdateOne(ctx,
+		bson.M{"_id": oid, "status": status},
+		bson.M{"$set": bson.M{"position": pos}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return fail("project '%s' changed status during move", id)
+	}
+	return nil
 }

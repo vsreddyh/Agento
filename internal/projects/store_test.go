@@ -450,6 +450,55 @@ func TestMoveCompactsExhaustedGap(t *testing.T) {
 	}
 }
 
+// #527 review: a tail move must consume the atomic counter, or the next
+// Create $incs into the same position (sequential move-then-create
+// duplicate — no concurrency needed).
+func TestMoveTailThenCreateDistinct(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	var ids []string
+	for _, name := range []string{"a", "b", "c"} {
+		doc, err := s.Create(ctx, name, "Todo", "")
+		if err != nil {
+			t.Fatalf("Create %s: %v", name, err)
+		}
+		ids = append(ids, doc["id"].(string))
+	}
+	if err := s.Move(ctx, "Todo", ids[0], ids[2], true); err != nil {
+		t.Fatalf("Move to tail: %v", err)
+	}
+	fourth, err := s.Create(ctx, "d", "Todo", "")
+	if err != nil {
+		t.Fatalf("Create after tail move: %v", err)
+	}
+	rows, err := s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := []string{ids[1], ids[2], ids[0], fourth["id"].(string)}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tail move then create: got %v, want %v", got, want)
+	}
+	seen := map[int64]bool{}
+	for _, row := range rows {
+		var pos int64
+		switch v := row["position"].(type) {
+		case int64:
+			pos = v
+		case int32:
+			pos = int64(v)
+		case float64:
+			pos = int64(v)
+		default:
+			t.Fatalf("position is %T, want int64", row["position"])
+		}
+		if seen[pos] {
+			t.Fatalf("duplicate position %d after move-then-create", pos)
+		}
+		seen[pos] = true
+	}
+}
+
 func projectIDs(rows []map[string]any) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
