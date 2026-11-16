@@ -112,7 +112,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_project",
-		Description: "Edit name/status/note (only sent keys change; blank name rejected)."},
+		Description: "Edit name/status/note (only sent keys change; blank name rejected). A status change moves the project to the end of its new section."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateProjectInput) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
 			// Pointers tell absent from set: nil = untouched, non-nil

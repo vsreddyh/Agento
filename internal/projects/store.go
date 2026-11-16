@@ -389,9 +389,10 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 }
 
 // Reorder rewrites the manual order for one status section (#519): ids must
-// list the complete section, every id must exist and still carry status (a
-// concurrent status edit is a 422, not a silent overwrite), and positions
-// become (i+1)*positionStep in the given order. updatedAt is deliberately
+// list the complete section, every id must exist and still carry status
+// (checked per id and again in each write's filter, so a concurrent status
+// edit is an error rather than a silent overwrite), and positions become
+// (i+1)*positionStep in the given order. updatedAt is deliberately
 // untouched — reordering is not an edit.
 func (s *Store) Reorder(ctx context.Context, status string, ids []string) error {
 	status, err := CheckStatus(status)
@@ -454,12 +455,28 @@ func (s *Store) Reorder(ctx context.Context, status string, ids []string) error 
 		}
 		oids = append(oids, oid)
 	}
+	// The status filter is repeated on every write: a row edited to another
+	// status between the check above and its write must abort the reorder
+	// instead of silently taking a new position in a section it left.
+	// Earlier rows keep their rewritten positions, which the next list
+	// shows as-is (the app reloads on failure), so a partial rewrite is
+	// visible rather than hidden.
+	changed := ""
 	for i, oid := range oids {
-		if _, err := s.projects.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{
-			"$set": bson.M{"position": int64(i+1) * positionStep},
-		}); err != nil {
+		res, err := s.projects.UpdateOne(ctx,
+			bson.M{"_id": oid, "status": status},
+			bson.M{"$set": bson.M{"position": int64(i+1) * positionStep}},
+		)
+		if err != nil {
 			return err
 		}
+		if res.MatchedCount == 0 {
+			changed = oid.Hex()
+			break
+		}
+	}
+	if changed != "" {
+		return fail("project '%s' changed status during reorder", changed)
 	}
 	return nil
 }

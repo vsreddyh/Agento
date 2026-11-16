@@ -103,6 +103,11 @@ private data class ProjectSection(val status: String, val rows: List<ServerProje
  * `h:` so the two key spaces can never collide. */
 private const val CARD_KEY_PREFIX = "p:"
 
+/** Server-side MaxLimit: the most projects one list call returns. A board
+ * at the cap is a truncated view, so it is called out instead of passed off
+ * as complete. */
+private const val PROJECT_LIST_CAP = 500
+
 private fun cardKey(id: String) = CARD_KEY_PREFIX + id
 
 /** Project board: fixed statuses, collapsible sections, backed by the
@@ -182,7 +187,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 val norm = { s: String -> s.trim().lowercase(Locale.ROOT) }
                 // Limit 500 (server max): the default 200 would see an
                 // incomplete board past 200 rows and duplicate/stall.
-                val have = api.list("all", limit = 500).getOrNull().orEmpty()
+                val have = api.list("all", limit = PROJECT_LIST_CAP).getOrNull().orEmpty()
                     .map { norm(it.name) }.toMutableSet()
                 for ((name, status, note) in legacy) {
                     if (norm(name) in have) continue
@@ -190,7 +195,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     if (created == null) break
                     have.add(norm(created.name))
                 }
-                val landed = api.list("all", limit = 500).getOrNull().orEmpty()
+                val landed = api.list("all", limit = PROJECT_LIST_CAP).getOrNull().orEmpty()
                     .map { norm(it.name) }.toSet()
                 if (legacy.all { norm(it.first) in landed }) {
                     withContext(Dispatchers.IO) {
@@ -208,12 +213,17 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     LaunchedEffect(refreshTick) {
         loading = true
         error = ""
-        api.list("all", limit = 500).fold(
+        api.list("all", limit = PROJECT_LIST_CAP).fold(
             onSuccess = {
                 projects = it
                 // The server is the source of truth for manual order; a
                 // drag's local mutation is replaced by the persisted result.
                 manualOrder = manualProjectOrder(it)
+                // Section counts are computed from these rows, so a
+                // truncated board must not look complete.
+                if (it.size >= PROJECT_LIST_CAP) {
+                    toast("Showing the first $PROJECT_LIST_CAP projects", ToastKind.Info)
+                }
             },
             onFailure = { e ->
                 val msg = serverDetail(e.message ?: e.javaClass.simpleName)
@@ -341,31 +351,33 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         busy = true
         scope.launch {
             // Reorder needs the complete section and the loaded board is
-            // capped (500), so fetch this section directly and replay the
-            // local move on the server order. A section over the cap still
-            // fails server-side (the server refuses a partial list) and
-            // surfaces as a toast instead of silently reordering.
-            val base = api.list(status, limit = 500).getOrNull()?.map { it.id } ?: localIds
-            val ids = base.toMutableList()
-            val movedFrom = ids.indexOf(id)
-            if (targetId != null && movedFrom >= 0 && targetId != id) {
+            // capped, so fetch this section directly and replay the local
+            // move on the server order. A section over the cap still fails
+            // server-side (it refuses a partial list) and surfaces as a
+            // toast instead of silently reordering.
+            val ids = api.list(status, limit = PROJECT_LIST_CAP)
+                .getOrNull()?.map { it.id }?.toMutableList()
+            val movedFrom = ids?.indexOf(id) ?: -1
+            if (ids == null || movedFrom < 0) {
+                // Do not guess: reload and let the user retry.
+                toast("Could not reorder — board reloaded", ToastKind.Error)
+            } else {
                 ids.removeAt(movedFrom)
-                val targetNow = ids.indexOf(targetId)
-                if (targetNow >= 0) {
-                    ids.add(if (afterTarget) targetNow + 1 else targetNow, id)
+                val targetNow = targetId?.let { ids.indexOf(it) } ?: -1
+                if (targetNow < 0) {
+                    // The drop target left the section (edited or deleted
+                    // elsewhere). Appending would move the row somewhere
+                    // the user never chose.
+                    toast("Board changed — try the move again", ToastKind.Error)
                 } else {
-                    // Target vanished from the server's section: the local
-                    // order is the only remaining hint.
-                    ids.add(id)
+                    ids.add(if (afterTarget) targetNow + 1 else targetNow, id)
+                    api.reorder(status, ids).fold(
+                        onSuccess = { },
+                        onFailure = { e -> fail(e) },
+                    )
                 }
             }
-            api.reorder(status, ids).fold(
-                onSuccess = { refreshTick++ },
-                onFailure = { e ->
-                    fail(e)
-                    refreshTick++
-                },
-            )
+            refreshTick++
             busy = false
         }
     }
