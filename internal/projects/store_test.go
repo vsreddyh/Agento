@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,6 +197,12 @@ func TestManualOrderAndReorder(t *testing.T) {
 	}
 	if err := s.Reorder(ctx, "Todo", []string{ids[0], ids[0]}); err == nil {
 		t.Fatal("duplicate ids should fail")
+	}
+	// ObjectID hex is case-insensitive: the same id in another case is
+	// still a duplicate, and letting it through would write one position
+	// to two rows.
+	if err := s.Reorder(ctx, "Todo", []string{ids[0], strings.ToUpper(ids[0])}); err == nil {
+		t.Fatal("duplicate ids in different case should fail")
 	}
 	if err := s.Reorder(ctx, "Todo", []string{ids[0], "nope"}); err == nil {
 		t.Fatal("unknown id should fail")

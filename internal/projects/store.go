@@ -9,8 +9,9 @@
 //
 // position is the manual board order (#519): ascending, spaced
 // positionStep apart so rows can be re-slotted without rewriting the whole
-// board. Rows created before #519 carry no position and sort after every
-// positioned row.
+// board. Rows created before #519 are backfilled with positions at startup
+// (EnsureSchema), so every row carries one in steady state; a row that
+// somehow lacks it sorts last instead of leading the board.
 package projects
 
 import (
@@ -128,7 +129,7 @@ func toDoc(doc bson.M) map[string]any {
 
 // Create inserts a project. Name required; empty status defaults to Todo.
 // New rows get the highest position, which renders as the end of their
-// status section (and of the board before it is grouped).
+// status section.
 func (s *Store) Create(ctx context.Context, name, status, note string) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -421,14 +422,19 @@ func (s *Store) Reorder(ctx context.Context, status string, ids []string) error 
 		if id == "" {
 			return fail("ids must not contain blank values")
 		}
-		if seen[id] {
-			return fail("duplicate id '%s'", id)
-		}
-		seen[id] = true
 		oid, err := primitive.ObjectIDFromHex(id)
 		if err != nil {
 			return fail("bad id '%s'", id)
 		}
+		// ObjectID hex is case-insensitive, so the same project can arrive
+		// twice in different case: key on the canonical form, or the
+		// duplicate slips past the guard, defeats the set-equality proof
+		// and writes the same position to two rows.
+		key := oid.Hex()
+		if seen[key] {
+			return fail("duplicate id '%s'", id)
+		}
+		seen[key] = true
 		var doc struct {
 			Status string `bson:"status"`
 		}
