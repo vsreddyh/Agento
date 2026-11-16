@@ -151,8 +151,26 @@ func TestReconcileRolloverFindsOnlyRealGaps(t *testing.T) {
 		"repeat_every": 1, "repeat_unit": "days",
 	})
 	_, _, badReason, err := s.Complete(ctx, badID)
-	if err != nil {
-		t.Fatalf("complete bad: %v", err)
+	if txCapable(ctx, s) {
+		// Atomic path (#530): the failed rollover aborts the completion —
+		// the task stays open and the error names the field to fix.
+		if err == nil || !strings.Contains(err.Error(), "due_time") {
+			t.Fatalf("complete bad: err = %v, want it to name due_time", err)
+		}
+		if doc := mustGet(t, s, badID); doc["completedAt"] != nil {
+			t.Fatalf("an aborted completion must leave the task open: %v", doc)
+		}
+		// The reconciler scans COMPLETED repeats, so an open task is not a
+		// gap. Force the historical completed-broken state directly to keep
+		// the report coverage below.
+		mustCompleteRaw(t, s, badID)
+		badReason = RolloverFailed
+	} else {
+		// Legacy path (no transactions): success with RolloverFailed, the
+		// parent already done.
+		if err != nil {
+			t.Fatalf("complete bad: %v", err)
+		}
 	}
 	if badReason != RolloverFailed {
 		t.Fatalf("setup: bad task rollover = %q, want %q", badReason, RolloverFailed)
@@ -458,6 +476,42 @@ func mustGet(t *testing.T, s *Store, id string) map[string]any {
 	return doc
 }
 
+// txCapable reports whether the test database supports multi-document
+// transactions (replica set / Atlas). Single-verb completions abort on a
+// failed rollover there and keep the legacy success-with-RolloverFailed
+// where not — so tests pinning the failure path branch on this.
+func txCapable(ctx context.Context, s *Store) bool {
+	return s.useTransactions(ctx)
+}
+
+// mustCompleteRaw marks a fixture completed WITHOUT going through Complete:
+// completedAt + expiresAt directly, no rollover. It simulates the state a
+// writer that bypassed the verb (or the legacy success-with-failed contract)
+// leaves behind — which is what the reconciler exists to notice.
+func mustCompleteRaw(t *testing.T, s *Store, id string) {
+	t.Helper()
+	oid, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		t.Fatalf("bad fixture id %q: %v", id, err)
+	}
+	now := time.Now().UTC()
+	res, err := s.tasks.UpdateOne(context.Background(),
+		bson.M{"_id": oid, "completedAt": nil},
+		bson.M{
+			"$set": bson.M{
+				"completedAt": primitive.NewDateTimeFromTime(now),
+				"expiresAt":   primitive.NewDateTimeFromTime(now.AddDate(0, 0, RetentionDays)),
+			},
+			"$inc": bson.M{"revision": 1},
+		})
+	if err != nil {
+		t.Fatalf("raw complete %s: %v", id, err)
+	}
+	if res.MatchedCount == 0 {
+		t.Fatalf("raw complete %s matched nothing", id)
+	}
+}
+
 func cleanupFixtures(t *testing.T, s *Store, ctx context.Context) {
 	t.Helper()
 	cur, err := s.tasks.Find(ctx, bson.M{
@@ -500,7 +554,13 @@ func TestReconcileGapsCarryTheReasonTheyFailed(t *testing.T) {
 	})
 	for _, id := range []string{blankTime, badEstimate} {
 		if _, _, _, err := s.Complete(ctx, id); err != nil {
-			t.Fatalf("complete %s: %v", id, err)
+			if !txCapable(ctx, s) {
+				t.Fatalf("complete %s: %v", id, err)
+			}
+			// Atomic path (#530): the completion aborts on the broken
+			// field, so force the historical completed-broken state
+			// directly — that is the shape this report exists for.
+			mustCompleteRaw(t, s, id)
 		}
 	}
 
@@ -916,7 +976,16 @@ func TestCorruptBackLinkCannotAbortThePass(t *testing.T) {
 		"repeat_every": 1, "repeat_unit": "days",
 	})
 	if _, _, _, err := s.Complete(ctx, broken); err != nil {
-		t.Fatalf("complete broken: %v", err)
+		if !txCapable(ctx, s) {
+			t.Fatalf("complete broken: %v", err)
+		}
+		// Atomic path (#530): the completion aborted and the task stays
+		// open, so force the historical completed-broken state directly —
+		// that is the shape this pass exists to report.
+		if !strings.Contains(err.Error(), "due_time") {
+			t.Fatalf("complete broken: err = %v, want it to name due_time", err)
+		}
+		mustCompleteRaw(t, s, broken)
 	}
 	res, err := s.ReconcileRollover(ctx)
 	if err != nil {
@@ -1072,7 +1141,10 @@ func TestDueTimeMistypedIsNotReportedAsMissing(t *testing.T) {
 // `needs_attention` reached the user as "this task was marked done, but creating its next
 // occurrence FAILED" — with no indication of WHICH field to open. The nightly reconciler
 // already produced the specific text, so the same failure was fixable-in-the-morning
-// when noticed at night and not at all when noticed live.
+// when noticed at night and not at all when noticed live. Where transactions are
+// available (#530) the completion aborts instead and the reason travels as the
+// error itself, so this test pins the error (transactional) or the detail
+// (legacy) depending on the deployment.
 func TestCompleteCarriesTheFieldSpecificReason(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -1085,6 +1157,22 @@ func TestCompleteCarriesTheFieldSpecificReason(t *testing.T) {
 		"repeat_every": 1, "repeat_unit": "days",
 	})
 	_, _, reason, detail, err := s.CompleteDetail(ctx, id)
+	if txCapable(ctx, s) {
+		// Atomic path (#530): the completion aborts and the error carries
+		// the field-specific reason — the user gets it live instead of via
+		// `needs_attention` on a task that is already (wrongly) done.
+		if err == nil {
+			t.Fatal("CompleteDetail must abort when the rollover cannot run")
+		}
+		if !strings.Contains(err.Error(), "due_time") {
+			t.Fatalf("err = %v, want it to name due_time", err)
+		}
+		if doc := mustGet(t, s, id); doc["completedAt"] != nil {
+			t.Fatalf("an aborted completion must leave the task open: %v", doc)
+		}
+		return
+	}
+	// Legacy path (no transactions): success with RolloverFailed + detail.
 	if err != nil {
 		t.Fatalf("CompleteDetail: %v", err)
 	}

@@ -12,10 +12,12 @@ package tasks
 //     bumps are suppressed for the batch (see noBumpCtx) and a single bump
 //     lands inside the transaction, so the marker advances exactly when the
 //     batch commits and never on abort.
-//   - a failed rollover ABORTS the batch. Single verbs report a failed
-//     rollover as success-with-RolloverFailed (the parent is already done, so
-//     failing the call would lie); inside a batch nothing has committed yet,
-//     so aborting is both honest and atomic.
+//   - a failed rollover ABORTS the batch. Single verbs abort the same way
+//     where transactions are available (the parent stays open and the
+//     failure returns as an error naming the field); inside a batch nothing
+//     has committed yet, so aborting is both honest and atomic. Without
+//     transactions the single verbs keep the legacy success-with-RolloverFailed
+//     (the parent is already done, so failing the call would lie).
 //   - no transaction support means no batch. The sequential fallback other
 //     stores use would silently break the all-or-nothing contract, so Batch
 //     refuses with ErrNoTransactions (mapped to 503) instead of degrading.
@@ -104,6 +106,22 @@ func (e *BatchOpError) Unwrap() error { return e.Err }
 // autocommit outside the transaction and no abort test could pass.
 type noBumpKey struct{}
 
+// inBatchKey marks a context as running inside Batch's transaction. The
+// single-verb wrappers check it FIRST — before any hello or session use —
+// so batch ops keep the legacy in-transaction semantics.
+//
+// Why a flag and not a type assertion on mongo.SessionContext: Batch wraps
+// the session in context.WithValue (noBump), and extra methods do NOT
+// promote through an embedded Context interface — the assertion sees a
+// *valueCtx, misses, and the wrapper then runs a hello on the session,
+// which bumps the txn number outside the transaction and kills it
+// (NoSuchTransaction). The flag survives wrapping by construction.
+type inBatchKey struct{}
+
+func batchOpCtx(sc context.Context) context.Context {
+	return noBump(context.WithValue(sc, inBatchKey{}, true))
+}
+
 func noBump(ctx context.Context) context.Context {
 	return context.WithValue(ctx, noBumpKey{}, true)
 }
@@ -173,7 +191,14 @@ func (s *Store) transact(ctx context.Context, fn func(ctx context.Context) error
 // an unknown op, and an over-cap batch are rejected before any write.
 // Envelope-level rejections (empty, over-cap) carry Index -1: they name no
 // op, and the client toasts the detail without an item number.
-func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, error) {
+//
+// source names the caller for rows this batch mints itself — today only the
+// duplicate's copy (#530: a copy whose doc says "unknown" while its log row
+// names the caller disagrees with itself, the same defect CreateWithKey
+// closed for creates). Mutations the batch does not mint (completes, skips,
+// updates) keep their own docs; their log rows are written by the transport,
+// which is also where source usually comes from.
+func (s *Store) Batch(ctx context.Context, ops []BatchOp, source string) ([]BatchItemResult, error) {
 	if len(ops) == 0 {
 		return nil, &BatchOpError{Index: -1,
 			Err: fail("batch is empty: send 1-%d ops", BatchMaxOps)}
@@ -290,7 +315,10 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 		// Per-op bumps suppressed: every shared write path (the verbs, the
 		// insert funnel, rollover successors) checks this flag, and the one
 		// bump for the whole batch lands below, inside the transaction.
-		nb := noBump(sc)
+		// batchOpCtx also marks the context as in-batch, so the single-verb
+		// wrappers take their legacy in-transaction path (no hello, no
+		// nested transaction) for these ops.
+		nb := batchOpCtx(sc)
 		for i, op := range ops {
 			// The id and the op in the envelope are the CANONICAL ones (lower
 			// case), the same spelling the change log stores — so a caller
@@ -349,7 +377,7 @@ func (s *Store) Batch(ctx context.Context, ops []BatchOp) ([]BatchItemResult, er
 				// change, and the log must not claim one.
 				res.Detail = UpdateFieldNames(fields)
 			case "duplicate":
-				res.Task, err = s.Duplicate(nb, srcID)
+				res.Task, err = s.Duplicate(nb, srcID, source)
 				res.Rollover = RolloverNone
 				// The audit detail names the SOURCE the copy came from.
 				// The row the log gets is about the copy (its id is the

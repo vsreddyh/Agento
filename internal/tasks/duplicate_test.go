@@ -21,7 +21,7 @@ func TestDuplicateCopiesContents(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	srcID, _ := src["id"].(string)
-	doc, err := s.Duplicate(ctx, srcID)
+	doc, err := s.Duplicate(ctx, srcID, "test")
 	if err != nil {
 		t.Fatalf("Duplicate: %v", err)
 	}
@@ -48,11 +48,14 @@ func TestDuplicateCopiesContents(t *testing.T) {
 	if _, ok := doc["rolled_from"]; ok {
 		t.Fatalf("a user copy is not a rollover successor: %v", doc["rolled_from"])
 	}
+	if doc["source"] != "test" {
+		t.Fatalf("the copy must carry the caller's source, got %v — else the doc disagrees with its log row", doc["source"])
+	}
 }
 
 func TestDuplicateUnknownId(t *testing.T) {
 	s := testStore(t)
-	if _, err := s.Duplicate(context.Background(), primitive.NewObjectID().Hex()); err == nil {
+	if _, err := s.Duplicate(context.Background(), primitive.NewObjectID().Hex(), "test"); err == nil {
 		t.Fatal("unknown id must fail")
 	} else if !strings.Contains(err.Error(), "unknown task") {
 		t.Fatalf("must read as unknown task, got %v", err)
@@ -66,7 +69,7 @@ func TestDuplicateDoneTaskCopiesAsOpen(t *testing.T) {
 	if _, _, _, _, err := s.CompleteDetail(ctx, id); err != nil {
 		t.Fatalf("CompleteDetail: %v", err)
 	}
-	doc, err := s.Duplicate(ctx, id)
+	doc, err := s.Duplicate(ctx, id, "test")
 	if err != nil {
 		t.Fatalf("Duplicate: %v", err)
 	}
@@ -81,7 +84,7 @@ func TestBatchDuplicateAtomically(t *testing.T) {
 	a := mkBatchTask(t, s, "bulk-a", Repeat{})
 	b := mkBatchTask(t, s, "bulk-b", Repeat{Every: 1, Unit: "weeks"})
 	before := revisionOf(t, s)
-	res, err := s.Batch(ctx, []BatchOp{{Op: "duplicate", ID: a}, {Op: "duplicate", ID: b}})
+	res, err := s.Batch(ctx, []BatchOp{{Op: "duplicate", ID: a}, {Op: "duplicate", ID: b}}, "test")
 	if err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
@@ -122,7 +125,7 @@ func TestBatchDuplicateAborts(t *testing.T) {
 	_, err := s.Batch(ctx, []BatchOp{
 		{Op: "duplicate", ID: a},
 		{Op: "duplicate", ID: primitive.NewObjectID().Hex()},
-	})
+	}, "test")
 	if err == nil {
 		t.Fatal("bogus duplicate must abort the batch")
 	}
@@ -150,7 +153,7 @@ func TestDuplicateLegacyRowWithoutNumbers(t *testing.T) {
 		t.Fatalf("insert fixture: %v", err)
 	}
 	id := res.InsertedID.(primitive.ObjectID).Hex()
-	doc, err := s.Duplicate(ctx, id)
+	doc, err := s.Duplicate(ctx, id, "test")
 	if err != nil {
 		t.Fatalf("Duplicate: %v", err)
 	}
@@ -161,14 +164,14 @@ func TestDuplicateLegacyRowWithoutNumbers(t *testing.T) {
 		bson.M{"$set": bson.M{"estimated_minutes": "lots"}}); err != nil {
 		t.Fatalf("corrupt fixture: %v", err)
 	}
-	if _, err := s.Duplicate(ctx, id); err == nil {
+	if _, err := s.Duplicate(ctx, id, "test"); err == nil {
 		t.Fatal("wrong-typed estimate must fail, not duplicate as zero")
 	}
 	if _, err := s.tasks.UpdateOne(ctx, bson.M{"_id": mustOid(t, id)},
 		bson.M{"$set": bson.M{"estimated_minutes": 5, "name": 42}}); err != nil {
 		t.Fatalf("corrupt fixture: %v", err)
 	}
-	if _, err := s.Duplicate(ctx, id); err == nil || !strings.Contains(err.Error(), "not a string") {
+	if _, err := s.Duplicate(ctx, id, "test"); err == nil || !strings.Contains(err.Error(), "not a string") {
 		t.Fatalf("wrong-typed name must name the field, got %v", err)
 	}
 }

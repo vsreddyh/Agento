@@ -27,13 +27,16 @@ func TestTaskHistoryReadsTheAgentsOwnWrites(t *testing.T) {
 	defer store.Close(context.Background())
 	ctx := context.Background()
 
-	doc, err := createTask(ctx, store, createTaskInput{
+	doc, replayed, err := createTask(ctx, store, createTaskInput{
 		Name: "history probe", Description: "d",
 		DueDate: "2026-10-05", DueTime: "08:00",
 		EstimatedMinutes: intPtr(5), Parallelable: boolPtr(false),
 	})
 	if err != nil {
 		t.Fatalf("createTask: %v", err)
+	}
+	if replayed {
+		t.Fatal("a fresh create must not replay")
 	}
 	id, _ := doc["id"].(string)
 	if id == "" {
@@ -88,13 +91,16 @@ func TestTaskHistoryFilters(t *testing.T) {
 	defer store.Close(context.Background())
 	ctx := context.Background()
 
-	doc, err := createTask(ctx, store, createTaskInput{
+	doc, replayed, err := createTask(ctx, store, createTaskInput{
 		Name: "history filter probe", Description: "d",
 		DueDate: "2026-10-06", DueTime: "08:00",
 		EstimatedMinutes: intPtr(5), Parallelable: boolPtr(false),
 	})
 	if err != nil {
 		t.Fatalf("createTask: %v", err)
+	}
+	if replayed {
+		t.Fatal("a fresh create must not replay")
 	}
 	id, _ := doc["id"].(string)
 	// The cleanup deletes the task WITHOUT writing a log row: only the

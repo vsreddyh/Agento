@@ -6,8 +6,6 @@ import (
 	"agento/internal/tasks"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -362,55 +360,18 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 // rule, and the wrapper is how the two copies this package once had came
 // back.
 
-// zeroLike returns the zero value of whatever type this field takes elsewhere, so an
-// absent key and an explicit zero hash the same. Type is taken from the OTHER keys
-// present in the same body where possible, because the digest has no schema of its own;
-// the fallbacks match what taskStrField / taskMinutes / the bool read would produce.
-func zeroLike(fields map[string]any, key string) any {
-	switch key {
-	case "estimated_minutes", "repeat_every":
-		for _, probe := range []string{"estimated_minutes", "repeat_every"} {
-			switch fields[probe].(type) {
-			case float64:
-				return float64(0)
-			case int:
-				return 0
-			case json.Number:
-				return json.Number("0")
-			}
-		}
-		return float64(0)
-	case "parallelable", "repeat_custom":
-		for _, probe := range []string{"parallelable", "repeat_custom"} {
-			if _, ok := fields[probe].(bool); ok {
-				return false
-			}
-		}
-		return false
-	case "repeat_days":
-		// The zero of a list is an EMPTY list, not a string: the store reads an
-		// absent key and an empty array identically (both = "not this mode"),
-		// so the digest must too, and `""` would hash differently from `[]`.
-		return []string{}
-	default:
-		return ""
-	}
-}
-
 // taskCreateFields is every body key the create path READS, and therefore every key
 // the idempotency fingerprint must cover.
 //
-// It is a named list rather than something derived because the consumers are spread
-// across taskStrField / taskMinutes / taskRepeat and nothing enforces that a new
-// consumed field is added here. That gap was real and shipped: `repeat_rule` is
-// consumed into Repeat.Text, validated, and STORED (repeat.go), yet was missing from
-// this list — so two creates differing only in their custom repeat text ("3rd Friday"
-// vs "end of month") hashed identically and the second was handed the first's task as
-// a replay. The silent wrong answer, reached through the mechanism built to prevent it.
+// It is a literal list (not an alias) because CI reads it statically: the
+// android-apk workflow awks this exact `var taskCreateFields = []string{...}`
+// block and diffs it against the app's TASK_CREATE_KEYS (#185). A field added,
+// renamed or dropped on one side without the other must fail there.
 //
-// `TestFingerprintCoversEveryConsumedField` walks this list and asserts each field
-// changes the digest, which is what makes the next omission a test failure rather than
-// a review finding. When a field is added to the create path, add it here too.
+// It must ALSO equal tasks.FingerprintFields — the fingerprint the MCP create
+// path shares — and TestFingerprintListsMatchStore pins that: two lists is how
+// `repeat_rule` went missing once (consumed, stored, but unhashed, so two
+// creates differing only in custom text replayed each other).
 var taskCreateFields = []string{
 	"name", "speak_name", "description", "due_date", "due_time",
 	"estimated_minutes", "parallelable",
@@ -418,128 +379,20 @@ var taskCreateFields = []string{
 }
 
 // trimmedForFingerprint is the subset of taskCreateFields the create path TrimSpaces
-// before storing. It must mirror that list exactly: a field trimmed by the store but
-// hashed verbatim makes the digest stricter than reality and 422s a legitimate retry,
-// and a field trimmed by the digest but stored verbatim makes it looser — two
-// genuinely different requests would replay as one.
-//
-// Kept as its own map rather than derived, because the trimming is spread across two
-// layers (the store trims the four core fields, taskRepeat trims the unit) and there is
-// nothing to derive from. TestFingerprintAgreesWithWhatTheStoreTrims round-trips
-// through the store to keep the two in step.
-//
-// `repeat_days` is deliberately NOT here: it is a LIST, and what the store does to it is
-// canonicalisation (lowercase, de-duplicate, sort), not trimming. taskFingerprint applies
-// the same canonicalisation through the store's own CanonicalRepeatDays, so the two cannot
-// drift — a second rule written here is the defect this map keeps producing.
-var trimmedForFingerprint = map[string]bool{
-	"name": true, "speak_name": true, "description": true,
-	"due_date": true, "due_time": true,
-	"repeat_unit": true,
-	// repeat_rule is here because Repeat.Normalize now trims Text, and the digest
-	// mirrors what the store writes. It was deliberately EXCLUDED while create stored
-	// the text raw — and that exclusion was correct then. It became wrong the moment
-	// the store started trimming, which is the argument for deriving this list from the
-	// store rather than restating it here: the exclusion was right about the old
-	// behaviour and silently became a bug when the behaviour changed.
-	"repeat_rule": true,
-}
+// before storing. Aliased to the store package's map: unlike taskCreateFields,
+// nothing external reads this one statically, so the alias keeps the two
+// transports on one rule with no second list to drift. TestFingerprintListsMatchStore
+// pins the alias. See tasks.FingerprintTrimmed for the semantics.
+var trimmedForFingerprint = tasks.FingerprintTrimmed
 
 // taskFingerprint digests a create body so a reused Idempotency-Key can be told
-// apart from a genuine retry.
-//
-// Derived from the DECODED body, not the raw bytes: encoding/json emits map keys in
-// sorted order, so this is canonical, and a client that re-serialises its retry with
-// different key order or indentation still matches. Hashing the bytes would 422 a
-// legitimate retry for a cosmetic difference.
-//
-// Only the fields the create actually consumes, so a client adding an unknown key
-// to a NEW version of its payload is not rejected for it.
+// apart from a genuine retry. One implementation lives in the store package
+// (tasks.Fingerprint) so the HTTP and MCP create paths agree about what "the
+// same request" means; this wrapper keeps the existing name its tests pin.
+// See tasks.Fingerprint for the rules (decoded body, zero-defaults, trimming,
+// speak_name truncation, repeat_days canonicalisation).
 func taskFingerprint(fields map[string]any) string {
-	if len(fields) == 0 {
-		return ""
-	}
-	// Every key is present in the digest, defaulting to its zero value when absent.
-	//
-	// The store reads an absent key and a zero-valued one IDENTICALLY —
-	// taskStrField returns "" either way, and the bool/number reads yield false/0 —
-	// so the digest must too. Skipping absent keys (the obvious implementation) makes
-	// a body that omits `repeat_rule` hash differently from the same body sending
-	// `"repeat_rule": ""`, and since the mismatch check only fires on a replay, that
-	// turns a client merely upgrading to an explicit empty value into a 422 on its own
-	// retry of a request that succeeded. A false rejection of a legitimate retry is
-	// the same class of silent-wrong-answer as the one this guards against.
-	// Trimmed exactly where the create path trims, and NOWHERE else.
-	//
-	// The store TrimSpaces name, description, due_date and due_time, and taskRepeat
-	// (this layer) TrimSpaces repeat_unit — so " foo " and "foo" create the SAME task.
-	// Hashing them verbatim made the digest disagree with the store about what "the
-	// same request" means, so a retry differing only in surrounding whitespace got a
-	// 422 Mismatch instead of a replay. Same class as the repeat_rule omission: the
-	// digest is only correct if it agrees with what actually gets stored.
-	//
-	// repeat_rule IS trimmed, because Repeat.Normalize now trims Text.
-	//
-	// This comment previously said the opposite — "deliberately NOT trimmed, because
-	// create stores it verbatim" — and it was true when written. Normalize then started
-	// trimming, so the store and the digest changed together while this paragraph did
-	// not. That made it worse than a stale comment: a reader trusting it would have
-	// removed "repeat_rule" from trimmedForFingerprint and reinstated a bug that two
-	// commits earlier had been fixed, with the comment actively telling them to.
-	//
-	// Verified by round-tripping through the store rather than by reading it: a body
-	// padded on any trimmed field must digest the same as the trimmed body AND produce
-	// the same stored task. That round trip is what caught the store-side change, and it
-	// is what should catch the next one.
-	trimmed := trimmedForFingerprint
-	relevant := make(map[string]any, len(taskCreateFields))
-	for _, k := range taskCreateFields {
-		v, ok := fields[k]
-		if !ok {
-			relevant[k] = zeroLike(fields, k)
-			continue
-		}
-		if trimmed[k] {
-			if str, isStr := v.(string); isStr {
-				v = strings.TrimSpace(str)
-			}
-		}
-		// The voice phrase is TRUNCATED as well as trimmed, because that is
-		// exactly what the store does (TruncateBytes 120): two bodies that
-		// differ only past the cap store identically, so hashing them
-		// differently would 422 a legitimate retry of a create that succeeded.
-		if k == "speak_name" {
-			if str, isStr := v.(string); isStr {
-				v = tasks.TruncateBytes(str, 120)
-			}
-		}
-		// The selection is CANONICALISED rather than trimmed, because that is
-		// exactly what the store does (CanonicalRepeatDays): ["Mon","mon"] and
-		// ["mon"] create the SAME task, and ["wed","mon"] and ["mon","wed"]
-		// create the same task, so hashing them differently would 422 a
-		// legitimate retry of a create that succeeded. A nil (empty) selection
-		// hashes as [], matching zeroLike.
-		if k == "repeat_days" {
-			if days, ok := tasks.ParseRepeatDays(v); ok {
-				if days == nil {
-					days = []string{}
-				}
-				v = days
-			}
-		}
-		relevant[k] = v
-	}
-	if len(relevant) == 0 {
-		return ""
-	}
-	raw, err := json.Marshal(relevant)
-	if err != nil {
-		// Unencodable means the body holds a type the create will reject anyway.
-		// Returning "" disables the mismatch check rather than failing the write.
-		return ""
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+	return tasks.Fingerprint(fields)
 }
 
 // requestSource names the caller for the audit log (#176). The app sends
@@ -623,9 +476,11 @@ func getTask(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, doc)
 }
 
-// updateTask applies a partial edit (only sent keys change; empty
-// repeat_rule clears the rule — same semantics as the agent's update_task).
-// Omit all four repeat keys to leave the recurrence alone; the rule is
+// updateTask applies a partial edit (only sent keys change; sending
+// repeat_rule "" with no structured key clears the whole rule (one-shot) —
+// same semantics as the agent's update_task).
+// Omit all five repeat keys (repeat_every/repeat_unit/repeat_days/
+// repeat_custom/repeat_rule) to leave the recurrence alone; the rule is
 // never inferred from an empty value. expected_revision is the
 // optimistic-concurrency guard: when present it must match the stored
 // revision or the edit is rejected with 409 instead of overwriting.
@@ -690,7 +545,15 @@ func deleteTask(w http.ResponseWriter, r *http.Request, id string) {
 	// Logged AFTER the delete, so there is no window where the log claims a delete
 	// that was then rolled back by a failed response.
 	store.RecordMutation(ctx, tasks.OpDelete, id, requestSource(r), "http DELETE")
-	writeJSON(w, http.StatusOK, bson.M{"deleted": true})
+	// The CANONICAL id, not a bare true: it is the spelling the change log
+	// stores, so a caller comparing this answer against a history row does
+	// not miss on case — the same envelope the MCP tool answers with (#530).
+	// The app ignores the body, so no client breaks.
+	deleted := id
+	if norm, nerr := tasks.NormalizeTaskID(id); nerr == nil {
+		deleted = norm
+	}
+	writeJSON(w, http.StatusOK, bson.M{"deleted": deleted})
 }
 
 // completeTask marks a task done (3-day retention starts server-side).
@@ -726,6 +589,14 @@ func completeTask(w http.ResponseWriter, r *http.Request, id string) {
 	out["rollover"] = string(rollover)
 	if rollover.NeedsAttention() {
 		out["needs_attention"] = rollover.Attention(rolloverDetail)
+	}
+	if rollover == tasks.RolloverCustom {
+		// The MCP tool echoes the rule back with a follow_up here; the app
+		// gets the same keys (additive — an old app ignores unknown keys).
+		// A custom condition is the caller's to advance either way (#530).
+		for k, v := range customRolloverEcho(doc) {
+			out[k] = v
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -785,7 +656,33 @@ func skipTask(w http.ResponseWriter, r *http.Request, id string) {
 	if rollover.NeedsAttention() {
 		out["needs_attention"] = rollover.Attention(rolloverDetail)
 	}
+	if rollover == tasks.RolloverCustom {
+		for k, v := range customRolloverEcho(doc) {
+			out[k] = v
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// customRolloverEcho mirrors the MCP complete_task/skip_task follow-up for a
+// custom repeat: the rule echoed back plus the instruction to create the next
+// occurrence. Additive on the HTTP verbs (an old app ignores unknown keys),
+// so both doors tell the caller the same thing (#530).
+func customRolloverEcho(doc map[string]any) bson.M {
+	rep := tasks.RepeatOf(doc)
+	days := rep.Days
+	if days == nil {
+		days = []string{}
+	}
+	return bson.M{
+		"repeat_every":  rep.Every,
+		"repeat_unit":   rep.Unit,
+		"repeat_days":   days,
+		"repeat_custom": rep.Custom,
+		"repeat_rule":   rep.Text,
+		"follow_up": "this task repeats (" + rep.String() + "), a CUSTOM condition the server will not interpret — create the next occurrence via POST /api/tasks with the SAME repeat keys (" +
+			tasks.RepeatHint(rep) + "), keeping name/description/due_time/estimated_minutes/parallelable identical; only due_date advances, to the occurrence you compute.",
+	}
 }
 
 // reopenTask clears completion (and the skip marker), making a done or

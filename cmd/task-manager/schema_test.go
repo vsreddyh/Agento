@@ -48,6 +48,7 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		{"skip_task", skipTaskInput{}, []string{"id"}},
 		{"reopen_task", reopenTaskInput{}, []string{"id"}},
 		{"delete_task", deleteTaskInput{}, []string{"id"}},
+		{"duplicate_task", duplicateTaskInput{}, []string{"id"}},
 		// Every filter is optional: the whole log is the default reading of
 		// the question, and a tool that made the agent invent a filter to
 		// ask "what happened?" would be a tool nobody calls.
@@ -91,7 +92,7 @@ func TestToolInputSchemaRequired(t *testing.T) {
 // exists, which is a different bug from the one this file exists to prevent.
 func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 	optional := map[string][]string{
-		"create_task": {"repeat_every", "repeat_unit", "repeat_custom", "repeat_rule"},
+		"create_task": {"repeat_every", "repeat_unit", "repeat_custom", "repeat_rule", "idempotency_key"},
 		"list_tasks":  {"state", "overdue", "search", "limit"},
 		"update_task": {"name", "description", "due_date", "due_time",
 			"estimated_minutes", "repeat_every", "repeat_unit", "repeat_custom",
