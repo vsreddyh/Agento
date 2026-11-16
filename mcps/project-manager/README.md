@@ -5,7 +5,7 @@ Agento Android app's Projects screen offers the same list with full CRUD
 over `GET/POST/PATCH/DELETE /api/projects` plus `POST /api/projects/reorder`
 on health-api (same store, same validation — see `cmd/health-api/main.go`).
 Reordering is an app-only verb: a project the agent creates appends to the
-end of the board, it never needs to set the order itself.
+end of its status section, it never needs to set the order itself.
 
 ## Tools
 
