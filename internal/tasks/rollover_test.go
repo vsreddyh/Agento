@@ -554,7 +554,13 @@ func TestReconcileGapsCarryTheReasonTheyFailed(t *testing.T) {
 	})
 	for _, id := range []string{blankTime, badEstimate} {
 		if _, _, _, err := s.Complete(ctx, id); err != nil {
-			t.Fatalf("complete %s: %v", id, err)
+			if !txCapable(ctx, s) {
+				t.Fatalf("complete %s: %v", id, err)
+			}
+			// Atomic path (#530): the completion aborts on the broken
+			// field, so force the historical completed-broken state
+			// directly — that is the shape this report exists for.
+			mustCompleteRaw(t, s, id)
 		}
 	}
 
