@@ -1106,7 +1106,11 @@ func inBatch(ctx context.Context) bool {
 // completeInTx runs core in one transaction, aborting when the rollover fails.
 // The parent mark and the successor insert commit together, closing the crash
 // window where the successor existed unlinked or not at all.
-func (s *Store) completeInTx(ctx context.Context, core func(context.Context) (map[string]any, map[string]any, Rollover, string, error)) (map[string]any, map[string]any, Rollover, string, error) {
+//
+// verb names the caller for the abort error ("completion", "skip"): a failed
+// skip rollover must not answer "completion aborted", which sends the operator
+// after the wrong verb.
+func (s *Store) completeInTx(ctx context.Context, verb string, core func(context.Context) (map[string]any, map[string]any, Rollover, string, error)) (map[string]any, map[string]any, Rollover, string, error) {
 	var done, next map[string]any
 	var reason Rollover
 	var detail string
@@ -1130,7 +1134,7 @@ func (s *Store) completeInTx(ctx context.Context, core func(context.Context) (ma
 			}
 			// The task stays OPEN: nothing committed. Name the field, not
 			// the outcome — the detail is the part that says what to fix.
-			return nil, nil, "", "", fail("completion aborted: %s — fix the field and retry", det)
+			return nil, nil, "", "", fail("%s aborted: %s — fix the field and retry", verb, det)
 		}
 		return nil, nil, "", "", txErr
 	}
@@ -1171,7 +1175,7 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 		}
 		return done, next, reason, detail, err
 	}
-	return s.completeInTx(ctx, func(sc context.Context) (map[string]any, map[string]any, Rollover, string, error) {
+	return s.completeInTx(ctx, "completion", func(sc context.Context) (map[string]any, map[string]any, Rollover, string, error) {
 		return s.completeDetail(sc, id)
 	})
 }
@@ -1247,7 +1251,7 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 		}
 		return done, next, reasonOut, detail, err
 	}
-	return s.completeInTx(ctx, func(sc context.Context) (map[string]any, map[string]any, Rollover, string, error) {
+	return s.completeInTx(ctx, "skip", func(sc context.Context) (map[string]any, map[string]any, Rollover, string, error) {
 		return s.skipDetail(sc, id, reason)
 	})
 }

@@ -51,7 +51,14 @@ Every completion reports WHY a next occurrence did or did not get created:
 | `none` | One-shot; there was never a next to make | nothing |
 | `custom` | The condition is the caller's to interpret | create it (the `follow_up` says so) |
 | `exhausted` | Structured and intact, but past `MaxRollovers` | tell the user; re-enter the repeat |
-| `failed` | Stored data won't carry forward, or minting errored | tell the user which field, loudly |
+| `failed` | Stored data won't carry forward, or minting errored — on a no-transaction deployment, or inside a batch session | tell the user which field, loudly |
+
+On a transaction-capable deployment (#530) there is no success-with-`failed`
+for single verbs: a rollover that cannot be minted ABORTS the completion/skip
+— the task stays open and the call returns an error naming the field ("fix
+the field and retry"). `rollover: failed` + `needs_attention` on a done task
+is then the legacy shape only (no transactions) plus the batch-session path,
+where the abort owns the failure instead.
 
 This field exists because the outcome used to be inferred from `next == nil`,
 which made `none`, `exhausted` and `failed` indistinguishable. A repeat that had
@@ -275,10 +282,10 @@ reads the BLANK first value, so it answers the whole log;
 page of 200 rather than 5; and `?limit=5&limit=garbage` reads the FIRST
 value, so it answers 5 — the second is ignored, valid or not.
 
-The delete envelopes differ too, and predates this reader: the MCP tool
-answers `{"deleted": "<canonical id>"}` while the HTTP route answers
-`{"deleted": true}` with no id. The canonical id is the one the log stores,
-so it is the one a caller can compare against a history row.
+The delete envelopes agree (#530): both the MCP tool and the HTTP route
+answer `{"deleted": "<canonical id>"}`. The canonical id is the one the log
+stores, so it is the one a caller can compare against a history row. (The app
+ignores the body.)
 
 `since` is **inclusive** and must be RFC3339 (fractional seconds accepted —
 the `at` this filter is fed back from carries milliseconds). It must carry an
@@ -331,10 +338,9 @@ whole log), exactly as a blank `op` means every op; a non-blank one that is
 not a hex id (including one made of spaces and commas) is a 422, exactly like
 an `op` filter that names nothing.
 
-`op=duplicate` is accepted but only the **batch** path records it (#341): a
-single duplicate is a store operation with no verb of its own, so the filter
-vocabulary is wider than the current set of writers. Rows come back only for
-duplicates made through a batch. Batch op names are lowercase-exact
+`op=duplicate` covers both doors (#341, #530): batch duplicates and single
+`duplicate_task` copies both write it, the row about the copy with the
+source in its detail. Batch op names are lowercase-exact
 (`"Complete"` is a 422), while these filters are case-insensitive — the two
 are different surfaces, and the difference is deliberate.
 
