@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -408,6 +409,31 @@ func (r Repeat) docs() bson.M {
 		"repeat_custom": r.Custom,
 		"repeat_rule":   r.Text,
 	}
+}
+
+// RepeatOf reads a task's recurrence back out of a rendered response map.
+// Shared by the MCP and HTTP transports so both echo the same rule for a
+// custom repeat — one reader, not one per door.
+func RepeatOf(doc map[string]any) Repeat {
+	return repeatFromDoc(bson.M(doc))
+}
+
+// RepeatHint spells out the exact create keys that reproduce a recurrence,
+// so the caller copies a cadence instead of re-deriving it.
+func RepeatHint(rep Repeat) string {
+	if rep.Custom {
+		// %q, not quotes: a custom condition may itself contain an
+		// apostrophe, and this string is copied by the caller.
+		return fmt.Sprintf("repeat_custom: true, repeat_rule: %q", rep.Text)
+	}
+	if len(rep.Days) > 0 {
+		parts := make([]string, 0, len(rep.Days))
+		for _, d := range rep.Days {
+			parts = append(parts, fmt.Sprintf("%q", d))
+		}
+		return "repeat_days: [" + strings.Join(parts, ", ") + "]"
+	}
+	return fmt.Sprintf("repeat_every: %d, repeat_unit: %q", rep.Every, rep.Unit)
 }
 
 // repeatFromDoc reads a doc's recurrence, tolerating pre-4.6 docs that

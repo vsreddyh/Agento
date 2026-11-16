@@ -48,10 +48,14 @@ rejects it.
 
 ## Everyday use
 
-- Capture fast: collect name + description + due date/time + estimate +
-  parallelable BEFORE calling `create_task` — it rejects missing fields.
-  ("takes about an hour" → `estimated_minutes: 60`; "I can do it alongside
-  X" → `parallelable: true`; no repeat mentioned → send no repeat keys.)
+- Capture fast — but NEVER invent fields. `create_task` rejects missing
+  fields, and guessing an `estimated_minutes`, a due date/time or a filler
+  `description` stores a lie the user then has to find and fix. If any
+  required field is missing, ask the user for it first (one short question,
+  short labeled options where they fit). "Takes about an hour" →
+  `estimated_minutes: 60` is fine; silence about duration is not 60 — ask.
+- All times are IST (Asia/Kolkata). Interpret user-supplied times in IST;
+  no timezone plumbing beyond that.
 - Morning check: `list_tasks` with `overdue: true`, then state=open.
 - Done for now but not finished: leave open. Only `complete_task` finishes.
 - "Not tonight" / "skip it" means the work did NOT happen: call `skip_task`
@@ -87,6 +91,19 @@ or a fractional number for `limit`, and a null for any of the four.
 `source` is a self-attested LABEL — `mcp` for the agent, the app's own label
 otherwise — not an authenticated identity. Say "the app changed it", not
 "the user did".
+
+## Postponing a task
+
+There is no "postpone" verb. To move ONE occurrence to a new date/time
+without disturbing the rest of the schedule:
+
+1. `duplicate_task` the target task (the copy keeps every field).
+2. Clear the copy's repeat condition (edit the copy to a one-shot), so it
+   never rolls over itself.
+3. `skip_task` the original occurrence (the work did NOT happen on the old
+   date; the series stays intact and rolls as usual).
+4. Move the copy to a date/time slot that doesn't disturb the rest of the
+   schedule (edit `due_date`/`due_time` on the copy only).
 
 ## Mistake
 

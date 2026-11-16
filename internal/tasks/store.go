@@ -1073,18 +1073,68 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 // "every 3rd Friday" and "end of every month" need the user or the agent,
 // and the server will not guess. One-shot tasks roll over to nothing.
 //
-// Returns the completed doc, the new task when one was created, and WHY one was
-// not. That third value is the point of #180: the caller used to see `next == nil`
-// and could not distinguish "one-shot, nothing to do" from "repeats, but the
-// rollover failed", so a task that had silently stopped recurring was reported as
-// an ordinary completion.
+// The completion and its rollover commit atomically when the deployment
+// supports transactions (#530): a rollover that cannot be minted aborts the
+// completion instead of leaving a done task with no successor, so a repeat
+// can no longer silently stop from this path. The error names the field to
+// fix — the task stays open, fix it, retry.
 //
 // It DISCARDS the field-specific reason a rollover failed. Use CompleteDetail if you need
 // to tell the user WHICH field to fix — the two transports do, and a caller that picks
-// this one by accident gets a `RolloverFailed` with no explanation attached.
+// this one by accident gets an error with no structured reason attached.
 func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, error) {
 	doc, next, reason, _, err := s.CompleteDetail(ctx, id)
 	return doc, next, reason, err
+}
+
+// txRolloverAbort carries a failed rollover's field detail out of a completion
+// transaction. The transaction must ABORT (not commit the parent done without its
+// successor), so the failure travels as an error — but the transports need the
+// detail, not just a marker, hence a typed error rather than a sentinel.
+type txRolloverAbort struct{ detail string }
+
+func (e *txRolloverAbort) Error() string { return e.detail }
+
+// inBatch reports whether ctx is running inside Batch's transaction (see
+// batchOpCtx). Checked FIRST by the single-verb wrappers, before any hello
+// or session use: a hello on a session that is mid-transaction bumps the
+// txn number outside the transaction and kills it.
+func inBatch(ctx context.Context) bool {
+	return ctx.Value(inBatchKey{}) != nil
+}
+
+// completeInTx runs core in one transaction, aborting when the rollover fails.
+// The parent mark and the successor insert commit together, closing the crash
+// window where the successor existed unlinked or not at all.
+func (s *Store) completeInTx(ctx context.Context, core func(context.Context) (map[string]any, map[string]any, Rollover, string, error)) (map[string]any, map[string]any, Rollover, string, error) {
+	var done, next map[string]any
+	var reason Rollover
+	var detail string
+	txErr := s.transact(ctx, func(sc context.Context) error {
+		d, n, r, det, err := core(sc)
+		if err != nil {
+			return err
+		}
+		if r == RolloverFailed {
+			return &txRolloverAbort{detail: det}
+		}
+		done, next, reason, detail = d, n, r, det
+		return nil
+	})
+	if txErr != nil {
+		var abort *txRolloverAbort
+		if errors.As(txErr, &abort) {
+			det := strings.TrimSpace(abort.detail)
+			if det == "" {
+				det = "the rollover could not be planned"
+			}
+			// The task stays OPEN: nothing committed. Name the field, not
+			// the outcome — the detail is the part that says what to fix.
+			return nil, nil, "", "", fail("completion aborted: %s — fix the field and retry", det)
+		}
+		return nil, nil, "", "", txErr
+	}
+	return done, next, reason, detail, nil
 }
 
 // CompleteDetail is Complete plus the FIELD-SPECIFIC reason a rollover failed, e.g.
@@ -1101,7 +1151,35 @@ func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[st
 // detail, but roughly twenty test call sites discard three of the four values already,
 // and widening the signature would churn every one of them to serve a need only the
 // transports have.
+//
+// Atomicity (#530): on a deployment with transactions the completion and its
+// rollover commit together — a failed rollover ABORTS, the task stays open, and
+// the failure returns as an error carrying the field detail. Inside a batch
+// session, or where transactions are unavailable, the legacy contract holds:
+// success with RolloverFailed, the parent already done, the detail alongside.
 func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, string, error) {
+	if inBatch(ctx) || !s.useTransactions(ctx) {
+		done, next, reason, detail, err := s.completeDetail(ctx, id)
+		if err == nil && reason == RolloverFailed {
+			// The task is already marked done, so a failed rollover must not
+			// make the completion look like it failed. Logged, because the
+			// reconciler runs nightly and the user may act sooner.
+			// The id is trimmed and bounded, like every other echo here: the row
+			// this failure produces stores the CANONICAL id, and a log line that
+			// spells it differently is one grep away from missing.
+			log.Printf("task %s completed but rollover failed: %v", TruncateBytes(canonicalID(id), 40), detail)
+		}
+		return done, next, reason, detail, err
+	}
+	return s.completeInTx(ctx, func(sc context.Context) (map[string]any, map[string]any, Rollover, string, error) {
+		return s.completeDetail(sc, id)
+	})
+}
+
+// completeDetail is the CompleteDetail core: mark done, mint the successor.
+// No logging here — the wrappers own that, because the transactional wrapper
+// must stay silent when it aborts (nothing committed, nothing to report yet).
+func (s *Store) completeDetail(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
 		return nil, nil, "", "", badID(id)
@@ -1137,16 +1215,9 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 	s.bumpChanges(ctx)
 	next, reason, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
-		// The task is already marked done, so a failed rollover must not
-		// make the completion look like it failed. It is reported as
-		// RolloverFailed rather than swallowed, because that reason is what
-		// tells the caller — and now the reconciler — that the repeat has
-		// stopped. Logged too, because the reconciler runs nightly and the
-		// user may act sooner.
-		// The id is trimmed and bounded, like every other echo here: the
-		// row this failure produces stores the CANONICAL id, and a log
-		// line that spells it differently is one grep away from missing.
-		log.Printf("task %s completed but rollover failed: %v", TruncateBytes(canonicalID(id), 40), rerr)
+		// Reported, not swallowed: the reason is what tells the caller — and
+		// the reconciler — that the repeat has stopped. The WRAPPERS own the
+		// logging (legacy path) and the abort (transactional path).
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reason, "", nil
@@ -1163,7 +1234,27 @@ func (s *Store) CompleteDetail(ctx context.Context, id string) (map[string]any, 
 // [reason] is free text (the notification action sends ""), trimmed and
 // capped like any other stored field. Errors on unknown ids and on tasks
 // that are already completed or skipped, naming the actual state.
+//
+// Atomicity (#530): same contract as CompleteDetail — transactional where
+// supported (abort on failed rollover, task stays open), legacy
+// success-with-RolloverFailed inside a batch session or without transactions.
 func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, string, error) {
+	if inBatch(ctx) || !s.useTransactions(ctx) {
+		done, next, reasonOut, detail, err := s.skipDetail(ctx, id, reason)
+		if err == nil && reasonOut == RolloverFailed {
+			// Trimmed and bounded, like the completion path above.
+			log.Printf("task %s skipped but rollover failed: %v", TruncateBytes(canonicalID(id), 40), detail)
+		}
+		return done, next, reasonOut, detail, err
+	}
+	return s.completeInTx(ctx, func(sc context.Context) (map[string]any, map[string]any, Rollover, string, error) {
+		return s.skipDetail(sc, id, reason)
+	})
+}
+
+// skipDetail is the SkipDetail core. See completeDetail for why logging lives
+// in the wrappers, not here.
+func (s *Store) skipDetail(ctx context.Context, id, reason string) (map[string]any, map[string]any, Rollover, string, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
 		return nil, nil, "", "", badID(id)
@@ -1197,8 +1288,8 @@ func (s *Store) SkipDetail(ctx context.Context, id, reason string) (map[string]a
 	s.bumpChanges(ctx)
 	next, reasonOut, rerr := s.rollOver(ctx, done)
 	if rerr != nil {
-		// Trimmed and bounded, like the completion path above.
-		log.Printf("task %s skipped but rollover failed: %v", TruncateBytes(canonicalID(id), 40), rerr)
+		// Reported, not swallowed — see completeDetail. Logging and abort
+		// live in the SkipDetail wrappers.
 		return done, nil, RolloverFailed, rerr.Error(), nil
 	}
 	return done, next, reasonOut, "", nil

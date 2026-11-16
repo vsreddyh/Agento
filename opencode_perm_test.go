@@ -70,7 +70,7 @@ var freeTools = map[string][]string{
 	"health-check": {"log_meal", "query_meals", "log_weight", "log_sleep",
 		"log_workout", "daily_summary"},
 	"task-manager": {"create_task", "list_tasks", "get_task", "update_task",
-		"complete_task", "skip_task", "reopen_task", "task_history"},
+		"complete_task", "skip_task", "reopen_task", "duplicate_task", "task_history"},
 	"project-manager": {"create_project", "list_projects", "get_project", "update_project"},
 	"reports":         {"create_report", "get_report", "list_reports"},
 }

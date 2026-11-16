@@ -17,7 +17,6 @@ import (
 	"os"
 	"strings"
 
-	"agento/internal/mongostore"
 	"agento/internal/tasks"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,48 +25,17 @@ import (
 var store *tasks.Store
 
 // repeatOf reads a task doc's recurrence back out of a response map.
+// Delegates to tasks.RepeatOf — one reader shared with the HTTP transport,
+// so both doors echo the same rule.
 func repeatOf(doc map[string]any) tasks.Repeat {
-	rep := tasks.Repeat{}
-	if s, ok := doc["repeat_rule"].(string); ok {
-		rep.Text = s
-	}
-	if n, ok := mongostore.ToInt(doc["repeat_every"]); ok {
-		rep.Every = n
-	}
-	if u, ok := doc["repeat_unit"].(string); ok {
-		rep.Unit = u
-	}
-	if b, ok := doc["repeat_custom"].(bool); ok {
-		rep.Custom = b
-	}
-	// The selection, leniently — a doc is read for display (rep.String()) and
-	// for the follow_up hint, so an unreadable shape must not fail the call.
-	rep.Days, _ = tasks.ParseRepeatDays(doc["repeat_days"])
-	return rep.Normalize()
+	return tasks.RepeatOf(doc)
 }
 
 // repeatHint spells out the exact create_task keys that reproduce a
 // recurrence, so the agent copies a cadence instead of re-deriving it.
+// Delegates to tasks.RepeatHint, shared with the HTTP transport.
 func repeatHint(rep tasks.Repeat) string {
-	if rep.Custom {
-		// %q, not quotes: a custom condition may itself contain an
-		// apostrophe, and this string is copied by the agent.
-		return fmt.Sprintf("repeat_custom: true, repeat_rule: %q", rep.Text)
-	}
-	if len(rep.Days) > 0 {
-		return fmt.Sprintf("repeat_days: %s", daysHint(rep.Days))
-	}
-	return fmt.Sprintf("repeat_every: %d, repeat_unit: %q", rep.Every, rep.Unit)
-}
-
-// daysHint renders a selection as the JSON-shaped literal an agent can copy,
-// quoted like every other value in this instruction.
-func daysHint(days []string) string {
-	parts := make([]string, 0, len(days))
-	for _, d := range days {
-		parts = append(parts, fmt.Sprintf("%q", d))
-	}
-	return "[" + strings.Join(parts, ", ") + "]"
+	return tasks.RepeatHint(rep)
 }
 
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
@@ -115,6 +83,10 @@ type createTaskInput struct {
 	// Required by store.Create, which rejects a task with no estimate and one with no
 	// parallelable flag — so it stays required in the schema despite being a pointer.
 	Parallelable *bool `json:"parallelable"`
+	// Optional client-supplied idempotency key (#530): same key + same body
+	// replays the original task instead of creating a second one; same key +
+	// different body is rejected. Absent (the common case) means no key.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 type listTasksInput struct {
@@ -162,6 +134,10 @@ type reopenTaskInput struct {
 }
 
 type deleteTaskInput struct {
+	ID string `json:"id"`
+}
+
+type duplicateTaskInput struct {
 	ID string `json:"id"`
 }
 
@@ -220,7 +196,7 @@ type taskHistoryInput struct {
 // test did exactly that and passed against the unfixed code, because the store honours
 // whatever source it is handed; the decision that had been wrong was the handler's
 // choice between Create and CreateWithKey, and only a test of the handler can see it.
-func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (map[string]any, error) {
+func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (map[string]any, bool, error) {
 	rep := tasks.Repeat{
 		Every:  0,
 		Unit:   strings.TrimSpace(in.RepeatUnit),
@@ -239,17 +215,50 @@ func createTask(ctx context.Context, store *tasks.Store, in createTaskInput) (ma
 	// exists to answer "which caller wrote this row" was blank for exactly the caller that
 	// writes most rows. The two records are the same fact and they disagreed.
 	//
-	// No idempotency key here: this path has no client-supplied key to replay, and an
-	// empty one disables the payload-mismatch check rather than weakening it — there is
-	// nothing to compare a retry against.
-	doc, _, err := store.CreateWithKey(ctx, in.Name, in.Description, in.DueDate,
+	// No idempotency key by default: this path has no client-supplied key unless
+	// the caller sends idempotency_key, and an empty one disables the
+	// payload-mismatch check rather than weakening it — there is nothing to
+	// compare a retry against.
+	//
+	// The fingerprint covers the same fields the HTTP create digests
+	// (tasks.Fingerprint, the shared rule), so a keyed retry differing only
+	// in padding, key order or day selection spelling still replays, and a
+	// key reused with a different body is rejected rather than silently
+	// returning the wrong task.
+	fields := map[string]any{
+		"name": in.Name, "description": in.Description,
+		"due_date": in.DueDate, "due_time": in.DueTime,
+		"speak_name": in.SpeakName,
+		"repeat_unit": in.RepeatUnit, "repeat_rule": in.RepeatRule,
+	}
+	if in.EstimatedMinutes != nil {
+		fields["estimated_minutes"] = *in.EstimatedMinutes
+	}
+	if in.RepeatEvery != nil {
+		fields["repeat_every"] = *in.RepeatEvery
+	}
+	if in.RepeatDays != nil {
+		fields["repeat_days"] = in.RepeatDays
+	}
+	if in.Parallelable != nil {
+		fields["parallelable"] = *in.Parallelable
+	}
+	if in.RepeatCustom != nil {
+		fields["repeat_custom"] = *in.RepeatCustom
+	}
+	doc, replayed, err := store.CreateWithKey(ctx, in.Name, in.Description, in.DueDate,
 		in.DueTime, in.EstimatedMinutes, rep.Normalize(), in.Parallelable,
-		in.SpeakName, "", mcpSource, "")
+		in.SpeakName, strings.TrimSpace(in.IdempotencyKey), mcpSource, tasks.Fingerprint(fields))
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if replayed {
+		// A replay changed nothing, so (like the HTTP path) it earns no audit
+		// row — and the caller is told it replayed via the flag, not a 201.
+		return doc, true, nil
 	}
 	store.RecordMutation(ctx, tasks.OpCreate, fmt.Sprint(doc["id"]), mcpSource, "mcp create_task")
-	return doc, nil
+	return doc, false, nil
 }
 
 // mcpSource labels every mutation made through this server in the audit log.
@@ -343,13 +352,17 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "task-manager", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_task",
-		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). Optional: speak_name, a verb phrase for voice reminders (e.g. name 'Power Bill' → speak_name 'pay the power bill'); blank falls back to name. The repeat is ONE of three mutually exclusive shapes — never combine them: structured interval (repeat_every 1-28 with repeat_unit days|weeks|months|years), structured selected days (repeat_days = an array of weekdays from mon,tue,wed,thu,fri,sat,sun, always WEEKLY, and due_date MUST be one of them), or a custom condition (repeat_custom true with repeat_rule = the user's words verbatim). All of them empty/0/[] = one-shot. Prefer the structured shapes: the server rolls those over itself; only a custom condition is yours to advance."},
+		Description: "Create an open task. ALL fields except the repeat are required: name, description, due_date YYYY-MM-DD, due_time HH:MM, estimated_minutes >= 0, parallelable (true = can run alongside other tasks). Ask the user for any missing required field instead of inventing a value. Optional: speak_name, a verb phrase for voice reminders (e.g. name 'Power Bill' → speak_name 'pay the power bill'); blank falls back to name. Optional: idempotency_key, a client-generated key (a UUID) making retries safe — same key + same body replays the original task (with `replayed: true`), same key + different body is rejected. The repeat is ONE of three mutually exclusive shapes — never combine them: structured interval (repeat_every 1-28 with repeat_unit days|weeks|months|years), structured selected days (repeat_days = an array of weekdays from mon,tue,wed,thu,fri,sat,sun, always WEEKLY, and due_date MUST be one of them), or a custom condition (repeat_custom true with repeat_rule = the user's words verbatim). All of them empty/0/[] = one-shot. Prefer the structured shapes: the server rolls those over itself; only a custom condition is yours to advance."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, map[string]any, error) {
-			doc, err := createTask(ctx, store, in)
+			doc, replayed, err := createTask(ctx, store, in)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "task": doc})
+			out := map[string]any{"ok": true, "task": doc}
+			if replayed {
+				out["replayed"] = true
+			}
+			return result(out)
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_tasks",
@@ -433,7 +446,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
-		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, call skip_task instead. A STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over: the next occurrence is created for you and returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
+		Description: "Mark a task done (retained 3 days, then auto-deleted). Call ONLY when the work actually happened — never to clear something not done; if it did not happen, call skip_task instead. A STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over: the completion and the next occurrence commit atomically and `next` is returned — do not create it yourself. A rollover that cannot be minted ABORTS the completion (the task stays open and the error names the field — fix it and retry). A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task with the same repeat keys, keeping every field identical (including due_time) and advancing only due_date."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.CompleteDetail(ctx, in.ID)
 			if err != nil {
@@ -470,7 +483,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "skip_task",
-		Description: "Skip the current occurrence WITHOUT claiming the work was done (retained 3 days like a completion, then auto-deleted; `reopen_task` restores it). Call when the work did NOT happen: a STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over exactly like complete_task and the next occurrence is returned as `next` — do not create it yourself. A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task the same way as after a custom completion."},
+		Description: "Skip the current occurrence WITHOUT claiming the work was done (retained 3 days like a completion, then auto-deleted; `reopen_task` restores it). Call when the work did NOT happen: a STRUCTURED repeat (repeat_every + repeat_unit, or repeat_days) rolls itself over atomically like complete_task and the next occurrence is returned as `next` — do not create it yourself (a rollover that cannot be minted aborts the skip, the task stays open). A CUSTOM repeat is yours: the response carries `follow_up` and you MUST create the next occurrence via create_task the same way as after a custom completion."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in skipTaskInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, next, rollover, rolloverDetail, err := store.SkipDetail(ctx, in.ID, in.Reason)
 			if err != nil {
@@ -545,6 +558,27 @@ func main() {
 				deleted = id
 			}
 			return result(map[string]any{"ok": true, "deleted": deleted})
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "duplicate_task",
+		Description: "Copy a task 1:1 (open, done or skipped) into a new open task: fresh id and revision, no completion or skip marker, no rollover back-link. Carries name, description, voice phrase, due date/time, estimated minutes, the whole recurrence and parallelable — edit the copy afterwards (e.g. clear its repeat for a one-shot postpone)."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in duplicateTaskInput) (*mcp.CallToolResult, map[string]any, error) {
+			doc, err := store.Duplicate(ctx, in.ID)
+			if err != nil {
+				return fail(err)
+			}
+			newID, _ := doc["id"].(string)
+			// The row is about the COPY; the detail names the SOURCE it came
+			// from (canonical id, like the change log stores). Recorded by
+			// the transport, which knows the caller — see Duplicate.
+			srcID := strings.TrimSpace(in.ID)
+			if norm, nerr := tasks.NormalizeTaskID(srcID); nerr == nil {
+				srcID = norm
+			}
+			if newID != "" {
+				store.RecordMutation(ctx, tasks.OpDuplicate, newID, mcpSource, srcID)
+			}
+			return result(map[string]any{"ok": true, "task": doc})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "task_history",

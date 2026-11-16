@@ -96,13 +96,16 @@ func TestMcpCreateStoresSourceOnTheTask(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	doc, err := createTask(ctx, store, createTaskInput{
+	doc, replayed, err := createTask(ctx, store, createTaskInput{
 		Name: "mcp source probe", Description: "d",
 		DueDate: "2026-10-05", DueTime: "08:00",
 		EstimatedMinutes: intPtr(5), Parallelable: boolPtr(false),
 	})
 	if err != nil {
 		t.Fatalf("createTask: %v", err)
+	}
+	if replayed {
+		t.Fatal("a fresh keyed-less create must not replay")
 	}
 	id, _ := doc["id"].(string)
 	if id == "" {
