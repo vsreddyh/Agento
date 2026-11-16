@@ -53,19 +53,18 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-/** Fixed task statuses (#55). Order here is the default sort order:
- * Ongoing → Testing → Blocked → Paused → Todo → Done. */
-internal val TASK_STATUSES = listOf("Ongoing", "Testing", "Blocked", "Paused", "Todo", "Done")
+/** Fixed task statuses (#55, #527). Order here is the default sort order:
+ * Ongoing → Testing → Paused → Todo → Done. */
+internal val TASK_STATUSES = listOf("Ongoing", "Testing", "Paused", "Todo", "Done")
 
 internal fun taskRank(status: String): Int =
     TASK_STATUSES.indexOf(status).let { if (it < 0) TASK_STATUSES.indexOf("Todo") else it }
 
-/** Maps legacy free-text statuses onto the fixed set (#55). */
+/** Maps legacy free-text statuses onto the fixed set (#55, #527). */
 internal fun normalizeStatus(raw: String): String = when (raw.trim().lowercase(Locale.ROOT)) {
     "doing", "ongoing", "in progress", "in_progress" -> "Ongoing"
     "testing", "test", "tests", "qa", "in testing" -> "Testing"
-    "blocked", "block", "stuck", "on hold" -> "Blocked"
-    "paused", "pause", "pasued" -> "Paused"
+    "paused", "pause", "pasued", "blocked", "block", "stuck", "on hold" -> "Paused"
     "done", "complete", "completed" -> "Done"
     else -> "Todo"
 }
@@ -150,6 +149,11 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // that relation onto the server's complete section order.
     var dragTargetId by remember { mutableStateOf<String?>(null) }
     var dragAfterTarget by remember { mutableStateOf(false) }
+    // Set while a drag hovers a row in the same visual section but a
+    // different stored section (#527 transition: Paused visual holds stored
+    // Paused + unmigrated Blocked). Consumed as a toast on release when no
+    // move happened, so the no-op is explained, not silent.
+    var dragMigrationBlocked by remember { mutableStateOf(false) }
 
     fun fail(e: Throwable) {
         toasts.toast(serverDetail(e.message ?: e.javaClass.simpleName), ToastKind.Error)
@@ -296,6 +300,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         dragMoved = false
         dragTargetId = null
         dragAfterTarget = false
+        dragMigrationBlocked = false
     }
 
     fun dragMove(dy: Float) {
@@ -303,21 +308,38 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         dragDelta += dy
         val info = listState.layoutInfo
         val dragged = info.visibleItemsInfo.firstOrNull { it.key == cardKey(id) } ?: return
-        val status = projects.firstOrNull { it.id == id }?.let { normalizeStatus(it.status) } ?: return
+        // Reorder is per stored status (#527 transition): the Paused visual
+        // section can hold stored Paused + unmigrated stored Blocked rows,
+        // but the server's full-section reorder is exact-status, so a drag
+        // must stay inside its own stored section, not the normalized one.
+        val stored = projects.firstOrNull { it.id == id }?.status ?: return
         // The dragged card's visual centre relative to the list: its layout
         // slot is fixed, the finger offset lives in dragDelta.
         val centre = dragged.offset + dragDelta + dragged.size / 2f
-        val target = info.visibleItemsInfo.firstOrNull { item ->
+        // The card under the finger, if any: a header key or empty space
+        // reads as no hover, never as a cross-section attempt.
+        val hovered = info.visibleItemsInfo.firstOrNull { item ->
             val key = item.key as? String ?: return@firstOrNull false
             if (!key.startsWith(CARD_KEY_PREFIX) || key == cardKey(id)) return@firstOrNull false
-            val other = projects.firstOrNull { it.id == key.removePrefix(CARD_KEY_PREFIX) }
-                ?: return@firstOrNull false
-            // Drags stay inside one section; crossing statuses is an edit,
-            // not a reorder.
-            normalizeStatus(other.status) == status &&
-                centre >= item.offset && centre <= item.offset + item.size
+            centre >= item.offset && centre <= item.offset + item.size
+        }?.let { (it.key as String).removePrefix(CARD_KEY_PREFIX) }
+            ?.let { hid -> projects.firstOrNull { it.id == hid } }
+        if (hovered == null) return
+        // Crossing visual sections is an edit, not a reorder: stay silent
+        // here like before (the section headers make the boundary visible).
+        if (!normalizeStatus(hovered.status).equals(normalizeStatus(stored), ignoreCase = true)) return
+        // Same visual section but different stored section (#527
+        // transition): the move cannot persist per exact-status reorder,
+        // so flag it for an explanatory toast on release instead of a
+        // silent no-op.
+        if (!hovered.status.equals(stored, ignoreCase = true)) {
+            dragMigrationBlocked = true
+            return
+        }
+        val target = info.visibleItemsInfo.firstOrNull { item ->
+            item.key == cardKey(hovered.id)
         } ?: return
-        val targetId = (target.key as String).removePrefix(CARD_KEY_PREFIX)
+        val targetId = hovered.id
         val from = manualOrder.indexOf(id)
         val to = manualOrder.indexOf(targetId)
         if (from < 0 || to < 0 || from == to) return
@@ -343,14 +365,27 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         val id = draggingId ?: return
         draggingId = null
         dragDelta = 0f
-        if (!dragMoved) return
+        if (!dragMoved) {
+            // A hover across the invisible stored boundary inside one
+            // visual section cannot persist: say so instead of dropping it
+            // silently. Runs once per drag (flag resets in startDrag).
+            if (dragMigrationBlocked) {
+                dragMigrationBlocked = false
+                toast("These Paused rows finish migrating first — reorder works again after the #527 migration", ToastKind.Info)
+            }
+            return
+        }
         dragMoved = false
-        val status = projects.firstOrNull { it.id == id }?.let { normalizeStatus(it.status) } ?: return
+        dragMigrationBlocked = false
+        // Same stored-section rule as dragMove (#527 transition): list +
+        // reorder the dragged row's stored status so unmigrated Blocked rows
+        // reorder their own section instead of failing against Paused.
+        val status = projects.firstOrNull { it.id == id }?.status ?: return
         val targetId = dragTargetId
         val afterTarget = dragAfterTarget
         val localIds = manualOrder.filter { pid ->
             projects.firstOrNull { it.id == pid }
-                ?.let { normalizeStatus(it.status) == status } == true
+                ?.let { it.status.equals(status, ignoreCase = true) } == true
         }
         if (localIds.size < 2) return
         busy = true

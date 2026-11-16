@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.0.0]
+- **BREAKING: Blocked status removed from the app board (#527).** The board
+  has five sections — Ongoing → Testing → Paused → Todo → Done — and legacy
+  `Blocked` rows render in `Paused` (`blocked` / `block` / `stuck` /
+  `on hold` normalize to `Paused`). Server + Atlas migration still pending
+  in #527: the API may still return stored `Blocked` rows until those land,
+  so this entry claims app rendering only, not a server 422 yet.
+
 ## [8.1.0]
 - **Projects board rework (#519).** Statuses are now collapsible sections
   (Ongoing → Testing → Blocked → Paused → Todo → Done) instead of a filter
