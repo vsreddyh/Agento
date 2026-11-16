@@ -461,9 +461,10 @@ func (s *Store) Create(ctx context.Context, name, description, dueDate, dueTime 
 // unique index below cannot drift apart.
 const (
 	// idempotencyKeyField is the client's key. Unique and SPARSE: most tasks are
-	// created without one (the MCP path does not use it), and a unique index over
-	// missing values would treat every one of them as the same key and reject all
-	// but the first. Sparse means "absent is not a value".
+	// created without one (the MCP path sends one only when the caller passes
+	// idempotency_key), and a unique index over missing values would treat
+	// every one of them as the same key and reject all but the first.
+	// Sparse means "absent is not a value".
 	idempotencyKeyField = "idempotency_key"
 	// sourceField records WHICH caller wrote the row — app vs MCP — so a duplicate
 	// or a surprise is traceable. health-api and the agent are indistinguishable at
@@ -1079,9 +1080,11 @@ func mergeRepeat(cur bson.M, fields map[string]any, strField func(string) (strin
 // can no longer silently stop from this path. The error names the field to
 // fix — the task stays open, fix it, retry.
 //
-// It DISCARDS the field-specific reason a rollover failed. Use CompleteDetail if you need
-// to tell the user WHICH field to fix — the two transports do, and a caller that picks
-// this one by accident gets an error with no structured reason attached.
+// It DISCARDS the separate field-specific detail string: use CompleteDetail
+// when you need the reason as its own return value. The abort error itself
+// still names the field (completeInTx threads it into the message), so
+// "discarded" is about the extra return slot, not about losing which field
+// to fix — the two transports call CompleteDetail anyway.
 func (s *Store) Complete(ctx context.Context, id string) (map[string]any, map[string]any, Rollover, error) {
 	doc, next, reason, _, err := s.CompleteDetail(ctx, id)
 	return doc, next, reason, err

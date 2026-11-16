@@ -378,7 +378,7 @@ that is worth knowing before diffing two rows:
 | `complete`, `skip` | the rollover outcome (`created`, `none`, `custom`, …) |
 | `reopen` | empty over HTTP, `mcp reopen_task` over MCP |
 | `delete` | the door that deleted it (`http DELETE`, `mcp delete_task`) |
-| `duplicate` | the id of the task this was duplicated from, when the writer passed a hex id (the batch path always does) — the row itself is about the COPY, whose id it carries. An EMPTY detail on a `duplicate` row means the writer passed no back-link: the row is kept (the copy happened) and the server log says so, so an empty detail on this op means "no source", never "no change" |
+| `duplicate` | the id of the task this was duplicated from — both doors always pass it (batch duplicates and single `duplicate_task` copies, canonicalized to lower case on the write seam) — the row itself is about the COPY, whose id it carries. An EMPTY detail on a `duplicate` row means the writer passed no back-link (only a direct store bypass today): the row is kept (the copy happened) and the server log says so, so an empty detail on this op means "no source", never "no change" |
 
 Two of those rows are about a MISSING value rather than a stored one, so
 they are worth spelling out: an empty `detail` is the honest answer for a
