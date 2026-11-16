@@ -245,3 +245,50 @@ func projectIDs(rows []map[string]any) []string {
 	}
 	return out
 }
+
+// #519 review: a partial reorder must fail, not leave omitted rows behind
+// colliding with the rewritten positions.
+func TestReorderRequiresCompleteSection(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	var ids []string
+	for _, name := range []string{"a", "b", "c"} {
+		doc, err := s.Create(ctx, name, "Todo", "")
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		ids = append(ids, doc["id"].(string))
+	}
+	if err := s.Reorder(ctx, "Todo", []string{ids[2], ids[0]}); err == nil {
+		t.Fatal("partial section must fail")
+	}
+	if err := s.Reorder(ctx, "Todo", []string{ids[2], ids[0], ids[1]}); err != nil {
+		t.Fatalf("complete section: %v", err)
+	}
+}
+
+// A status change is a section change: the row must append to the new
+// section instead of keeping its old slot.
+func TestStatusChangeReslotsToEnd(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	first, err := s.Create(ctx, "already done", "Done", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	moving, err := s.Create(ctx, "moving", "Todo", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	id := moving["id"].(string)
+	if _, err := s.Update(ctx, id, map[string]any{"status": "Done"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	rows, err := s.List(ctx, "Done", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, []string{first["id"].(string), id}) {
+		t.Fatalf("status change must append: got %v", got)
+	}
+}

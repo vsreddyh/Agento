@@ -411,6 +411,9 @@ func TestProjectReorderGuard(t *testing.T) {
 	// Malformed bodies fail before the store opens.
 	for _, body := range []string{
 		`{oops`,
+		`{"ids":[]}`,
+		`{"status":"  ","ids":[]}`,
+		`{"status":42,"ids":[]}`,
 		`{"status":"Todo"}`,
 		`{"status":"Todo","ids":"abc"}`,
 		`{"status":"Todo","ids":[1]}`,

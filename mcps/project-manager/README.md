@@ -24,9 +24,13 @@ Blocked | Paused | Done), `note`, `position`, `createdAt`, `updatedAt`
 (bumped on every edit).
 
 `position` is the manual board order (#519), ascending with gaps of 1000 so
-a section can be re-slotted. New rows get `max(position) + 1000` (the end of
-the board); `list_projects` returns manual order. Rows created before #519
-have no `position` and sort after every positioned row.
+a section can be re-slotted. New rows get `max(position) + 1000`, which the
+app renders as the end of their status section; a status change re-slots the
+row the same way, so it appends to the new section instead of inheriting the
+old slot. `list_projects` returns the board order the phone shows: status
+rank (Ongoing, Testing, Blocked, Paused, Todo, Done), then `position`, then
+newest. Rows created before #519 have no `position` and sort after every
+positioned row in their section.
 
 ### Key invariants
 
@@ -34,7 +38,10 @@ have no `position` and sort after every positioned row.
   write, stored canonical). Blank status defaults to Todo.
 - **Permanent:** no TTL, no retention pruning. Done means finished.
 - **Manual order:** `POST /api/projects/reorder` with `{"status":"Todo","ids":[…]}` rewrites one
-  section's positions; ids must still carry that status, and reordering does not bump `updatedAt`.
+  section's positions. `status` is required (no Todo default, unlike
+  create/update), `ids` must list the **complete** section (a partial list
+  would collide with omitted rows), every id must still carry that status,
+  and reordering does not bump `updatedAt`.
 - **Shared board:** the app's Projects tab reads/writes the same rows
   (see `.opencode/skills/project-manager/SKILL.md`); local `tasks.json` is gone.
 

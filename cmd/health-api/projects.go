@@ -272,7 +272,13 @@ func reorderProjects(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	status, _ := fields["status"].(string)
+	// Unlike create/update, reorder has no sensible "default section":
+	// an omitted/typo'd status must 422, never silently rewrite Todo.
+	status, ok := fields["status"].(string)
+	if !ok || strings.TrimSpace(status) == "" {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "status is required"})
+		return
+	}
 	rawIDs, ok := fields["ids"].([]any)
 	if !ok {
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "ids must be an array of project ids"})

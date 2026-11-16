@@ -124,7 +124,8 @@ func toDoc(doc bson.M) map[string]any {
 }
 
 // Create inserts a project. Name required; empty status defaults to Todo.
-// New rows land at the end of the manual board order.
+// New rows get the highest position, which renders as the end of their
+// status section (and of the board before it is grouped).
 func (s *Store) Create(ctx context.Context, name, status, note string) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -171,11 +172,12 @@ func (s *Store) nextPosition(ctx context.Context) (int64, error) {
 }
 
 // List returns projects filtered by status ("" or "all" = everything) with
-// optional case-insensitive name/note search, in manual board order
-// (position ascending, then most recently updated; rows written before
-// #519 have no position and sort after every positioned row). limit caps
-// rows after ordering: <=0 defaults to DefaultLimit, above MaxLimit clamps
-// down.
+// optional case-insensitive name/note search, in the board order the app
+// renders: status rank (Ongoing, Testing, Blocked, Paused, Todo, Done),
+// then position ascending, then most recently updated. Rows written before
+// #519 have no position and sort after every positioned row in their
+// section. limit caps rows after ordering: <=0 defaults to DefaultLimit,
+// above MaxLimit clamps down.
 func (s *Store) List(ctx context.Context, status, search string, limit int) ([]map[string]any, error) {
 	filt := bson.M{}
 	if status = strings.TrimSpace(status); status != "" && !strings.EqualFold(status, "all") {
@@ -190,20 +192,36 @@ func (s *Store) List(ctx context.Context, status, search string, limit int) ([]m
 		rx := bson.M{"$regex": regexp.QuoteMeta(search), "$options": "i"}
 		filt["$or"] = []bson.M{{"name": rx}, {"note": rx}}
 	}
-	// $ifNull makes a missing position sort last (MaxInt64) instead of
-	// first, which is where MongoDB puts a missing field in an ascending
-	// sort. limit has to run after the sort, hence an aggregation.
+	// Board order is the one the app renders: status sections in the fixed
+	// order (Ongoing → Testing → Blocked → Paused → Todo → Done), then the
+	// stored position, then newest-updated. $ifNull makes a missing
+	// position sort last (MaxInt64) instead of first, where MongoDB puts a
+	// missing field in an ascending sort. limit has to run after the sort,
+	// hence an aggregation.
 	cur, err := s.projects.Aggregate(ctx, mongoDrv.Pipeline{
 		{{Key: "$match", Value: filt}},
-		{{Key: "$addFields", Value: bson.M{"_manualOrder": bson.M{
-			"$ifNull": bson.A{"$position", int64(math.MaxInt64)},
-		}}}},
+		{{Key: "$addFields", Value: bson.M{
+			"_statusRank": bson.M{"$switch": bson.M{
+				"branches": bson.A{
+					bson.M{"case": bson.M{"$eq": bson.A{"$status", "Ongoing"}}, "then": 0},
+					bson.M{"case": bson.M{"$eq": bson.A{"$status", "Testing"}}, "then": 1},
+					bson.M{"case": bson.M{"$eq": bson.A{"$status", "Blocked"}}, "then": 2},
+					bson.M{"case": bson.M{"$eq": bson.A{"$status", "Paused"}}, "then": 3},
+					bson.M{"case": bson.M{"$eq": bson.A{"$status", "Done"}}, "then": 5},
+				},
+				"default": 4,
+			}},
+			"_manualOrder": bson.M{
+				"$ifNull": bson.A{"$position", int64(math.MaxInt64)},
+			},
+		}}},
 		{{Key: "$sort", Value: bson.D{
+			{Key: "_statusRank", Value: 1},
 			{Key: "_manualOrder", Value: 1},
 			{Key: "updatedAt", Value: -1},
 		}}},
 		{{Key: "$limit", Value: int64(mongostore.ClampLimit(limit, DefaultLimit, MaxLimit))}},
-		{{Key: "$unset", Value: "_manualOrder"}},
+		{{Key: "$unset", Value: bson.A{"_statusRank", "_manualOrder"}}},
 	})
 	if err != nil {
 		return nil, err
@@ -279,6 +297,19 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 	if len(set) == 0 {
 		return toDoc(cur), nil
 	}
+	// A status change moves the row to a new section: give it a fresh
+	// position so it lands at the end of that section instead of
+	// inheriting the old section's slot.
+	if newStatus, ok := set["status"].(string); ok {
+		oldStatus, _ := cur["status"].(string)
+		if !strings.EqualFold(newStatus, oldStatus) {
+			position, err := s.nextPosition(ctx)
+			if err != nil {
+				return nil, err
+			}
+			set["position"] = position
+		}
+	}
 	set["updatedAt"] = primitive.NewDateTimeFromTime(time.Now().UTC())
 	if _, err := s.projects.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": set}); err != nil {
 		return nil, err
@@ -299,10 +330,11 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	return res.DeletedCount > 0, nil
 }
 
-// Reorder rewrites the manual order for one status section (#519): every id
-// must exist and still carry status (a concurrent status edit is a 422, not
-// a silent overwrite), and positions become (i+1)*positionStep in the given
-// order. updatedAt is deliberately untouched — reordering is not an edit.
+// Reorder rewrites the manual order for one status section (#519): ids must
+// list the complete section, every id must exist and still carry status (a
+// concurrent status edit is a 422, not a silent overwrite), and positions
+// become (i+1)*positionStep in the given order. updatedAt is deliberately
+// untouched — reordering is not an edit.
 func (s *Store) Reorder(ctx context.Context, status string, ids []string) error {
 	status, err := CheckStatus(status)
 	if err != nil {
@@ -313,6 +345,17 @@ func (s *Store) Reorder(ctx context.Context, status string, ids []string) error 
 	}
 	if len(ids) > MaxLimit {
 		return fail("too many ids (max %d)", MaxLimit)
+	}
+	// A partial list would leave omitted rows at their old positions and
+	// create duplicates with the rewritten ones, so the whole section has
+	// to be listed. The per-id status checks below then prove set equality
+	// (distinct ids all in this section + same count as the section).
+	total, err := s.projects.CountDocuments(ctx, bson.M{"status": status})
+	if err != nil {
+		return err
+	}
+	if int(total) != len(ids) {
+		return fail("ids must list all %d %s projects, got %d", total, status, len(ids))
 	}
 	oids := make([]primitive.ObjectID, 0, len(ids))
 	seen := make(map[string]bool, len(ids))

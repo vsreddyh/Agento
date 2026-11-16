@@ -91,7 +91,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_projects",
-		Description: "List projects in manual board order. status Todo | Ongoing | Testing | Blocked | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
+		Description: "List projects in board order (status, then manual position). status Todo | Ongoing | Testing | Blocked | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listProjectsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.List(ctx, in.Status, in.Search, in.Limit)
 			if err != nil {

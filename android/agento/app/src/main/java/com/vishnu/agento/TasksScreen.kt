@@ -222,8 +222,10 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     }
 
     // Swipe right = delete (#519): the row settles dismissed, the delete
-    // runs, and Undo recreates it from the cached fields. A failure bumps
-    // refreshTick so TaskCard's resetToken snaps the row back.
+    // runs, and Undo recreates it from the cached fields. It is a new row,
+    // so it comes back at the end of its section (id and position are
+    // server-assigned). A failure bumps refreshTick so TaskCard's
+    // resetToken snaps the row back.
     fun doDelete(t: ServerProject) {
         if (busy) return
         busy = true
