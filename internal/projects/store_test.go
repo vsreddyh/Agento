@@ -3,10 +3,14 @@ package projects
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
 	"agento/internal/mongo"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func testStore(t *testing.T) *Store {
@@ -130,4 +134,114 @@ func TestListLimit(t *testing.T) {
 	if err != nil || len(rows) != 3 {
 		t.Fatalf("List limit=0 defaults: %v %v", rows, err)
 	}
+}
+
+// #519: manual order. New rows append, reorder rewrites that section's
+// positions, and reordering never bumps updatedAt.
+func TestManualOrderAndReorder(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	var ids []string
+	for _, name := range []string{"one", "two", "three"} {
+		doc, err := s.Create(ctx, name, "Todo", "")
+		if err != nil {
+			t.Fatalf("Create %s: %v", name, err)
+		}
+		ids = append(ids, doc["id"].(string))
+	}
+	rows, err := s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, ids) {
+		t.Fatalf("creation order: got %v, want %v", got, ids)
+	}
+	before, err := s.Get(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	want := []string{ids[2], ids[0], ids[1]}
+	if err := s.Reorder(ctx, "Todo", want); err != nil {
+		t.Fatalf("Reorder: %v", err)
+	}
+	rows, err = s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List after reorder: %v", err)
+	}
+	if got := projectIDs(rows); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reordered ids: got %v, want %v", got, want)
+	}
+	after, err := s.Get(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("Get after reorder: %v", err)
+	}
+	if before["updatedAt"] != after["updatedAt"] {
+		t.Fatalf("reorder must not bump updatedAt: %v -> %v", before["updatedAt"], after["updatedAt"])
+	}
+	// Positions are spaced so a later create still appends at the end.
+	doc, err := s.Create(ctx, "four", "Todo", "")
+	if err != nil {
+		t.Fatalf("Create after reorder: %v", err)
+	}
+	rows, err = s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List after append: %v", err)
+	}
+	if got := projectIDs(rows); len(got) != 4 || got[3] != doc["id"] {
+		t.Fatalf("create after reorder must append: got %v", got)
+	}
+	// Rejections: wrong status, duplicate, unknown, blank.
+	if err := s.Reorder(ctx, "Done", want); err == nil {
+		t.Fatal("reorder with a status mismatch should fail")
+	}
+	if err := s.Reorder(ctx, "Todo", []string{ids[0], ids[0]}); err == nil {
+		t.Fatal("duplicate ids should fail")
+	}
+	if err := s.Reorder(ctx, "Todo", []string{ids[0], "nope"}); err == nil {
+		t.Fatal("unknown id should fail")
+	}
+	if err := s.Reorder(ctx, "Todo", []string{"  "}); err == nil {
+		t.Fatal("blank id should fail")
+	}
+	if err := s.Reorder(ctx, "Todo", nil); err == nil {
+		t.Fatal("empty ids should fail")
+	}
+}
+
+// Rows written before #519 have no position and must sort after positioned
+// rows instead of leading the board.
+func TestLegacyRowsWithoutPositionSortLast(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	positioned, err := s.Create(ctx, "positioned", "Todo", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	now := primitive.NewDateTimeFromTime(time.Now().UTC())
+	res, err := s.projects.InsertOne(ctx, bson.M{
+		"name": "legacy", "status": "Todo", "note": "",
+		"createdAt": now, "updatedAt": now,
+	})
+	if err != nil {
+		t.Fatalf("insert legacy: %v", err)
+	}
+	legacy := res.InsertedID.(primitive.ObjectID).Hex()
+	rows, err := s.List(ctx, "Todo", "", 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := projectIDs(rows)
+	if len(got) != 2 || got[0] != positioned["id"] || got[1] != legacy {
+		t.Fatalf("legacy row must sort last: got %v", got)
+	}
+}
+
+func projectIDs(rows []map[string]any) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if id, ok := row["id"].(string); ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }

@@ -2,8 +2,10 @@
 
 Project board for the user. The agent manages projects over MCP; the
 Agento Android app's Projects screen offers the same list with full CRUD
-over `GET/POST/PATCH/DELETE /api/projects` on health-api (same store,
-same validation — see `cmd/health-api/main.go`).
+over `GET/POST/PATCH/DELETE /api/projects` plus `POST /api/projects/reorder`
+on health-api (same store, same validation — see `cmd/health-api/main.go`).
+Reordering is an app-only verb: a project the agent creates appends to the
+end of the board, it never needs to set the order itself.
 
 ## Tools
 
@@ -18,13 +20,21 @@ same validation — see `cmd/health-api/main.go`).
 ## Schema (MongoDB `hermes` DB)
 
 **`projects`** — `name` (required), `status` (Todo | Ongoing | Testing |
-Blocked | Paused | Done), `note`, `createdAt`, `updatedAt` (bumped on every edit).
+Blocked | Paused | Done), `note`, `position`, `createdAt`, `updatedAt`
+(bumped on every edit).
+
+`position` is the manual board order (#519), ascending with gaps of 1000 so
+a section can be re-slotted. New rows get `max(position) + 1000` (the end of
+the board); `list_projects` returns manual order. Rows created before #519
+have no `position` and sort after every positioned row.
 
 ### Key invariants
 
 - **Fixed statuses:** only Todo/Ongoing/Testing/Blocked/Paused/Done (case-insensitive on
   write, stored canonical). Blank status defaults to Todo.
 - **Permanent:** no TTL, no retention pruning. Done means finished.
+- **Manual order:** `POST /api/projects/reorder` with `{"status":"Todo","ids":[…]}` rewrites one
+  section's positions; ids must still carry that status, and reordering does not bump `updatedAt`.
 - **Shared board:** the app's Projects tab reads/writes the same rows
   (see `.opencode/skills/project-manager/SKILL.md`); local `tasks.json` is gone.
 

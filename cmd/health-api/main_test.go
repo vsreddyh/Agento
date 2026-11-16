@@ -383,3 +383,55 @@ func TestSyncInvalidJSONScrubbed(t *testing.T) {
 		t.Fatalf("422 must name invalid JSON, got %s", body)
 	}
 }
+
+// #519 reorder: collection-shaped verb, guarded before any MongoDB touch.
+func TestProjectReorderGuard(t *testing.T) {
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	// No token → 401.
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/reorder", strings.NewReader(`{"status":"Todo"}`))
+	w := httptest.NewRecorder()
+	reorderProjects(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token: got %d", w.Code)
+	}
+	// Wrong method names the route with Allow, after auth.
+	req = httptest.NewRequest(http.MethodGet, "/api/projects/reorder", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	reorderProjects(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get: got %d (%s), want 405", w.Code, w.Body.String())
+	}
+	if allow := w.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow: got %q, want POST", allow)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "/api/projects/reorder accepts POST") {
+		t.Fatalf("405 must name the route, got %s", body)
+	}
+	// Malformed bodies fail before the store opens.
+	for _, body := range []string{
+		`{oops`,
+		`{"status":"Todo"}`,
+		`{"status":"Todo","ids":"abc"}`,
+		`{"status":"Todo","ids":[1]}`,
+	} {
+		req = httptest.NewRequest(http.MethodPost, "/api/projects/reorder", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-secret-12345678")
+		w = httptest.NewRecorder()
+		reorderProjects(w, req)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: got %d (%s)", body, w.Code, w.Body.String())
+		}
+	}
+	// The exact route wins over the /api/projects/ item handler, which
+	// would answer 404 for this path.
+	mux := http.NewServeMux()
+	registerProjects(mux)
+	req = httptest.NewRequest(http.MethodPost, "/api/projects/reorder", strings.NewReader(`{"status":"Todo"}`))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("reorder route: got %d (%s)", w.Code, w.Body.String())
+	}
+}

@@ -255,6 +255,51 @@ func deleteProject(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, bson.M{"deleted": true})
 }
 
+// reorderProjects rewrites the manual order of one status section (#519):
+// body {"status":"Todo","ids":["<id>",…]}. The store rejects duplicates,
+// unknown ids and ids whose status changed under the request.
+func reorderProjects(w http.ResponseWriter, r *http.Request) {
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "/api/projects/reorder accepts POST"})
+		return
+	}
+	fields, ok := decodeProjectBody(w, r)
+	if !ok {
+		return
+	}
+	status, _ := fields["status"].(string)
+	rawIDs, ok := fields["ids"].([]any)
+	if !ok {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "ids must be an array of project ids"})
+		return
+	}
+	ids := make([]string, 0, len(rawIDs))
+	for _, v := range rawIDs {
+		s, ok := v.(string)
+		if !ok {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "ids must be an array of project ids"})
+			return
+		}
+		ids = append(ids, s)
+	}
+	store, ok := projectStore(w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := store.Reorder(ctx, status, ids); err != nil {
+		writeProjectErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, bson.M{"ok": true})
+}
+
 // projectsRoot serves the collection endpoint: GET lists, POST creates.
 func projectsRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
@@ -272,5 +317,8 @@ func projectsRoot(w http.ResponseWriter, r *http.Request) {
 // list of domains, not a list of paths (#171).
 func registerProjects(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects", projectsRoot)
+	// Exact pattern wins over the /api/projects/ subtree: reorder is a
+	// collection verb, never a project id.
+	mux.HandleFunc("/api/projects/reorder", reorderProjects)
 	mux.HandleFunc("/api/projects/", projectItem)
 }

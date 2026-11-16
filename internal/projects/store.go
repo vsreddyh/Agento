@@ -1,16 +1,23 @@
 // Package projects: MongoDB-backed project board for the agent.
 //
 // Collection: projects. One doc per project with name, status (Todo |
-// Ongoing | Testing | Blocked | Paused | Done), note, createdAt, updatedAt. Projects are
-// permanent (no TTL, no retention pruning) and shared with the app's
-// Projects tab over /api/projects (see cmd/health-api/main.go) and the
-// project-manager MCP server (see cmd/project-manager/main.go).
+// Ongoing | Testing | Blocked | Paused | Done), note, position, createdAt,
+// updatedAt. Projects are permanent (no TTL, no retention pruning) and
+// shared with the app's Projects tab over /api/projects (see
+// cmd/health-api/main.go) and the project-manager MCP server (see
+// cmd/project-manager/main.go).
+//
+// position is the manual board order (#519): ascending, spaced
+// positionStep apart so rows can be re-slotted without rewriting the whole
+// board. Rows created before #519 carry no position and sort after every
+// positioned row.
 package projects
 
 import (
 	"agento/internal/mongostore"
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -22,6 +29,10 @@ import (
 )
 
 const coll = "projects"
+
+// positionStep separates consecutive manual positions so a reorder can
+// rewrite a section without renumbering the whole board.
+const positionStep = int64(1000)
 
 // DefaultLimit caps List rows when the caller passes limit <= 0;
 // MaxLimit clamps explicit requests (one unbounded Find would grow with
@@ -76,6 +87,7 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	_, err := s.projects.Indexes().CreateMany(ctx, []mongoDrv.IndexModel{
 		{Keys: bson.D{{Key: "status", Value: 1}}, Options: options.Index().SetName("status_1")},
 		{Keys: bson.D{{Key: "updatedAt", Value: -1}}, Options: options.Index().SetName("updatedAt_-1")},
+		{Keys: bson.D{{Key: "position", Value: 1}}, Options: options.Index().SetName("position_1")},
 	})
 	return err
 }
@@ -112,6 +124,7 @@ func toDoc(doc bson.M) map[string]any {
 }
 
 // Create inserts a project. Name required; empty status defaults to Todo.
+// New rows land at the end of the manual board order.
 func (s *Store) Create(ctx context.Context, name, status, note string) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -121,10 +134,14 @@ func (s *Store) Create(ctx context.Context, name, status, note string) (map[stri
 	if err != nil {
 		return nil, err
 	}
+	position, err := s.nextPosition(ctx)
+	if err != nil {
+		return nil, err
+	}
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{
 		"name": name, "status": status, "note": strings.TrimSpace(note),
-		"createdAt": now, "updatedAt": now,
+		"position": position, "createdAt": now, "updatedAt": now,
 	}
 	res, err := s.projects.InsertOne(ctx, doc)
 	if err != nil {
@@ -134,10 +151,31 @@ func (s *Store) Create(ctx context.Context, name, status, note string) (map[stri
 	return toDoc(doc), nil
 }
 
+// nextPosition returns one step past the current highest position (1000 on
+// an empty board). Two concurrent creates can pick the same value; the
+// updatedAt tiebreak keeps the list deterministic until the next reorder.
+func (s *Store) nextPosition(ctx context.Context) (int64, error) {
+	var last struct {
+		Position int64 `bson:"position"`
+	}
+	err := s.projects.FindOne(ctx,
+		bson.M{"position": bson.M{"$exists": true}},
+		options.FindOne().
+			SetSort(bson.D{{Key: "position", Value: -1}}).
+			SetProjection(bson.M{"position": 1}),
+	).Decode(&last)
+	if err != nil && err != mongoDrv.ErrNoDocuments {
+		return 0, err
+	}
+	return last.Position + positionStep, nil
+}
+
 // List returns projects filtered by status ("" or "all" = everything) with
-// optional case-insensitive name/note search, most recently updated first
-// (the app applies its status-rank ordering client-side). limit caps rows:
-// <=0 defaults to DefaultLimit, above MaxLimit clamps down.
+// optional case-insensitive name/note search, in manual board order
+// (position ascending, then most recently updated; rows written before
+// #519 have no position and sort after every positioned row). limit caps
+// rows after ordering: <=0 defaults to DefaultLimit, above MaxLimit clamps
+// down.
 func (s *Store) List(ctx context.Context, status, search string, limit int) ([]map[string]any, error) {
 	filt := bson.M{}
 	if status = strings.TrimSpace(status); status != "" && !strings.EqualFold(status, "all") {
@@ -152,8 +190,21 @@ func (s *Store) List(ctx context.Context, status, search string, limit int) ([]m
 		rx := bson.M{"$regex": regexp.QuoteMeta(search), "$options": "i"}
 		filt["$or"] = []bson.M{{"name": rx}, {"note": rx}}
 	}
-	cur, err := s.projects.Find(ctx, filt,
-		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(int64(mongostore.ClampLimit(limit, DefaultLimit, MaxLimit))))
+	// $ifNull makes a missing position sort last (MaxInt64) instead of
+	// first, which is where MongoDB puts a missing field in an ascending
+	// sort. limit has to run after the sort, hence an aggregation.
+	cur, err := s.projects.Aggregate(ctx, mongoDrv.Pipeline{
+		{{Key: "$match", Value: filt}},
+		{{Key: "$addFields", Value: bson.M{"_manualOrder": bson.M{
+			"$ifNull": bson.A{"$position", int64(math.MaxInt64)},
+		}}}},
+		{{Key: "$sort", Value: bson.D{
+			{Key: "_manualOrder", Value: 1},
+			{Key: "updatedAt", Value: -1},
+		}}},
+		{{Key: "$limit", Value: int64(mongostore.ClampLimit(limit, DefaultLimit, MaxLimit))}},
+		{{Key: "$unset", Value: "_manualOrder"}},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -246,4 +297,63 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 		return false, err
 	}
 	return res.DeletedCount > 0, nil
+}
+
+// Reorder rewrites the manual order for one status section (#519): every id
+// must exist and still carry status (a concurrent status edit is a 422, not
+// a silent overwrite), and positions become (i+1)*positionStep in the given
+// order. updatedAt is deliberately untouched — reordering is not an edit.
+func (s *Store) Reorder(ctx context.Context, status string, ids []string) error {
+	status, err := CheckStatus(status)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return fail("ids is required")
+	}
+	if len(ids) > MaxLimit {
+		return fail("too many ids (max %d)", MaxLimit)
+	}
+	oids := make([]primitive.ObjectID, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return fail("ids must not contain blank values")
+		}
+		if seen[id] {
+			return fail("duplicate id '%s'", id)
+		}
+		seen[id] = true
+		oid, err := primitive.ObjectIDFromHex(id)
+		if err != nil {
+			return fail("bad id '%s'", id)
+		}
+		var doc struct {
+			Status string `bson:"status"`
+		}
+		if err := s.projects.FindOne(ctx, bson.M{"_id": oid}, options.FindOne().
+			SetProjection(bson.M{"status": 1})).Decode(&doc); err != nil {
+			if err == mongoDrv.ErrNoDocuments {
+				return fail("unknown project '%s'", id)
+			}
+			return err
+		}
+		current, err := CheckStatus(doc.Status)
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(current, status) {
+			return fail("project '%s' is %s, not %s", id, current, status)
+		}
+		oids = append(oids, oid)
+	}
+	for i, oid := range oids {
+		if _, err := s.projects.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{
+			"$set": bson.M{"position": int64(i+1) * positionStep},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

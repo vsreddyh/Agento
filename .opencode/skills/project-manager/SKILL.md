@@ -9,5 +9,8 @@ Agent-side board via the `project-manager` MCP server (MongoDB). Same list as
 the app's Projects tab. Permanent: no TTL, no pruning.
 
 - `name` required; `status` Todo|Ongoing|Testing|Blocked|Paused|Done (default Todo); `note` free-form.
+- The board has a manual order the user controls on the phone. `create_project`
+  appends to the end; `list_projects` returns manual order. There is no reorder
+  tool — never try to fake it by editing projects.
 - Advance with `update_project`. Done means finished, not deleted.
 - Never `delete_project` to "finish" — set status Done.

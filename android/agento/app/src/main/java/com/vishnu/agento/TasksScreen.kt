@@ -3,40 +3,51 @@
 package com.vishnu.agento
 
 /**
- * Legacy projects board (fixed statuses, local tasks.json import) — the old surface, kept whole (#163, last of four moves).
+ * Projects board (#519): collapsible status sections, swipe left to edit,
+ * swipe right to delete with Undo, long-press drag to reorder inside a
+ * section. Ordering is persisted server-side (`position`, see
+ * [ProjectsApi.reorder]).
  *
- * Moved verbatim out of MainActivity.kt; the only changes are
- * visibility (`private` to `internal`, same package) and the import
- * list, which carries exactly what this file uses.
+ * Legacy note: this file moved verbatim out of MainActivity.kt in #163;
+ * the only parts left from that move are the status helpers and the
+ * one-time tasks.json import below.
  */
-import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.content.edit
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -76,17 +87,29 @@ internal fun loadLegacyTasks(context: android.content.Context): List<Triple<Stri
     }.getOrDefault(emptyList())
 }
 
+/** Manual is the persisted board order (#519); the rest are read-only
+ * views that disable drag reordering. */
 internal enum class TaskSort(val title: String) {
-    Default("Status"),
+    Manual("Manual"),
     Name("Name"),
     Newest("Newest"),
     Oldest("Oldest"),
 }
 
-/** Project board: fixed statuses, filters + sorts, backed by the shared
- * `projects` collection over /api/projects (#104 — retired local
- * tasks.json). The agent manages the same rows over the project-manager
- * MCP. First launch imports any local rows missing on the server. */
+/** One rendered status section: its fixed status plus the rows in it. */
+private data class ProjectSection(val status: String, val rows: List<ServerProject>)
+
+/** Lazy-item keys shared by the drag math and the lists. Headers use
+ * `h:` so the two key spaces can never collide. */
+private const val CARD_KEY_PREFIX = "p:"
+
+private fun cardKey(id: String) = CARD_KEY_PREFIX + id
+
+/** Project board: fixed statuses, collapsible sections, backed by the
+ * shared `projects` collection over /api/projects (#104 — retired local
+ * tasks.json; #519 — sections + gestures + manual order). The agent
+ * manages the same rows over the project-manager MCP. First launch
+ * imports any local rows missing on the server. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
@@ -101,10 +124,23 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
     var refreshTick by remember { mutableIntStateOf(0) }
-    var filter by remember { mutableStateOf("All") }
-    var sort by remember { mutableStateOf(TaskSort.Default) }
+    var sort by remember { mutableStateOf(TaskSort.Manual) }
     var sortOpen by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    // Persisted manual order (#519), rebuilt from the server after every
+    // load and mutated locally while a drag is in flight.
+    var manualOrder by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Collapsed status sections, comma-separated so rememberSaveable can
+    // hold it (a Set is not Bundle-supported).
+    var collapsedCsv by rememberSaveable { mutableStateOf("") }
+    val collapsed = remember(collapsedCsv) {
+        collapsedCsv.split(',').filter { it.isNotEmpty() }.toSet()
+    }
+    val snackbar = remember { SnackbarHostState() }
+    val listState = rememberLazyListState()
+    var draggingId by remember { mutableStateOf<String?>(null) }
+    var dragDelta by remember { mutableFloatStateOf(0f) }
+    var dragMoved by remember { mutableStateOf(false) }
 
     fun fail(e: Throwable) {
         toasts.toast(serverDetail(e.message ?: e.javaClass.simpleName), ToastKind.Error)
@@ -114,16 +150,10 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         toasts.toast(msg, kind)
     }
 
-    fun cycleStatus(t: ServerProject): String {
-        val next = when (normalizeStatus(t.status)) {
-            "Todo" -> "Ongoing"
-            "Ongoing" -> "Testing"
-            "Testing" -> "Blocked"
-            "Blocked" -> "Paused"
-            "Paused" -> "Done"
-            else -> "Todo"
-        }
-        return next
+    fun toggleSection(status: String) {
+        val current = collapsedCsv.split(',').filter { it.isNotEmpty() }.toSet()
+        collapsedCsv = (if (status in current) current - status else current + status)
+            .joinToString(",")
     }
 
     // One-time import of the retired local tasks.json (#104): uploads rows
@@ -171,11 +201,16 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         }
     }
 
-    LaunchedEffect(filter, refreshTick) {
+    LaunchedEffect(refreshTick) {
         loading = true
         error = ""
-        api.list(if (filter == "All") "all" else filter).fold(
-            onSuccess = { projects = it },
+        api.list("all", limit = 500).fold(
+            onSuccess = {
+                projects = it
+                // The server is the source of truth for manual order; a
+                // drag's local mutation is replaced by the persisted result.
+                manualOrder = manualProjectOrder(it)
+            },
             onFailure = { e ->
                 val msg = serverDetail(e.message ?: e.javaClass.simpleName)
                 // A failed refresh over cached rows still surfaces: stale
@@ -186,44 +221,142 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         loading = false
     }
 
-    fun doCycle(t: ServerProject) {
-        busy = true
-        scope.launch {
-            api.update(t.id, status = cycleStatus(t)).fold(
-                onSuccess = { refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success) },
-                onFailure = ::fail,
-            )
-            busy = false
-        }
-    }
-
+    // Swipe right = delete (#519): the row settles dismissed, the delete
+    // runs, and Undo recreates it from the cached fields. A failure bumps
+    // refreshTick so TaskCard's resetToken snaps the row back.
     fun doDelete(t: ServerProject) {
+        if (busy) return
         busy = true
         scope.launch {
             api.delete(t.id).fold(
-                onSuccess = { refreshTick++; toast(Toasts.TASK_DELETED, ToastKind.Success) },
-                onFailure = ::fail,
+                onSuccess = {
+                    refreshTick++
+                    busy = false
+                    val result = snackbar.showSnackbar(
+                        message = "Deleted \"${t.name}\"",
+                        actionLabel = "Undo",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        busy = true
+                        api.create(t.name, normalizeStatus(t.status), t.note).fold(
+                            onSuccess = {
+                                refreshTick++
+                                toast("Project restored", ToastKind.Success)
+                            },
+                            onFailure = { e ->
+                                fail(e)
+                                refreshTick++
+                            },
+                        )
+                        busy = false
+                    }
+                },
+                onFailure = { e ->
+                    fail(e)
+                    busy = false
+                    refreshTick++
+                },
+            )
+        }
+    }
+
+    // Long press = drag to reorder (#519). Only the Manual view can be
+    // dragged: any other sort is a read-only view of the same rows.
+    fun startDrag(id: String) {
+        if (busy) return
+        if (sort != TaskSort.Manual) {
+            toast("Sort by Manual to reorder projects")
+            return
+        }
+        draggingId = id
+        dragDelta = 0f
+        dragMoved = false
+    }
+
+    fun dragMove(dy: Float) {
+        val id = draggingId ?: return
+        dragDelta += dy
+        val info = listState.layoutInfo
+        val dragged = info.visibleItemsInfo.firstOrNull { it.key == cardKey(id) } ?: return
+        val status = projects.firstOrNull { it.id == id }?.let { normalizeStatus(it.status) } ?: return
+        // The dragged card's visual centre relative to the list: its layout
+        // slot is fixed, the finger offset lives in dragDelta.
+        val centre = dragged.offset + dragDelta + dragged.size / 2f
+        val target = info.visibleItemsInfo.firstOrNull { item ->
+            val key = item.key as? String ?: return@firstOrNull false
+            if (!key.startsWith(CARD_KEY_PREFIX) || key == cardKey(id)) return@firstOrNull false
+            val other = projects.firstOrNull { it.id == key.removePrefix(CARD_KEY_PREFIX) }
+                ?: return@firstOrNull false
+            // Drags stay inside one section; crossing statuses is an edit,
+            // not a reorder.
+            normalizeStatus(other.status) == status &&
+                centre >= item.offset && centre <= item.offset + item.size
+        } ?: return
+        val targetId = (target.key as String).removePrefix(CARD_KEY_PREFIX)
+        val from = manualOrder.indexOf(id)
+        val to = manualOrder.indexOf(targetId)
+        if (from < 0 || to < 0 || from == to) return
+        val next = manualOrder.toMutableList()
+        next.removeAt(from)
+        next.add(to, id)
+        manualOrder = next
+        dragMoved = true
+        // Keep the card under the finger: after the move its layout slot is
+        // the target's old slot (moving up) or the target's old bottom
+        // minus our height (moving down).
+        val newTop = if (to > from) {
+            target.offset + target.size - dragged.size
+        } else {
+            target.offset
+        }
+        dragDelta += dragged.offset - newTop
+    }
+
+    fun endDrag() {
+        val id = draggingId ?: return
+        draggingId = null
+        dragDelta = 0f
+        if (!dragMoved) return
+        dragMoved = false
+        val status = projects.firstOrNull { it.id == id }?.let { normalizeStatus(it.status) } ?: return
+        val ids = manualOrder.filter { pid ->
+            projects.firstOrNull { it.id == pid }
+                ?.let { normalizeStatus(it.status) == status } == true
+        }
+        if (ids.size < 2) return
+        busy = true
+        scope.launch {
+            api.reorder(status, ids).fold(
+                onSuccess = { refreshTick++ },
+                onFailure = { e ->
+                    fail(e)
+                    refreshTick++
+                },
             )
             busy = false
         }
     }
 
-    val visible = projects
-        .let { list ->
-            when (sort) {
-                TaskSort.Name -> list.sortedBy { it.name.lowercase(Locale.ROOT) }
-                TaskSort.Newest -> list.sortedByDescending { projectTimeMs(it.updatedAt) }
-                TaskSort.Oldest -> list.sortedBy { projectTimeMs(it.updatedAt) }
-                TaskSort.Default -> list.sortedWith(
-                    compareBy({ taskRank(normalizeStatus(it.status)) }, { -projectTimeMs(it.updatedAt) })
-                )
-            }
-        }
+    val visible = when (sort) {
+        TaskSort.Name -> projects.sortedBy { it.name.lowercase(Locale.ROOT) }
+        TaskSort.Newest -> projects.sortedByDescending { projectTimeMs(it.updatedAt) }
+        TaskSort.Oldest -> projects.sortedBy { projectTimeMs(it.updatedAt) }
+        TaskSort.Manual -> sortProjectsManually(projects, manualOrder)
+    }
+
+    // Empty sections are hidden; collapsing keeps the header and hides rows.
+    val sections = TASK_STATUSES.mapNotNull { status ->
+        val rows = visible.filter { normalizeStatus(it.status) == status }
+        if (rows.isEmpty()) null else ProjectSection(status, rows)
+    }
 
     // The toast card floats top-end over the content (Box overlay, not
     // the bottom-anchored Scaffold slot) so it never shifts the layout.
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -256,18 +389,10 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         ) {
             Column(modifier = Modifier.contentWidth(wc)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                        .horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    listOf("All").plus(TASK_STATUSES).forEach { f ->
-                        FilterChip(
-                            selected = filter == f,
-                            onClick = { filter = f },
-                            label = { Text(f) },
-                        )
-                    }
                     Box {
                         TextButton(onClick = { sortOpen = true }) { Text("Sort: ${sort.title}") }
                         DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
@@ -278,6 +403,13 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 )
                             }
                         }
+                    }
+                    if (sort != TaskSort.Manual) {
+                        Text(
+                            "Reordering needs Manual sort",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
                 if (busy) {
@@ -296,18 +428,14 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 } else if (!loading && error.isEmpty() && visible.isEmpty()) {
                     EmptyState(
                         icon = Icons.Filled.List,
-                        title = if (projects.isEmpty()) "No projects yet" else "Nothing matches this filter",
-                        subtitle = if (projects.isEmpty()) {
-                            "Capture your first project — it syncs to your server."
-                        } else {
-                            "Try a different status filter."
-                        },
-                        actionLabel = if (projects.isEmpty()) "New task" else null,
-                        onAction = if (projects.isEmpty()) {
-                            { editing = ServerProject(status = "Todo") }
-                        } else null,
+                        title = "No projects yet",
+                        subtitle = "Capture your first project — it syncs to your server.",
+                        actionLabel = "New task",
+                        onAction = { editing = ServerProject(status = "Todo") },
                     )
                 } else if (wc == WindowClass.Expanded) {
+                    // Two columns have no linear order to persist: swipe
+                    // still works, long-press drag is list-only.
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -315,30 +443,72 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
-                        items(visible, key = { it.id }) { t ->
-                            TaskCard(
-                                task = t,
-                                // Cards stay tappable but ignore taps mid-mutation:
-                                // concurrent edits race the refreshTick reload.
-                                onCycle = { if (!busy) doCycle(t) },
-                                onEdit = { if (!busy) editing = t.copy(status = normalizeStatus(t.status)) },
-                                onDelete = { if (!busy) doDelete(t) },
-                            )
+                        sections.forEach { section ->
+                            item(
+                                key = "h:${section.status}",
+                                span = { GridItemSpan(maxLineSpan) },
+                            ) {
+                                SectionHeader(
+                                    status = section.status,
+                                    count = section.rows.size,
+                                    expanded = section.status !in collapsed,
+                                    onToggle = { toggleSection(section.status) },
+                                )
+                            }
+                            if (section.status !in collapsed) {
+                                items(section.rows, key = { cardKey(it.id) }) { t ->
+                                    TaskCard(
+                                        task = t,
+                                        onDelete = { doDelete(t) },
+                                        onEdit = {
+                                            if (!busy) editing =
+                                                t.copy(status = normalizeStatus(t.status))
+                                        },
+                                        swipeEnabled = !busy,
+                                        resetToken = refreshTick,
+                                    )
+                                }
+                            }
                         }
                     }
                 } else {
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
-                        items(visible, key = { it.id }) { t ->
-                            TaskCard(
-                                task = t,
-                                onCycle = { if (!busy) doCycle(t) },
-                                onEdit = { if (!busy) editing = t.copy(status = normalizeStatus(t.status)) },
-                                onDelete = { if (!busy) doDelete(t) },
-                            )
+                        sections.forEach { section ->
+                            item(key = "h:${section.status}") {
+                                SectionHeader(
+                                    status = section.status,
+                                    count = section.rows.size,
+                                    expanded = section.status !in collapsed,
+                                    onToggle = { toggleSection(section.status) },
+                                )
+                            }
+                            if (section.status !in collapsed) {
+                                items(section.rows, key = { cardKey(it.id) }) { t ->
+                                    val isDragging = draggingId == t.id
+                                    TaskCard(
+                                        task = t,
+                                        onDelete = { doDelete(t) },
+                                        onEdit = {
+                                            if (!busy) editing =
+                                                t.copy(status = normalizeStatus(t.status))
+                                        },
+                                        modifier = if (isDragging) Modifier else Modifier.animateItem(),
+                                        isDragging = isDragging,
+                                        dragOffset = if (isDragging) dragDelta else 0f,
+                                        dragEnabled = !busy,
+                                        swipeEnabled = !busy,
+                                        resetToken = refreshTick,
+                                        onDragStart = { startDrag(t.id) },
+                                        onDrag = { dy -> dragMove(dy) },
+                                        onDragEnd = { endDrag() },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -376,69 +546,188 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     }
 }
 
-/** One project card: title + note + colored status chip + timestamp + menu.
- * Long-press opens the edit dialog. */
+/** Collapsible status header: chevron, status, count. */
+@Composable
+private fun SectionHeader(
+    status: String,
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+            contentDescription = if (expanded) "Collapse $status" else "Expand $status",
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            status,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "$count",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** What sits behind the card while it swipes: delete on a right swipe,
+ * edit on a left swipe. */
+@Composable
+private fun SwipeBackground(state: SwipeToDismissBoxState) {
+    val direction = state.dismissDirection
+    val container = when (direction) {
+        SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.errorContainer
+        SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.secondaryContainer
+        SwipeToDismissBoxValue.Settled -> Color.Transparent
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(12.dp))
+            .background(container)
+            .padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (direction == SwipeToDismissBoxValue.StartToEnd) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = "Delete",
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        } else {
+            Spacer(modifier = Modifier.width(24.dp))
+        }
+        if (direction == SwipeToDismissBoxValue.EndToStart) {
+            Icon(
+                Icons.Filled.Edit,
+                contentDescription = "Edit",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+        } else {
+            Spacer(modifier = Modifier.width(24.dp))
+        }
+    }
+}
+
+/** One project card: title + note + timestamp. No menu, no edit button —
+ * swipe left edits, swipe right deletes, long press drags (#519). The
+ * `resetToken` recreates the swipe state after a failed delete so the row
+ * snaps back instead of staying dismissed. */
 @Composable
 internal fun TaskCard(
     task: ServerProject,
-    onCycle: () -> Unit,
-    onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+    isDragging: Boolean = false,
+    dragOffset: Float = 0f,
+    dragEnabled: Boolean = false,
+    swipeEnabled: Boolean = true,
+    resetToken: Int = 0,
+    onDragStart: () -> Unit = {},
+    onDrag: (Float) -> Unit = {},
+    onDragEnd: () -> Unit = {},
 ) {
-    var rowMenu by remember(task.id) { mutableStateOf(false) }
-    val status = normalizeStatus(task.status)
     val haptics = LocalHapticFeedback.current
-    Card(
-        modifier = Modifier.fillMaxWidth().combinedClickable(
-            onClick = {},
-            onLongClick = {
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                onEdit()
+    val latestOnDragStart by rememberUpdatedState(onDragStart)
+    val latestOnDrag by rememberUpdatedState(onDrag)
+    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
+    // Only the compact list wires this up; the grid leaves it empty.
+    val dragModifier = if (dragEnabled) {
+        Modifier.pointerInput(Unit) {
+            detectDragGesturesAfterLongPress(
+                onDragStart = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    latestOnDragStart()
+                },
+                onDrag = { change, amount ->
+                    change.consume()
+                    latestOnDrag(amount.y)
+                },
+                onDragEnd = { latestOnDragEnd() },
+                onDragCancel = { latestOnDragEnd() },
+            )
+        }
+    } else {
+        Modifier
+    }
+
+    key(resetToken) {
+        val swipeState = rememberSwipeToDismissBoxState(
+            confirmValueChange = { target ->
+                when (target) {
+                    SwipeToDismissBoxValue.StartToEnd -> {
+                        onDelete()
+                        true
+                    }
+                    // Edit must leave the row where it was: refusing
+                    // the change settles it back immediately.
+                    SwipeToDismissBoxValue.EndToStart -> {
+                        onEdit()
+                        false
+                    }
+                    SwipeToDismissBoxValue.Settled -> true
+                }
             },
-        ),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        )
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    translationY = if (isDragging) dragOffset else 0f
+                }
+                .zIndex(if (isDragging) 1f else 0f),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    task.name.ifEmpty { "(untitled)" },
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 2,
-                )
-                if (task.note.isNotEmpty()) {
-                    Text(
-                        task.note,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                    )
-                }
-                val ts = shortTime(projectTimeMs(task.updatedAt))
-                if (ts.isNotEmpty()) {
-                    Text(
-                        "Updated $ts",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            StatusChip(status = status, onClick = onCycle)
-            Box {
-                IconButton(onClick = { rowMenu = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "Task menu")
-                }
-                DropdownMenu(expanded = rowMenu, onDismissRequest = { rowMenu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Edit") },
-                        onClick = { rowMenu = false; onEdit() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        onClick = { rowMenu = false; onDelete() },
-                    )
+            SwipeToDismissBox(
+                state = swipeState,
+                backgroundContent = { SwipeBackground(state = swipeState) },
+                gesturesEnabled = swipeEnabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(dragModifier),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                task.name.ifEmpty { "(untitled)" },
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 2,
+                            )
+                            if (task.note.isNotEmpty()) {
+                                Text(
+                                    task.note,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 3,
+                                )
+                            }
+                            val ts = shortTime(projectTimeMs(task.updatedAt))
+                            if (ts.isNotEmpty()) {
+                                Text(
+                                    "Updated $ts",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

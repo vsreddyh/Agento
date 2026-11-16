@@ -81,7 +81,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "project-manager", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_project",
-		Description: "Create a project. name required; status Todo (default) | Ongoing | Testing | Blocked | Paused | Done; note free-form."},
+		Description: "Create a project. name required; status Todo (default) | Ongoing | Testing | Blocked | Paused | Done; note free-form. New projects append to the end of the board order."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, map[string]any, error) {
 			doc, err := store.Create(ctx, in.Name, in.Status, in.Note)
 			if err != nil {
@@ -91,7 +91,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_projects",
-		Description: "List projects. status Todo | Ongoing | Testing | Blocked | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
+		Description: "List projects in manual board order. status Todo | Ongoing | Testing | Blocked | Paused | Done | all (default all); search matches name/note; limit caps rows (default 200, max 500)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listProjectsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.List(ctx, in.Status, in.Search, in.Limit)
 			if err != nil {

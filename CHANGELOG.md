@@ -8,6 +8,17 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [8.1.0]
+- **Projects board rework (#519).** Statuses are now collapsible sections
+  (Ongoing → Testing → Blocked → Paused → Todo → Done) instead of a filter
+  chip row, the three-dot menu and per-card status chip are gone, and the
+  card is gesture-driven: swipe left to edit, swipe right to delete (with
+  Undo), long press to drag a project into a new order inside its section.
+  Manual order is the default sort and is stored server-side (`position`),
+  so it syncs across devices and survives restarts; Name/Newest/Oldest stay
+  read-only views and disable dragging. Two-column layouts keep swipe but
+  not drag.
+
 ## [8.0.0]
 - **Thin phone client: Chat and agent-management surfaces removed (#493).**
   The app is now Tasks/Projects, Task Manager, Files, ∃-Mail, Health Sync,
