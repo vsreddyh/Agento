@@ -70,6 +70,18 @@ func stringifyIDs(docs []bson.M) {
 	}
 }
 
+// dollarKey reports a top-level operator key ($set, $inc, ...) in a doc
+// that must hold plain fields: update/upsert wrap the doc in $set
+// themselves, so an operator key here would double-wrap into garbage.
+func dollarKey(doc bson.M) string {
+	for k := range doc {
+		if strings.HasPrefix(k, "$") {
+			return k
+		}
+	}
+	return ""
+}
+
 func run() int {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "usage: mongo <get|count|insert|insert-many|upsert|update|delete|drop|aggregate> <collection> [json...]")
@@ -199,6 +211,9 @@ func run() int {
 		if !ok {
 			return fail("update must be a JSON object", 3)
 		}
+		if bad := dollarKey(um); bad != "" {
+			return fail("update takes plain fields (got operator key '"+bad+"')", 3)
+		}
 		res, err := col.UpdateOne(ctx, fm, bson.M{"$set": um}, options.Update().SetUpsert(true))
 		if err != nil {
 			return fail(err.Error(), 1)
@@ -228,6 +243,9 @@ func run() int {
 		um, ok := toDoc(uv)
 		if !ok {
 			return fail("set must be a JSON object", 3)
+		}
+		if bad := dollarKey(um); bad != "" {
+			return fail("update takes plain fields (got operator key '"+bad+"')", 3)
 		}
 		res, err := col.UpdateMany(ctx, fm, bson.M{"$set": um})
 		if err != nil {

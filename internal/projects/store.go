@@ -7,11 +7,13 @@
 // cmd/health-api/projects.go) and the project-manager MCP server (see
 // cmd/project-manager/main.go).
 //
-// position is the manual board order (#519): ascending, spaced
-// positionStep apart so rows can be re-slotted without rewriting the whole
-// board. Rows created before #519 are backfilled with positions at startup
-// (EnsureSchema), so every row carries one in steady state; a row that
-// somehow lacks it sorts last instead of leading the board.
+// position is the manual board order (#519, #527): ascending, handed out
+// from an atomic counter and slotted into sparse gaps by Move, so a single
+// row can move without rewriting the whole section. Rows created before
+// #519 are backfilled with positions at startup (EnsureSchema), so every
+// row carries one in steady state; a row that somehow lacks it sorts last
+// instead of leading the board. Position values are store-assigned only:
+// out-of-band writes bypass the counter and can reissue a live position.
 package projects
 
 import (
@@ -159,8 +161,8 @@ func toDoc(doc bson.M) map[string]any {
 }
 
 // Create inserts a project. Name required; empty status defaults to Todo.
-// New rows get the highest position, which renders as the end of their
-// status section.
+// New rows take the next atomic counter value, which stays past every row
+// on the board, so the project appends to the end of its status section.
 func (s *Store) Create(ctx context.Context, name, status, note string) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -713,6 +715,13 @@ func (s *Store) Move(ctx context.Context, status, id, anchor string, after bool)
 		if pos, ok = slotPosition(prev, next, positionStep); !ok {
 			// Gap exhausted: compact the section with the row already in
 			// its new slot, so the move and the compaction land together.
+			// Compaction rewrites the whole section, so it honors the same
+			// 500-row cap as Reorder: beyond that the fast path still slots
+			// single rows, but an exhausted gap fails loudly instead of
+			// rewriting unboundedly.
+			if len(rest)+1 > MaxLimit {
+				return fail("section too large to compact (%d rows, max %d)", len(rest)+1, MaxLimit)
+			}
 			ordered := make([]primitive.ObjectID, 0, len(rest)+1)
 			if after {
 				ordered = append(ordered, rest[:at+1]...)
