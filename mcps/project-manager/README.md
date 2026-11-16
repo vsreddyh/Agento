@@ -23,7 +23,7 @@ end of its status section, it never needs to set the order itself.
 
 **`projects`** — `name` (required), `status` (Todo | Ongoing | Testing |
 Paused | Done), `note`, `position`, `createdAt`, `updatedAt`
-(bumped on every edit; a reorder deliberately leaves it alone, so `updatedAt`
+(bumped on every edit; a reorder or move deliberately leaves it alone, so `updatedAt`
 is edit time, not move time).
 
 `position` is the manual board order (#519), ascending with gaps of 1000 so

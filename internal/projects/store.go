@@ -497,7 +497,7 @@ func (s *Store) Reorder(ctx context.Context, status string, ids []string) error 
 	// The status filter is repeated on every write: a row edited to another
 	// status between the check above and its write must abort the reorder
 	// instead of silently taking a new position in a section it left.
-	if err := s.writePositions(ctx, status, oids); err != nil {
+	if err := s.writePositions(ctx, status, oids, "reorder"); err != nil {
 		return err
 	}
 	return nil
@@ -509,8 +509,9 @@ func (s *Store) Reorder(ctx context.Context, status string, ids []string) error 
 // instead of silently taking a new position in a section it left.
 // Earlier rows keep their rewritten positions, which the next list shows
 // as-is (callers reload on failure), so a partial rewrite is visible
-// rather than hidden. updatedAt is deliberately untouched.
-func (s *Store) writePositions(ctx context.Context, status string, oids []primitive.ObjectID) error {
+// rather than hidden. updatedAt is deliberately untouched. verb names the
+// caller ("reorder"/"move") so the abort error points at the right verb.
+func (s *Store) writePositions(ctx context.Context, status string, oids []primitive.ObjectID, verb string) error {
 	changed := ""
 	for i, oid := range oids {
 		res, err := s.projects.UpdateOne(ctx,
@@ -526,7 +527,7 @@ func (s *Store) writePositions(ctx context.Context, status string, oids []primit
 		}
 	}
 	if changed != "" {
-		return fail("project '%s' changed status during reorder", changed)
+		return fail("project '%s' changed status during %s", changed, verb)
 	}
 	return nil
 }
@@ -624,9 +625,6 @@ func (s *Store) Move(ctx context.Context, status, id, anchor string, after bool)
 	if id == "" || anchor == "" {
 		return fail("id and anchor are required")
 	}
-	if strings.EqualFold(id, anchor) {
-		return nil // idempotent no-op
-	}
 	oid, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		return fail("bad id '%s'", id)
@@ -657,6 +655,9 @@ func (s *Store) Move(ctx context.Context, status, id, anchor string, after bool)
 		if !strings.EqualFold(current, status) {
 			return fail("project '%s' is %s, not %s", pair.raw, current, status)
 		}
+	}
+	if strings.EqualFold(oid.Hex(), anchorOID.Hex()) {
+		return nil // idempotent no-op, after parsing and membership proof
 	}
 	// Order without the moving row, then slot it at the anchor. The
 	// guarded writes below re-prove membership, so a status edit between
@@ -721,5 +722,5 @@ func (s *Store) Move(ctx context.Context, status, id, anchor string, after bool)
 		ordered = append(ordered, oid)
 		ordered = append(ordered, rest[at:]...)
 	}
-	return s.writePositions(ctx, status, ordered)
+	return s.writePositions(ctx, status, ordered, "move")
 }

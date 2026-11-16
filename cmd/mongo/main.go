@@ -7,7 +7,12 @@
 //	mongo insert <collection> <doc-json>
 //	mongo insert-many <collection> <docs-json-array>
 //	mongo upsert <collection> <filter-json> <update-json>
+//	(upserts one doc: UpdateOne with $set, creating it when absent)
 //	mongo update <collection> <filter-json> <set-json>
+//	(updates every match: UpdateMany with $set — the second arg is plain
+//	fields, NOT a full update doc, so '{"status":"Paused"}', never
+//	'{"$set":{"status":"Paused"}}'. Migration example:
+//	mongo update projects '{"status":"Blocked"}' '{"status":"Paused"}')
 //	mongo delete <collection> <filter-json>
 //	mongo drop <collection>
 //	mongo aggregate <collection> <pipeline-json>

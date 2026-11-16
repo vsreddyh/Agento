@@ -388,9 +388,17 @@ func TestMoveOrdersSection(t *testing.T) {
 	if got := projectIDs(rows); !reflect.DeepEqual(got, []string{ids[0], ids[1], ids[2]}) {
 		t.Fatalf("move after: got %v", got)
 	}
-	// Same id twice is an idempotent no-op.
+	// Same id twice is an idempotent no-op — but only after the ids parse
+	// and prove membership, so unknown rows never answer ok:true.
 	if err := s.Move(ctx, "Todo", ids[0], ids[0], false); err != nil {
 		t.Fatalf("self move: %v", err)
+	}
+	if err := s.Move(ctx, "Todo", "not-hex", "not-hex", false); err == nil {
+		t.Fatal("self move with bad hex must fail")
+	}
+	unknown := primitive.NewObjectID().Hex()
+	if err := s.Move(ctx, "Todo", unknown, unknown, false); err == nil {
+		t.Fatal("self move with unknown ids must fail")
 	}
 	// Unknown ids, cross-status anchors and bad statuses fail.
 	if err := s.Move(ctx, "Todo", "000000000000000000000000", ids[0], false); err == nil {
