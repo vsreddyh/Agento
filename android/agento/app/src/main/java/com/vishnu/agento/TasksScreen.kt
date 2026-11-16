@@ -149,6 +149,11 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     // that relation onto the server's complete section order.
     var dragTargetId by remember { mutableStateOf<String?>(null) }
     var dragAfterTarget by remember { mutableStateOf(false) }
+    // Set while a drag hovers a row in the same visual section but a
+    // different stored section (#527 transition: Paused visual holds stored
+    // Paused + unmigrated Blocked). Consumed as a toast on release when no
+    // move happened, so the no-op is explained, not silent.
+    var dragMigrationBlocked by remember { mutableStateOf(false) }
 
     fun fail(e: Throwable) {
         toasts.toast(serverDetail(e.message ?: e.javaClass.simpleName), ToastKind.Error)
@@ -295,6 +300,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         dragMoved = false
         dragTargetId = null
         dragAfterTarget = false
+        dragMigrationBlocked = false
     }
 
     fun dragMove(dy: Float) {
@@ -310,17 +316,30 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         // The dragged card's visual centre relative to the list: its layout
         // slot is fixed, the finger offset lives in dragDelta.
         val centre = dragged.offset + dragDelta + dragged.size / 2f
-        val target = info.visibleItemsInfo.firstOrNull { item ->
+        // The card under the finger, if any: a header key or empty space
+        // reads as no hover, never as a cross-section attempt.
+        val hovered = info.visibleItemsInfo.firstOrNull { item ->
             val key = item.key as? String ?: return@firstOrNull false
             if (!key.startsWith(CARD_KEY_PREFIX) || key == cardKey(id)) return@firstOrNull false
-            val other = projects.firstOrNull { it.id == key.removePrefix(CARD_KEY_PREFIX) }
-                ?: return@firstOrNull false
-            // Drags stay inside one stored section; crossing statuses is an
-            // edit, not a reorder.
-            other.status.equals(stored, ignoreCase = true) &&
-                centre >= item.offset && centre <= item.offset + item.size
+            centre >= item.offset && centre <= item.offset + item.size
+        }?.let { (it.key as String).removePrefix(CARD_KEY_PREFIX) }
+            ?.let { hid -> projects.firstOrNull { it.id == hid } }
+        if (hovered == null) return
+        // Crossing visual sections is an edit, not a reorder: stay silent
+        // here like before (the section headers make the boundary visible).
+        if (!normalizeStatus(hovered.status).equals(normalizeStatus(stored), ignoreCase = true)) return
+        // Same visual section but different stored section (#527
+        // transition): the move cannot persist per exact-status reorder,
+        // so flag it for an explanatory toast on release instead of a
+        // silent no-op.
+        if (!hovered.status.equals(stored, ignoreCase = true)) {
+            dragMigrationBlocked = true
+            return
+        }
+        val target = info.visibleItemsInfo.firstOrNull { item ->
+            item.key == cardKey(hovered.id)
         } ?: return
-        val targetId = (target.key as String).removePrefix(CARD_KEY_PREFIX)
+        val targetId = hovered.id
         val from = manualOrder.indexOf(id)
         val to = manualOrder.indexOf(targetId)
         if (from < 0 || to < 0 || from == to) return
@@ -346,8 +365,18 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         val id = draggingId ?: return
         draggingId = null
         dragDelta = 0f
-        if (!dragMoved) return
+        if (!dragMoved) {
+            // A hover across the invisible stored boundary inside one
+            // visual section cannot persist: say so instead of dropping it
+            // silently. Runs once per drag (flag resets in startDrag).
+            if (dragMigrationBlocked) {
+                dragMigrationBlocked = false
+                toast("These Paused rows finish migrating first — reorder works again after the #527 migration", ToastKind.Info)
+            }
+            return
+        }
         dragMoved = false
+        dragMigrationBlocked = false
         // Same stored-section rule as dragMove (#527 transition): list +
         // reorder the dragged row's stored status so unmigrated Blocked rows
         // reorder their own section instead of failing against Paused.

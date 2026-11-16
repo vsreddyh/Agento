@@ -178,9 +178,12 @@ class ProjectsApi(context: Context) {
     private fun password(): String = ServerEndpoint.password(prefs)
 
     /** Lists projects by status (`Todo|Ongoing|Testing|Paused|Done|all`, default
-     * all). The app never requests `Blocked`, but the server still accepts
-     * it until the #527 migration — unknown statuses fail fast. `search`
-     * matches name/note. `limit` caps rows (server default 200, max 500). */
+     * all). The picker offers these five and create/update never send
+     * `Blocked` for new values, but drag-reorder addresses the dragged
+     * row's stored section — so an unmigrated `Blocked` row still lists /
+     * reorders `Blocked` until the #527 migration. Other unknown statuses
+     * fail fast. `search` matches name/note. `limit` caps rows (server
+     * default 200, max 500). */
     suspend fun list(status: String = "all", search: String = "", limit: Int = 200): Result<List<ServerProject>> =
         withContext(Dispatchers.IO) {
             val base = base()
