@@ -511,7 +511,7 @@ private fun WidgetPreview(
                         maxLines = 1,
                     )
                     Text(
-                        previewCount(view, scrollable),
+                        previewCount(view, scrollable, total),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -636,7 +636,7 @@ private fun SmallPreview(
                 maxLines = 1,
             )
             Text(
-                previewCount(view, scrollable = true) + shownSuffix(total, 1),
+                previewCount(view, scrollable = true, total = total) + shownSuffix(total, 1),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -671,14 +671,15 @@ private fun SmallPreview(
 }
 
 /** Honest count line: the non-scrolling mode caps rows, so say so — and
- * never claim a cap above the total it is capping. */
-private fun previewCount(view: TaskWidgetView, scrollable: Boolean): String {
+ * never claim a cap above the total it is capping. [total] is the fake
+ * dataset's own row count, passed in so the line and the rendered rows
+ * cannot disagree (#532 review). */
+private fun previewCount(view: TaskWidgetView, scrollable: Boolean, total: Int): String {
     val noun = when (view) {
         TaskWidgetView.Open -> "open task"
         TaskWidgetView.Done -> "done task"
         TaskWidgetView.All -> "task"
     }
-    val total = if (view == TaskWidgetView.Done) 1 else 12
     val shown = total.toString() +
         if (total == 1) " $noun" else " ${noun}s"
     if (scrollable) return shown
