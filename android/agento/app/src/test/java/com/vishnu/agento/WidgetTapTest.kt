@@ -99,18 +99,34 @@ class WidgetTapTest {
                 widgetTapTarget(id),
             )
         }
-        // Both layouts install the background, title, empty line and
-        // refresh — only the view label is plain-only.
+        // Shared chrome: background, title, count and refresh are
+        // installed by all three layouts. The empty line is full-layouts
+        // only, the view label plain-only, next/next_due small-only.
         for (id in listOf(
             R.id.task_widget_body,
             R.id.task_widget_title,
-            R.id.task_widget_empty,
+            R.id.task_widget_count,
             R.id.task_widget_refresh,
         )) {
-            assertTrue("both layouts install $id", id in PLAIN_TAP_IDS && id in LIST_TAP_IDS)
+            assertTrue(
+                "all layouts install $id",
+                id in PLAIN_TAP_IDS && id in LIST_TAP_IDS && id in SMALL_TAP_IDS,
+            )
         }
+        assertTrue(
+            "only the full layouts install empty",
+            R.id.task_widget_empty in PLAIN_TAP_IDS &&
+                R.id.task_widget_empty in LIST_TAP_IDS &&
+                R.id.task_widget_empty !in SMALL_TAP_IDS,
+        )
         assertTrue(R.id.task_widget_view in PLAIN_TAP_IDS)
-        assertTrue(R.id.task_widget_count in PLAIN_TAP_IDS)
-        assertTrue(R.id.task_widget_count in LIST_TAP_IDS)
+        assertTrue(R.id.task_widget_view !in LIST_TAP_IDS)
+        assertTrue(R.id.task_widget_view !in SMALL_TAP_IDS)
+        for (id in listOf(R.id.task_widget_next, R.id.task_widget_next_due)) {
+            assertTrue(
+                "only the small layout installs $id",
+                id in SMALL_TAP_IDS && id !in PLAIN_TAP_IDS && id !in LIST_TAP_IDS,
+            )
+        }
     }
 }

@@ -459,7 +459,9 @@ private fun WidgetPreview(
         return
     }
     val compact = density == TaskWidgetDensity.Compact
-    val total = if (view == TaskWidgetView.Done) 1 else 12
+    // Eight fake rows below (1+2+2+1+1+1): the total matches them exactly,
+    // so the preview never invents a gap the device would not show.
+    val total = if (view == TaskWidgetView.Done) 1 else 8
     // Done is one flat list with no headers, like the real widget.
     val sections: List<Pair<String, List<PreviewRow>>> =
         if (view == TaskWidgetView.Done) {
@@ -618,7 +620,7 @@ private fun SmallPreview(
         } else {
             PREVIEW_SECTIONS
         }
-    val total = if (view == TaskWidgetView.Done) 1 else 12
+    val total = if (view == TaskWidgetView.Done) 1 else 8
     val next = sections.firstOrNull()?.second?.firstOrNull()
     Card(
         modifier = Modifier.fillMaxWidth(),
