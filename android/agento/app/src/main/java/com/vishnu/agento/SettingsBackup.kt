@@ -106,18 +106,19 @@ object SettingsBackup {
 
     /**
      * Per-widget display settings, keyed by the widget id the user configured:
-     * `task_widget_{view,density,due,scroll}_<appWidgetId>`, written by
-     * `TaskWidgetConfigActivity.onSave` and read by the widget rows (#169).
+     * `task_widget_{view,density,sort,title,due,scroll}_<appWidgetId>`,
+     * written by `TaskWidgetConfigActivity.onSave` and read by the widget
+     * rows (#169, #532).
      *
      * Per-widget display settings: enumerated live because the key ends in
      * a runtime id, and shaped tight so a hand-edited backup cannot
-     * inject arbitrary `task_widget_*` prefs: five prefixes, each with its own
+     * inject arbitrary `task_widget_*` prefs: six prefixes, each with its own
      * value type, and a numeric suffix (widget ids are ints — anything else
      * matches nothing). Values are mixed: `view`, `density` and `sort` are
-     * enum names, `due` and `scroll` are booleans, so export writes, and
-     * import accepts, each by its own type. A mistyped value in a
-     * hand-edited backup is skipped rather than coerced, exactly like
-     * every other key.
+     * enum names, `title` is free text, `due` and `scroll` are booleans, so
+     * export writes, and import accepts, each by its own type. A mistyped
+     * value in a hand-edited backup is skipped rather than coerced, exactly
+     * like every other key.
      *
      * Deliberately NOT backed up, and the reason matters: the two other
      * `task_reminder_*` prefs are device-local alarm bookkeeping, not settings.

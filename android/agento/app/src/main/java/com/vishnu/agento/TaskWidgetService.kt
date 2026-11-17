@@ -21,8 +21,9 @@ import java.time.temporal.ChronoUnit
  * view (Open/Done/All) in its density (Comfortable/Compact) and row order
  * (matching the Task Manager sort, or server order). Snapshots
  * come from [TaskWidget]'s per-state cache (same process, no IPC
- * payload) so getViewAt stays cheap; row taps and the ring button fill
- * in to the [TaskCompleteActivity] template pending intent.
+ * payload) so getViewAt stays cheap; row taps, the ring button
+ * (complete) and the skip button fill in to the [TaskCompleteActivity]
+ * template pending intent (#532).
  *
  * Rows are the same agenda the direct-items path builds (#532): one
  * collection holding section headers and rows, reported as two view types.

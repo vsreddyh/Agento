@@ -278,9 +278,11 @@ internal fun widgetMutationAction(target: NotifAction): String = when (target) {
 internal const val COMPACT_MAX_WIDTH_DP = 180
 internal const val COMPACT_MIN_HEIGHT_DP = 110
 
-/** Whether a placement reporting these options is compact (#532). Any
- * option missing or 0 keeps the full list (the historical behaviour), never
- * a surprise downgrade on a launcher that will not say how big it is. */
+/** Whether a placement reporting these options is compact (#532). Only
+ * BOTH options missing/0 keeps the full list (the historical behaviour on
+ * a launcher that will not say how big it is) — a known-small dimension
+ * compacts even when the other is unknown, so (110, 0) and (0, 50) are
+ * compact and only (0, 0) is not. */
 internal fun widgetIsCompact(minWidthDp: Int, minHeightDp: Int): Boolean =
     (minWidthDp in 1 until COMPACT_MAX_WIDTH_DP) ||
         (minHeightDp in 1 until COMPACT_MIN_HEIGHT_DP)
@@ -1063,11 +1065,13 @@ class TaskWidget : AppWidgetProvider() {
             }
 
         /** Builds one collection row: text only, no taps. Callers attach
-         * them — [buildRowWithIntents] on 31+ (explicit broadcasts) and
-         * [buildLegacyRow] on the API <31 template (fill-ins). Keeping the
-         * two apart means a row can never carry both an explicit intent and
-         * a fill-in for the same view, where which one wins is an
-         * implementation detail of the host. */
+         * them — [buildRowWithIntents] wherever a row owns its intents
+         * (the direct-items path on 31+ AND the plain-rows layout at any
+         * API: explicit broadcasts) and [buildLegacyRow] on the API <31
+         * scrollable template (fill-ins). Keeping the two apart means a row
+         * can never carry both an explicit intent and a fill-in for the
+         * same view, where which one wins is an implementation detail of
+         * the host. */
         fun buildRow(
             packageName: String,
             compact: Boolean,

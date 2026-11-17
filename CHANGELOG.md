@@ -19,11 +19,11 @@ see GitHub Releases for older notes.
   surfaces the ring completes and a new skip button moves past a task;
   widgets built from direct items (Android 12+) and the non-scrolling
   plain-rows layout (any Android version) send both as broadcasts, so a tap
-  no longer brings Agento to the foreground on its Projects tab (the old
-  trampoline did). Only the scrolling collection on Android 11 and older
+  no longer brings Agento to the foreground on its Task Manager tab
+  (the old trampoline did). Only the scrolling collection on Android 11 and older
   keeps the invisible trampoline, where the shared collection template
   makes it unavoidable. The compact layout is display-only — title, count
-  and next task, every tap opens the Task Manager. A failed mutation now
+  and next task; everything but refresh opens the Task Manager. A failed mutation now
   says so with a toast instead of looking like it worked, on both
   full-size paths.
 - **Custom widget title.** Each placement can name itself from its settings
