@@ -1381,12 +1381,13 @@ class TaskWidget : AppWidgetProvider() {
             // their codes stay reserved, never reused. The table itself
             // lives in [widgetTapTarget], which render() consults through
             // [applyTapTargets] — one source, pinned by WidgetTapTest.
-            // Trampoline template: per-row fill-ins carry either
-            // EXTRA_TASK_ID (open detail) or EXTRA_COMPLETE_ID (complete
-            // inline). MUTABLE is required: fill-in extras are silently
-            // dropped from an immutable template on API 31+. Per-widget
-            // code, like the view/config intents, so placements never
-            // share a cached PendingIntent.
+            // Trampoline template: per-row fill-ins carry EXTRA_TASK_ID
+            // (open detail), EXTRA_COMPLETE_ID (complete inline) or
+            // EXTRA_SKIP_ID (skip inline) — the only verbs the API <31
+            // collection can express. MUTABLE is required: fill-in extras
+            // are silently dropped from an immutable template on API 31+.
+            // Per-widget code, like the view/config intents, so placements
+            // never share a cached PendingIntent.
             val trampoline = Intent(context, TaskCompleteActivity::class.java)
             val rowPending = PendingIntent.getActivity(
                 context, ROW_CODE + appWidgetId, trampoline,

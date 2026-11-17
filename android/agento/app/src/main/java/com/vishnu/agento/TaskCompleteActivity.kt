@@ -23,8 +23,9 @@ import kotlinx.coroutines.launch
  *
  * - EXTRA_COMPLETE_ID → complete the task via TasksApi, refresh the
  *   widget, finish. The app never visibly opens: inline complete.
- * - EXTRA_SKIP_ID → the same for skip (no reason; the API accepts an empty
- *   one).
+ * - EXTRA_SKIP_ID → the same for skip. No reason is recorded (the API
+ *   accepts an empty reason); the id itself is guarded non-empty below,
+ *   like the complete id — an empty extra falls through to open.
  * - EXTRA_TASK_ID → forward to MainActivity (foreground by now, so the
  *   start is allowed) with the deep-link extra, finish. The Task Manager
  *   opens the task's detail sheet.

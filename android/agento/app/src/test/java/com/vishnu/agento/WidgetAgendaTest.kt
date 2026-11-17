@@ -182,7 +182,7 @@ class WidgetAgendaTest {
     }
 
     @Test
-    fun `compact under the provider minimums`() {
+    fun `compact below the full-size bounds`() {
         // Full size is the provider's default 3x2 footprint: 180dp wide,
         // 110dp tall. Anything smaller goes compact, either dimension.
         assertFalse(widgetIsCompact(COMPACT_MAX_WIDTH_DP, COMPACT_MIN_HEIGHT_DP))
