@@ -41,6 +41,32 @@ class WidgetTapTest {
     }
 
     @Test
+    fun `compact layout lines open the task manager`() {
+        // The compact placement has no collection rows: its two text lines
+        // are the whole body, so a tap on either must still open the app
+        // (#532). Refresh keeps its own job there too.
+        assertEquals(
+            WidgetTapTarget.REFRESH,
+            widgetTapTarget(R.id.task_widget_refresh),
+        )
+        for (id in listOf(
+            R.id.task_widget_body,
+            R.id.task_widget_title,
+            R.id.task_widget_count,
+            R.id.task_widget_next,
+            R.id.task_widget_next_due,
+        )) {
+            assertEquals(
+                "compact id $id must open the Task Manager",
+                WidgetTapTarget.OPEN_TASKS,
+                widgetTapTarget(id),
+            )
+        }
+        assertTrue(R.id.task_widget_next in SMALL_TAP_IDS)
+        assertTrue(R.id.task_widget_next_due in SMALL_TAP_IDS)
+    }
+
+    @Test
     fun `rows are not header targets`() {
         // Ring, name and due lines, the static container and the list
         // itself: the template/fill-ins or the body fallback own these,
@@ -51,6 +77,9 @@ class WidgetTapTest {
         assertNull(widgetTapTarget(R.id.task_widget_row_due))
         assertNull(widgetTapTarget(R.id.task_widget_static_list))
         assertNull(widgetTapTarget(R.id.task_widget_list_view))
+        // The skip button (#532) rides the same template/fill-in path as
+        // the ring: claiming it here would overwrite that handler.
+        assertNull(widgetTapTarget(R.id.task_widget_row_skip))
     }
 
     @Test
@@ -58,7 +87,7 @@ class WidgetTapTest {
         // The table alone cannot catch a layout omission (the plain-rows
         // count shipped without a handler behind a passing table test):
         // every installed id must resolve to its layout's destination.
-        for (id in PLAIN_TAP_IDS + LIST_TAP_IDS) {
+        for (id in PLAIN_TAP_IDS + LIST_TAP_IDS + SMALL_TAP_IDS) {
             val expected = if (id == R.id.task_widget_refresh) {
                 WidgetTapTarget.REFRESH
             } else {
@@ -70,18 +99,34 @@ class WidgetTapTest {
                 widgetTapTarget(id),
             )
         }
-        // Both layouts install the background, title, empty line and
-        // refresh — only the view label is plain-only.
+        // Shared chrome: background, title, count and refresh are
+        // installed by all three layouts. The empty line is full-layouts
+        // only, the view label plain-only, next/next_due small-only.
         for (id in listOf(
             R.id.task_widget_body,
             R.id.task_widget_title,
-            R.id.task_widget_empty,
+            R.id.task_widget_count,
             R.id.task_widget_refresh,
         )) {
-            assertTrue("both layouts install $id", id in PLAIN_TAP_IDS && id in LIST_TAP_IDS)
+            assertTrue(
+                "all layouts install $id",
+                id in PLAIN_TAP_IDS && id in LIST_TAP_IDS && id in SMALL_TAP_IDS,
+            )
         }
+        assertTrue(
+            "only the full layouts install empty",
+            R.id.task_widget_empty in PLAIN_TAP_IDS &&
+                R.id.task_widget_empty in LIST_TAP_IDS &&
+                R.id.task_widget_empty !in SMALL_TAP_IDS,
+        )
         assertTrue(R.id.task_widget_view in PLAIN_TAP_IDS)
-        assertTrue(R.id.task_widget_count in PLAIN_TAP_IDS)
-        assertTrue(R.id.task_widget_count in LIST_TAP_IDS)
+        assertTrue(R.id.task_widget_view !in LIST_TAP_IDS)
+        assertTrue(R.id.task_widget_view !in SMALL_TAP_IDS)
+        for (id in listOf(R.id.task_widget_next, R.id.task_widget_next_due)) {
+            assertTrue(
+                "only the small layout installs $id",
+                id in SMALL_TAP_IDS && id !in PLAIN_TAP_IDS && id !in LIST_TAP_IDS,
+            )
+        }
     }
 }

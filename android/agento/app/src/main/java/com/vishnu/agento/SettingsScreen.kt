@@ -1210,6 +1210,11 @@ internal fun WidgetSettingsSection() {
                         )
                         Text(
                             buildString {
+                                // The custom title (#532) first, when set:
+                                // it is what the placement shows, and it is
+                                // the only way to tell two placements apart.
+                                val title = TaskWidget.titleFor(context, id, "")
+                                if (title.isNotEmpty()) append("$title · ")
                                 append(TaskWidget.viewFor(context, id).title)
                                 append(" tasks · ")
                                 append(TaskWidget.densityFor(context, id).title)

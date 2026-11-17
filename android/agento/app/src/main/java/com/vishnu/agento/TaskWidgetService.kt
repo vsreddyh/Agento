@@ -9,6 +9,8 @@ import android.widget.RemoteViewsService
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit
 
 /**
  * Collection adapter for the task widget's scrollable list. LEGACY path
@@ -19,8 +21,14 @@ import java.time.LocalDate
  * view (Open/Done/All) in its density (Comfortable/Compact) and row order
  * (matching the Task Manager sort, or server order). Snapshots
  * come from [TaskWidget]'s per-state cache (same process, no IPC
- * payload) so getViewAt stays cheap; row taps and the ring button fill
- * in to the [TaskCompleteActivity] template pending intent.
+ * payload) so getViewAt stays cheap; row taps, the ring button
+ * (complete) and the skip button fill in to the [TaskCompleteActivity]
+ * template pending intent (#532).
+ *
+ * Rows are the same agenda the direct-items path builds (#532): one
+ * collection holding section headers and rows, reported as two view types.
+ * The platform derives each item's view type from its RemoteViews layout
+ * id, so the count only has to admit both layouts.
  */
 class TaskWidgetService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
@@ -37,14 +45,19 @@ private class TaskFactory(
     private val appWidgetId: Int,
 ) : RemoteViewsService.RemoteViewsFactory {
 
-    private var items: List<ServerTask> = emptyList()
+    private var items: List<WidgetItem> = emptyList()
     // Read once per dataset change, not per row (#130 review).
     private var today: LocalDate = LocalDate.now(IST)
+    // Same instant the agenda grouping uses, read once for the same reason.
+    private var now: LocalDateTime = LocalDateTime.now(IST).truncatedTo(ChronoUnit.MINUTES)
 
     override fun onCreate() = Unit
     override fun onDestroy() = Unit
     override fun getLoadingView(): RemoteViews? = null
-    override fun getViewTypeCount(): Int = 1
+
+    // Headers and rows (#532). The adapter maps each item to a type from
+    // its layout id, so this only has to say "two layouts exist".
+    override fun getViewTypeCount(): Int = 2
 
     private fun view(): TaskWidgetView =
         if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
@@ -82,6 +95,7 @@ private class TaskFactory(
         runCatching {
             val state = view().state
             today = LocalDate.now(IST)
+            now = LocalDateTime.now(IST).truncatedTo(ChronoUnit.MINUTES)
             // Cached rows skip the network; a miss fetches synchronously
             // (blocking is explicitly allowed on this binder thread).
             // A preview/system bind has no placement: sourceless, so it
@@ -118,10 +132,17 @@ private class TaskFactory(
             ) {
                 TasksApi.clearCoercedNotesExcept(factorySource, state)
             }
-            items = (cached ?: fetched?.tasks.orEmpty()
+            val rows = (cached ?: fetched?.tasks.orEmpty()
                 // Same order as the pushed paths (#369): the factory is
                 // the only renderer on API <31, so it sorts its own copy.
                 ).sortedForWidget(sort())
+            // Same agenda as the direct-items path (#532); Done stays flat.
+            items = widgetAgenda(
+                rows,
+                grouped = view() != TaskWidgetView.Done,
+                today = today,
+                now = now,
+            )
         }.onFailure {
             TaskWidget.recordFactoryError("onDataSetChanged", it)
         }
@@ -142,10 +163,20 @@ private class TaskFactory(
         // failure row. Legacy path only (API <31); newer devices get
         // their rows directly via RemoteCollectionItems in render().
         return runCatching {
-            val task = items.getOrNull(position)
-                ?: return@runCatching RemoteViews(appCtx.packageName,
+            when (val item = items.getOrNull(position)) {
+                null -> RemoteViews(appCtx.packageName,
                     if (compact()) R.layout.task_widget_row_compact else R.layout.task_widget_row)
-            TaskWidget.buildRow(appCtx.packageName, compact(), showDue(), today, task)
+                is WidgetItem.Header ->
+                    TaskWidget.buildSection(appCtx, item.bucket, item.count).apply {
+                        // The list has ONE template (the trampoline), so a
+                        // header taps it empty: the trampoline opens the
+                        // Task Manager when there is nothing to mutate.
+                        setOnClickFillInIntent(R.id.task_widget_section, Intent())
+                    }
+                is WidgetItem.Row ->
+                    TaskWidget.buildLegacyRow(
+                        appCtx.packageName, compact(), showDue(), today, item.task)
+            }
         }.getOrElse {
             TaskWidget.recordFactoryError("getViewAt($position)", it)
             // Visible failure, not a mysteriously empty row (the error is

@@ -11,4 +11,7 @@
          resolve theme attrs and reject the whole RemoteViews (#137). -->
     <color name="task_widget_text_primary">#1C1B1F</color>
     <color name="task_widget_text_secondary">#49454F</color>
+    <!-- Overdue agenda header (#532): the app's error colour, concrete like
+         the others so a bare-theme host cannot reject the RemoteViews. -->
+    <color name="task_widget_overdue">#B3261E</color>
 </resources>

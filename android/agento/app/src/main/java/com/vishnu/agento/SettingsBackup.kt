@@ -106,18 +106,19 @@ object SettingsBackup {
 
     /**
      * Per-widget display settings, keyed by the widget id the user configured:
-     * `task_widget_{view,density,due,scroll}_<appWidgetId>`, written by
-     * `TaskWidgetConfigActivity.onSave` and read by the widget rows (#169).
+     * `task_widget_{view,density,sort,title,due,scroll}_<appWidgetId>`,
+     * written by `TaskWidgetConfigActivity.onSave` and read by the widget
+     * rows (#169, #532).
      *
      * Per-widget display settings: enumerated live because the key ends in
      * a runtime id, and shaped tight so a hand-edited backup cannot
-     * inject arbitrary `task_widget_*` prefs: five prefixes, each with its own
+     * inject arbitrary `task_widget_*` prefs: six prefixes, each with its own
      * value type, and a numeric suffix (widget ids are ints — anything else
      * matches nothing). Values are mixed: `view`, `density` and `sort` are
-     * enum names, `due` and `scroll` are booleans, so export writes, and
-     * import accepts, each by its own type. A mistyped value in a
-     * hand-edited backup is skipped rather than coerced, exactly like
-     * every other key.
+     * enum names, `title` is free text, `due` and `scroll` are booleans, so
+     * export writes, and import accepts, each by its own type. A mistyped
+     * value in a hand-edited backup is skipped rather than coerced, exactly
+     * like every other key.
      *
      * Deliberately NOT backed up, and the reason matters: the two other
      * `task_reminder_*` prefs are device-local alarm bookkeeping, not settings.
@@ -133,17 +134,22 @@ object SettingsBackup {
         // Row order (#369): a string like view/density, same numeric-id
         // shape, same import coercion (unknown names read back Server).
         "task_widget_sort_",
+        // Custom header title (#532): free text, so it is restored verbatim
+        // and trimmed/capped on read like every other title.
+        "task_widget_title_",
     )
     private val BOOLEAN_WIDGET_PREFIXES = listOf(
         "task_widget_due_",
         "task_widget_scroll_",
     )
 
-    /** True for a per-widget display key `task_widget_{view,density,sort,due,scroll}_<id>`. */
+    /** True for a per-widget display key
+     * `task_widget_{view,density,sort,title,due,scroll}_<id>`. */
     fun isWidgetDisplayKey(k: String): Boolean =
         isStringWidgetKey(k) || isBooleanWidgetKey(k)
 
-    /** True for a `task_widget_{view,density,sort}_<numeric id>` key (string-valued). */
+    /** True for a `task_widget_{view,density,sort,title}_<numeric id>` key
+     * (string-valued). */
     fun isStringWidgetKey(k: String): Boolean =
         STRING_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
 
@@ -207,7 +213,7 @@ object SettingsBackup {
             (all[k] as? String)?.let { values.put(k, it) }
         }
         // Per-widget display settings: enumerated live because the key ends in
-        // an appWidgetId, and written by type because the five fields are not
+        // an appWidgetId, and written by type because the six fields are not
         // all one type. Sorted, so two exports of the same prefs are
         // byte-identical. Read from the same `all` snapshot as every other block.
         for (k in all.keys.filter { isWidgetDisplayKey(it) }.sorted()) {

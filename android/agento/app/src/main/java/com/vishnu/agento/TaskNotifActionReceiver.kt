@@ -3,7 +3,10 @@ package com.vishnu.agento
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,21 +29,26 @@ private val notifActionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 /**
  * Notification-action taps for task reminders (#368): `[Completed]` and
  * `[Skip]` complete inline in the background, with the app never visibly
- * opening.
+ * opening. Also the target of the widget rows' complete/skip actions
+ * (#532): those used to go through an activity trampoline, which brings
+ * the app to the foreground on Android 12+ even when translucent.
  *
  * These used to be `PendingIntent.getActivity()` calls into the widget
  * complete trampoline ([TaskCompleteActivity]) and a dedicated skip
  * trampoline. On Android 12+ starting an activity from a notification
  * brings the task to the foreground even through a translucent noHistory
  * trampoline — the tap visibly opened the app. A broadcast fired from our
- * own PendingIntent needs no activity at all (unlike the widget rows,
- * which keep their trampoline for background-launch reasons), so the
- * actions go straight here instead.
+ * own PendingIntent needs no activity at all, so the actions go straight
+ * here instead. The one widget surface still on the trampoline is the
+ * legacy service-backed collection ([TaskWidgetService], API < 31): its
+ * list has a single PendingIntent template, the row body must open an
+ * activity, and an API < 31 host (Android < 12) does not bring the task
+ * forward for a translucent noHistory trampoline anyway.
  *
  * Semantics match the trampoline exactly: on success every posted alert
  * for the task is dismissed ([TaskReminders.cancelPosted]) and both
- * surfaces refresh; on failure the alert stays, so an offline tap keeps
- * the reminder instead of silently dropping it.
+ * surfaces refresh; on failure the alert stays and a toast says so, so an
+ * offline tap keeps the reminder instead of silently dropping it.
  */
 class TaskNotifActionReceiver : BroadcastReceiver() {
 
@@ -95,8 +103,10 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        // Routed once, up front: unknown actions return before goAsync,
-        // so a stray tap costs neither a wake lock nor a surface refresh.
+        // Widget rows built from explicit intents (#532) — direct items on
+        // API 31+ and the plain-rows layout at any API — post these same two
+        // actions as broadcasts, so one route covers notification taps and
+        // widget taps: same mutation, same failure handling, no activity.
         val target = notifActionFor(intent.action) ?: return
         // Read before goAsync and before any coroutine (#386): a malformed
         // tap is then fully free — no wake lock, no launch — and no Intent
@@ -111,7 +121,7 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
         // action name (no id, nothing to leak) tells corrupt taps apart
         // from version skew in the field.
         if (id.isEmpty()) {
-            Log.w("TaskNotif", "notification $target with no id ignored")
+            Log.w("TaskNotif", "action $target with no id ignored")
             return
         }
         val appCtx = context.applicationContext
@@ -131,7 +141,7 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
                 if (finished == null) {
                     Log.w(
                         "TaskNotif",
-                        "notification $target for $id timed out after " +
+                        "action $target for $id timed out after " +
                             "${MUTATION_TIMEOUT_MS}ms; mutation cancelled if still " +
                             "in flight (alert kept, next tap retries), running " +
                             "refresh if any continues without the wake lock",
@@ -172,11 +182,21 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
         if (done) {
             runCatching { TaskReminders.cancelPosted(appCtx, id) }
         } else {
-            // Audible in logcat, not just in the kept alert (#384): without
-            // this an offline/5xx tap is indistinguishable from "nothing
-            // happened". Action + id only — same as the timeout log, no
-            // content.
-            Log.w("TaskNotif", "notification $target for $id failed; alert kept")
+            // Audible, not just in logcat (#384, #532): an offline/5xx tap is
+            // otherwise indistinguishable from "nothing happened". Action +
+            // id only — same as the timeout log, no content.
+            Log.w("TaskNotif", "action $target for $id failed; row/alert kept")
+            val message = when (target) {
+                NotifAction.COMPLETE -> R.string.task_complete_failed
+                NotifAction.SKIP -> R.string.task_skip_failed
+            }
+            // Toast from a background broadcast: post to the main looper so
+            // the host process is not asked to build a view off-thread.
+            Handler(Looper.getMainLooper()).post {
+                runCatching {
+                    Toast.makeText(appCtx, message, Toast.LENGTH_SHORT).show()
+                }
+            }
         }
         refreshSurfaces(appCtx)
     }

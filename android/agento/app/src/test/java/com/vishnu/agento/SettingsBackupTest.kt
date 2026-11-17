@@ -22,6 +22,10 @@ class SettingsBackupTest {
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_view_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_density_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_sort_12"))
+        // Custom header title (#532): free text, so a string key.
+        assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_title_12"))
+        assertTrue(SettingsBackup.isStringWidgetKey("task_widget_title_12"))
+        assertFalse(SettingsBackup.isBooleanWidgetKey("task_widget_title_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_due_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_scroll_12"))
     }

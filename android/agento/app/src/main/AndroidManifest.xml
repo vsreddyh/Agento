@@ -122,9 +122,14 @@
             android:permission="android.permission.BIND_REMOTEVIEWS"
             android:exported="false" />
 
-        <!-- Invisible trampoline for task-widget row taps: completes the
-             task or forwards to MainActivity, then finishes. Exported so
-             the widget host can send its PendingIntent. -->
+        <!-- Invisible trampoline for task-widget row taps on API < 31:
+             completes/skips the task or forwards to MainActivity, then
+             finishes. Placements built from explicit intents — direct
+             collection items on API 31+ and the plain-rows layout at any
+             API — send complete/skip as broadcasts to
+             TaskNotifActionReceiver instead (#532); only the legacy
+             service-backed collection keeps this as its single template
+             target. Exported so the widget host can send its PendingIntent. -->
         <activity
             android:name=".TaskCompleteActivity"
             android:theme="@style/Theme.Agento.Trampoline"
@@ -132,9 +137,9 @@
             android:noHistory="true"
             android:exported="true" />
 
-        <!-- Per-widget display settings (density, due line): launched by
-             the system at add time via android:configure and later by
-             tapping the widget's title. -->
+        <!-- Per-widget settings (title, view, density, sort, due line,
+             scrolling): launched by the system at add time via
+             android:configure and from Settings → Home-screen widget. -->
         <activity
             android:name=".TaskWidgetConfigActivity"
             android:theme="@style/Theme.Agento"
@@ -149,10 +154,12 @@
             android:name=".TaskAlarmReceiver"
             android:exported="false" />
 
-        <!-- Reminder notification [Completed]/[Skip] actions (#368):
-             explicit intents only, so non-exported like the receiver above.
-             The widget rows keep the activity trampolines for
-             background-launch reasons; notification actions need none. -->
+        <!-- Reminder notification [Completed]/[Skip] actions (#368) and the
+             widget rows' complete/skip broadcasts (#532): explicit intents
+             only, so non-exported like the receiver above. Direct-items
+             widgets (API 31+) and plain-rows widgets (any API) use it;
+             only the legacy service-backed collection (API < 31) keeps the
+             activity trampoline, because its list shares one template. -->
         <receiver
             android:name=".TaskNotifActionReceiver"
             android:exported="false" />

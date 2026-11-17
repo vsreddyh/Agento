@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Skip button used by the widget rows (#532): a right-pointing double
+     chevron, so it reads as "move past this" rather than "delete". Concrete
+     color for the same reason as task_check.xml (theme attrs in widget
+     drawables fail on some launchers, #137). Night variant in values-night. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@color/task_widget_ring"
+        android:pathData="M6,6 L13.5,12 L6,18 Z" />
+    <path
+        android:fillColor="@color/task_widget_ring"
+        android:pathData="M12.5,6 L20,12 L12.5,18 Z" />
+</vector>

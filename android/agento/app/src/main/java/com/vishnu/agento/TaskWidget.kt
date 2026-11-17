@@ -7,9 +7,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
@@ -25,11 +27,13 @@ import kotlinx.coroutines.launch
 /**
  * Header/background tap-contract ids per layout (#370): the chrome ids that
  * handle a tap themselves, named once so render() and the test read the
- * same lists. [R.id.task_widget_refresh] is in both lists because it is one
- * of the two targets ([WidgetTapTarget.REFRESH]); every other id here opens
- * the Task Manager. The view label exists only in the plain layout (the
- * scrollable header names the view in its title instead); every other
- * chrome id exists in both.
+ * same lists — one per layout ([PLAIN_TAP_IDS], [LIST_TAP_IDS],
+ * [SMALL_TAP_IDS]). [R.id.task_widget_refresh] is in all three because it
+ * is one of the two targets ([WidgetTapTarget.REFRESH]); every other id
+ * here opens the Task Manager. Membership differs by layout: the view
+ * label exists only in the plain layout (the scrollable header names the
+ * view in its title instead), `empty` only in the two full layouts, and
+ * `next`/`next_due` only in the small one.
  *
  * The two collection containers — `task_widget_static_list` and
  * `task_widget_list_view` — are deliberately absent: their taps ride the
@@ -54,6 +58,21 @@ internal val LIST_TAP_IDS = listOf(
     R.id.task_widget_refresh,
 )
 
+/**
+ * Compact-layout chrome (#532). The compact placement shows the next task
+ * as two plain text lines rather than collection rows, so those lines join
+ * the background in opening the Task Manager — a dead label reads as a
+ * broken widget.
+ */
+internal val SMALL_TAP_IDS = listOf(
+    R.id.task_widget_body,
+    R.id.task_widget_title,
+    R.id.task_widget_count,
+    R.id.task_widget_next,
+    R.id.task_widget_next_due,
+    R.id.task_widget_refresh,
+)
+
 /** Where one widget header/background tap lands (#370). Rows are not in
  * this table: the ring and the row body ride the collection template (or
  * per-row intents), which own their view ids. */
@@ -75,7 +94,9 @@ internal fun widgetTapTarget(viewId: Int): WidgetTapTarget? = when (viewId) {
     R.id.task_widget_title,
     R.id.task_widget_count,
     R.id.task_widget_view,
-    R.id.task_widget_empty -> WidgetTapTarget.OPEN_TASKS
+    R.id.task_widget_empty,
+    R.id.task_widget_next,
+    R.id.task_widget_next_due -> WidgetTapTarget.OPEN_TASKS
     R.id.task_widget_refresh -> WidgetTapTarget.REFRESH
     else -> null
 }
@@ -143,6 +164,149 @@ internal fun List<ServerTask>.sortedForWidget(sort: TaskWidgetSort): List<Server
         TaskWidgetSort.Created -> sortedByMode(ServerTaskSort.Created)
         TaskWidgetSort.Estimate -> sortedByMode(ServerTaskSort.Estimate)
     }
+
+/**
+ * One item in the widget's collection (#532): an agenda header or a task
+ * row. Headers are collection items rather than static views because the
+ * list scrolls as one unit, and they get their own layout: the platform
+ * adapter derives each item's view type from its RemoteViews layout id, so
+ * two distinct layouts plus a view-type count of 2 is what makes mixed
+ * items legal on both the legacy factory and the direct-items path.
+ */
+internal sealed interface WidgetItem {
+    data class Header(val bucket: DueBucket, val count: Int) : WidgetItem
+    data class Row(val task: ServerTask) : WidgetItem
+}
+
+/**
+ * Builds one placement's agenda in the Task Manager's own bucket order
+ * (#532). Pure and JVM-pinned: the widget must never invent an order the
+ * app does not show. [grouped] is false for the Done view, where buckets
+ * carry no meaning.
+ */
+internal fun widgetAgenda(
+    tasks: List<ServerTask>,
+    grouped: Boolean,
+    today: java.time.LocalDate,
+    now: java.time.LocalDateTime,
+): List<WidgetItem> {
+    if (!grouped) return tasks.map { WidgetItem.Row(it) }
+    val byBucket = tasks.groupBy { it.dueBucket(today, now) }
+    return DueBucket.entries.flatMap { bucket ->
+        val rows = byBucket[bucket].orEmpty()
+        if (rows.isEmpty()) {
+            emptyList()
+        } else {
+            listOf(WidgetItem.Header(bucket, rows.size)) + rows.map { WidgetItem.Row(it) }
+        }
+    }
+}
+
+/**
+ * The "showing N" qualifier for a capped widget count line (#532): present
+ * exactly when the surface shows fewer rows than exist. Pure and
+ * JVM-pinned, so the static path (8) and the compact placement (1) cannot
+ * drift into different honesty rules.
+ */
+internal fun shownSuffix(total: Int, shownRows: Int?): String =
+    if (shownRows != null && total > shownRows) " · showing $shownRows" else ""
+
+/**
+ * The task a compact placement names as "next" (#532): the first row of the
+ * same agenda the full layout builds, so a placement sorted by Name or
+ * Estimate cannot name a different task than its full-size twin shows first.
+ * Pure and JVM-pinned.
+ */
+internal fun widgetNextTask(
+    tasks: List<ServerTask>,
+    grouped: Boolean,
+    today: java.time.LocalDate,
+    now: java.time.LocalDateTime,
+): ServerTask? = widgetAgenda(tasks, grouped, today, now)
+    .filterIsInstance<WidgetItem.Row>()
+    .firstOrNull()
+    ?.task
+
+/**
+ * Trims an agenda to [maxRows] task rows for the non-scrolling layout
+ * (#532): the cap counts rows, and a section header only survives when at
+ * least one of its rows does, so the header count and "showing N" can never
+ * disagree. Pure and JVM-pinned.
+ */
+internal fun List<WidgetItem>.takeAgendaRows(maxRows: Int): List<WidgetItem> {
+    if (maxRows <= 0) return emptyList()
+    val out = ArrayList<WidgetItem>(maxRows + 4)
+    var rows = 0
+    for (item in this) {
+        if (item is WidgetItem.Row) {
+            if (rows == maxRows) break
+            rows++
+        }
+        out.add(item)
+    }
+    while (out.isNotEmpty() && out.last() is WidgetItem.Header) out.removeAt(out.size - 1)
+    return out
+}
+
+/** Longest custom title a placement keeps, in characters (#532). */
+internal const val WIDGET_TITLE_MAX = 30
+
+/** A placement's header title: its custom title, trimmed and capped, or
+ * [fallback] when blank. Pure and JVM-pinned, so the blank-means-default
+ * rule cannot drift between the widget and its config screen. */
+internal fun widgetTitle(custom: String?, fallback: String): String {
+    val trimmed = custom?.trim().orEmpty()
+    return if (trimmed.isEmpty()) fallback else trimmed.take(WIDGET_TITLE_MAX)
+}
+
+/** The broadcast action a widget row posts for [target] (#532): the
+ * notification actions themselves, so the receiver needs no second route
+ * and a widget tap shares the notification's failure handling. Pure and
+ * JVM-pinned by WidgetAgendaTest. */
+internal fun widgetMutationAction(target: NotifAction): String = when (target) {
+    NotifAction.COMPLETE -> TaskNotifActionReceiver.ACTION_COMPLETE
+    NotifAction.SKIP -> TaskNotifActionReceiver.ACTION_SKIP
+}
+
+/**
+ * Size at or above which a placement gets the full list (#532): the
+ * provider's default 3x2 footprint in task_widget_info.xml, i.e. three
+ * cells wide (180dp) and two rows tall (110dp). A placement smaller than
+ * EITHER bound — narrower than three cells or shorter than two rows, e.g.
+ * a 4x1 — shrinks to the compact layout instead of squeezing the header +
+ * list into the gap. Pure so the thresholds are testable without a
+ * launcher.
+ */
+internal const val COMPACT_MAX_WIDTH_DP = 180
+internal const val COMPACT_MIN_HEIGHT_DP = 110
+
+/** Whether a placement reporting these options is compact (#532). Only
+ * BOTH options missing/0 keeps the full list (the historical behaviour on
+ * a launcher that will not say how big it is) — a known-small dimension
+ * compacts even when the other is unknown, so (110, 0) and (0, 50) are
+ * compact and only (0, 0) is not. */
+internal fun widgetIsCompact(minWidthDp: Int, minHeightDp: Int): Boolean =
+    (minWidthDp in 1 until COMPACT_MAX_WIDTH_DP) ||
+        (minHeightDp in 1 until COMPACT_MIN_HEIGHT_DP)
+
+/**
+ * The secondary line a widget row shows (#532): the shared due · repeat ·
+ * parallel line, or — when the placement turns due dates off — only the
+ * repeat/parallel marks, so the repeat condition never disappears with a
+ * display toggle that was never about it.
+ */
+internal fun widgetSecondaryLine(
+    task: ServerTask,
+    today: java.time.LocalDate,
+    showDue: Boolean,
+): String {
+    if (showDue) return task.dueBits(today)
+    val bits = ArrayList<String>(2)
+    val repeat = task.repeatLabel()
+    if (repeat.isNotEmpty()) bits.add(repeat)
+    if (task.parallelable) bits.add("parallel")
+    return bits.joinToString(" · ")
+}
 
 /** A stored widget view name, defaulting to Open (#437). Unknown names
  * reset — and that reset reports through [widgetViewCoercion], so a
@@ -235,16 +399,23 @@ fun taskWidgetIds(context: Context): IntArray {
  * Settings → Home-screen widget — the widget's own controls never rendered
  * on some launchers (#137). Tap contract (#370): the ring completes inline,
  * a row opens its detail sheet, and everything else (background, header,
- * empty line) opens the Task Manager. Row taps deep-link
- * into the task's detail sheet and the ring button completes inline —
- * both via the translucent [TaskCompleteActivity] trampoline, which
- * keeps widget taps BAL-safe on all API levels. Reads the same shared
+ * empty line) opens the Task Manager. Row taps deep-link into the task's
+ * detail sheet; the ring completes and the skip control skips inline. On
+ * the legacy service-backed collection (API <31) both ride the translucent
+ * [TaskCompleteActivity] trampoline, because that list has one
+ * PendingIntent template; placements built from explicit intents (direct
+ * collection items on API 31+, and the plain-rows layout at any API) send
+ * those two verbs as broadcasts to [TaskNotifActionReceiver] instead
+ * (#532) — no activity for complete/skip, while the row body still opens
+ * the detail sheet by design. Reads the same shared
  * `tasks` collection as TaskManagerScreen via TasksApi; the app pushes
  * fresh data after every task mutation via [refresh]. No periodic
  * updates (updatePeriodMillis=0) — data pulls on add/refresh-tap/
  * view-change/mutation only, so a sleeping server costs nothing.
  *
- * Dynamic sizing: min footprint 3x2, resizable both ways. The list is a
+ * Dynamic sizing: default 3x2 footprint, resizable down to two cells
+ * wide (110dp) and one row tall (40dp) — below 180dp x 110dp on either
+ * axis the small layout takes over. The list is a
  * RemoteViews collection ([TaskWidgetService]) with weight 1, so it
  * takes whatever height the placement offers. Every display setting is
  * per-widget via [TaskWidgetConfigActivity] — read `render()`'s per-key
@@ -270,6 +441,56 @@ class TaskWidget : AppWidgetProvider() {
             }
         }
         pull(context, appWidgetIds)
+    }
+
+    /**
+     * Resize re-render (#532): the layout depends on the placement's size,
+     * so a resize must swap layouts immediately rather than waiting for the
+     * next data change. Draws from the in-memory snapshot, and only fetches
+     * when there is no snapshot to draw — a resize drag fires this many
+     * times per second, and a resize never changes which tasks exist.
+     */
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: Bundle,
+    ) {
+        if (!renderCached(context, appWidgetManager, appWidgetId)) {
+            pull(context, intArrayOf(appWidgetId))
+        }
+    }
+
+    /** Draws one placement from the snapshot, without a network fetch.
+     * Returns whether a snapshot existed — false means the caller should
+     * fetch, so a resize after process death is not stuck on "Loading…". */
+    private fun renderCached(
+        context: Context,
+        mgr: AppWidgetManager,
+        appWidgetId: Int,
+    ): Boolean {
+        var hasSnapshot = false
+        runCatching {
+            val view = viewFor(context, appWidgetId)
+            val state = view.state
+            val cached = cachedViews[state]?.sortedForWidget(sortFor(context, appWidgetId))
+            hasSnapshot = cached != null
+            // Same honesty rule as the pushed path (#435): a snapshot drawn
+            // after a failed fetch is stale and must say so. A successful
+            // last fetch means these rows are live, so no badge.
+            val failed = lastErrors.containsKey(state)
+            val stale = if (failed) staleBadgeFor(null, cached, cachedAt[state]) else null
+            mgr.updateAppWidget(
+                appWidgetId,
+                render(
+                    context, appWidgetId, view, cached,
+                    error = cached == null && failed, staleBadge = stale,
+                ),
+            )
+        }.onFailure {
+            Log.w("TaskWidget", "resize render failed for id=$appWidgetId", it)
+        }
+        return hasSnapshot
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -309,6 +530,7 @@ class TaskWidget : AppWidgetProvider() {
                 remove("task_widget_sort_$id")
                 remove("task_widget_due_$id")
                 remove("task_widget_scroll_$id")
+                remove("task_widget_title_$id")
                 // Retired diagnostic ladder: drop its key on delete too.
                 remove("task_widget_style_$id")
             }
@@ -369,7 +591,12 @@ class TaskWidget : AppWidgetProvider() {
          * [TaskNotifActionReceiver] instead (#368) — no activity at all. */
         const val EXTRA_TASK_ID = "com.vishnu.agento.extra.TASK_ID"
 
-        /** Immediate complete request, handled by [TaskCompleteActivity]. */
+        /** Immediate complete request: the widget ring's fill-in on the
+         * legacy API <31 scrollable collection (handled by
+         * [TaskCompleteActivity]) and its broadcast everywhere a row owns
+         * its intents — direct items on 31+ and the plain-rows layout at
+         * any API (handled by [TaskNotifActionReceiver]) — the same extra
+         * key the reminder notifications use (#368, #532). */
         const val EXTRA_COMPLETE_ID = "com.vishnu.agento.extra.COMPLETE_ID"
 
         // One app-scoped worker: per-call CoroutineScope(Dispatchers.IO)
@@ -395,9 +622,21 @@ class TaskWidget : AppWidgetProvider() {
          * the widget settings preview so the cap isn't a surprise. */
         internal const val STATIC_ROW_LIMIT = 8
 
+        /** Rows handed to the direct-items collection (API 31+): the whole
+         * list rides one parcel, so an unbounded "All" view would
+         * TransactionTooLarge the update. Counts ROWS and drops a trailing
+         * header, the same rule as the plain-rows path ([takeAgendaRows]).
+         * Headroom, not a live limit: the widget fetches 50 rows per state
+         * (at most ~62 items with headers), so this only fires if that
+         * fetch limit ever grows. Internal (like [STATIC_ROW_LIMIT]) so the
+         * settings screen can promise the same number it enforces. The
+         * header counts still show the true per-bucket totals. */
+        internal const val MAX_COLLECTION_ROWS = 100
+
         // Row tap codes; per-task uniqueness comes from the data URI.
         private const val ROW_COMPLETE_CODE = 1006
         private const val ROW_OPEN_CODE = 1007
+        private const val ROW_SKIP_CODE = 1008
 
         // Snapshots per server state, read by TaskWidgetService's factory
         // (same process). Volatile: written on IO, read on the RemoteViews
@@ -451,6 +690,7 @@ class TaskWidget : AppWidgetProvider() {
                 appendLine("placements=${ids.size}")
                 for (id in ids) {
                     appendLine("id=$id view=${viewFor(ctx, id)} " +
+                        "title=${titleFor(ctx, id, "(default)")} " +
                         "density=${densityFor(ctx, id)} sort=${sortFor(ctx, id)} " +
                         "showDue=${showDueFor(ctx, id)} " +
                         "scrollable=${scrollableFor(ctx, id)}")
@@ -614,7 +854,10 @@ class TaskWidget : AppWidgetProvider() {
                 l.contains("agento") || l.contains("com.vishnu") ||
                 l.contains("RemoteCollection") ||
                 l.contains("TasksApi") || l.contains("TaskSyncWorker") ||
-                l.contains("SyncRunner")
+                l.contains("SyncRunner") ||
+                // Inline complete/skip failures (#532) log under TaskNotif;
+                // the claim "logged to diagnostics" is otherwise false.
+                l.contains("TaskNotif")
 
         // Bearer secrets must never ride along when the user pastes the
         // log elsewhere. Redacts key=value pairs for the usual secret
@@ -660,6 +903,15 @@ class TaskWidget : AppWidgetProvider() {
             noteCoercion(key, widgetSortCoercion(name), name)
             return widgetSortForName(name)
         }
+
+        /** This placement's custom header title (#532), or [fallback] when
+         * it has none. No coercion path: a title is free text, so it is
+         * trimmed and capped on read instead of resetting. */
+        fun titleFor(context: Context, appWidgetId: Int, fallback: String): String =
+            widgetTitle(
+                prefs(context).getString("task_widget_title_$appWidgetId", null),
+                fallback,
+            )
 
         // Resets that already notified (#437): one log line per distinct
         // key+raw per process, so every render does not re-log the same
@@ -726,10 +978,10 @@ class TaskWidget : AppWidgetProvider() {
         /** One row with explicit per-row intents instead of the collection
          * template: all immutable, so hosts that balk at the mutable
          * template (or at fill-in merging) still complete/open rows
-         * (issue #137). Same layout and content as [buildRow]. */
+         * (issue #137). Same layout and content as [buildRow]; complete and
+         * skip are broadcasts so the tap never foregrounds the app (#532). */
         fun buildRowWithIntents(
             context: Context,
-            appWidgetId: Int,
             compact: Boolean,
             showDue: Boolean,
             today: java.time.LocalDate,
@@ -739,11 +991,14 @@ class TaskWidget : AppWidgetProvider() {
             // data URIs below are unique per task AND per action, so rows
             // can never share a PendingIntent — the codes only have to be
             // distinct constants, not a per-row hash (which can collide).
-            val complete = PendingIntent.getActivity(
+            val complete = PendingIntent.getBroadcast(
                 context, ROW_COMPLETE_CODE,
-                Intent(context, TaskCompleteActivity::class.java)
-                    .putExtra(EXTRA_COMPLETE_ID, task.id)
-                    .setData("agento://task/${task.id}/complete".toUri()),
+                completeIntent(context, task.id),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val skip = PendingIntent.getBroadcast(
+                context, ROW_SKIP_CODE,
+                skipIntent(context, task.id),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val openTask = PendingIntent.getActivity(
@@ -756,12 +1011,73 @@ class TaskWidget : AppWidgetProvider() {
             )
             return buildRow(context.packageName, compact, showDue, today, task).apply {
                 setOnClickPendingIntent(R.id.task_widget_row_check, complete)
+                setOnClickPendingIntent(R.id.task_widget_row_skip, skip)
                 setOnClickPendingIntent(R.id.task_widget_row, openTask)
             }
         }
 
-        /** Builds one collection row. Shared by the legacy factory
-         * (API <31) and the direct RemoteCollectionItems path (31+). */
+        /**
+         * The broadcast behind a widget row's ring (#532): the reminder
+         * notification's own complete action, so a widget tap and a
+         * notification tap are one code path (and one failure path).
+         * Explicit component (the receiver is non-exported — an implicit
+         * broadcast would never reach it) and a per-task data URI, so two
+         * rows never share a PendingIntent. IMMUTABLE at the call site:
+         * nothing fills this in.
+         */
+        internal fun completeIntent(context: Context, taskId: String): Intent =
+            mutationIntent(context, taskId, NotifAction.COMPLETE)
+
+        /** The skip broadcast (#532); same shape, the skip action. */
+        internal fun skipIntent(context: Context, taskId: String): Intent =
+            mutationIntent(context, taskId, NotifAction.SKIP)
+
+        private fun mutationIntent(
+            context: Context,
+            taskId: String,
+            target: NotifAction,
+        ): Intent = Intent(context, TaskNotifActionReceiver::class.java)
+            .setAction(widgetMutationAction(target))
+            .putExtra(target.extraKey, taskId)
+            .setData("agento://task/$taskId/${target.name.lowercase()}".toUri())
+
+        /** One agenda section header (#532), a collection item of its own.
+         * [open] is the Task Manager intent the direct/plain paths pin
+         * explicitly; the legacy factory passes null and lets its fill-in
+         * template handle the tap (see TaskWidgetService). Internal because
+         * [DueBucket] is, and a public signature cannot expose it. */
+        internal fun buildSection(
+            context: Context,
+            bucket: DueBucket,
+            count: Int,
+            open: PendingIntent? = null,
+        ): RemoteViews =
+            RemoteViews(context.packageName, R.layout.task_widget_section).apply {
+                setTextViewText(R.id.task_widget_section, "${bucket.title} · $count")
+                if (open != null) {
+                    setOnClickPendingIntent(R.id.task_widget_section, open)
+                }
+                setTextColor(
+                    R.id.task_widget_section,
+                    ContextCompat.getColor(
+                        context,
+                        if (bucket == DueBucket.Overdue) {
+                            R.color.task_widget_overdue
+                        } else {
+                            R.color.task_widget_text_primary
+                        },
+                    ),
+                )
+            }
+
+        /** Builds one collection row: text only, no taps. Callers attach
+         * them — [buildRowWithIntents] wherever a row owns its intents
+         * (the direct-items path on 31+ AND the plain-rows layout at any
+         * API: explicit broadcasts) and [buildLegacyRow] on the API <31
+         * scrollable template (fill-ins). Keeping the two apart means a row
+         * can never carry both an explicit intent and a fill-in for the
+         * same view, where which one wins is an implementation detail of
+         * the host. */
         fun buildRow(
             packageName: String,
             compact: Boolean,
@@ -776,27 +1092,44 @@ class TaskWidget : AppWidgetProvider() {
             }
             return RemoteViews(packageName, layout).apply {
                 setTextViewText(R.id.task_widget_row_name, task.name)
-                // Same line as the Task Manager rows (#130): start → due,
-                // IST-pinned. The estimate is an input, not a label — every
-                // surface outside the editor shows the start moment.
-                val due = task.startToDueLine(today)
-                if (showDue && due.isNotEmpty()) {
+                // Same line as the Task Manager rows (#130, #532): due →
+                // repeat → parallel, IST-pinned, shared helper.
+                val due = widgetSecondaryLine(task, today, showDue)
+                if (due.isNotEmpty()) {
                     setTextViewText(R.id.task_widget_row_due, due)
                     setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)
                 } else {
                     setViewVisibility(R.id.task_widget_row_due, View.GONE)
                 }
-                // Ring completes inline; anywhere else opens the detail
-                // sheet. Both ride the trampoline template pending intent.
-                setOnClickFillInIntent(
-                    R.id.task_widget_row_check,
-                    Intent().putExtra(TaskWidget.EXTRA_COMPLETE_ID, task.id),
-                )
-                setOnClickFillInIntent(
-                    R.id.task_widget_row,
-                    Intent().putExtra(TaskWidget.EXTRA_TASK_ID, task.id),
-                )
             }
+        }
+
+        /**
+         * One row for the legacy collection (API <31), whose ListView has a
+         * single PendingIntent template — the [TaskCompleteActivity]
+         * trampoline, because the row body must open an activity and a
+         * template cannot be both. The fill-ins therefore only carry which
+         * id and which verb; the trampoline decides (#532).
+         */
+        fun buildLegacyRow(
+            packageName: String,
+            compact: Boolean,
+            showDue: Boolean,
+            today: java.time.LocalDate,
+            task: ServerTask,
+        ): RemoteViews = buildRow(packageName, compact, showDue, today, task).apply {
+            setOnClickFillInIntent(
+                R.id.task_widget_row_check,
+                Intent().putExtra(TaskWidget.EXTRA_COMPLETE_ID, task.id),
+            )
+            setOnClickFillInIntent(
+                R.id.task_widget_row_skip,
+                Intent().putExtra(TaskNotifActionReceiver.EXTRA_SKIP_ID, task.id),
+            )
+            setOnClickFillInIntent(
+                R.id.task_widget_row,
+                Intent().putExtra(TaskWidget.EXTRA_TASK_ID, task.id),
+            )
         }
 
         /** Advance Open → Done → All → Open for one placement. */
@@ -948,10 +1281,19 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         /** Full widget view: header reflects this placement's view and the
-         * latest fetch (null = not loaded yet, error flag = fetch failed);
-         * the list binds to [TaskWidgetService] and fills whatever height
-         * the placement offers. Row taps and the ring button go through
-         * the [TaskCompleteActivity] trampoline with per-row fill-ins. */
+         * latest fetch (null = not loaded yet, error flag = fetch failed).
+         * The collection binds to [TaskWidgetService] only on the legacy
+         * API <31 path (or before any fetch lands); on 31+ with rows the
+         * items ride the update directly as RemoteCollectionItems, no
+         * service involved. Both full layouts fill whatever height the
+         * placement offers. Complete, skip and the row body go through the
+         * [TaskCompleteActivity] trampoline with per-row fill-ins on the
+         * legacy path; the direct-items path (31+) and the plain-rows path
+         * (any API) send complete/skip as explicit broadcasts (#532) and
+         * open the detail sheet from the row body. A placement below
+         * either bound — narrower than [COMPACT_MAX_WIDTH_DP] or shorter
+         * than [COMPACT_MIN_HEIGHT_DP] — gets the compact layout
+         * instead. */
         private fun render(
             context: Context,
             appWidgetId: Int,
@@ -972,6 +1314,60 @@ class TaskWidget : AppWidgetProvider() {
                 context, REFRESH_CODE, refresh,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
+            // Compact placements (#532): title + count + the next task. No
+            // collection: below either full-size bound there is no room
+            // for a scrolling list with a header over it, and an empty
+            // list would just be a header over nothing.
+            val options = AppWidgetManager.getInstance(context)
+                .getAppWidgetOptions(appWidgetId)
+            val compactPlacement = widgetIsCompact(
+                options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0),
+                options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0),
+            )
+            if (compactPlacement) {
+                // "Next" is the first row of the same agenda the full layout
+                // builds (#532), not the first task in the placement's own
+                // sort: a Name- or Estimate-sorted placement must not name a
+                // different task from its full-size twin. Byte-identical
+                // grouping, so the same clock and buckets.
+                val today = java.time.LocalDate.now(IST)
+                val next = widgetNextTask(
+                    tasks.orEmpty(),
+                    grouped = view != TaskWidgetView.Done,
+                    today = today,
+                    now = java.time.LocalDateTime.now(IST)
+                        .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
+                )
+                return RemoteViews(context.packageName, R.layout.task_widget_small).apply {
+                    applyTapTargets(this, openPending, refreshPending, SMALL_TAP_IDS)
+                    setTextViewText(
+                        R.id.task_widget_title,
+                        // Custom title wins; the view name is the default,
+                        // same rule as the full layout.
+                        titleFor(context, appWidgetId, view.title),
+                    )
+                    setTextViewText(
+                        R.id.task_widget_count,
+                        // One named task, however many exist — the same
+                        // "showing N" honesty as the static path (#532).
+                        countText(context, view, tasks, error,
+                            shownRows = 1, staleBadge = staleBadge),
+                    )
+                    if (next != null) {
+                        setTextViewText(R.id.task_widget_next, next.name)
+                        val line = widgetSecondaryLine(
+                            next, today, showDueFor(context, appWidgetId))
+                        setTextViewText(R.id.task_widget_next_due, line)
+                        setViewVisibility(
+                            R.id.task_widget_next_due,
+                            if (line.isEmpty()) View.GONE else View.VISIBLE,
+                        )
+                    } else {
+                        setViewVisibility(R.id.task_widget_next, View.GONE)
+                        setViewVisibility(R.id.task_widget_next_due, View.GONE)
+                    }
+                }
+            }
             // Header tap contract (#370): the ring completes inline, a row
             // opens its detail sheet, and EVERYTHING else — background,
             // title, count, view label, empty line — opens the Task Manager.
@@ -985,12 +1381,13 @@ class TaskWidget : AppWidgetProvider() {
             // their codes stay reserved, never reused. The table itself
             // lives in [widgetTapTarget], which render() consults through
             // [applyTapTargets] — one source, pinned by WidgetTapTest.
-            // Trampoline template: per-row fill-ins carry either
-            // EXTRA_TASK_ID (open detail) or EXTRA_COMPLETE_ID (complete
-            // inline). MUTABLE is required: fill-in extras are silently
-            // dropped from an immutable template on API 31+. Per-widget
-            // code, like the view/config intents, so placements never
-            // share a cached PendingIntent.
+            // Trampoline template: per-row fill-ins carry EXTRA_TASK_ID
+            // (open detail), EXTRA_COMPLETE_ID (complete inline) or
+            // EXTRA_SKIP_ID (skip inline) — the only verbs the API <31
+            // collection can express. MUTABLE is required: fill-in extras
+            // are silently dropped from an immutable template on API 31+.
+            // Per-widget code, like the view/config intents, so placements
+            // never share a cached PendingIntent.
             val trampoline = Intent(context, TaskCompleteActivity::class.java)
             val rowPending = PendingIntent.getActivity(
                 context, ROW_CODE + appWidgetId, trampoline,
@@ -1014,14 +1411,30 @@ class TaskWidget : AppWidgetProvider() {
                         val today = java.time.LocalDate.now(IST)
                         val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
                         val due = showDueFor(context, appWidgetId)
+                        // Same agenda order as the collection paths (#532).
+                        val agenda = widgetAgenda(
+                            tasks,
+                            grouped = view != TaskWidgetView.Done,
+                            today = today,
+                            now = java.time.LocalDateTime.now(IST)
+                                .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
+                        )
                         // Clear first: re-rendering into a fresh RemoteViews
                         // each time would append, leaving ghost rows when
                         // the list shrinks.
                         removeAllViews(R.id.task_widget_static_list)
-                        tasks.take(STATIC_ROW_LIMIT).forEach { t ->
-                            addView(R.id.task_widget_static_list,
-                                buildRowWithIntents(
-                                    context, appWidgetId, compact, due, today, t))
+                        agenda.takeAgendaRows(STATIC_ROW_LIMIT).forEach { item ->
+                            addView(
+                                R.id.task_widget_static_list,
+                                when (item) {
+                                    is WidgetItem.Header ->
+                                        buildSection(
+                                            context, item.bucket, item.count, openPending)
+                                    is WidgetItem.Row ->
+                                        buildRowWithIntents(
+                                            context, compact, due, today, item.task)
+                                },
+                            )
                         }
                     }
                     val showList = !tasks.isNullOrEmpty()
@@ -1032,9 +1445,12 @@ class TaskWidget : AppWidgetProvider() {
                     setViewVisibility(R.id.task_widget_empty,
                         if (empty.isEmpty()) View.GONE else View.VISIBLE)
                     setTextViewText(R.id.task_widget_view, view.title)
-                    setTextViewText(R.id.task_widget_title, view.title)
+                    setTextViewText(R.id.task_widget_title,
+                        titleFor(context, appWidgetId, view.title))
                     setTextViewText(R.id.task_widget_count,
-                        countText(context, view, tasks, error, capped = true, staleBadge = staleBadge))
+                        countText(
+                            context, view, tasks, error,
+                            shownRows = STATIC_ROW_LIMIT, staleBadge = staleBadge))
                 }
             }
             // E: the collection widget, on the same proven chrome.
@@ -1052,14 +1468,35 @@ class TaskWidget : AppWidgetProvider() {
                     val today = java.time.LocalDate.now(IST)
                     val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
                     val due = showDueFor(context, appWidgetId)
+                    // Agenda order (#532): overdue → today → upcoming →
+                    // someday, with a header item per non-empty bucket. The
+                    // Done view stays flat — a bucket for finished work
+                    // says nothing. Two layouts means a view-type count of
+                    // 2; the platform derives an item's type from its
+                    // RemoteViews layout id.
+                    val agenda = widgetAgenda(
+                        tasks,
+                        grouped = view != TaskWidgetView.Done,
+                        today = today,
+                        now = java.time.LocalDateTime.now(IST)
+                            .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
+                    )
                     val items = RemoteViews.RemoteCollectionItems.Builder().apply {
-                        tasks.take(100).forEachIndexed { i, t ->
-                            addItem(i.toLong(),
-                                buildRowWithIntents(
-                                    context, appWidgetId, compact, due, today, t))
+                        agenda.takeAgendaRows(MAX_COLLECTION_ROWS).forEachIndexed { i, item ->
+                            addItem(
+                                i.toLong(),
+                                when (item) {
+                                    is WidgetItem.Header ->
+                                        buildSection(
+                                            context, item.bucket, item.count, openPending)
+                                    is WidgetItem.Row ->
+                                        buildRowWithIntents(
+                                            context, compact, due, today, item.task)
+                                },
+                            )
                         }
                         setHasStableIds(false)
-                        setViewTypeCount(1)
+                        setViewTypeCount(2)
                     }.build()
                     // Overload taking the items directly (API 31+), not
                     // the service Intent below.
@@ -1080,11 +1517,17 @@ class TaskWidget : AppWidgetProvider() {
                         R.id.task_widget_empty,
                     )
                 }
-                // The header title doubles as the view name now that the
-                // toggle button is gone (it never rendered on this host).
-                setTextViewText(R.id.task_widget_title, view.title)
+                // The header title doubles as the view name (the toggle
+                // button is gone — it never rendered on this host), and a
+                // placement's custom title (#532) wins over it.
+                setTextViewText(R.id.task_widget_title,
+                    titleFor(context, appWidgetId, view.title))
                 setTextViewText(R.id.task_widget_count,
-                    countText(context, view, tasks, error, staleBadge = staleBadge))
+                    // Same honesty as the other capped surfaces (#532):
+                    // dead at today's fetch limit of 50, live the day it
+                    // grows past MAX_COLLECTION_ROWS.
+                    countText(context, view, tasks, error,
+                        shownRows = MAX_COLLECTION_ROWS, staleBadge = staleBadge))
                 val empty = emptyText(context, tasks, error, errorDetail)
                 setTextViewText(R.id.task_widget_empty, empty)
                 // Hide the empty line when rows are showing: an empty
@@ -1112,14 +1555,17 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         /** Header count line, shared by the full widget and the diagnostic
-         * styles. [capped] notes the static-row limit so the count and the
-         * visible rows never silently disagree. */
+         * styles. [shownRows] is the surface's row cap when it has one, so
+         * the count and the visible rows never silently disagree: the static
+         * path shows up to [STATIC_ROW_LIMIT], the compact placement exactly
+         * one task, the scrollable collection up to [MAX_COLLECTION_ROWS].
+         * Null means uncapped, so no qualifier is possible. */
         private fun countText(
             context: Context,
             view: TaskWidgetView,
             tasks: List<ServerTask>?,
             error: Boolean,
-            capped: Boolean = false,
+            shownRows: Int? = null,
             /** Stale-cache badge, null when the rows are live (#435). */
             staleBadge: StaleBadge? = null,
         ): String {
@@ -1132,9 +1578,9 @@ class TaskWidget : AppWidgetProvider() {
                 tasks == null && !error -> context.getString(R.string.task_widget_loading)
                 tasks == null -> context.getString(R.string.task_widget_error)
                 tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
-                capped && tasks.size > STATIC_ROW_LIMIT ->
+                shownRows != null && tasks.size > shownRows ->
                     context.resources.getQuantityString(plural, tasks.size, tasks.size) +
-                        " · showing " + STATIC_ROW_LIMIT
+                        shownSuffix(tasks.size, shownRows)
                 else -> context.resources.getQuantityString(plural, tasks.size, tasks.size)
             }
             // Cache used after a failed fetch (#435): say so. Rows rendered

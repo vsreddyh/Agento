@@ -17,6 +17,9 @@ class WidgetLogFilterTest {
         assertTrue(TaskWidget.widgetLine("W/TasksApi: dropped 2 unparseable task row(s) in list response"))
         assertTrue(TaskWidget.widgetLine("W/TaskSyncWorker: task surface refresh failed"))
         assertTrue(TaskWidget.widgetLine("W/SyncRunner: sync failed"))
+        // Inline widget complete/skip (#532) shares the reminder receiver,
+        // so its failure line logs under TaskNotif and must survive too.
+        assertTrue(TaskWidget.widgetLine("W/TaskNotif: action SKIP for 68b0 failed; row/alert kept"))
     }
 
     @Test
