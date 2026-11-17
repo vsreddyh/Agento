@@ -999,8 +999,9 @@ class TaskWidget : AppWidgetProvider() {
         /** One agenda section header (#532), a collection item of its own.
          * [open] is the Task Manager intent the direct/plain paths pin
          * explicitly; the legacy factory passes null and lets its fill-in
-         * template handle the tap (see TaskWidgetService). */
-        fun buildSection(
+         * template handle the tap (see TaskWidgetService). Internal because
+         * [DueBucket] is, and a public signature cannot expose it. */
+        internal fun buildSection(
             context: Context,
             bucket: DueBucket,
             count: Int,
