@@ -183,8 +183,8 @@ class WidgetAgendaTest {
 
     @Test
     fun `compact under the provider minimums`() {
-        // Full size is the provider's own minimums: 180dp wide, 110dp
-        // tall. Anything smaller goes compact, either dimension.
+        // Full size is the provider's default 3x2 footprint: 180dp wide,
+        // 110dp tall. Anything smaller goes compact, either dimension.
         assertFalse(widgetIsCompact(COMPACT_MAX_WIDTH_DP, COMPACT_MIN_HEIGHT_DP))
         assertFalse(widgetIsCompact(320, 220))
         // Two cells wide (or one row tall) shrinks.

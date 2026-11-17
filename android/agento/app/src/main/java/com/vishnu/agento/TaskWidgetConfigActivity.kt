@@ -576,10 +576,11 @@ private fun previewCount(view: TaskWidgetView, scrollable: Boolean): String {
     val total = if (view == TaskWidgetView.Done) 1 else 12
     val shown = total.toString() +
         if (total == 1) " $noun" else " ${noun}s"
-    return if (scrollable) {
-        shown
-    } else {
-        val cap = minOf(total, TaskWidget.STATIC_ROW_LIMIT)
-        "$shown · showing $cap"
-    }
+    if (scrollable) return shown
+    // Same rule as the real count line (#532): the qualifier appears only
+    // when rows are actually hidden. A one-task Done view capped at 8 hides
+    // nothing, so "· showing 1" would promise a disclosure the device never
+    // shows.
+    val cap = minOf(total, TaskWidget.STATIC_ROW_LIMIT)
+    return if (total > cap) "$shown · showing $cap" else shown
 }

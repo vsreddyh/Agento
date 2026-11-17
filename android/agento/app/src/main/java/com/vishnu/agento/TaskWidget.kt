@@ -268,11 +268,12 @@ internal fun widgetMutationAction(target: NotifAction): String = when (target) {
 
 /**
  * Size at or above which a placement gets the full list (#532): the
- * provider's own minimums in task_widget_info.xml, i.e. three cells wide
- * (180dp) and two rows tall (110dp). A placement smaller than EITHER
- * bound — narrower than three cells or shorter than two rows, e.g. a 4x1 —
- * shrinks to the compact layout instead of squeezing the header + list
- * into the gap. Pure so the thresholds are testable without a launcher.
+ * provider's default 3x2 footprint in task_widget_info.xml, i.e. three
+ * cells wide (180dp) and two rows tall (110dp). A placement smaller than
+ * EITHER bound — narrower than three cells or shorter than two rows, e.g.
+ * a 4x1 — shrinks to the compact layout instead of squeezing the header +
+ * list into the gap. Pure so the thresholds are testable without a
+ * launcher.
  */
 internal const val COMPACT_MAX_WIDTH_DP = 180
 internal const val COMPACT_MIN_HEIGHT_DP = 110
@@ -1504,7 +1505,11 @@ class TaskWidget : AppWidgetProvider() {
                 setTextViewText(R.id.task_widget_title,
                     titleFor(context, appWidgetId, view.title))
                 setTextViewText(R.id.task_widget_count,
-                    countText(context, view, tasks, error, staleBadge = staleBadge))
+                    // Same honesty as the other capped surfaces (#532):
+                    // dead at today's fetch limit of 50, live the day it
+                    // grows past MAX_COLLECTION_ROWS.
+                    countText(context, view, tasks, error,
+                        shownRows = MAX_COLLECTION_ROWS, staleBadge = staleBadge))
                 val empty = emptyText(context, tasks, error, errorDetail)
                 setTextViewText(R.id.task_widget_empty, empty)
                 // Hide the empty line when rows are showing: an empty
