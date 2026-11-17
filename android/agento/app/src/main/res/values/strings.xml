@@ -10,6 +10,10 @@
     <string name="task_widget_empty">All done!</string>
     <string name="task_widget_refresh">Refresh tasks</string>
     <string name="task_widget_complete">Complete task</string>
+    <string name="task_widget_skip">Skip task</string>
+    <string name="task_widget_default_title">Tasks</string>
+    <string name="task_complete_failed">Couldn\'t complete — try again</string>
+    <string name="task_skip_failed">Couldn\'t skip — try again</string>
     <string name="task_reminder_channel">Task reminders</string>
     <string name="task_reminder_channel_desc">A nudge to start, a heads-up 5 minutes before due, and a repeat every 15 minutes while a task is overdue</string>
     <string name="channel_name">Health Sync</string>

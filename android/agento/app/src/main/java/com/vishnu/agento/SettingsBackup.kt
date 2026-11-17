@@ -133,17 +133,22 @@ object SettingsBackup {
         // Row order (#369): a string like view/density, same numeric-id
         // shape, same import coercion (unknown names read back Server).
         "task_widget_sort_",
+        // Custom header title (#532): free text, so it is restored verbatim
+        // and trimmed/capped on read like every other title.
+        "task_widget_title_",
     )
     private val BOOLEAN_WIDGET_PREFIXES = listOf(
         "task_widget_due_",
         "task_widget_scroll_",
     )
 
-    /** True for a per-widget display key `task_widget_{view,density,sort,due,scroll}_<id>`. */
+    /** True for a per-widget display key
+     * `task_widget_{view,density,sort,title,due,scroll}_<id>`. */
     fun isWidgetDisplayKey(k: String): Boolean =
         isStringWidgetKey(k) || isBooleanWidgetKey(k)
 
-    /** True for a `task_widget_{view,density,sort}_<numeric id>` key (string-valued). */
+    /** True for a `task_widget_{view,density,sort,title}_<numeric id>` key
+     * (string-valued). */
     fun isStringWidgetKey(k: String): Boolean =
         STRING_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
 

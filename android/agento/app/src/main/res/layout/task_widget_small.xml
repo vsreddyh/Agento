@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Compact task widget (#532): the layout a placement gets when it is
+     narrower than 180dp (2 grid cells). Title + count + the single next
+     task, no scrolling list; every non-control tap opens the Task Manager.
+     Concrete colours only — theme attrs in widget layouts are rejected by
+     some hosts (#137). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/task_widget_body"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/task_widget_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/task_widget_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/task_widget_default_title"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="@color/task_widget_text_primary" />
+
+        <ImageButton
+            android:id="@+id/task_widget_refresh"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:src="@android:drawable/ic_menu_rotate"
+            android:background="@android:color/transparent"
+            android:contentDescription="@string/task_widget_refresh" />
+
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/task_widget_count"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="12sp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:text="@string/task_widget_loading"
+        android:textColor="@color/task_widget_text_secondary" />
+
+    <TextView
+        android:id="@+id/task_widget_next"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textSize="14sp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="@color/task_widget_text_primary" />
+
+    <TextView
+        android:id="@+id/task_widget_next_due"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="12sp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="@color/task_widget_text_secondary" />
+
+</LinearLayout>

@@ -1937,16 +1937,12 @@ internal fun ServerTaskRow(
                 textDecoration = if (done) TextDecoration.LineThrough else null,
                 color = nameColor,
             )
-            val dueLine = task.startToDueLine(today)
-            val dueBits = buildList {
-                if (dueLine.isNotEmpty()) add(dueLine)
-                val repeat = task.repeatLabel()
-                if (repeat.isNotEmpty()) add(repeat)
-                if (task.parallelable) add("parallel")
-            }
+            // One shared line (#532): due → repeat → parallel, so the widget
+            // and this row can never render two different "same" rows.
+            val dueBits = task.dueBits(today)
             if (dueBits.isNotEmpty()) {
                 Text(
-                    dueBits.joinToString(" · "),
+                    dueBits,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

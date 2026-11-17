@@ -5,4 +5,6 @@
     <color name="task_widget_ring">#B0B0B0</color>
     <color name="task_widget_text_primary">#E6E1E5</color>
     <color name="task_widget_text_secondary">#CAC4D0</color>
+    <!-- Overdue agenda header (#532), night variant. -->
+    <color name="task_widget_overdue">#F2B8B5</color>
 </resources>

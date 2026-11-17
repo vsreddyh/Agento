@@ -18,7 +18,7 @@
         android:layout_height="32dp"
         android:padding="6dp"
         android:src="@drawable/task_check"
-        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:background="@android:color/transparent"
         android:contentDescription="@string/task_widget_complete" />
 
     <TextView
@@ -40,5 +40,14 @@
         android:textSize="12sp"
         android:maxLines="1"
         android:textColor="@color/task_widget_text_secondary" />
+
+    <ImageButton
+        android:id="@+id/task_widget_row_skip"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:padding="6dp"
+        android:src="@drawable/task_skip"
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/task_widget_skip" />
 
 </LinearLayout>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Agenda section header (#532), an item in the widget's collection just
+     like a row: "Overdue · 3". Its colour is set at render time (error for
+     Overdue, primary otherwise), and it carries no taps — the collection
+     body behind it opens the Task Manager. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/task_widget_section"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingStart="4dp"
+    android:paddingEnd="4dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="2dp"
+    android:textSize="12sp"
+    android:textStyle="bold"
+    android:maxLines="1"
+    android:ellipsize="end"
+    android:textColor="@color/task_widget_text_primary" />

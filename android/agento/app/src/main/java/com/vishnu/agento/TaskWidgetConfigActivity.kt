@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowRight
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -34,6 +35,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -57,8 +59,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 
 /**
- * Display settings for one task-widget placement: which slice it shows,
- * row density, row order, the due line, and whether the list scrolls.
+ * Display settings for one task-widget placement: a custom title, which
+ * slice it shows, row density, row order, the due line, and whether the
+ * list scrolls.
  * Launched by the system at add time (android:configure) and from
  * Settings → Home-screen widget afterwards. Cancelling at add time aborts
  * the placement; saving re-renders that widget via [TaskWidget].
@@ -84,6 +87,7 @@ class TaskWidgetConfigActivity : ComponentActivity() {
             val dark = isSystemInDarkTheme()
             AgentoTheme(dark = dark) {
                 WidgetSettingsScreen(
+                    title = TaskWidget.titleFor(this, appWidgetId, ""),
                     view = TaskWidget.viewFor(this, appWidgetId),
                     density = TaskWidget.densityFor(this, appWidgetId),
                     sort = TaskWidget.sortFor(this, appWidgetId),
@@ -93,8 +97,17 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                         setResult(RESULT_CANCELED, done)
                         finish()
                     },
-                    onSave = { v, d, s, due, scroll ->
+                    onSave = { t, v, d, s, due, scroll ->
                         prefs().edit {
+                            // Blank means "follow the view title", so the
+                            // key is removed rather than storing "" —
+                            // matches titleFor's fallback rule (#532).
+                            val trimmed = t.trim().take(WIDGET_TITLE_MAX)
+                            if (trimmed.isEmpty()) {
+                                remove("task_widget_title_$appWidgetId")
+                            } else {
+                                putString("task_widget_title_$appWidgetId", trimmed)
+                            }
                             putString("task_widget_view_$appWidgetId", v.name)
                             putString("task_widget_density_$appWidgetId", d.name)
                             putString("task_widget_sort_$appWidgetId", s.name)
@@ -122,17 +135,19 @@ class TaskWidgetConfigActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WidgetSettingsScreen(
+    title: String,
     view: TaskWidgetView,
     density: TaskWidgetDensity,
     sort: TaskWidgetSort,
     showDue: Boolean,
     scrollable: Boolean,
     onCancel: () -> Unit,
-    onSave: (TaskWidgetView, TaskWidgetDensity, TaskWidgetSort, Boolean, Boolean) -> Unit,
+    onSave: (String, TaskWidgetView, TaskWidgetDensity, TaskWidgetSort, Boolean, Boolean) -> Unit,
 ) {
     // rememberSaveable: rotating before Save must not reset the picks
     // (this screen is a system-launched configure activity, so rotation
     // is routine).
+    var pickedTitle by rememberSaveable { mutableStateOf(title) }
     var pickedView by rememberSaveable { mutableStateOf(view) }
     var pickedDensity by rememberSaveable { mutableStateOf(density) }
     var pickedSort by rememberSaveable { mutableStateOf(sort) }
@@ -167,7 +182,10 @@ private fun WidgetSettingsScreen(
                 }
                 Button(
                     onClick = {
-                        onSave(pickedView, pickedDensity, pickedSort, pickedDue, pickedScroll)
+                        onSave(
+                            pickedTitle, pickedView, pickedDensity,
+                            pickedSort, pickedDue, pickedScroll,
+                        )
                     },
                     modifier = Modifier.weight(2f),
                 ) {
@@ -185,11 +203,27 @@ private fun WidgetSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             WidgetPreview(
+                title = pickedTitle,
                 view = pickedView,
                 density = pickedDensity,
                 showDue = pickedDue,
                 scrollable = pickedScroll,
             )
+            // Title first: it is the one thing above the list that a
+            // placement cannot infer (#532). Blank means "follow the view".
+            SettingsGroup("Title") {
+                OutlinedTextField(
+                    value = pickedTitle,
+                    onValueChange = { pickedTitle = it.take(WIDGET_TITLE_MAX) },
+                    singleLine = true,
+                    label = { Text("Widget title") },
+                    placeholder = { Text(pickedView.title) },
+                    supportingText = {
+                        Text("Blank shows \"${pickedView.title}\" · max $WIDGET_TITLE_MAX characters")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             SettingsGroup("Tasks shown") {
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     TaskWidgetView.entries.forEachIndexed { i, v ->
@@ -351,41 +385,72 @@ private fun SwitchRow(
     }
 }
 
+/** One fake agenda row in the preview. [repeat] keeps its own line so the
+ * preview shows that a repeat condition survives "show due dates" off,
+ * exactly like [widgetSecondaryLine]. */
+private data class PreviewRow(
+    val name: String,
+    val due: String,
+    val repeat: String? = null,
+)
+
+/** Fake agenda in the widget's bucket order (#532): Overdue first, no-date
+ * last. Shown only for the grouped views — Done renders flat. */
+private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
+    "Overdue" to listOf(
+        PreviewRow("Pay rent", "Yesterday, 10:00"),
+    ),
+    "Current" to listOf(
+        PreviewRow("Apply hair oil", "Today, 09:00", "Every 3 days"),
+        PreviewRow("Bath", "Today, 20:00"),
+    ),
+    "Later today" to listOf(
+        PreviewRow("Brush teeth", "Today, 22:00", "Daily"),
+        PreviewRow("Change bedsheets", "Today, 23:00"),
+    ),
+    "Tomorrow" to listOf(
+        PreviewRow("Buy vegetables", "Tomorrow, 18:00"),
+    ),
+    "This week" to listOf(
+        PreviewRow("Water plants", "Sat, 09:00", "Mon, Wed, Fri"),
+    ),
+    "No due date" to listOf(
+        PreviewRow("Plan the week", "", "Every 2 weeks"),
+    ),
+)
+
 /** Miniature of the real widget, so each choice is visible immediately:
- * same header, row shape, due line and truncation as the placement. */
+ * same title, section order, row shape, due line and truncation as the
+ * placement. */
 @Composable
 private fun WidgetPreview(
+    title: String,
     view: TaskWidgetView,
     density: TaskWidgetDensity,
     showDue: Boolean,
     scrollable: Boolean,
 ) {
     val compact = density == TaskWidgetDensity.Compact
-    // A full set of samples, so the non-scrolling mode can actually
-    // demonstrate its cap instead of implying it with 3 rows and "showing 8".
-    val samples = listOf(
-        "Apply hair oil" to "Today, 09:00",
-        "Bath" to "Today, 20:00",
-        "Brush teeth" to "Today, 22:00",
-        "Buy vegetables" to "Tomorrow, 18:00",
-        "Change bedsheets" to "Fri, 11:00",
-        "Water plants" to "Sat, 09:00",
-        "Pay rent" to "Sun, 10:00",
-        "Plan the week" to "Mon, 08:00",
-    )
-    // One fake total drives the count line, the rows shown and the
-    // truncation hint, so the preview can't claim one number and
-    // demonstrate another.
     val total = if (view == TaskWidgetView.Done) 1 else 12
-    val cap = TaskWidget.STATIC_ROW_LIMIT
-    val shown = if (scrollable) {
-        // Still capped by the total: the Done view has one task, so the
-        // scrollable preview must not draw eight rows for it.
-        samples.take(minOf(total, samples.size))
-    } else {
-        samples.take(minOf(total, cap))
+    // Done is one flat list with no headers, like the real widget.
+    val sections: List<Pair<String, List<PreviewRow>>> =
+        if (view == TaskWidgetView.Done) {
+            listOf("" to listOf(PreviewRow("Apply hair oil", "Today, 09:00")))
+        } else {
+            PREVIEW_SECTIONS
+        }
+    // The cap counts rows, and a section header only appears when one of
+    // its rows does — the same rule as takeAgendaRows in the widget.
+    val rowCap = if (scrollable) Int.MAX_VALUE else TaskWidget.STATIC_ROW_LIMIT
+    val shownSections = ArrayList<Pair<String, List<PreviewRow>>>()
+    var shownRows = 0
+    for ((name, rows) in sections) {
+        if (shownRows >= rowCap) break
+        val take = rows.take(rowCap - shownRows)
+        shownRows += take.size
+        shownSections.add(name to take)
     }
-    val hidden = (total - shown.size).coerceAtLeast(0)
+    val hidden = (total - shownRows).coerceAtLeast(0)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -398,9 +463,10 @@ private fun WidgetPreview(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "Tasks",
+                        widgetTitle(title, view.title),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
+                        maxLines = 1,
                     )
                     Text(
                         previewCount(view, scrollable),
@@ -408,11 +474,6 @@ private fun WidgetPreview(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Text(
-                    view.title,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 Spacer(modifier = Modifier.width(8.dp))
                 Icon(
                     Icons.Filled.Refresh,
@@ -425,38 +486,66 @@ private fun WidgetPreview(
                 modifier = Modifier.padding(vertical = 10.dp),
                 color = MaterialTheme.colorScheme.outlineVariant,
             )
-            shown.forEach { (name, due) ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = if (compact) 2.dp else 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Filled.RadioButtonUnchecked,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(if (compact) 18.dp else 22.dp),
+            shownSections.forEach { (section, rows) ->
+                if (section.isNotEmpty()) {
+                    val count = sections.first { it.first == section }.second.size
+                    Text(
+                        "$section · $count",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (section == "Overdue") {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier.padding(top = 6.dp),
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            name,
-                            style = if (compact) {
-                                MaterialTheme.typography.bodyMedium
-                            } else {
-                                MaterialTheme.typography.bodyLarge
-                            },
-                            maxLines = 1,
+                }
+                rows.forEach { row ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = if (compact) 2.dp else 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.RadioButtonUnchecked,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(if (compact) 18.dp else 22.dp),
                         )
-                        if (showDue) {
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                due,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                row.name,
+                                style = if (compact) {
+                                    MaterialTheme.typography.bodyMedium
+                                } else {
+                                    MaterialTheme.typography.bodyLarge
+                                },
                                 maxLines = 1,
                             )
+                            // Same join as the widget row: due, then repeat.
+                            val line = buildList {
+                                if (showDue && row.due.isNotEmpty()) add(row.due)
+                                if (row.repeat != null) add(row.repeat)
+                            }.joinToString(" · ")
+                            if (line.isNotEmpty()) {
+                                Text(
+                                    line,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            Icons.Filled.KeyboardDoubleArrowRight,
+                            contentDescription = "Skip",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(if (compact) 16.dp else 20.dp),
+                        )
                     }
                 }
             }

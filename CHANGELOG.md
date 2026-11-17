@@ -8,6 +8,27 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.1.0]
+- **Task widget rebuilt around the agenda (#532).** The home-screen widget
+  now groups open tasks the way the Task Manager does — Overdue → Current →
+  today's hours → Tomorrow → This week → Later → No due date — with a header
+  per non-empty section and its count, Overdue in the error colour. Rows
+  carry the same due · repeat · parallel line as the app, so a repeating
+  task shows its condition, and that line survives turning due dates off.
+- **Inline complete and skip, without opening the app.** The ring completes
+  and a new skip button moves past a task; on Android 12+ both are sent as
+  broadcasts, so a tap no longer brings Agento to the foreground on its
+  Projects tab (the old trampoline did). Android 11 and older keep the
+  invisible trampoline, where the shared collection template makes it
+  unavoidable. A failed mutation now says so with a toast instead of
+  looking like it worked.
+- **Custom widget title.** Each placement can name itself from its settings
+  (30 characters, blank means the view name), and the title is included in
+  backups.
+- **Size-aware layout.** Below two cells wide the placement switches to a
+  compact layout — title, count and the next task — and resizing re-renders
+  immediately instead of waiting for the next refresh.
+
 ## [9.0.0]
 - **BREAKING: Blocked status removed from the app board (#527).** The board
   has five sections — Ongoing → Testing → Paused → Todo → Done — and legacy

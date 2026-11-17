@@ -194,6 +194,22 @@ internal fun ServerTask.dueBucket(
     }
 }
 
+/**
+ * The one secondary line a task row shows (#532): the start → due line, the
+ * repeat condition and the parallel marker, joined with " · ". Shared by
+ * the Task Manager row and the widget row, so the two surfaces cannot drift
+ * apart the way they did while each built its own line.
+ */
+fun ServerTask.dueBits(today: java.time.LocalDate): String {
+    val bits = ArrayList<String>(3)
+    val due = startToDueLine(today)
+    if (due.isNotEmpty()) bits.add(due)
+    val repeat = repeatLabel()
+    if (repeat.isNotEmpty()) bits.add(repeat)
+    if (parallelable) bits.add("parallel")
+    return bits.joinToString(" · ")
+}
+
 internal fun List<ServerTask>.sortedByMode(mode: ServerTaskSort): List<ServerTask> =
     when (mode) {
         ServerTaskSort.Start -> sortedWith(
