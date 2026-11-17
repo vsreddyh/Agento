@@ -443,7 +443,7 @@ private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
  * same title, section order, row shape, due line and truncation as the
  * placement — including the row caps (8 non-scrolling, 100 scrolling).
  * [small] previews the display-only small layout a placement under either
- * size bound gets on-device (TaskWidget.kt:1310 returns before the
+ * size bound gets on-device (render() returns the small layout before the
  * scrollable check), where density and scrolling do not apply. */
 @Composable
 private fun WidgetPreview(
