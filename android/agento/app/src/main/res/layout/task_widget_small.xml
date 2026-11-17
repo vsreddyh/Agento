@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Compact task widget (#532): the layout a placement gets when it is
-     narrower than 180dp (2 grid cells). Title + count + the single next
-     task, no scrolling list; every non-control tap opens the Task Manager.
+     smaller than either full-size bound — narrower than 180dp (2 grid
+     cells) or shorter than 110dp (a 4x1 also compacts). Title + count +
+     the single next task, no scrolling list; every non-control tap opens
+     the Task Manager.
      Concrete colours only — theme attrs in widget layouts are rejected by
      some hosts (#137). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"

@@ -27,7 +27,8 @@ see GitHub Releases for older notes.
 - **Custom widget title.** Each placement can name itself from its settings
   (30 characters, blank means the view name), and the title is included in
   backups.
-- **Size-aware layout.** Below two cells wide the placement switches to a
+- **Size-aware layout.** A placement smaller than either full-size bound
+  (narrower than two cells wide or shorter than two rows tall) switches to a
   compact layout — title, count and the next task — and resizing re-renders
   immediately instead of waiting for the next refresh.
 

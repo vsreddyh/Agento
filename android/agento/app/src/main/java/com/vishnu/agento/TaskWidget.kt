@@ -206,6 +206,15 @@ internal fun widgetAgenda(
  * Estimate cannot name a different task than its full-size twin shows first.
  * Pure and JVM-pinned.
  */
+/**
+ * The "showing N" qualifier for a capped widget count line (#532): present
+ * exactly when the surface shows fewer rows than exist. Pure and
+ * JVM-pinned, so the static path (8) and the compact placement (1) cannot
+ * drift into different honesty rules.
+ */
+internal fun shownSuffix(total: Int, shownRows: Int?): String =
+    if (shownRows != null && total > shownRows) " · showing $shownRows" else ""
+
 internal fun widgetNextTask(
     tasks: List<ServerTask>,
     grouped: Boolean,
@@ -603,11 +612,15 @@ class TaskWidget : AppWidgetProvider() {
          * the widget settings preview so the cap isn't a surprise. */
         internal const val STATIC_ROW_LIMIT = 8
 
-        /** Items (headers + rows) handed to the direct-items collection
-         * (API 31+): the whole list rides one parcel, so a huge "All" view
-         * would TransactionTooLarge the update. The header count still
-         * shows the true total. */
-        private const val MAX_COLLECTION_ITEMS = 100
+        /** Rows handed to the direct-items collection (API 31+): the whole
+         * list rides one parcel, so an unbounded "All" view would
+         * TransactionTooLarge the update. Counts ROWS and drops a trailing
+         * header, the same rule as the plain-rows path ([takeAgendaRows]).
+         * Headroom, not a live limit: the widget fetches 50 rows per state
+         * (at most ~62 items with headers), so this only fires if that
+         * fetch limit ever grows. The header counts still show the true
+         * per-bucket totals. */
+        private const val MAX_COLLECTION_ROWS = 100
 
         // Row tap codes; per-task uniqueness comes from the data URI.
         private const val ROW_COMPLETE_CODE = 1006
@@ -1261,8 +1274,9 @@ class TaskWidget : AppWidgetProvider() {
          * the [TaskCompleteActivity] trampoline with per-row fill-ins on
          * API <31; the direct-items path (31+) and the plain-rows path (any
          * API) use explicit broadcast complete/skip (#532). A placement
-         * smaller than [COMPACT_MAX_WIDTH_DP] x [COMPACT_MIN_HEIGHT_DP] gets
-         * the compact layout instead. */
+         * below either bound — narrower than [COMPACT_MAX_WIDTH_DP] or
+         * shorter than [COMPACT_MIN_HEIGHT_DP] — gets the compact layout
+         * instead. */
         private fun render(
             context: Context,
             appWidgetId: Int,
@@ -1316,7 +1330,10 @@ class TaskWidget : AppWidgetProvider() {
                     )
                     setTextViewText(
                         R.id.task_widget_count,
-                        countText(context, view, tasks, error, staleBadge = staleBadge),
+                        // One named task, however many exist — the same
+                        // "showing N" honesty as the static path (#532).
+                        countText(context, view, tasks, error,
+                            shownRows = 1, staleBadge = staleBadge),
                     )
                     if (next != null) {
                         setTextViewText(R.id.task_widget_next, next.name)
@@ -1412,7 +1429,9 @@ class TaskWidget : AppWidgetProvider() {
                     setTextViewText(R.id.task_widget_title,
                         titleFor(context, appWidgetId, view.title))
                     setTextViewText(R.id.task_widget_count,
-                        countText(context, view, tasks, error, capped = true, staleBadge = staleBadge))
+                        countText(
+                            context, view, tasks, error,
+                            shownRows = STATIC_ROW_LIMIT, staleBadge = staleBadge))
                 }
             }
             // E: the collection widget, on the same proven chrome.
@@ -1444,7 +1463,7 @@ class TaskWidget : AppWidgetProvider() {
                             .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
                     )
                     val items = RemoteViews.RemoteCollectionItems.Builder().apply {
-                        agenda.take(MAX_COLLECTION_ITEMS).forEachIndexed { i, item ->
+                        agenda.takeAgendaRows(MAX_COLLECTION_ROWS).forEachIndexed { i, item ->
                             addItem(
                                 i.toLong(),
                                 when (item) {
@@ -1513,14 +1532,17 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         /** Header count line, shared by the full widget and the diagnostic
-         * styles. [capped] notes the static-row limit so the count and the
-         * visible rows never silently disagree. */
+         * styles. [shownRows] is the surface's row cap when it has one, so
+         * the count and the visible rows never silently disagree: the static
+         * path shows up to [STATIC_ROW_LIMIT], the compact placement exactly
+         * one task. Null means every row is visible (scrollable list, so no
+         * qualifier needed). */
         private fun countText(
             context: Context,
             view: TaskWidgetView,
             tasks: List<ServerTask>?,
             error: Boolean,
-            capped: Boolean = false,
+            shownRows: Int? = null,
             /** Stale-cache badge, null when the rows are live (#435). */
             staleBadge: StaleBadge? = null,
         ): String {
@@ -1533,9 +1555,9 @@ class TaskWidget : AppWidgetProvider() {
                 tasks == null && !error -> context.getString(R.string.task_widget_loading)
                 tasks == null -> context.getString(R.string.task_widget_error)
                 tasks.isEmpty() -> context.getString(R.string.task_widget_empty)
-                capped && tasks.size > STATIC_ROW_LIMIT ->
+                shownRows != null && tasks.size > shownRows ->
                     context.resources.getQuantityString(plural, tasks.size, tasks.size) +
-                        " · showing " + STATIC_ROW_LIMIT
+                        shownSuffix(tasks.size, shownRows)
                 else -> context.resources.getQuantityString(plural, tasks.size, tasks.size)
             }
             // Cache used after a failed fetch (#435): say so. Rows rendered

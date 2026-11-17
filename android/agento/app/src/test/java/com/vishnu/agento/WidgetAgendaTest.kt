@@ -216,6 +216,19 @@ class WidgetAgendaTest {
     }
 
     @Test
+    fun `count qualifier appears only when rows are hidden`() {
+        // The static path caps at 8, the compact placement at exactly 1 —
+        // same rule, different caps (#532).
+        assertEquals("", shownSuffix(8, 8))
+        assertEquals("", shownSuffix(3, 8))
+        assertEquals(" · showing 8", shownSuffix(20, 8))
+        assertEquals("", shownSuffix(1, 1))
+        assertEquals(" · showing 1", shownSuffix(20, 1))
+        // The scrolling list shows everything: never qualified.
+        assertEquals("", shownSuffix(50, null))
+    }
+
+    @Test
     fun `secondary line ignores due dates but keeps the repeat condition`() {
         val repeating = task(
             "a", dueDate = "2026-08-09", dueTime = "23:00", estimatedMinutes = 60,
