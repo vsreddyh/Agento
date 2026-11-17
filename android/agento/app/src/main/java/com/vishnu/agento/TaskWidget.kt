@@ -201,12 +201,6 @@ internal fun widgetAgenda(
 }
 
 /**
- * The task a compact placement names as "next" (#532): the first row of the
- * same agenda the full layout builds, so a placement sorted by Name or
- * Estimate cannot name a different task than its full-size twin shows first.
- * Pure and JVM-pinned.
- */
-/**
  * The "showing N" qualifier for a capped widget count line (#532): present
  * exactly when the surface shows fewer rows than exist. Pure and
  * JVM-pinned, so the static path (8) and the compact placement (1) cannot
@@ -215,6 +209,12 @@ internal fun widgetAgenda(
 internal fun shownSuffix(total: Int, shownRows: Int?): String =
     if (shownRows != null && total > shownRows) " · showing $shownRows" else ""
 
+/**
+ * The task a compact placement names as "next" (#532): the first row of the
+ * same agenda the full layout builds, so a placement sorted by Name or
+ * Estimate cannot name a different task than its full-size twin shows first.
+ * Pure and JVM-pinned.
+ */
 internal fun widgetNextTask(
     tasks: List<ServerTask>,
     grouped: Boolean,
@@ -408,7 +408,9 @@ fun taskWidgetIds(context: Context): IntArray {
  * updates (updatePeriodMillis=0) — data pulls on add/refresh-tap/
  * view-change/mutation only, so a sleeping server costs nothing.
  *
- * Dynamic sizing: min footprint 3x2, resizable both ways. The list is a
+ * Dynamic sizing: default 3x2 footprint, resizable down to two cells
+ * wide (110dp) and one row tall (40dp) — below 180dp x 110dp on either
+ * axis the small layout takes over. The list is a
  * RemoteViews collection ([TaskWidgetService]) with weight 1, so it
  * takes whatever height the placement offers. Every display setting is
  * per-widget via [TaskWidgetConfigActivity] — read `render()`'s per-key
@@ -1299,8 +1301,9 @@ class TaskWidget : AppWidgetProvider() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             // Compact placements (#532): title + count + the next task. No
-            // collection: a 2-cell-wide widget has no room for scrolling
-            // rows, and an empty list would just be a header over nothing.
+            // collection: below either full-size bound there is no room
+            // for a scrolling list with a header over it, and an empty
+            // list would just be a header over nothing.
             val options = AppWidgetManager.getInstance(context)
                 .getAppWidgetOptions(appWidgetId)
             val compactPlacement = widgetIsCompact(
@@ -1540,8 +1543,8 @@ class TaskWidget : AppWidgetProvider() {
          * styles. [shownRows] is the surface's row cap when it has one, so
          * the count and the visible rows never silently disagree: the static
          * path shows up to [STATIC_ROW_LIMIT], the compact placement exactly
-         * one task. Null means every row is visible (scrollable list, so no
-         * qualifier needed). */
+         * one task, the scrollable collection up to [MAX_COLLECTION_ROWS].
+         * Null means uncapped, so no qualifier is possible. */
         private fun countText(
             context: Context,
             view: TaskWidgetView,

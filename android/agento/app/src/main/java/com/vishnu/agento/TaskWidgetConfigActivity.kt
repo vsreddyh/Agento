@@ -202,12 +202,32 @@ private fun WidgetSettingsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // Preview-only: the device picks the layout from the
+            // placement's size, which the config screen cannot know (#532).
+            // Without this an operator sizing to 2 cells sees a list preview
+            // but gets the display-only small layout on-device.
+            var previewSmall by rememberSaveable { mutableStateOf(false) }
+            SettingsGroup("Preview size") {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = !previewSmall,
+                        onClick = { previewSmall = false },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    ) { Text("Full") }
+                    SegmentedButton(
+                        selected = previewSmall,
+                        onClick = { previewSmall = true },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    ) { Text("Small") }
+                }
+            }
             WidgetPreview(
                 title = pickedTitle,
                 view = pickedView,
                 density = pickedDensity,
                 showDue = pickedDue,
                 scrollable = pickedScroll,
+                small = previewSmall,
             )
             // Title first: it is the one thing above the list that a
             // placement cannot infer (#532). Blank means "follow the view".
@@ -421,7 +441,9 @@ private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
 
 /** Miniature of the real widget, so each choice is visible immediately:
  * same title, section order, row shape, due line and truncation as the
- * placement. */
+ * placement. [small] previews the display-only small layout a placement
+ * under either size bound gets on-device (TaskWidget.kt:1310 returns before
+ * the scrollable check), where density and scrolling do not apply. */
 @Composable
 private fun WidgetPreview(
     title: String,
@@ -429,7 +451,12 @@ private fun WidgetPreview(
     density: TaskWidgetDensity,
     showDue: Boolean,
     scrollable: Boolean,
+    small: Boolean,
 ) {
+    if (small) {
+        SmallPreview(title = title, view = view, showDue = showDue)
+        return
+    }
     val compact = density == TaskWidgetDensity.Compact
     val total = if (view == TaskWidgetView.Done) 1 else 12
     // Done is one flat list with no headers, like the real widget.
@@ -561,6 +588,73 @@ private fun WidgetPreview(
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
+        }
+    }
+}
+
+/** Miniature of the small layout: title, count and the single next task
+ * (#532). Same agenda order as the device — the first row of the grouped
+ * sections, or the one Done row — and the same "showing 1" honesty as the
+ * real compact count line. Density and scrolling are intentionally absent:
+ * the device ignores both below either size bound. */
+@Composable
+private fun SmallPreview(
+    title: String,
+    view: TaskWidgetView,
+    showDue: Boolean,
+) {
+    val sections: List<Pair<String, List<PreviewRow>>> =
+        if (view == TaskWidgetView.Done) {
+            listOf("" to listOf(PreviewRow("Apply hair oil", "Today, 09:00")))
+        } else {
+            PREVIEW_SECTIONS
+        }
+    val total = if (view == TaskWidgetView.Done) 1 else 12
+    val next = sections.firstOrNull()?.second?.firstOrNull()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                widgetTitle(title, view.title),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+            Text(
+                previewCount(view, scrollable = true) + shownSuffix(total, 1),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (next != null) {
+                Text(
+                    next.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                val line = buildList {
+                    if (showDue && next.due.isNotEmpty()) add(next.due)
+                    if (next.repeat != null) add(next.repeat)
+                }.joinToString(" · ")
+                if (line.isNotEmpty()) {
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Text(
+                "Small placement: density and scrolling don't apply",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }
