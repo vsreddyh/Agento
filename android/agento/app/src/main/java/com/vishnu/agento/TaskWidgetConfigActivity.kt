@@ -441,9 +441,10 @@ private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
 
 /** Miniature of the real widget, so each choice is visible immediately:
  * same title, section order, row shape, due line and truncation as the
- * placement. [small] previews the display-only small layout a placement
- * under either size bound gets on-device (TaskWidget.kt:1310 returns before
- * the scrollable check), where density and scrolling do not apply. */
+ * placement — including the row caps (8 non-scrolling, 100 scrolling).
+ * [small] previews the display-only small layout a placement under either
+ * size bound gets on-device (TaskWidget.kt:1310 returns before the
+ * scrollable check), where density and scrolling do not apply. */
 @Composable
 private fun WidgetPreview(
     title: String,
@@ -467,8 +468,16 @@ private fun WidgetPreview(
             PREVIEW_SECTIONS
         }
     // The cap counts rows, and a section header only appears when one of
-    // its rows does — the same rule as takeAgendaRows in the widget.
-    val rowCap = if (scrollable) Int.MAX_VALUE else TaskWidget.STATIC_ROW_LIMIT
+    // its rows does — the same takeAgendaRows rule as the widget, with the
+    // same caps (STATIC_ROW_LIMIT non-scrolling, MAX_COLLECTION_ROWS
+    // scrolling). The hidden line is non-scrolling only: the device never
+    // shows "scroll for more" — a scrolling placement with all rows visible
+    // shows no qualifier at all.
+    val rowCap = if (scrollable) {
+        TaskWidget.MAX_COLLECTION_ROWS
+    } else {
+        TaskWidget.STATIC_ROW_LIMIT
+    }
     val shownSections = ArrayList<Pair<String, List<PreviewRow>>>()
     var shownRows = 0
     for ((name, rows) in sections) {
@@ -477,7 +486,11 @@ private fun WidgetPreview(
         shownRows += take.size
         shownSections.add(name to take)
     }
-    val hidden = (total - shownRows).coerceAtLeast(0)
+    val hidden = if (scrollable) {
+        0
+    } else {
+        (total - shownRows).coerceAtLeast(0)
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -578,11 +591,7 @@ private fun WidgetPreview(
             }
             if (hidden > 0) {
                 Text(
-                    if (scrollable) {
-                        "Scroll for $hidden more"
-                    } else {
-                        "+ $hidden more in the app"
-                    },
+                    "+ $hidden more in the app",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp),

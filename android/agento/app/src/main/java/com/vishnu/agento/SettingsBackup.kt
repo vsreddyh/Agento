@@ -213,7 +213,7 @@ object SettingsBackup {
             (all[k] as? String)?.let { values.put(k, it) }
         }
         // Per-widget display settings: enumerated live because the key ends in
-        // an appWidgetId, and written by type because the five fields are not
+        // an appWidgetId, and written by type because the six fields are not
         // all one type. Sorted, so two exports of the same prefs are
         // byte-identical. Read from the same `all` snapshot as every other block.
         for (k in all.keys.filter { isWidgetDisplayKey(it) }.sorted()) {

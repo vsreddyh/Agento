@@ -224,7 +224,14 @@ class WidgetAgendaTest {
         assertEquals(" · showing 8", shownSuffix(20, 8))
         assertEquals("", shownSuffix(1, 1))
         assertEquals(" · showing 1", shownSuffix(20, 1))
-        // The scrolling list shows everything: never qualified.
+        // The scrolling list passes the collection cap: quiet under it,
+        // qualified past it.
+        assertEquals("", shownSuffix(50, TaskWidget.MAX_COLLECTION_ROWS))
+        assertEquals(
+            " · showing ${TaskWidget.MAX_COLLECTION_ROWS}",
+            shownSuffix(120, TaskWidget.MAX_COLLECTION_ROWS),
+        )
+        // Uncapped helper case: no qualifier is possible.
         assertEquals("", shownSuffix(50, null))
     }
 
