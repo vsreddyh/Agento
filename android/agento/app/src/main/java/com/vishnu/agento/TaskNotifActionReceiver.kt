@@ -42,8 +42,8 @@ private val notifActionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
  * here instead. The one widget surface still on the trampoline is the
  * legacy service-backed collection ([TaskWidgetService], API < 31): its
  * list has a single PendingIntent template, the row body must open an
- * activity, and an API < 12 host does not bring the task forward for a
- * translucent noHistory trampoline anyway.
+ * activity, and an API < 31 host (Android < 12) does not bring the task
+ * forward for a translucent noHistory trampoline anyway.
  *
  * Semantics match the trampoline exactly: on success every posted alert
  * for the task is dismissed ([TaskReminders.cancelPosted]) and both
@@ -103,9 +103,10 @@ class TaskNotifActionReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        // Widget rows on API 31+ (#532) post these same two actions as
-        // broadcasts, so one route covers notification taps and widget
-        // taps: same mutation, same failure handling, no activity.
+        // Widget rows built from explicit intents (#532) — direct items on
+        // API 31+ and the plain-rows layout at any API — post these same two
+        // actions as broadcasts, so one route covers notification taps and
+        // widget taps: same mutation, same failure handling, no activity.
         val target = notifActionFor(intent.action) ?: return
         // Read before goAsync and before any coroutine (#386): a malformed
         // tap is then fully free — no wake lock, no launch — and no Intent

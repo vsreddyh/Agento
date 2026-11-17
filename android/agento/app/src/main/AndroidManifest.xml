@@ -124,10 +124,12 @@
 
         <!-- Invisible trampoline for task-widget row taps on API < 31:
              completes/skips the task or forwards to MainActivity, then
-             finishes. Newer placements send complete/skip as broadcasts to
-             TaskNotifActionReceiver instead (#532), so this is only the
-             legacy collection's single template target. Exported so the
-             widget host can send its PendingIntent. -->
+             finishes. Placements built from explicit intents — direct
+             collection items on API 31+ and the plain-rows layout at any
+             API — send complete/skip as broadcasts to
+             TaskNotifActionReceiver instead (#532); only the legacy
+             service-backed collection keeps this as its single template
+             target. Exported so the widget host can send its PendingIntent. -->
         <activity
             android:name=".TaskCompleteActivity"
             android:theme="@style/Theme.Agento.Trampoline"
@@ -153,10 +155,11 @@
             android:exported="false" />
 
         <!-- Reminder notification [Completed]/[Skip] actions (#368) and the
-             widget rows' complete/skip broadcasts on API 31+ (#532):
-             explicit intents only, so non-exported like the receiver
-             above. API < 31 widget rows keep the activity trampoline
-             because their collection shares one template. -->
+             widget rows' complete/skip broadcasts (#532): explicit intents
+             only, so non-exported like the receiver above. Direct-items
+             widgets (API 31+) and plain-rows widgets (any API) use it;
+             only the legacy service-backed collection (API < 31) keeps the
+             activity trampoline, because its list shares one template. -->
         <receiver
             android:name=".TaskNotifActionReceiver"
             android:exported="false" />

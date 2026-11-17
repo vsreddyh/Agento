@@ -201,6 +201,22 @@ internal fun widgetAgenda(
 }
 
 /**
+ * The task a compact placement names as "next" (#532): the first row of the
+ * same agenda the full layout builds, so a placement sorted by Name or
+ * Estimate cannot name a different task than its full-size twin shows first.
+ * Pure and JVM-pinned.
+ */
+internal fun widgetNextTask(
+    tasks: List<ServerTask>,
+    grouped: Boolean,
+    today: java.time.LocalDate,
+    now: java.time.LocalDateTime,
+): ServerTask? = widgetAgenda(tasks, grouped, today, now)
+    .filterIsInstance<WidgetItem.Row>()
+    .firstOrNull()
+    ?.task
+
+/**
  * Trims an agenda to [maxRows] task rows for the non-scrolling layout
  * (#532): the cap counts rows, and a section header only survives when at
  * least one of its rows does, so the header count and "showing N" can never
@@ -244,9 +260,10 @@ internal fun widgetMutationAction(target: NotifAction): String = when (target) {
 /**
  * Size at or above which a placement gets the full list (#532): the
  * provider's own minimums in task_widget_info.xml, i.e. three cells wide
- * (180dp) and two rows tall (110dp). A placement narrower than three cells
- * shrinks to the compact layout instead of squeezing a scrolling list into
- * two cells. Pure so the thresholds are testable without a launcher.
+ * (180dp) and two rows tall (110dp). A placement smaller than EITHER
+ * bound — narrower than three cells or shorter than two rows, e.g. a 4x1 —
+ * shrinks to the compact layout instead of squeezing the header + list
+ * into the gap. Pure so the thresholds are testable without a launcher.
  */
 internal const val COMPACT_MAX_WIDTH_DP = 180
 internal const val COMPACT_MIN_HEIGHT_DP = 110
@@ -368,10 +385,14 @@ fun taskWidgetIds(context: Context): IntArray {
  * Settings → Home-screen widget — the widget's own controls never rendered
  * on some launchers (#137). Tap contract (#370): the ring completes inline,
  * a row opens its detail sheet, and everything else (background, header,
- * empty line) opens the Task Manager. Row taps deep-link
- * into the task's detail sheet and the ring button completes inline —
- * both via the translucent [TaskCompleteActivity] trampoline, which
- * keeps widget taps BAL-safe on all API levels. Reads the same shared
+ * empty line) opens the Task Manager. Row taps deep-link into the task's
+ * detail sheet; the ring completes and the skip control skips inline. On
+ * the legacy service-backed collection (API <31) both ride the translucent
+ * [TaskCompleteActivity] trampoline, because that list has one
+ * PendingIntent template; placements built from explicit intents (direct
+ * collection items on API 31+, and the plain-rows layout at any API) send
+ * them as broadcasts to [TaskNotifActionReceiver] and never open an
+ * activity (#532). Reads the same shared
  * `tasks` collection as TaskManagerScreen via TasksApi; the app pushes
  * fresh data after every task mutation via [refresh]. No periodic
  * updates (updatePeriodMillis=0) — data pulls on add/refresh-tap/
@@ -1238,10 +1259,10 @@ class TaskWidget : AppWidgetProvider() {
          * the list binds to [TaskWidgetService] and fills whatever height
          * the placement offers. Row taps and the ring button go through
          * the [TaskCompleteActivity] trampoline with per-row fill-ins on
-         * API <31; newer placements use direct items with broadcast
-         * complete/skip (#532). A placement smaller than
-         * [COMPACT_MAX_WIDTH_DP] x [COMPACT_MIN_HEIGHT_DP] gets the compact
-         * layout instead. */
+         * API <31; the direct-items path (31+) and the plain-rows path (any
+         * API) use explicit broadcast complete/skip (#532). A placement
+         * smaller than [COMPACT_MAX_WIDTH_DP] x [COMPACT_MIN_HEIGHT_DP] gets
+         * the compact layout instead. */
         private fun render(
             context: Context,
             appWidgetId: Int,
@@ -1272,6 +1293,19 @@ class TaskWidget : AppWidgetProvider() {
                 options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0),
             )
             if (compactPlacement) {
+                // "Next" is the first row of the same agenda the full layout
+                // builds (#532), not the first task in the placement's own
+                // sort: a Name- or Estimate-sorted placement must not name a
+                // different task from its full-size twin. Byte-identical
+                // grouping, so the same clock and buckets.
+                val today = java.time.LocalDate.now(IST)
+                val next = widgetNextTask(
+                    tasks.orEmpty(),
+                    grouped = view != TaskWidgetView.Done,
+                    today = today,
+                    now = java.time.LocalDateTime.now(IST)
+                        .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
+                )
                 return RemoteViews(context.packageName, R.layout.task_widget_small).apply {
                     applyTapTargets(this, openPending, refreshPending, SMALL_TAP_IDS)
                     setTextViewText(
@@ -1284,12 +1318,10 @@ class TaskWidget : AppWidgetProvider() {
                         R.id.task_widget_count,
                         countText(context, view, tasks, error, staleBadge = staleBadge),
                     )
-                    val next = tasks?.firstOrNull()
                     if (next != null) {
                         setTextViewText(R.id.task_widget_next, next.name)
                         val line = widgetSecondaryLine(
-                            next, java.time.LocalDate.now(IST),
-                            showDueFor(context, appWidgetId))
+                            next, today, showDueFor(context, appWidgetId))
                         setTextViewText(R.id.task_widget_next_due, line)
                         setViewVisibility(
                             R.id.task_widget_next_due,

@@ -4,6 +4,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -156,6 +157,28 @@ class WidgetAgendaTest {
         val long = "x".repeat(WIDGET_TITLE_MAX + 20)
         assertEquals(long.take(WIDGET_TITLE_MAX), widgetTitle(long, "Open"))
         assertEquals(WIDGET_TITLE_MAX, widgetTitle(long, "Open").length)
+    }
+
+    @Test
+    fun `compact next task follows the agenda, not the placement sort`() {
+        // The list order is what a Name/Estimate sort would hand over: an
+        // "Aardvark" task due next month ahead of an overdue "Zebra". The
+        // full layout groups Overdue first, so the compact placement must
+        // name the same task — the agenda's first row.
+        val later = task("later", dueDate = "2026-09-30", dueTime = "09:00")
+        val overdue = task("overdue", dueDate = "2026-08-08", dueTime = "09:00")
+
+        assertEquals(
+            overdue,
+            widgetNextTask(listOf(later, overdue), grouped = true, today = today, now = now),
+        )
+        // Done never groups, so it keeps the placement's own first row.
+        assertEquals(
+            later,
+            widgetNextTask(listOf(later, overdue), grouped = false, today = today, now = now),
+        )
+        // Nothing to name: no row, no crash.
+        assertNull(widgetNextTask(emptyList(), grouped = true, today = today, now = now))
     }
 
     @Test

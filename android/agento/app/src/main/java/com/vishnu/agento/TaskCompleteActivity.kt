@@ -2,6 +2,8 @@ package com.vishnu.agento
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.awaitAll
@@ -26,6 +28,11 @@ import kotlinx.coroutines.launch
  * - EXTRA_TASK_ID → forward to MainActivity (foreground by now, so the
  *   start is allowed) with the deep-link extra, finish. The Task Manager
  *   opens the task's detail sheet.
+ *
+ * Failure handling matches [TaskNotifActionReceiver] (#532): the row and any
+ * posted alert stay, a toast says the mutation failed, and a `TaskNotif`
+ * line lands in the widget's diagnostics. Without it the offline path on
+ * API < 31 looked exactly like success.
  */
 class TaskCompleteActivity : ComponentActivity() {
 
@@ -48,15 +55,36 @@ class TaskCompleteActivity : ComponentActivity() {
                 // this is success even when the mutation failed, and the
                 // alert is dismissed despite the comment below saying
                 // otherwise.
+                val target = if (skip) NotifAction.SKIP else NotifAction.COMPLETE
                 val done = runCatching {
                     val api = TasksApi(this@TaskCompleteActivity)
-                    (if (skip) api.skip(mutateId) else api.complete(mutateId)).getOrThrow()
+                    when (target) {
+                        NotifAction.COMPLETE -> api.complete(mutateId)
+                        NotifAction.SKIP -> api.skip(mutateId)
+                    }.getOrThrow()
                 }.isSuccess
                 // Action taps dismiss every posted alert for the task (all
                 // four reminder-point tags, #287) — but only on success, so
                 // an offline tap keeps the alert.
                 if (done) {
                     runCatching { TaskReminders.cancelPosted(this@TaskCompleteActivity, mutateId) }
+                } else {
+                    // Same feedback as the broadcast path (#532): silent
+                    // failure reads as "nothing happened", and the widget
+                    // diagnostics filter keeps TaskNotif lines. Action + id
+                    // only — no task content in the log.
+                    Log.w(
+                        "TaskNotif",
+                        "trampoline action $target for $mutateId failed; row/alert kept",
+                    )
+                    Toast.makeText(
+                        this@TaskCompleteActivity,
+                        when (target) {
+                            NotifAction.COMPLETE -> R.string.task_complete_failed
+                            NotifAction.SKIP -> R.string.task_skip_failed
+                        },
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 }
                 // Join before finishing: the scopes are static and would
                 // survive, but a process death right after the tap must not

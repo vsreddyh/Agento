@@ -16,12 +16,14 @@ see GitHub Releases for older notes.
   carry the same due · repeat · parallel line as the app, so a repeating
   task shows its condition, and that line survives turning due dates off.
 - **Inline complete and skip, without opening the app.** The ring completes
-  and a new skip button moves past a task; on Android 12+ both are sent as
-  broadcasts, so a tap no longer brings Agento to the foreground on its
-  Projects tab (the old trampoline did). Android 11 and older keep the
-  invisible trampoline, where the shared collection template makes it
-  unavoidable. A failed mutation now says so with a toast instead of
-  looking like it worked.
+  and a new skip button moves past a task; widgets built from direct items
+  (Android 12+) and the non-scrolling plain-rows layout (any Android
+  version) send both as broadcasts, so a tap no longer brings Agento to the
+  foreground on its Projects tab (the old trampoline did). Only the
+  scrolling collection on Android 11 and older keeps the invisible
+  trampoline, where the shared collection template makes it unavoidable. A
+  failed mutation now says so with a toast instead of looking like it
+  worked, on both paths.
 - **Custom widget title.** Each placement can name itself from its settings
   (30 characters, blank means the view name), and the title is included in
   backups.

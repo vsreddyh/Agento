@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 3x2 default (180dp x 110dp); resizable down to 2 cells wide (110dp),
-     where the placement switches to task_widget_small (#532). The list
-     fills whatever height the placement offers. -->
+<!-- 3x2 default (180dp x 110dp); resizable down to 110dp on each axis,
+     where the placement switches to task_widget_small (#532). EITHER
+     dimension below the full size (width < 180dp OR height < 110dp) selects
+     the compact layout, so a 4x1 short placement compacts too. The list
+     otherwise fills whatever height the placement offers. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:minWidth="110dp"
