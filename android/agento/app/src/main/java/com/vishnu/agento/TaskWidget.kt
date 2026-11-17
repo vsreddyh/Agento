@@ -405,8 +405,9 @@ fun taskWidgetIds(context: Context): IntArray {
  * [TaskCompleteActivity] trampoline, because that list has one
  * PendingIntent template; placements built from explicit intents (direct
  * collection items on API 31+, and the plain-rows layout at any API) send
- * them as broadcasts to [TaskNotifActionReceiver] and never open an
- * activity (#532). Reads the same shared
+ * those two verbs as broadcasts to [TaskNotifActionReceiver] instead
+ * (#532) — no activity for complete/skip, while the row body still opens
+ * the detail sheet by design. Reads the same shared
  * `tasks` collection as TaskManagerScreen via TasksApi; the app pushes
  * fresh data after every task mutation via [refresh]. No periodic
  * updates (updatePeriodMillis=0) — data pulls on add/refresh-tap/
@@ -627,9 +628,10 @@ class TaskWidget : AppWidgetProvider() {
          * header, the same rule as the plain-rows path ([takeAgendaRows]).
          * Headroom, not a live limit: the widget fetches 50 rows per state
          * (at most ~62 items with headers), so this only fires if that
-         * fetch limit ever grows. The header counts still show the true
-         * per-bucket totals. */
-        private const val MAX_COLLECTION_ROWS = 100
+         * fetch limit ever grows. Internal (like [STATIC_ROW_LIMIT]) so the
+         * settings screen can promise the same number it enforces. The
+         * header counts still show the true per-bucket totals. */
+        internal const val MAX_COLLECTION_ROWS = 100
 
         // Row tap codes; per-task uniqueness comes from the data URI.
         private const val ROW_COMPLETE_CODE = 1006
@@ -1279,14 +1281,18 @@ class TaskWidget : AppWidgetProvider() {
         }
 
         /** Full widget view: header reflects this placement's view and the
-         * latest fetch (null = not loaded yet, error flag = fetch failed);
-         * the list binds to [TaskWidgetService] and fills whatever height
-         * the placement offers. Row taps and the ring button go through
-         * the [TaskCompleteActivity] trampoline with per-row fill-ins on
-         * API <31; the direct-items path (31+) and the plain-rows path (any
-         * API) use explicit broadcast complete/skip (#532). A placement
-         * below either bound — narrower than [COMPACT_MAX_WIDTH_DP] or
-         * shorter than [COMPACT_MIN_HEIGHT_DP] — gets the compact layout
+         * latest fetch (null = not loaded yet, error flag = fetch failed).
+         * The collection binds to [TaskWidgetService] only on the legacy
+         * API <31 path (or before any fetch lands); on 31+ with rows the
+         * items ride the update directly as RemoteCollectionItems, no
+         * service involved. Both full layouts fill whatever height the
+         * placement offers. Complete, skip and the row body go through the
+         * [TaskCompleteActivity] trampoline with per-row fill-ins on the
+         * legacy path; the direct-items path (31+) and the plain-rows path
+         * (any API) send complete/skip as explicit broadcasts (#532) and
+         * open the detail sheet from the row body. A placement below
+         * either bound — narrower than [COMPACT_MAX_WIDTH_DP] or shorter
+         * than [COMPACT_MIN_HEIGHT_DP] — gets the compact layout
          * instead. */
         private fun render(
             context: Context,

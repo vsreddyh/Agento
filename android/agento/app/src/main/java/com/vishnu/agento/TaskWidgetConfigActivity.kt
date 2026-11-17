@@ -296,7 +296,7 @@ private fun WidgetSettingsScreen(
                 SwitchRow(
                     title = "Scrolling list",
                     subtitle = if (pickedScroll) {
-                        "All tasks, scroll through them"
+                        "Up to ${TaskWidget.MAX_COLLECTION_ROWS} tasks, scroll through them"
                     } else {
                         "First ${TaskWidget.STATIC_ROW_LIMIT} tasks, no scrolling"
                     },
