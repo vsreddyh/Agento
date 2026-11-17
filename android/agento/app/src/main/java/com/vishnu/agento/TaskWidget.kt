@@ -27,11 +27,13 @@ import kotlinx.coroutines.launch
 /**
  * Header/background tap-contract ids per layout (#370): the chrome ids that
  * handle a tap themselves, named once so render() and the test read the
- * same lists. [R.id.task_widget_refresh] is in both lists because it is one
- * of the two targets ([WidgetTapTarget.REFRESH]); every other id here opens
- * the Task Manager. The view label exists only in the plain layout (the
- * scrollable header names the view in its title instead); every other
- * chrome id exists in both.
+ * same lists — one per layout ([PLAIN_TAP_IDS], [LIST_TAP_IDS],
+ * [SMALL_TAP_IDS]). [R.id.task_widget_refresh] is in all three because it
+ * is one of the two targets ([WidgetTapTarget.REFRESH]); every other id
+ * here opens the Task Manager. Membership differs by layout: the view
+ * label exists only in the plain layout (the scrollable header names the
+ * view in its title instead), `empty` only in the two full layouts, and
+ * `next`/`next_due` only in the small one.
  *
  * The two collection containers — `task_widget_static_list` and
  * `task_widget_list_view` — are deliberately absent: their taps ride the
@@ -588,10 +590,12 @@ class TaskWidget : AppWidgetProvider() {
          * [TaskNotifActionReceiver] instead (#368) — no activity at all. */
         const val EXTRA_TASK_ID = "com.vishnu.agento.extra.TASK_ID"
 
-        /** Immediate complete request: the widget ring's fill-in on API <31
-         * (handled by [TaskCompleteActivity]) and its broadcast on 31+
-         * (handled by [TaskNotifActionReceiver]) — the same extra key the
-         * reminder notifications use (#368, #532). */
+        /** Immediate complete request: the widget ring's fill-in on the
+         * legacy API <31 scrollable collection (handled by
+         * [TaskCompleteActivity]) and its broadcast everywhere a row owns
+         * its intents — direct items on 31+ and the plain-rows layout at
+         * any API (handled by [TaskNotifActionReceiver]) — the same extra
+         * key the reminder notifications use (#368, #532). */
         const val EXTRA_COMPLETE_ID = "com.vishnu.agento.extra.COMPLETE_ID"
 
         // One app-scoped worker: per-call CoroutineScope(Dispatchers.IO)
