@@ -8,6 +8,23 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.3.0]
+- **Task widget settings rework (#536).** The settings screen is rebuilt
+  around categories — Title, Row content, Row style, Row order, List — and
+  the preview above it reflects every switch as you flip it.
+- **Row content is three independent switches.** *Due date and time*,
+  *Repeat condition* and *Parallel marker* can be turned off one at a time,
+  so a placement can show "Every 3 days" without the date and time — the
+  behaviour the old single *Show due dates* switch had, now visible and
+  separately choosable. A parallel marker is no longer glued to the date.
+- **More list control.** Section headers can be turned off for one flat list,
+  the non-scrolling list now takes 4, 6 or 8 rows (8 still the default), and
+  the header's title and count line can each be hidden — the refresh button
+  stays either way.
+- Every setting is per placement, saved on Save, pruned when the placement is
+  deleted and carried in Settings backup. Defaults reproduce the previous
+  widget exactly, so existing placements render unchanged.
+
 ## [9.2.0]
 - **Project snooze.** A Paused project now carries an optional snooze: pick a
   date **and** a time (both required, defaulting to 6 PM tomorrow), and the

@@ -195,10 +195,11 @@ internal fun ServerTask.dueBucket(
 }
 
 /**
- * The one secondary line a task row shows (#532): the start → due line, the
- * repeat condition and the parallel marker, joined with " · ". Shared by
- * the Task Manager row and the widget row, so the two surfaces cannot drift
- * apart the way they did while each built its own line.
+ * The one secondary line the Task Manager row shows (#532): the start → due
+ * line, the repeat condition and the parallel marker, joined with " · ".
+ * The widget builds its own line ([widgetRowLine]) from three independent
+ * per-placement switches (#536), so a placement can drop any one of the
+ * three; the in-app row keeps showing all of them.
  */
 fun ServerTask.dueBits(today: java.time.LocalDate): String {
     val bits = ArrayList<String>(3)

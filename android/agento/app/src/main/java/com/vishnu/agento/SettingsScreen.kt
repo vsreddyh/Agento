@@ -1210,22 +1210,35 @@ internal fun WidgetSettingsSection() {
                         )
                         Text(
                             buildString {
+                                // One read of the placement's settings (#536):
+                                // the summary and the widget agree because
+                                // they read the same object.
+                                val settings = TaskWidget.settingsFor(context, id)
                                 // The custom title (#532) first, when set:
                                 // it is what the placement shows, and it is
                                 // the only way to tell two placements apart.
-                                val title = TaskWidget.titleFor(context, id, "")
+                                val title = widgetTitle(settings.title, "")
                                 if (title.isNotEmpty()) append("$title · ")
-                                append(TaskWidget.viewFor(context, id).title)
+                                append(settings.view.title)
                                 append(" tasks · ")
-                                append(TaskWidget.densityFor(context, id).title)
+                                append(settings.density.title)
                                 append(" rows")
-                                val sort = TaskWidget.sortFor(context, id)
-                                if (sort != TaskWidgetSort.Server) {
-                                    append(" · ${sort.title}")
+                                if (settings.sort != TaskWidgetSort.Server) {
+                                    append(" · ${settings.sort.title}")
                                 }
-                                if (!TaskWidget.showDueFor(context, id)) append(" · no due dates")
-                                if (!TaskWidget.scrollableFor(context, id)) {
-                                    append(" · up to ${TaskWidget.STATIC_ROW_LIMIT} rows")
+                                val hidden = buildList {
+                                    if (!settings.showDue) add("no due dates")
+                                    if (!settings.showRepeat) add("no repeat")
+                                    if (!settings.showParallel) add("no parallel")
+                                    if (!settings.showSections) add("no sections")
+                                    if (!settings.showTitle) add("no title")
+                                    if (!settings.showCount) add("no count")
+                                }
+                                if (hidden.isNotEmpty()) {
+                                    append(" · " + hidden.joinToString(", "))
+                                }
+                                if (!settings.scrollable) {
+                                    append(" · up to ${settings.staticRows.rows} rows")
                                 }
                             },
                             style = MaterialTheme.typography.bodySmall,

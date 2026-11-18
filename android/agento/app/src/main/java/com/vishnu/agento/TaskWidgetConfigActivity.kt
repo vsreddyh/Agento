@@ -59,9 +59,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 
 /**
- * Display settings for one task-widget placement: a custom title, which
- * slice it shows, row density, row order, the due line, and whether the
- * list scrolls.
+ * Display settings for one task-widget placement (#536): a custom title,
+ * which slice it shows, row density and order, what each row shows (due date
+ * and time, repeat condition, parallel marker), section headers, the header
+ * switches and whether — and how long — the list scrolls.
  * Launched by the system at add time (android:configure) and from
  * Settings → Home-screen widget afterwards. Cancelling at add time aborts
  * the placement; saving re-renders that widget via [TaskWidget].
@@ -87,32 +88,37 @@ class TaskWidgetConfigActivity : ComponentActivity() {
             val dark = isSystemInDarkTheme()
             AgentoTheme(dark = dark) {
                 WidgetSettingsScreen(
-                    title = TaskWidget.titleFor(this, appWidgetId, ""),
-                    view = TaskWidget.viewFor(this, appWidgetId),
-                    density = TaskWidget.densityFor(this, appWidgetId),
-                    sort = TaskWidget.sortFor(this, appWidgetId),
-                    showDue = TaskWidget.showDueFor(this, appWidgetId),
-                    scrollable = TaskWidget.scrollableFor(this, appWidgetId),
+                    initial = TaskWidget.settingsFor(this, appWidgetId),
                     onCancel = {
                         setResult(RESULT_CANCELED, done)
                         finish()
                     },
-                    onSave = { t, v, d, s, due, scroll ->
+                    onSave = { picked ->
                         prefs().edit {
                             // Blank means "follow the view title", so the
                             // key is removed rather than storing "" —
                             // matches titleFor's fallback rule (#532).
-                            val trimmed = t.trim().take(WIDGET_TITLE_MAX)
+                            val trimmed = picked.title.orEmpty()
+                                .trim().take(WIDGET_TITLE_MAX)
                             if (trimmed.isEmpty()) {
                                 remove("task_widget_title_$appWidgetId")
                             } else {
                                 putString("task_widget_title_$appWidgetId", trimmed)
                             }
-                            putString("task_widget_view_$appWidgetId", v.name)
-                            putString("task_widget_density_$appWidgetId", d.name)
-                            putString("task_widget_sort_$appWidgetId", s.name)
-                            putBoolean("task_widget_due_$appWidgetId", due)
-                            putBoolean("task_widget_scroll_$appWidgetId", scroll)
+                            putString("task_widget_view_$appWidgetId", picked.view.name)
+                            putString("task_widget_density_$appWidgetId", picked.density.name)
+                            putString("task_widget_sort_$appWidgetId", picked.sort.name)
+                            putBoolean("task_widget_due_$appWidgetId", picked.showDue)
+                            putBoolean("task_widget_repeat_$appWidgetId", picked.showRepeat)
+                            putBoolean("task_widget_parallel_$appWidgetId", picked.showParallel)
+                            putBoolean("task_widget_sections_$appWidgetId", picked.showSections)
+                            putBoolean("task_widget_count_$appWidgetId", picked.showCount)
+                            putBoolean("task_widget_show_title_$appWidgetId", picked.showTitle)
+                            putString(
+                                "task_widget_static_rows_$appWidgetId",
+                                picked.staticRows.name,
+                            )
+                            putBoolean("task_widget_scroll_$appWidgetId", picked.scrollable)
                             // Retired diagnostic ladder: drop the key here
                             // too, not just on widget delete.
                             remove("task_widget_style_$appWidgetId")
@@ -130,29 +136,51 @@ class TaskWidgetConfigActivity : ComponentActivity() {
         AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
 }
 
-/** Settings for one placement. Everything is live: the preview above the
- * controls redraws as you pick, so a choice never has to be imagined. */
+/** Settings for one placement, grouped by what they change (#536): title,
+ * rows, what each row shows, and the list itself. Everything is live — the
+ * preview above the controls redraws as you pick, so a choice never has to
+ * be imagined — and the switches are independent on purpose: hiding the due
+ * date must not take the repeat condition with it. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WidgetSettingsScreen(
-    title: String,
-    view: TaskWidgetView,
-    density: TaskWidgetDensity,
-    sort: TaskWidgetSort,
-    showDue: Boolean,
-    scrollable: Boolean,
+    initial: WidgetSettings,
     onCancel: () -> Unit,
-    onSave: (String, TaskWidgetView, TaskWidgetDensity, TaskWidgetSort, Boolean, Boolean) -> Unit,
+    onSave: (WidgetSettings) -> Unit,
 ) {
     // rememberSaveable: rotating before Save must not reset the picks
     // (this screen is a system-launched configure activity, so rotation
     // is routine).
-    var pickedTitle by rememberSaveable { mutableStateOf(title) }
-    var pickedView by rememberSaveable { mutableStateOf(view) }
-    var pickedDensity by rememberSaveable { mutableStateOf(density) }
-    var pickedSort by rememberSaveable { mutableStateOf(sort) }
-    var pickedDue by rememberSaveable { mutableStateOf(showDue) }
-    var pickedScroll by rememberSaveable { mutableStateOf(scrollable) }
+    var pickedTitle by rememberSaveable { mutableStateOf(initial.title.orEmpty()) }
+    var pickedView by rememberSaveable { mutableStateOf(initial.view) }
+    var pickedDensity by rememberSaveable { mutableStateOf(initial.density) }
+    var pickedSort by rememberSaveable { mutableStateOf(initial.sort) }
+    var pickedDue by rememberSaveable { mutableStateOf(initial.showDue) }
+    var pickedRepeat by rememberSaveable { mutableStateOf(initial.showRepeat) }
+    var pickedParallel by rememberSaveable { mutableStateOf(initial.showParallel) }
+    var pickedSections by rememberSaveable { mutableStateOf(initial.showSections) }
+    var pickedShowTitle by rememberSaveable { mutableStateOf(initial.showTitle) }
+    var pickedShowCount by rememberSaveable { mutableStateOf(initial.showCount) }
+    var pickedScroll by rememberSaveable { mutableStateOf(initial.scrollable) }
+    var pickedStaticRows by rememberSaveable { mutableStateOf(initial.staticRows) }
+
+    // One value for the preview and for Save: a control cannot affect the
+    // preview without landing in the saved placement, or the other way
+    // round.
+    val picked = WidgetSettings(
+        view = pickedView,
+        density = pickedDensity,
+        sort = pickedSort,
+        title = pickedTitle,
+        showDue = pickedDue,
+        showRepeat = pickedRepeat,
+        showParallel = pickedParallel,
+        showSections = pickedSections,
+        showTitle = pickedShowTitle,
+        showCount = pickedShowCount,
+        scrollable = pickedScroll,
+        staticRows = pickedStaticRows,
+    )
 
     Scaffold(
         topBar = {
@@ -181,12 +209,7 @@ private fun WidgetSettingsScreen(
                     Text("Cancel")
                 }
                 Button(
-                    onClick = {
-                        onSave(
-                            pickedTitle, pickedView, pickedDensity,
-                            pickedSort, pickedDue, pickedScroll,
-                        )
-                    },
+                    onClick = { onSave(picked) },
                     modifier = Modifier.weight(2f),
                 ) {
                     Text("Save")
@@ -221,14 +244,7 @@ private fun WidgetSettingsScreen(
                     ) { Text("Small") }
                 }
             }
-            WidgetPreview(
-                title = pickedTitle,
-                view = pickedView,
-                density = pickedDensity,
-                showDue = pickedDue,
-                scrollable = pickedScroll,
-                small = previewSmall,
-            )
+            WidgetPreview(settings = picked, small = previewSmall)
             // Title first: it is the one thing above the list that a
             // placement cannot infer (#532). Blank means "follow the view".
             SettingsGroup("Title") {
@@ -237,24 +253,47 @@ private fun WidgetSettingsScreen(
                     onValueChange = { pickedTitle = it.take(WIDGET_TITLE_MAX) },
                     singleLine = true,
                     label = { Text("Widget title") },
-                    placeholder = { Text(pickedView.title) },
+                    placeholder = { Text(picked.view.title) },
                     supportingText = {
-                        Text("Blank shows \"${pickedView.title}\" · max $WIDGET_TITLE_MAX characters")
+                        Text("Blank shows \"${picked.view.title}\" · max $WIDGET_TITLE_MAX characters")
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                SwitchRow(
+                    title = "Show the title",
+                    subtitle = "Hides the name; the refresh button stays",
+                    checked = pickedShowTitle,
+                    onChange = { pickedShowTitle = it },
+                )
+                SwitchRow(
+                    title = "Show the count line",
+                    subtitle = "The \"3 open tasks\" line under the title",
+                    checked = pickedShowCount,
+                    onChange = { pickedShowCount = it },
+                )
             }
-            SettingsGroup("Tasks shown") {
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    TaskWidgetView.entries.forEachIndexed { i, v ->
-                        SegmentedButton(
-                            selected = pickedView == v,
-                            onClick = { pickedView = v },
-                            shape = SegmentedButtonDefaults.itemShape(
-                                index = i, count = TaskWidgetView.entries.size),
-                        ) { Text(v.title) }
-                    }
-                }
+            // What each row says. Three independent switches (#536): the
+            // repeat condition has to survive turning the due date and time
+            // off, so it can never ride the due switch.
+            SettingsGroup("Row content") {
+                SwitchRow(
+                    title = "Due date and time",
+                    subtitle = "e.g. Today, 09:00 → 10:00",
+                    checked = pickedDue,
+                    onChange = { pickedDue = it },
+                )
+                SwitchRow(
+                    title = "Repeat condition",
+                    subtitle = "e.g. Every 3 days — stays with the due date off",
+                    checked = pickedRepeat,
+                    onChange = { pickedRepeat = it },
+                )
+                SwitchRow(
+                    title = "Parallel marker",
+                    subtitle = "The word \"parallel\" on a parallel task",
+                    checked = pickedParallel,
+                    onChange = { pickedParallel = it },
+                )
             }
             SettingsGroup("Row style") {
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
@@ -269,7 +308,7 @@ private fun WidgetSettingsScreen(
                 }
             }
             // Five orders don't fit a segmented row: a radio list instead,
-            // same whole-row-selectable shape as the switches below. The
+            // same whole-row-selectable shape as the switches above. The
             // non-Server orders mirror the Task Manager's sort menu, so a
             // placement can match the in-app list.
             SettingsGroup("Row order") {
@@ -286,23 +325,59 @@ private fun WidgetSettingsScreen(
                     )
                 }
             }
-            SettingsGroup("Options") {
+            SettingsGroup("List") {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    TaskWidgetView.entries.forEachIndexed { i, v ->
+                        SegmentedButton(
+                            selected = pickedView == v,
+                            onClick = { pickedView = v },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = i, count = TaskWidgetView.entries.size),
+                        ) { Text(v.title) }
+                    }
+                }
                 SwitchRow(
-                    title = "Show due dates",
-                    subtitle = "A friendly line under each task name",
-                    checked = pickedDue,
-                    onChange = { pickedDue = it },
+                    title = "Section headers",
+                    subtitle = "Overdue → Current → … → No due date",
+                    checked = pickedSections,
+                    onChange = { pickedSections = it },
                 )
                 SwitchRow(
                     title = "Scrolling list",
                     subtitle = if (pickedScroll) {
                         "Up to ${TaskWidget.MAX_COLLECTION_ROWS} tasks, scroll through them"
                     } else {
-                        "First ${TaskWidget.STATIC_ROW_LIMIT} tasks, no scrolling"
+                        "A fixed list, no scrolling"
                     },
                     checked = pickedScroll,
                     onChange = { pickedScroll = it },
                 )
+                // Only a non-scrolling placement has a row cap to choose:
+                // the scrolling list already shows everything it fetched.
+                if (!pickedScroll) {
+                    Text(
+                        "Rows without scrolling",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        TaskWidgetStaticRows.entries.forEachIndexed { i, cap ->
+                            SegmentedButton(
+                                selected = pickedStaticRows == cap,
+                                onClick = { pickedStaticRows = cap },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = i, count = TaskWidgetStaticRows.entries.size),
+                            ) { Text(cap.rows.toString()) }
+                        }
+                    }
+                    Text(
+                        "The rest stay in the Task Manager; the count line says " +
+                            "how many are showing.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(4.dp))
         }
@@ -405,14 +480,25 @@ private fun SwitchRow(
     }
 }
 
-/** One fake agenda row in the preview. [repeat] keeps its own line so the
- * preview shows that a repeat condition survives "show due dates" off,
- * exactly like [widgetSecondaryLine]. */
+/** One fake agenda row in the preview (#532). [repeat] and [parallel] stay
+ * separate fields so the preview can drop any of them on its own, exactly
+ * like the placement's three switches (#536). */
 private data class PreviewRow(
     val name: String,
     val due: String,
     val repeat: String? = null,
+    val parallel: Boolean = false,
 )
+
+/** The line one preview row shows: the same order and the same switches as
+ * the real widget's [widgetRowLine], so a preview can never promise a line
+ * the device would not render. */
+private fun previewRowLine(row: PreviewRow, settings: WidgetSettings): String =
+    buildList {
+        if (settings.showDue && row.due.isNotEmpty()) add(row.due)
+        if (settings.showRepeat) row.repeat?.let { add(it) }
+        if (settings.showParallel && row.parallel) add("parallel")
+    }.joinToString(" · ")
 
 /** Fake agenda in the widget's bucket order (#532): Overdue first, no-date
  * last. Shown only for the grouped views — Done renders flat. */
@@ -422,7 +508,7 @@ private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
     ),
     "Current" to listOf(
         PreviewRow("Apply hair oil", "Today, 09:00", "Every 3 days"),
-        PreviewRow("Bath", "Today, 20:00"),
+        PreviewRow("Bath", "Today, 20:00", parallel = true),
     ),
     "Later today" to listOf(
         PreviewRow("Brush teeth", "Today, 22:00", "Daily"),
@@ -440,55 +526,59 @@ private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
 )
 
 /** Miniature of the real widget, so each choice is visible immediately:
- * same title, section order, row shape, due line and truncation as the
- * placement — including the row caps (8 non-scrolling, 100 scrolling).
+ * same header switches, section order, row control switches, row shape and
+ * truncation as the placement — including the row caps (the placement's own
+ * non-scrolling cap, [TaskWidget.MAX_COLLECTION_ROWS] scrolling).
  * [small] previews the display-only small layout a placement under either
  * size bound gets on-device (render() returns the small layout before the
  * scrollable check), where density and scrolling do not apply. */
 @Composable
 private fun WidgetPreview(
-    title: String,
-    view: TaskWidgetView,
-    density: TaskWidgetDensity,
-    showDue: Boolean,
-    scrollable: Boolean,
+    settings: WidgetSettings,
     small: Boolean,
 ) {
     if (small) {
-        SmallPreview(title = title, view = view, showDue = showDue)
+        SmallPreview(settings)
         return
     }
-    val compact = density == TaskWidgetDensity.Compact
+    val compact = settings.density == TaskWidgetDensity.Compact
     // Eight fake rows below (1+2+2+1+1+1): the total matches them exactly,
     // so the preview never invents a gap the device would not show.
-    val total = if (view == TaskWidgetView.Done) 1 else 8
+    val total = if (settings.view == TaskWidgetView.Done) 1 else 8
     // Done is one flat list with no headers, like the real widget.
     val sections: List<Pair<String, List<PreviewRow>>> =
-        if (view == TaskWidgetView.Done) {
+        if (settings.view == TaskWidgetView.Done) {
             listOf("" to listOf(PreviewRow("Apply hair oil", "Today, 09:00")))
         } else {
             PREVIEW_SECTIONS
         }
+    // Section headers off: one flat list in the same agenda order (#536).
+    val shownSource: List<Pair<String, List<PreviewRow>>> =
+        if (settings.showSections) {
+            sections
+        } else {
+            listOf("" to sections.flatMap { it.second })
+        }
     // The cap counts rows, and a section header only appears when one of
     // its rows does — the same takeAgendaRows rule as the widget, with the
-    // same caps (STATIC_ROW_LIMIT non-scrolling, MAX_COLLECTION_ROWS
+    // same caps (the placement's cap non-scrolling, MAX_COLLECTION_ROWS
     // scrolling). The hidden line is non-scrolling only: the device never
     // shows "scroll for more" — a scrolling placement with all rows visible
     // shows no qualifier at all.
-    val rowCap = if (scrollable) {
+    val rowCap = if (settings.scrollable) {
         TaskWidget.MAX_COLLECTION_ROWS
     } else {
-        TaskWidget.STATIC_ROW_LIMIT
+        settings.staticRows.rows
     }
     val shownSections = ArrayList<Pair<String, List<PreviewRow>>>()
     var shownRows = 0
-    for ((name, rows) in sections) {
+    for ((name, rows) in shownSource) {
         if (shownRows >= rowCap) break
         val take = rows.take(rowCap - shownRows)
         shownRows += take.size
         shownSections.add(name to take)
     }
-    val hidden = if (scrollable) {
+    val hidden = if (settings.scrollable) {
         0
     } else {
         (total - shownRows).coerceAtLeast(0)
@@ -504,17 +594,25 @@ private fun WidgetPreview(
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        widgetTitle(title, view.title),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                    )
-                    Text(
-                        previewCount(view, scrollable, total),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (settings.showTitle) {
+                        Text(
+                            widgetTitle(settings.title, settings.view.title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                        )
+                    }
+                    if (settings.showCount) {
+                        Text(
+                            previewCount(
+                                settings.view,
+                                if (settings.scrollable) null else settings.staticRows.rows,
+                                total,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Icon(
@@ -567,11 +665,9 @@ private fun WidgetPreview(
                                 },
                                 maxLines = 1,
                             )
-                            // Same join as the widget row: due, then repeat.
-                            val line = buildList {
-                                if (showDue && row.due.isNotEmpty()) add(row.due)
-                                if (row.repeat != null) add(row.repeat)
-                            }.joinToString(" · ")
+                            // Same join and same three switches as the
+                            // widget row (#536).
+                            val line = previewRowLine(row, settings)
                             if (line.isNotEmpty()) {
                                 Text(
                                     line,
@@ -605,23 +701,23 @@ private fun WidgetPreview(
 
 /** Miniature of the small layout: title, count and the single next task
  * (#532). Same agenda order as the device — the first row of the grouped
- * sections, or the one Done row — and the same "showing 1" honesty as the
- * real compact count line. Density and scrolling are intentionally absent:
- * the device ignores both below either size bound. */
+ * sections, or the one Done row — the same header switches (#536) and the
+ * same "showing 1" honesty as the real compact count line. Density and
+ * scrolling are intentionally absent: the device ignores both below either
+ * size bound. */
 @Composable
-private fun SmallPreview(
-    title: String,
-    view: TaskWidgetView,
-    showDue: Boolean,
-) {
+private fun SmallPreview(settings: WidgetSettings) {
     val sections: List<Pair<String, List<PreviewRow>>> =
-        if (view == TaskWidgetView.Done) {
+        if (settings.view == TaskWidgetView.Done) {
             listOf("" to listOf(PreviewRow("Apply hair oil", "Today, 09:00")))
         } else {
             PREVIEW_SECTIONS
         }
-    val total = if (view == TaskWidgetView.Done) 1 else 8
-    val next = sections.firstOrNull()?.second?.firstOrNull()
+    // A flat placement names the same first task the device would (#536).
+    val flat = sections.flatMap { it.second }
+    val next = if (settings.showSections) sections.firstOrNull()?.second?.firstOrNull()
+    else flat.firstOrNull()
+    val total = if (settings.view == TaskWidgetView.Done) 1 else 8
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -629,17 +725,22 @@ private fun SmallPreview(
             containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                widgetTitle(title, view.title),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-            )
-            Text(
-                previewCount(view, scrollable = true, total = total) + shownSuffix(total, 1),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (settings.showTitle) {
+                Text(
+                    widgetTitle(settings.title, settings.view.title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+            }
+            if (settings.showCount) {
+                Text(
+                    previewCount(settings.view, cap = null, total = total) +
+                        shownSuffix(total, 1),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (next != null) {
                 Text(
                     next.name,
@@ -647,10 +748,7 @@ private fun SmallPreview(
                     maxLines = 1,
                     modifier = Modifier.padding(top = 6.dp),
                 )
-                val line = buildList {
-                    if (showDue && next.due.isNotEmpty()) add(next.due)
-                    if (next.repeat != null) add(next.repeat)
-                }.joinToString(" · ")
+                val line = previewRowLine(next, settings)
                 if (line.isNotEmpty()) {
                     Text(
                         line,
@@ -673,8 +771,10 @@ private fun SmallPreview(
 /** Honest count line: the non-scrolling mode caps rows, so say so — and
  * never claim a cap above the total it is capping. [total] is the fake
  * dataset's own row count, passed in so the line and the rendered rows
- * cannot disagree (#532 review). */
-private fun previewCount(view: TaskWidgetView, scrollable: Boolean, total: Int): String {
+ * cannot disagree (#532 review). [cap] is the placement's own cap (#536),
+ * passed from the same setting the rows are cut with; null means the
+ * surface shows everything it has, so no qualifier is possible. */
+private fun previewCount(view: TaskWidgetView, cap: Int?, total: Int): String {
     val noun = when (view) {
         TaskWidgetView.Open -> "open task"
         TaskWidgetView.Done -> "done task"
@@ -682,11 +782,11 @@ private fun previewCount(view: TaskWidgetView, scrollable: Boolean, total: Int):
     }
     val shown = total.toString() +
         if (total == 1) " $noun" else " ${noun}s"
-    if (scrollable) return shown
+    if (cap == null) return shown
     // Same rule as the real count line (#532): the qualifier appears only
     // when rows are actually hidden. A one-task Done view capped at 8 hides
     // nothing, so "· showing 1" would promise a disclosure the device never
     // shows.
-    val cap = minOf(total, TaskWidget.STATIC_ROW_LIMIT)
-    return if (total > cap) "$shown · showing $cap" else shown
+    val effective = minOf(total, cap)
+    return if (total > effective) "$shown · showing $effective" else shown
 }

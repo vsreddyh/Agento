@@ -50,6 +50,10 @@ private class TaskFactory(
     private var today: LocalDate = LocalDate.now(IST)
     // Same instant the agenda grouping uses, read once for the same reason.
     private var now: LocalDateTime = LocalDateTime.now(IST).truncatedTo(ChronoUnit.MINUTES)
+    // This placement's whole settings screen (#536), read once in
+    // onDataSetChanged: getViewAt then cannot mix two vintages of it, and a
+    // long list does not re-read a dozen prefs per row.
+    private var placement: WidgetSettings = WidgetSettings()
 
     override fun onCreate() = Unit
     override fun onDestroy() = Unit
@@ -58,29 +62,6 @@ private class TaskFactory(
     // Headers and rows (#532). The adapter maps each item to a type from
     // its layout id, so this only has to say "two layouts exist".
     override fun getViewTypeCount(): Int = 2
-
-    private fun view(): TaskWidgetView =
-        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
-            TaskWidgetView.Open
-        } else {
-            TaskWidget.viewFor(appCtx, appWidgetId)
-        }
-
-    private fun sort(): TaskWidgetSort =
-        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
-            // No placement to read from: keep the fetch order.
-            TaskWidgetSort.Server
-        } else {
-            TaskWidget.sortFor(appCtx, appWidgetId)
-        }
-
-    private fun compact(): Boolean =
-        appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID &&
-            TaskWidget.densityFor(appCtx, appWidgetId) == TaskWidgetDensity.Compact
-
-    private fun showDue(): Boolean =
-        appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID ||
-            TaskWidget.showDueFor(appCtx, appWidgetId)
 
     override fun onDataSetChanged() {
         // In-memory snapshot first; after process death/reboot the cache
@@ -93,7 +74,15 @@ private class TaskFactory(
         // Anything escaping is recorded for diagnostics (never rethrown:
         // a factory throw IS the system error view).
         runCatching {
-            val state = view().state
+            placement =
+                if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+                    // No placement to read from: keep the historical
+                    // defaults rather than guessing at prefs.
+                    WidgetSettings()
+                } else {
+                    TaskWidget.settingsFor(appCtx, appWidgetId)
+                }
+            val state = placement.view.state
             today = LocalDate.now(IST)
             now = LocalDateTime.now(IST).truncatedTo(ChronoUnit.MINUTES)
             // Cached rows skip the network; a miss fetches synchronously
@@ -135,11 +124,12 @@ private class TaskFactory(
             val rows = (cached ?: fetched?.tasks.orEmpty()
                 // Same order as the pushed paths (#369): the factory is
                 // the only renderer on API <31, so it sorts its own copy.
-                ).sortedForWidget(sort())
-            // Same agenda as the direct-items path (#532); Done stays flat.
+                ).sortedForWidget(placement.sort)
+            // Same agenda as the direct-items path (#532), flat in Done and
+            // in a placement that turned section headers off (#536).
             items = widgetAgenda(
                 rows,
-                grouped = view() != TaskWidgetView.Done,
+                grouped = placement.view != TaskWidgetView.Done && placement.showSections,
                 today = today,
                 now = now,
             )
@@ -165,7 +155,11 @@ private class TaskFactory(
         return runCatching {
             when (val item = items.getOrNull(position)) {
                 null -> RemoteViews(appCtx.packageName,
-                    if (compact()) R.layout.task_widget_row_compact else R.layout.task_widget_row)
+                    if (placement.density == TaskWidgetDensity.Compact) {
+                        R.layout.task_widget_row_compact
+                    } else {
+                        R.layout.task_widget_row
+                    })
                 is WidgetItem.Header ->
                     TaskWidget.buildSection(appCtx, item.bucket, item.count).apply {
                         // The list has ONE template (the trampoline), so a
@@ -175,7 +169,8 @@ private class TaskFactory(
                     }
                 is WidgetItem.Row ->
                     TaskWidget.buildLegacyRow(
-                        appCtx.packageName, compact(), showDue(), today, item.task)
+                        appCtx.packageName, placement.density == TaskWidgetDensity.Compact,
+                        placement, today, item.task)
             }
         }.getOrElse {
             TaskWidget.recordFactoryError("getViewAt($position)", it)

@@ -151,6 +151,47 @@ enum class TaskWidgetSort(val title: String) {
 }
 
 /**
+ * Rows a non-scrolling placement shows (#536). [Eight] is the cap the
+ * plain-rows layout used before it became a setting, so an untouched
+ * placement renders exactly as it did. The cap counts task rows and drops a
+ * trailing header — see [takeAgendaRows].
+ */
+enum class TaskWidgetStaticRows(val rows: Int, val title: String) {
+    Four(4, "4 rows"),
+    Six(6, "6 rows"),
+    Eight(TaskWidget.STATIC_ROW_LIMIT, "8 rows"),
+}
+
+/**
+ * Everything one placement's settings screen can change (#536), read once
+ * per render so the rows, the header and the count line cannot disagree
+ * about what this placement shows. Defaults reproduce the widget before the
+ * settings rework, so an untouched placement — and an old backup that never
+ * stored the new keys — renders unchanged.
+ */
+internal data class WidgetSettings(
+    val view: TaskWidgetView = TaskWidgetView.Open,
+    val density: TaskWidgetDensity = TaskWidgetDensity.Comfortable,
+    val sort: TaskWidgetSort = TaskWidgetSort.Server,
+    /** Custom header title; null or blank follows the view name. */
+    val title: String? = null,
+    /** The due part of a row line: date, time and the start → due range. */
+    val showDue: Boolean = true,
+    /** The repeat condition ("Every 3 days") on a row line. */
+    val showRepeat: Boolean = true,
+    /** The "parallel" marker on a row line. */
+    val showParallel: Boolean = true,
+    /** Section headers (Overdue → Current → … → No due date). */
+    val showSections: Boolean = true,
+    /** The header title text (the refresh button stays reachable). */
+    val showTitle: Boolean = true,
+    /** The header count line. */
+    val showCount: Boolean = true,
+    val scrollable: Boolean = true,
+    val staticRows: TaskWidgetStaticRows = TaskWidgetStaticRows.Eight,
+)
+
+/**
  * Orders one placement's rows. Server keeps the fetch order untouched;
  * every other mode reuses the Task Manager's own [sortedByMode], so the
  * widget and the in-app list can never disagree about what "Name" means.
@@ -290,21 +331,26 @@ internal fun widgetIsCompact(minWidthDp: Int, minHeightDp: Int): Boolean =
         (minHeightDp in 1 until COMPACT_MIN_HEIGHT_DP)
 
 /**
- * The secondary line a widget row shows (#532): the shared due · repeat ·
- * parallel line, or — when the placement turns due dates off — only the
- * repeat/parallel marks, so the repeat condition never disappears with a
- * display toggle that was never about it.
+ * The secondary line a widget row shows (#536): the due line (date + time),
+ * the repeat condition and the parallel marker, each behind its own
+ * per-placement switch, joined with " · ".
+ *
+ * Deliberately separate from the Task Manager's [dueBits] (#532): the app
+ * row always shows all three, while a placement can drop any of them — and
+ * dropping the date must never take the repeat condition with it, which is
+ * why they are three switches rather than one. Pure and JVM-pinned.
  */
-internal fun widgetSecondaryLine(
+internal fun widgetRowLine(
     task: ServerTask,
     today: java.time.LocalDate,
-    showDue: Boolean,
+    showDue: Boolean = true,
+    showRepeat: Boolean = true,
+    showParallel: Boolean = true,
 ): String {
-    if (showDue) return task.dueBits(today)
-    val bits = ArrayList<String>(2)
-    val repeat = task.repeatLabel()
-    if (repeat.isNotEmpty()) bits.add(repeat)
-    if (task.parallelable) bits.add("parallel")
+    val bits = ArrayList<String>(3)
+    if (showDue) task.startToDueLine(today).takeIf { it.isNotEmpty() }?.let(bits::add)
+    if (showRepeat) task.repeatLabel().takeIf { it.isNotEmpty() }?.let(bits::add)
+    if (showParallel && task.parallelable) bits.add("parallel")
     return bits.joinToString(" · ")
 }
 
@@ -341,6 +387,17 @@ internal fun widgetSortForName(raw: String?): TaskWidgetSort =
 internal fun widgetSortCoercion(raw: String?): String? =
     if (raw == null || TaskWidgetSort.entries.any { it.name == raw }) null
     else "${visibleTaskRaw(raw)}->${TaskWidgetSort.Server.name}"
+
+/** A stored non-scrolling row cap, defaulting to Eight (#536). */
+internal fun widgetStaticRowsForName(raw: String?): TaskWidgetStaticRows =
+    raw?.let { n -> TaskWidgetStaticRows.entries.firstOrNull { it.name == n } }
+        ?: TaskWidgetStaticRows.Eight
+
+/** Names a row-cap reset (#536): null when absent or known, otherwise
+ * `"raw"->Eight`, the same shape every other display coercion reports. */
+internal fun widgetStaticRowsCoercion(raw: String?): String? =
+    if (raw == null || TaskWidgetStaticRows.entries.any { it.name == raw }) null
+    else "${visibleTaskRaw(raw)}->${TaskWidgetStaticRows.Eight.name}"
 
 /** Whether two millis fall on the same device-local calendar day (#435
  * review): a yesterday 09:14 stamp badged as "updated 09:14" reads as
@@ -418,9 +475,10 @@ fun taskWidgetIds(context: Context): IntArray {
  * axis the small layout takes over. The list is a
  * RemoteViews collection ([TaskWidgetService]) with weight 1, so it
  * takes whatever height the placement offers. Every display setting is
- * per-widget via [TaskWidgetConfigActivity] — read `render()`'s per-key
- * prefs lookups for the current set rather than trusting a list here,
- * which is exactly how this KDoc drifted before.
+ * per-widget via [TaskWidgetConfigActivity]; the whole set is read in one
+ * place, [settingsFor], so a render cannot mix two vintages of it — read
+ * [WidgetSettings] for the current set rather than trusting a list here,
+ * which is exactly how this KDoc drifted before (#536).
  */
 class TaskWidget : AppWidgetProvider() {
 
@@ -435,7 +493,7 @@ class TaskWidget : AppWidgetProvider() {
         for (id in appWidgetIds) {
             runCatching {
                 appWidgetManager.updateAppWidget(
-                    id, render(context, id, viewFor(context, id), null, false))
+                    id, render(context, id, null, false))
             }.onFailure {
                 Log.w("TaskWidget", "initial render failed for id=$id", it)
             }
@@ -483,7 +541,7 @@ class TaskWidget : AppWidgetProvider() {
             mgr.updateAppWidget(
                 appWidgetId,
                 render(
-                    context, appWidgetId, view, cached,
+                    context, appWidgetId, cached,
                     error = cached == null && failed, staleBadge = stale,
                 ),
             )
@@ -529,6 +587,12 @@ class TaskWidget : AppWidgetProvider() {
                 remove("task_widget_density_$id")
                 remove("task_widget_sort_$id")
                 remove("task_widget_due_$id")
+                remove("task_widget_repeat_$id")
+                remove("task_widget_parallel_$id")
+                remove("task_widget_sections_$id")
+                remove("task_widget_count_$id")
+                remove("task_widget_show_title_$id")
+                remove("task_widget_static_rows_$id")
                 remove("task_widget_scroll_$id")
                 remove("task_widget_title_$id")
                 // Retired diagnostic ladder: drop its key on delete too.
@@ -618,8 +682,9 @@ class TaskWidget : AppWidgetProvider() {
         @Suppress("unused")
         private const val CONFIG_CODE = 1005
 
-        /** Rows rendered by the non-scrolling (plain-rows) path. Shown in
-         * the widget settings preview so the cap isn't a surprise. */
+        /** Default rows rendered by the non-scrolling (plain-rows) path
+         * (#536): [TaskWidgetStaticRows.Eight], the cap the layout used
+         * before the placement could choose 4 or 6 instead. */
         internal const val STATIC_ROW_LIMIT = 8
 
         /** Rows handed to the direct-items collection (API 31+): the whole
@@ -689,11 +754,15 @@ class TaskWidget : AppWidgetProvider() {
             buildString {
                 appendLine("placements=${ids.size}")
                 for (id in ids) {
-                    appendLine("id=$id view=${viewFor(ctx, id)} " +
+                    val s = settingsFor(ctx, id)
+                    appendLine("id=$id view=${s.view} " +
                         "title=${titleFor(ctx, id, "(default)")} " +
-                        "density=${densityFor(ctx, id)} sort=${sortFor(ctx, id)} " +
-                        "showDue=${showDueFor(ctx, id)} " +
-                        "scrollable=${scrollableFor(ctx, id)}")
+                        "density=${s.density} sort=${s.sort} " +
+                        "showDue=${s.showDue} showRepeat=${s.showRepeat} " +
+                        "showParallel=${s.showParallel} sections=${s.showSections} " +
+                        "count=${s.showCount} showTitle=${s.showTitle} " +
+                        "staticRows=${s.staticRows.rows} " +
+                        "scrollable=${s.scrollable}")
                 }
                 // Resets that notified (#437): the latest raw->became per
                 // pref key, so a placement that changed for no apparent
@@ -959,15 +1028,60 @@ class TaskWidget : AppWidgetProvider() {
                     "task_widget_view_$appWidgetId",
                     "task_widget_density_$appWidgetId",
                     "task_widget_sort_$appWidgetId",
+                    "task_widget_static_rows_$appWidgetId",
                 )
                 lastCoercions = lastCoercions.filterKeys { it !in keys }
                 coercionSeen.removeIf { seen -> keys.any { seen.startsWith("$it|") } }
             }
         }
 
-        /** Whether this placement's rows show the due line. */
+        /** Whether this placement's rows show the due line (date and
+         * time). */
         fun showDueFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_due_$appWidgetId", true)
+
+        /** This placement's non-scrolling row cap (#536), defaulting to
+         * Eight. Resets report like [viewFor] (#437). */
+        fun staticRowsFor(context: Context, appWidgetId: Int): TaskWidgetStaticRows {
+            val key = "task_widget_static_rows_$appWidgetId"
+            val name = prefs(context).getString(key, null)
+            noteCoercion(key, widgetStaticRowsCoercion(name), name)
+            return widgetStaticRowsForName(name)
+        }
+
+        /** One boolean display switch (#536): [prefix] plus the widget id,
+         * defaulting to [fallback] when the key is absent or was never
+         * written. All of them default to on, which is how the widget
+         * rendered before the switches existed. */
+        private fun switchFor(
+            context: Context,
+            appWidgetId: Int,
+            prefix: String,
+            fallback: Boolean = true,
+        ): Boolean = prefs(context).getBoolean("$prefix$appWidgetId", fallback)
+
+        /**
+         * The whole settings screen for one placement (#536), read once so a
+         * render cannot mix two vintages of it — a row body built with one
+         * set of switches and a count line built with another. Individual
+         * readers stay for the settings screen and diagnostics, which ask
+         * about one key.
+         */
+        internal fun settingsFor(context: Context, appWidgetId: Int): WidgetSettings =
+            WidgetSettings(
+                view = viewFor(context, appWidgetId),
+                density = densityFor(context, appWidgetId),
+                sort = sortFor(context, appWidgetId),
+                title = prefs(context).getString("task_widget_title_$appWidgetId", null),
+                showDue = showDueFor(context, appWidgetId),
+                showRepeat = switchFor(context, appWidgetId, "task_widget_repeat_"),
+                showParallel = switchFor(context, appWidgetId, "task_widget_parallel_"),
+                showSections = switchFor(context, appWidgetId, "task_widget_sections_"),
+                showTitle = switchFor(context, appWidgetId, "task_widget_show_title_"),
+                showCount = switchFor(context, appWidgetId, "task_widget_count_"),
+                scrollable = scrollableFor(context, appWidgetId),
+                staticRows = staticRowsFor(context, appWidgetId),
+            )
 
         /** Whether this placement uses the scrollable collection. Plain
          * rows are the fallback for hosts that reject the list; a fresh
@@ -980,10 +1094,10 @@ class TaskWidget : AppWidgetProvider() {
          * template (or at fill-in merging) still complete/open rows
          * (issue #137). Same layout and content as [buildRow]; complete and
          * skip are broadcasts so the tap never foregrounds the app (#532). */
-        fun buildRowWithIntents(
+        internal fun buildRowWithIntents(
             context: Context,
             compact: Boolean,
-            showDue: Boolean,
+            settings: WidgetSettings,
             today: java.time.LocalDate,
             task: ServerTask,
         ): RemoteViews {
@@ -1009,7 +1123,7 @@ class TaskWidget : AppWidgetProvider() {
                     .setData("agento://task/${task.id}".toUri()),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            return buildRow(context.packageName, compact, showDue, today, task).apply {
+            return buildRow(context.packageName, compact, settings, today, task).apply {
                 setOnClickPendingIntent(R.id.task_widget_row_check, complete)
                 setOnClickPendingIntent(R.id.task_widget_row_skip, skip)
                 setOnClickPendingIntent(R.id.task_widget_row, openTask)
@@ -1078,10 +1192,10 @@ class TaskWidget : AppWidgetProvider() {
          * can never carry both an explicit intent and a fill-in for the
          * same view, where which one wins is an implementation detail of
          * the host. */
-        fun buildRow(
+        internal fun buildRow(
             packageName: String,
             compact: Boolean,
-            showDue: Boolean,
+            settings: WidgetSettings,
             today: java.time.LocalDate,
             task: ServerTask,
         ): RemoteViews {
@@ -1092,9 +1206,16 @@ class TaskWidget : AppWidgetProvider() {
             }
             return RemoteViews(packageName, layout).apply {
                 setTextViewText(R.id.task_widget_row_name, task.name)
-                // Same line as the Task Manager rows (#130, #532): due →
-                // repeat → parallel, IST-pinned, shared helper.
-                val due = widgetSecondaryLine(task, today, showDue)
+                // One line, three independent switches (#536): due date and
+                // time, repeat condition, parallel marker. The repeat
+                // condition survives turning the due part off, which is why
+                // it has its own switch rather than riding this one.
+                val due = widgetRowLine(
+                    task, today,
+                    showDue = settings.showDue,
+                    showRepeat = settings.showRepeat,
+                    showParallel = settings.showParallel,
+                )
                 if (due.isNotEmpty()) {
                     setTextViewText(R.id.task_widget_row_due, due)
                     setViewVisibility(R.id.task_widget_row_due, View.VISIBLE)
@@ -1111,13 +1232,13 @@ class TaskWidget : AppWidgetProvider() {
          * template cannot be both. The fill-ins therefore only carry which
          * id and which verb; the trampoline decides (#532).
          */
-        fun buildLegacyRow(
+        internal fun buildLegacyRow(
             packageName: String,
             compact: Boolean,
-            showDue: Boolean,
+            settings: WidgetSettings,
             today: java.time.LocalDate,
             task: ServerTask,
-        ): RemoteViews = buildRow(packageName, compact, showDue, today, task).apply {
+        ): RemoteViews = buildRow(packageName, compact, settings, today, task).apply {
             setOnClickFillInIntent(
                 R.id.task_widget_row_check,
                 Intent().putExtra(TaskWidget.EXTRA_COMPLETE_ID, task.id),
@@ -1261,7 +1382,7 @@ class TaskWidget : AppWidgetProvider() {
                 // One wedged placement must not abort the rest (#130).
                 runCatching {
                     mgr.updateAppWidget(
-                        id, render(appCtx, id, view, tasks, tasks == null, detail, staleBadge))
+                        id, render(appCtx, id, tasks, tasks == null, detail, staleBadge))
                 }.onFailure {
                     Log.w("TaskWidget", "updateAppWidget failed for id=$id", it)
                 }
@@ -1297,13 +1418,16 @@ class TaskWidget : AppWidgetProvider() {
         private fun render(
             context: Context,
             appWidgetId: Int,
-            view: TaskWidgetView,
             tasks: List<ServerTask>?,
             error: Boolean,
             errorDetail: String? = null,
             /** Stale-cache badge, null when the rows are live (#435). */
             staleBadge: StaleBadge? = null,
         ): RemoteViews {
+            // One read of the settings screen per render (#536): the header,
+            // the rows and the count line must agree about this placement.
+            val settings = settingsFor(context, appWidgetId)
+            val view = settings.view
             val open = Intent(context, MainActivity::class.java).setAction(ACTION_TASKS)
             val openPending = PendingIntent.getActivity(
                 context, OPEN_CODE, open,
@@ -1333,7 +1457,7 @@ class TaskWidget : AppWidgetProvider() {
                 val today = java.time.LocalDate.now(IST)
                 val next = widgetNextTask(
                     tasks.orEmpty(),
-                    grouped = view != TaskWidgetView.Done,
+                    grouped = view != TaskWidgetView.Done && settings.showSections,
                     today = today,
                     now = java.time.LocalDateTime.now(IST)
                         .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
@@ -1344,7 +1468,7 @@ class TaskWidget : AppWidgetProvider() {
                         R.id.task_widget_title,
                         // Custom title wins; the view name is the default,
                         // same rule as the full layout.
-                        titleFor(context, appWidgetId, view.title),
+                        widgetTitle(settings.title, view.title),
                     )
                     setTextViewText(
                         R.id.task_widget_count,
@@ -1353,10 +1477,15 @@ class TaskWidget : AppWidgetProvider() {
                         countText(context, view, tasks, error,
                             shownRows = 1, staleBadge = staleBadge),
                     )
+                    applyHeaderSwitches(this, settings)
                     if (next != null) {
                         setTextViewText(R.id.task_widget_next, next.name)
-                        val line = widgetSecondaryLine(
-                            next, today, showDueFor(context, appWidgetId))
+                        val line = widgetRowLine(
+                            next, today,
+                            showDue = settings.showDue,
+                            showRepeat = settings.showRepeat,
+                            showParallel = settings.showParallel,
+                        )
                         setTextViewText(R.id.task_widget_next_due, line)
                         setViewVisibility(
                             R.id.task_widget_next_due,
@@ -1401,20 +1530,20 @@ class TaskWidget : AppWidgetProvider() {
             }
             // Two shapes, both proven on the affected launcher (#137):
             // the scrollable list (default) and the plain-row layout.
-            val scrollable = scrollableFor(context, appWidgetId)
-            if (!scrollable) {
+            if (!settings.scrollable) {
                 return RemoteViews(context.packageName, R.layout.task_widget_full).apply {
                     // The view label exists only here (the scrollable
                     // layout names the view in its title instead).
                     applyTapTargets(this, openPending, refreshPending, PLAIN_TAP_IDS)
                     if (tasks != null) {
                         val today = java.time.LocalDate.now(IST)
-                        val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
-                        val due = showDueFor(context, appWidgetId)
-                        // Same agenda order as the collection paths (#532).
+                        val compact = settings.density == TaskWidgetDensity.Compact
+                        // Same agenda order as the collection paths (#532),
+                        // flat when the placement turns section headers off
+                        // (#536).
                         val agenda = widgetAgenda(
                             tasks,
-                            grouped = view != TaskWidgetView.Done,
+                            grouped = view != TaskWidgetView.Done && settings.showSections,
                             today = today,
                             now = java.time.LocalDateTime.now(IST)
                                 .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
@@ -1423,7 +1552,10 @@ class TaskWidget : AppWidgetProvider() {
                         // each time would append, leaving ghost rows when
                         // the list shrinks.
                         removeAllViews(R.id.task_widget_static_list)
-                        agenda.takeAgendaRows(STATIC_ROW_LIMIT).forEach { item ->
+                        // The cap is this placement's own (#536), and the
+                        // preview promises the same number from the same
+                        // setting.
+                        agenda.takeAgendaRows(settings.staticRows.rows).forEach { item ->
                             addView(
                                 R.id.task_widget_static_list,
                                 when (item) {
@@ -1432,7 +1564,7 @@ class TaskWidget : AppWidgetProvider() {
                                             context, item.bucket, item.count, openPending)
                                     is WidgetItem.Row ->
                                         buildRowWithIntents(
-                                            context, compact, due, today, item.task)
+                                            context, compact, settings, today, item.task)
                                 },
                             )
                         }
@@ -1446,11 +1578,12 @@ class TaskWidget : AppWidgetProvider() {
                         if (empty.isEmpty()) View.GONE else View.VISIBLE)
                     setTextViewText(R.id.task_widget_view, view.title)
                     setTextViewText(R.id.task_widget_title,
-                        titleFor(context, appWidgetId, view.title))
+                        widgetTitle(settings.title, view.title))
                     setTextViewText(R.id.task_widget_count,
                         countText(
                             context, view, tasks, error,
-                            shownRows = STATIC_ROW_LIMIT, staleBadge = staleBadge))
+                            shownRows = settings.staticRows.rows, staleBadge = staleBadge))
+                    applyHeaderSwitches(this, settings)
                 }
             }
             // E: the collection widget, on the same proven chrome.
@@ -1466,17 +1599,16 @@ class TaskWidget : AppWidgetProvider() {
                     // view would TransactionTooLarge the update (the
                     // header count below still shows the true total).
                     val today = java.time.LocalDate.now(IST)
-                    val compact = densityFor(context, appWidgetId) == TaskWidgetDensity.Compact
-                    val due = showDueFor(context, appWidgetId)
+                    val compact = settings.density == TaskWidgetDensity.Compact
                     // Agenda order (#532): overdue → today → upcoming →
                     // someday, with a header item per non-empty bucket. The
-                    // Done view stays flat — a bucket for finished work
-                    // says nothing. Two layouts means a view-type count of
-                    // 2; the platform derives an item's type from its
-                    // RemoteViews layout id.
+                    // Done view stays flat, and so does a placement that
+                    // turned section headers off (#536). Two layouts means a
+                    // view-type count of 2; the platform derives an item's
+                    // type from its RemoteViews layout id.
                     val agenda = widgetAgenda(
                         tasks,
-                        grouped = view != TaskWidgetView.Done,
+                        grouped = view != TaskWidgetView.Done && settings.showSections,
                         today = today,
                         now = java.time.LocalDateTime.now(IST)
                             .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
@@ -1491,7 +1623,7 @@ class TaskWidget : AppWidgetProvider() {
                                             context, item.bucket, item.count, openPending)
                                     is WidgetItem.Row ->
                                         buildRowWithIntents(
-                                            context, compact, due, today, item.task)
+                                            context, compact, settings, today, item.task)
                                 },
                             )
                         }
@@ -1521,13 +1653,14 @@ class TaskWidget : AppWidgetProvider() {
                 // button is gone — it never rendered on this host), and a
                 // placement's custom title (#532) wins over it.
                 setTextViewText(R.id.task_widget_title,
-                    titleFor(context, appWidgetId, view.title))
+                    widgetTitle(settings.title, view.title))
                 setTextViewText(R.id.task_widget_count,
                     // Same honesty as the other capped surfaces (#532):
                     // dead at today's fetch limit of 50, live the day it
                     // grows past MAX_COLLECTION_ROWS.
                     countText(context, view, tasks, error,
                         shownRows = MAX_COLLECTION_ROWS, staleBadge = staleBadge))
+                applyHeaderSwitches(this, settings)
                 val empty = emptyText(context, tasks, error, errorDetail)
                 setTextViewText(R.id.task_widget_empty, empty)
                 // Hide the empty line when rows are showing: an empty
@@ -1554,12 +1687,28 @@ class TaskWidget : AppWidgetProvider() {
             else -> ""
         }
 
+        /** Hides the header text a placement turned off (#536). The refresh
+         * button is not part of either switch: it stays reachable even when
+         * the title and count are hidden, or the header would be a dead
+         * strip. */
+        private fun applyHeaderSwitches(views: RemoteViews, settings: WidgetSettings) {
+            views.setViewVisibility(
+                R.id.task_widget_title,
+                if (settings.showTitle) View.VISIBLE else View.GONE,
+            )
+            views.setViewVisibility(
+                R.id.task_widget_count,
+                if (settings.showCount) View.VISIBLE else View.GONE,
+            )
+        }
+
         /** Header count line, shared by the full widget and the diagnostic
          * styles. [shownRows] is the surface's row cap when it has one, so
          * the count and the visible rows never silently disagree: the static
-         * path shows up to [STATIC_ROW_LIMIT], the compact placement exactly
-         * one task, the scrollable collection up to [MAX_COLLECTION_ROWS].
-         * Null means uncapped, so no qualifier is possible. */
+         * path shows up to the placement's [WidgetSettings.staticRows], the
+         * compact placement exactly one task, the scrollable collection up to
+         * [MAX_COLLECTION_ROWS]. Null means uncapped, so no qualifier is
+         * possible. */
         private fun countText(
             context: Context,
             view: TaskWidgetView,
