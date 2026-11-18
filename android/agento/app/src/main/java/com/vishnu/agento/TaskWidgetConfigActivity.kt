@@ -504,7 +504,7 @@ private fun previewRowLine(row: PreviewRow, settings: WidgetSettings): String =
  * visible here too — 4 hides three, 6 hides one, 8 shows all — instead of a
  * single row that would make the cap and scrolling switches look dead. */
 private val PREVIEW_DONE_ROWS: List<PreviewRow> = listOf(
-    PreviewRow("Pay rent", "Yesterday, 10:00"),
+    PreviewRow("Pay rent", "Yesterday, 10:00", "Monthly", parallel = true),
     PreviewRow("Apply hair oil", "Today, 09:00", "Every 3 days"),
     PreviewRow("Bath", "Today, 20:00", parallel = true),
     PreviewRow("Brush teeth", "Today, 22:00", "Daily"),
@@ -517,7 +517,10 @@ private val PREVIEW_DONE_ROWS: List<PreviewRow> = listOf(
  * last. Shown only for the grouped views — Done renders flat. */
 private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
     "Overdue" to listOf(
-        PreviewRow("Pay rent", "Yesterday, 10:00"),
+        // The first row doubles as the Small preview's next task: due,
+        // repeat and parallel bits all present, so each row-content switch
+        // visibly moves there too.
+        PreviewRow("Pay rent", "Yesterday, 10:00", "Monthly", parallel = true),
     ),
     "Current" to listOf(
         PreviewRow("Apply hair oil", "Today, 09:00", "Every 3 days"),
@@ -737,23 +740,32 @@ private fun WidgetPreview(
 
 /** Miniature of the small layout: title, count and the single next task
  * (#532). Same agenda order as the device — the first row of the grouped
- * sections, or the one Done row — the same header switches (#536) and the
- * same "showing 1" honesty as the real compact count line. Density,
- * scrolling and the row cap are intentionally absent: the device ignores
- * all three below either size bound, where the layout names exactly one
- * task. The headers switch is a correct no-op here: a flat placement keeps
- * the agenda order ([withoutHeaders]), so the first row is the same either
- * way. */
+ * sections, or the first Done row — the same header switches (#536) and the
+ * same "showing 1" honesty as the real compact count line (the Done total
+ * comes from the same 7-row set as the Full preview, so the qualifier
+ * appears there too). Density, scrolling and the row cap are intentionally
+ * absent: the device ignores all three below either size bound, where the
+ * layout names exactly one task. The headers switch is a correct no-op
+ * here: a flat placement keeps the agenda order ([withoutHeaders]), so the
+ * first row is the same either way. Row order gets the same caption as the
+ * Full preview: the fake first row cannot re-sort itself.
+ */
 @Composable
 private fun SmallPreview(settings: WidgetSettings) {
-    val sections: List<Pair<String, List<PreviewRow>>> =
-        if (settings.view == TaskWidgetView.Done) {
-            listOf("" to listOf(PreviewRow("Apply hair oil", "Today, 09:00")))
-        } else {
-            PREVIEW_SECTIONS
-        }
-    val next = sections.firstOrNull()?.second?.firstOrNull()
-    val total = if (settings.view == TaskWidgetView.Done) 1 else 8
+    // Done names the first row of the same 7-row set the Full preview
+    // renders (#536, review): with total 1 the count qualifier and the
+    // scrolling switch would look dead here for the same reason they did
+    // there. Open/All name the first grouped row — eight fake rows behind
+    // it, same as Full.
+    val next: PreviewRow?
+    val total: Int
+    if (settings.view == TaskWidgetView.Done) {
+        next = PREVIEW_DONE_ROWS.firstOrNull()
+        total = PREVIEW_DONE_ROWS.size
+    } else {
+        next = PREVIEW_SECTIONS.firstOrNull()?.second?.firstOrNull()
+        total = 8
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -800,6 +812,17 @@ private fun SmallPreview(settings: WidgetSettings) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
+            // Same promise as the Full preview: the fake first row cannot
+            // re-sort itself, so say where the order comes from.
+            if (settings.sort != TaskWidgetSort.Server) {
+                Text(
+                    "On-device rows are sorted by ${settings.sort.title}; " +
+                        "the preview keeps the agenda order",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
     }
 }
