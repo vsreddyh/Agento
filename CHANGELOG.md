@@ -11,7 +11,10 @@ see GitHub Releases for older notes.
 ## [9.3.0]
 - **Task widget settings rework (#536).** The settings screen is rebuilt
   around categories — Title, Row content, Row style, Row order, List — and
-  the preview above it reflects every switch as you flip it.
+  the preview above it reflects each switch as you flip it, with two stated
+  exceptions: row order is captioned rather than previewed (the preview rows
+  are fixed), and the Small preview ignores density, scrolling and the row
+  cap, like the small layout on-device.
 - **Row content is three independent switches.** *Due date and time*,
   *Repeat condition* and *Parallel marker* can be turned off one at a time,
   so a placement can show "Every 3 days" without the date and time — the
