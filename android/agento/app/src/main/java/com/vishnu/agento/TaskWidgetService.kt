@@ -125,14 +125,18 @@ private class TaskFactory(
                 // Same order as the pushed paths (#369): the factory is
                 // the only renderer on API <31, so it sorts its own copy.
                 ).sortedForWidget(placement.sort)
-            // Same agenda as the direct-items path (#532), flat in Done and
-            // in a placement that turned section headers off (#536).
+            // Same agenda as the direct-items path (#532). Done stays flat
+            // (its own sort order — buckets mean nothing for finished work);
+            // a grouped view with headers off keeps the agenda order minus
+            // the headers (#536, [withoutHeaders]).
             items = widgetAgenda(
                 rows,
-                grouped = placement.view != TaskWidgetView.Done && placement.showSections,
+                grouped = placement.view != TaskWidgetView.Done,
                 today = today,
                 now = now,
-            )
+            ).let {
+                if (!placement.showSections) it.withoutHeaders() else it
+            }
         }.onFailure {
             TaskWidget.recordFactoryError("onDataSetChanged", it)
         }

@@ -13,7 +13,8 @@ import org.junit.Test
  * compact threshold and the row line. The bucket order and the dueBucket
  * grouping live in the Task Manager's own code, so these pin the half the
  * widget adds — that it groups in that order, counts each group, stays flat
- * in Done, honors the placement's row-content switches independently (#536),
+ * in Done, keeps the agenda order with headers off (#536), honors the
+ * placement's row-content switches independently (#536),
  * and caps rows without leaving an orphan header behind.
  */
 class WidgetAgendaTest {
@@ -86,6 +87,22 @@ class WidgetAgendaTest {
         // No headers and no reordering: a bucket for finished work says
         // nothing, and the placement's sort already chose the order.
         assertEquals(listOf(WidgetItem.Row(a), WidgetItem.Row(b)), agenda)
+    }
+
+    @Test
+    fun `headers off keeps the agenda order without reordering`() {
+        val overdue = task("overdue", dueDate = "2026-08-08", dueTime = "09:00")
+        val later = task("later", dueDate = "2026-09-30", dueTime = "09:00")
+        // Fetch order disagrees with bucket order on purpose: the flat
+        // placement must still show agenda order, like the preview does.
+        val agenda = widgetAgenda(
+            listOf(later, overdue), grouped = true, today = today, now = now)
+            .withoutHeaders()
+        assertEquals(listOf(WidgetItem.Row(overdue), WidgetItem.Row(later)), agenda)
+        // The cap still counts rows, and with no headers there is nothing
+        // to dangle.
+        assertEquals(agenda, agenda.takeAgendaRows(99))
+        assertEquals(listOf(WidgetItem.Row(overdue)), agenda.takeAgendaRows(1))
     }
 
     @Test

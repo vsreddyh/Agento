@@ -244,6 +244,18 @@ internal fun widgetAgenda(
 }
 
 /**
+ * One placement's agenda rows with section headers off (#536): the same
+ * agenda order, just without the headers — turning the switch off removes
+ * the headers, never reorders the rows. Done keeps its own flat path
+ * ([widgetAgenda] with `grouped = false`, i.e. the placement's sort order),
+ * because buckets carry no meaning for finished work; only a grouped view
+ * with headers off goes through here. The settings preview flattens its
+ * fake sections the same way, so the two cannot promise different orders.
+ */
+internal fun List<WidgetItem>.withoutHeaders(): List<WidgetItem> =
+    filter { it is WidgetItem.Row }
+
+/**
  * The "showing N" qualifier for a capped widget count line (#532): present
  * exactly when the surface shows fewer rows than exist. Pure and
  * JVM-pinned, so the static path (8) and the compact placement (1) cannot
@@ -1453,11 +1465,14 @@ class TaskWidget : AppWidgetProvider() {
                 // builds (#532), not the first task in the placement's own
                 // sort: a Name- or Estimate-sorted placement must not name a
                 // different task from its full-size twin. Byte-identical
-                // grouping, so the same clock and buckets.
+                // grouping, so the same clock and buckets. The headers
+                // switch does not move it: a flat placement keeps the agenda
+                // order ([withoutHeaders]), so the first row is the same
+                // either way.
                 val today = java.time.LocalDate.now(IST)
                 val next = widgetNextTask(
                     tasks.orEmpty(),
-                    grouped = view != TaskWidgetView.Done && settings.showSections,
+                    grouped = view != TaskWidgetView.Done,
                     today = today,
                     now = java.time.LocalDateTime.now(IST)
                         .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
@@ -1538,16 +1553,19 @@ class TaskWidget : AppWidgetProvider() {
                     if (tasks != null) {
                         val today = java.time.LocalDate.now(IST)
                         val compact = settings.density == TaskWidgetDensity.Compact
-                        // Same agenda order as the collection paths (#532),
-                        // flat when the placement turns section headers off
-                        // (#536).
+                        // Same agenda order as the collection paths (#532).
+                        // Headers off keeps that order, minus the headers
+                        // ([withoutHeaders]) — the switch removes chrome,
+                        // never reorders.
                         val agenda = widgetAgenda(
                             tasks,
-                            grouped = view != TaskWidgetView.Done && settings.showSections,
+                            grouped = view != TaskWidgetView.Done,
                             today = today,
                             now = java.time.LocalDateTime.now(IST)
                                 .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
-                        )
+                        ).let {
+                            if (!settings.showSections) it.withoutHeaders() else it
+                        }
                         // Clear first: re-rendering into a fresh RemoteViews
                         // each time would append, leaving ghost rows when
                         // the list shrinks.
@@ -1602,17 +1620,20 @@ class TaskWidget : AppWidgetProvider() {
                     val compact = settings.density == TaskWidgetDensity.Compact
                     // Agenda order (#532): overdue → today → upcoming →
                     // someday, with a header item per non-empty bucket. The
-                    // Done view stays flat, and so does a placement that
-                    // turned section headers off (#536). Two layouts means a
-                    // view-type count of 2; the platform derives an item's
-                    // type from its RemoteViews layout id.
+                    // Done view stays flat; a grouped view with headers off
+                    // keeps the same order minus the headers
+                    // ([withoutHeaders]). Two layouts means a view-type count
+                    // of 2; the platform derives an item's type from its
+                    // RemoteViews layout id.
                     val agenda = widgetAgenda(
                         tasks,
-                        grouped = view != TaskWidgetView.Done && settings.showSections,
+                        grouped = view != TaskWidgetView.Done,
                         today = today,
                         now = java.time.LocalDateTime.now(IST)
                             .truncatedTo(java.time.temporal.ChronoUnit.MINUTES),
-                    )
+                    ).let {
+                        if (!settings.showSections) it.withoutHeaders() else it
+                    }
                     val items = RemoteViews.RemoteCollectionItems.Builder().apply {
                         agenda.takeAgendaRows(MAX_COLLECTION_ROWS).forEachIndexed { i, item ->
                             addItem(

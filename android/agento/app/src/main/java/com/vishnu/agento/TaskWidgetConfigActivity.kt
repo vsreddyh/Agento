@@ -528,10 +528,12 @@ private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
 /** Miniature of the real widget, so each choice is visible immediately:
  * same header switches, section order, row control switches, row shape and
  * truncation as the placement — including the row caps (the placement's own
- * non-scrolling cap, [TaskWidget.MAX_COLLECTION_ROWS] scrolling).
+ * non-scrolling cap, [TaskWidget.MAX_COLLECTION_ROWS] scrolling). Row order
+ * is the one exception: the fake rows are fixed, so a non-default order
+ * gets a caption instead of a re-sorted preview.
  * [small] previews the display-only small layout a placement under either
  * size bound gets on-device (render() returns the small layout before the
- * scrollable check), where density and scrolling do not apply. */
+ * scrollable check), where density, scrolling and the row cap do not apply. */
 @Composable
 private fun WidgetPreview(
     settings: WidgetSettings,
@@ -552,7 +554,9 @@ private fun WidgetPreview(
         } else {
             PREVIEW_SECTIONS
         }
-    // Section headers off: one flat list in the same agenda order (#536).
+    // Section headers off: one flat list in the same agenda order (#536) —
+    // the device strips the headers without reordering ([withoutHeaders]),
+    // so the preview flattens the same way.
     val shownSource: List<Pair<String, List<PreviewRow>>> =
         if (settings.showSections) {
             sections
@@ -695,6 +699,19 @@ private fun WidgetPreview(
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
+            // The preview cannot sort: its rows are fixed fake data, while
+            // the device orders real rows by the placement's row order
+            // first. Say so when a non-default order is picked, or the
+            // preview promises an order the device will not render.
+            if (settings.sort != TaskWidgetSort.Server) {
+                Text(
+                    "On-device rows are sorted by ${settings.sort.title}; " +
+                        "the preview keeps the agenda order",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
     }
 }
@@ -702,9 +719,12 @@ private fun WidgetPreview(
 /** Miniature of the small layout: title, count and the single next task
  * (#532). Same agenda order as the device — the first row of the grouped
  * sections, or the one Done row — the same header switches (#536) and the
- * same "showing 1" honesty as the real compact count line. Density and
- * scrolling are intentionally absent: the device ignores both below either
- * size bound. */
+ * same "showing 1" honesty as the real compact count line. Density,
+ * scrolling and the row cap are intentionally absent: the device ignores
+ * all three below either size bound, where the layout names exactly one
+ * task. The headers switch is a correct no-op here: a flat placement keeps
+ * the agenda order ([withoutHeaders]), so the first row is the same either
+ * way. */
 @Composable
 private fun SmallPreview(settings: WidgetSettings) {
     val sections: List<Pair<String, List<PreviewRow>>> =
@@ -713,10 +733,7 @@ private fun SmallPreview(settings: WidgetSettings) {
         } else {
             PREVIEW_SECTIONS
         }
-    // A flat placement names the same first task the device would (#536).
-    val flat = sections.flatMap { it.second }
-    val next = if (settings.showSections) sections.firstOrNull()?.second?.firstOrNull()
-    else flat.firstOrNull()
+    val next = sections.firstOrNull()?.second?.firstOrNull()
     val total = if (settings.view == TaskWidgetView.Done) 1 else 8
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -759,7 +776,7 @@ private fun SmallPreview(settings: WidgetSettings) {
                 }
             }
             Text(
-                "Small placement: density and scrolling don't apply",
+                "Small placement: density, scrolling and the row cap don't apply",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
