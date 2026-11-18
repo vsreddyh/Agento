@@ -500,6 +500,19 @@ private fun previewRowLine(row: PreviewRow, settings: WidgetSettings): String =
         if (settings.showParallel && row.parallel) add("parallel")
     }.joinToString(" · ")
 
+/** Fake Done rows (#536, review): seven, so the non-scrolling row cap is
+ * visible here too — 4 hides three, 6 hides one, 8 shows all — instead of a
+ * single row that would make the cap and scrolling switches look dead. */
+private val PREVIEW_DONE_ROWS: List<PreviewRow> = listOf(
+    PreviewRow("Pay rent", "Yesterday, 10:00"),
+    PreviewRow("Apply hair oil", "Today, 09:00", "Every 3 days"),
+    PreviewRow("Bath", "Today, 20:00", parallel = true),
+    PreviewRow("Brush teeth", "Today, 22:00", "Daily"),
+    PreviewRow("Buy vegetables", "Tomorrow, 18:00"),
+    PreviewRow("Water plants", "Sat, 09:00", "Mon, Wed, Fri"),
+    PreviewRow("Plan the week", "", "Every 2 weeks"),
+)
+
 /** Fake agenda in the widget's bucket order (#532): Overdue first, no-date
  * last. Shown only for the grouped views — Done renders flat. */
 private val PREVIEW_SECTIONS: List<Pair<String, List<PreviewRow>>> = listOf(
@@ -544,13 +557,19 @@ private fun WidgetPreview(
         return
     }
     val compact = settings.density == TaskWidgetDensity.Compact
-    // Eight fake rows below (1+2+2+1+1+1): the total matches them exactly,
-    // so the preview never invents a gap the device would not show.
-    val total = if (settings.view == TaskWidgetView.Done) 1 else 8
+    // Eight fake rows below for Open/All (1+2+2+1+1+1), seven for Done: the
+    // total matches them exactly, so the preview never invents a gap the
+    // device would not show — and the Done total exceeds the smallest cap,
+    // so the 4/6/8 switch visibly moves there too.
+    val total = if (settings.view == TaskWidgetView.Done) {
+        PREVIEW_DONE_ROWS.size
+    } else {
+        8
+    }
     // Done is one flat list with no headers, like the real widget.
     val sections: List<Pair<String, List<PreviewRow>>> =
         if (settings.view == TaskWidgetView.Done) {
-            listOf("" to listOf(PreviewRow("Apply hair oil", "Today, 09:00")))
+            listOf("" to PREVIEW_DONE_ROWS)
         } else {
             PREVIEW_SECTIONS
         }
