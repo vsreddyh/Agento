@@ -339,6 +339,7 @@ func TestProjectFieldValidation(t *testing.T) {
 	for _, body := range []string{
 		`{"name":"x","status":42}`,
 		`{"name":"x","note":42}`,
+		`{"name":"x","snoozeAt":42}`,
 		`{"name":42}`,
 	} {
 		if w := post("/api/projects", body); w.Code != http.StatusUnprocessableEntity {

@@ -24,7 +24,7 @@ import kotlinx.coroutines.awaitAll
  * device that is simply asleep — silently starve the task list. This one
  * has one job and one cadence.
  *
- * Both calls are no-ops when they have nothing to do: `refresh` returns at
+ * Each call is a no-op when it has nothing to do: `refresh` returns at
  * once if reminders are off, and the widget's push returns if no placement
  * is installed. A user with neither still pays one no-op wakeup.
  *
@@ -56,6 +56,9 @@ class TaskSyncWorker(
         val outcomes = awaitAll(
             TaskWidget.refresh(applicationContext),
             TaskReminders.refresh(applicationContext),
+            // Project snoozes ride the same tick instead of a second periodic
+            // job: one wakeup, one network constraint, one retry policy.
+            ProjectSnooze.check(applicationContext),
         )
         // Both refreshes report failure by swallowing it, so neither throws
         // and a bare try/catch here would be a promise this class cannot

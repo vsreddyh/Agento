@@ -2699,6 +2699,7 @@ internal fun DueTimePickerDialog(
     initial: String,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
+    title: String = "Due time",
 ) {
     val (initHour, initMinute) = remember(initial) {
         val parts = initial.trim().split(":")
@@ -2713,7 +2714,7 @@ internal fun DueTimePickerDialog(
     )
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Due time") },
+        title = { Text(title) },
         text = { TimePicker(state = state) },
         confirmButton = {
             TextButton(onClick = {

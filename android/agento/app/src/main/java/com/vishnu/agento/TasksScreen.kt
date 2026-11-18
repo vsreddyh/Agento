@@ -255,6 +255,8 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         scope.launch {
             api.delete(t.id).fold(
                 onSuccess = {
+                    // The row is gone, so its armed snooze can never fire.
+                    ProjectSnooze.forget(context, t.id)
                     refreshTick++
                     busy = false
                     val result = snackbar.showSnackbar(
@@ -265,8 +267,18 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     )
                     if (result == SnackbarResult.ActionPerformed) {
                         busy = true
-                        api.create(t.name, normalizeStatus(t.status), t.note).fold(
-                            onSuccess = {
+                        // Undo is a new row, but a snoozed Paused project keeps
+                        // its snooze when the instant is still in the future;
+                        // the server rejects anything else, and that surfaces as
+                        // the normal save error instead of a silent drop.
+                        api.create(
+                            t.name,
+                            normalizeStatus(t.status),
+                            t.note,
+                            if (normalizeStatus(t.status) == "Paused") t.snoozeAt else "",
+                        ).fold(
+                            onSuccess = { row ->
+                                ProjectSnooze.remember(context, row)
                                 refreshTick++
                                 toast("Project restored", ToastKind.Success)
                             },
@@ -611,13 +623,19 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 busy = true
                 scope.launch {
                     if (saved.id.isEmpty()) {
-                        api.create(saved.name, saved.status, saved.note).fold(
-                            onSuccess = { editing = null; refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success) },
+                        api.create(saved.name, saved.status, saved.note, saved.snoozeAt).fold(
+                            onSuccess = { row ->
+                                ProjectSnooze.remember(context, row)
+                                editing = null; refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success)
+                            },
                             onFailure = ::fail,
                         )
                     } else {
-                        api.update(saved.id, saved.name, saved.status, saved.note).fold(
-                            onSuccess = { editing = null; refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success) },
+                        api.update(saved.id, saved.name, saved.status, saved.note, saved.snoozeAt).fold(
+                            onSuccess = { row ->
+                                ProjectSnooze.remember(context, row)
+                                editing = null; refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success)
+                            },
                             onFailure = ::fail,
                         )
                     }
@@ -801,6 +819,13 @@ internal fun TaskCard(
                                     maxLines = 3,
                                 )
                             }
+                            if (task.snoozeAt.isNotBlank()) {
+                                Text(
+                                    "Snoozed until ${ProjectSnooze.label(task.snoozeAt)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                )
+                            }
                             val ts = shortTime(projectTimeMs(task.updatedAt))
                             if (ts.isNotEmpty()) {
                                 Text(
@@ -831,6 +856,16 @@ internal fun TaskDialog(
     var status by remember(initial.id) { mutableStateOf(normalizeStatus(initial.status)) }
     var note by remember(initial.id) { mutableStateOf(initial.note) }
     var statusOpen by remember { mutableStateOf(false) }
+    // Snooze is Paused-only (the server rejects it anywhere else). Both the
+    // date and the time are chosen, in that order: the date picker hands its
+    // answer to the time picker, and a cancelled second step leaves the
+    // previous value untouched rather than saving a bare date.
+    var snoozeAt by remember(initial.id) { mutableStateOf(initial.snoozeAt) }
+    var showSnoozeDate by remember { mutableStateOf(false) }
+    var showSnoozeTime by remember { mutableStateOf(false) }
+    var pendingSnoozeDate by remember { mutableStateOf("") }
+    var snoozeError by remember { mutableStateOf("") }
+    val paused = status.equals("Paused", ignoreCase = true)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isNew) "New task" else "Edit task") },
@@ -867,6 +902,47 @@ internal fun TaskDialog(
                         }
                     }
                 }
+                if (paused) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (snoozeAt.isBlank()) "Snooze: not set"
+                                else "Snooze: ${ProjectSnooze.label(snoozeAt)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = {
+                                    snoozeError = ""
+                                    pendingSnoozeDate = ProjectSnooze.datePart(snoozeAt)
+                                    showSnoozeDate = true
+                                },
+                            ) { Text(if (snoozeAt.isBlank()) "Set" else "Change") }
+                            if (snoozeAt.isNotBlank()) {
+                                TextButton(onClick = { snoozeAt = ""; snoozeError = "" }) {
+                                    Text("Clear")
+                                }
+                            }
+                        }
+                        // The default is a suggestion (6 PM tomorrow), but it
+                        // is only stored after both pickers are confirmed.
+                        Text(
+                            "Pick a date, then a time — both are required.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (snoozeError.isNotEmpty()) {
+                            Text(
+                                snoozeError,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
@@ -883,6 +959,10 @@ internal fun TaskDialog(
                         name = name.trim(),
                         status = status,
                         note = note.trim(),
+                        // Leaving Paused clears it server-side too; sending the
+                        // empty string keeps both ends agreeing without a
+                        // second round trip.
+                        snoozeAt = if (paused) snoozeAt else "",
                     ))
                 },
                 // Gated on !saving: double-tap would create/update twice.
@@ -893,4 +973,33 @@ internal fun TaskDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+    if (showSnoozeDate) {
+        DueDatePickerDialog(
+            initial = pendingSnoozeDate.ifEmpty { ProjectSnooze.datePart(snoozeAt) },
+            onConfirm = { date ->
+                pendingSnoozeDate = date
+                showSnoozeDate = false
+                // Straight into the time step: a date alone is not a snooze.
+                showSnoozeTime = true
+            },
+            onDismiss = { showSnoozeDate = false },
+        )
+    }
+    if (showSnoozeTime) {
+        DueTimePickerDialog(
+            initial = ProjectSnooze.timePart(snoozeAt),
+            title = "Snooze time",
+            onConfirm = { time ->
+                val at = ProjectSnooze.iso(pendingSnoozeDate, time)
+                when {
+                    at == null -> snoozeError = "Pick a date and a time"
+                    !ProjectSnooze.isFuture(at) ->
+                        snoozeError = "Pick a time at least a minute ahead"
+                    else -> { snoozeAt = at; snoozeError = "" }
+                }
+                showSnoozeTime = false
+            },
+            onDismiss = { showSnoozeTime = false },
+        )
+    }
 }
