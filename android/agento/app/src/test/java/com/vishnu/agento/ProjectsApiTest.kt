@@ -123,6 +123,18 @@ class ProjectsApiTest {
         )
     }
 
+    @Test
+    fun `snooze reads from the row and defaults blank`() {
+        val out = parseProjectList(
+            """{"projects":[
+                {"id":"a","name":"A","status":"Paused","snoozeAt":"2026-11-19T12:30:00Z"},
+                {"id":"b","name":"B","status":"Ongoing","snoozeAt":null}
+            ]}""",
+        )
+        assertEquals("2026-11-19T12:30:00Z", out[0].snoozeAt)
+        assertEquals("", out[1].snoozeAt)
+    }
+
     private fun project(id: String, status: String, position: Long?, updatedAt: String) =
         ServerProject(id = id, name = id, status = status, updatedAt = updatedAt, position = position)
 }

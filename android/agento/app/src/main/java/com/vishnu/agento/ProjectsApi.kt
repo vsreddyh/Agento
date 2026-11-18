@@ -36,6 +36,10 @@ data class ServerProject(
     /** Manual board order (#519), ascending; null on rows written before
      * the field existed, which sort after every positioned row. */
     val position: Long? = null,
+    /** RFC3339 instant the server will wake this Paused project to Ongoing
+     * (one minute early, at snoozeAt-1m), or blank when it is not snoozed.
+     * Only Paused rows can carry one; the server clears it on the move. */
+    val snoozeAt: String = "",
 )
 
 /** Parses an RFC3339 instant (server timestamps) to epoch millis for
@@ -82,6 +86,7 @@ internal fun parseProject(o: JSONObject): ServerProject? {
         createdAt = optJsonStr(o, "createdAt"),
         updatedAt = optJsonStr(o, "updatedAt"),
         position = position,
+        snoozeAt = optJsonStr(o, "snoozeAt"),
     )
 }
 
@@ -197,11 +202,14 @@ class ProjectsApi(context: Context) {
             call("GET", "/api/projects$q").mapCatching { body -> parseProjectList(body) }
         }
 
-    /** Creates a project; name required, blank status defaults to Todo. */
+    /** Creates a project; name required, blank status defaults to Todo.
+     * [snoozeAt] is an RFC3339 instant and is only valid with Paused; blank
+     * means no snooze. */
     suspend fun create(
         name: String,
         status: String = "Todo",
         note: String = "",
+        snoozeAt: String = "",
     ): Result<ServerProject> = withContext(Dispatchers.IO) {
         if (name.trim().isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("Name is required"))
@@ -209,15 +217,19 @@ class ProjectsApi(context: Context) {
         val body = JSONObject().put("name", name.trim())
         if (status.isNotBlank()) body.put("status", status.trim())
         if (note.isNotEmpty()) body.put("note", note)
+        if (snoozeAt.isNotBlank()) body.put("snoozeAt", snoozeAt.trim())
         call("POST", "/api/projects", body).map { parseOne(it) }
     }
 
-    /** Partial edit: only non-null keys are sent. */
+    /** Partial edit: only non-null keys are sent. A null [snoozeAt] keeps the
+     * stored snooze; an empty string clears it (the server rejects a snooze on
+     * a non-Paused project). */
     suspend fun update(
         id: String,
         name: String? = null,
         status: String? = null,
         note: String? = null,
+        snoozeAt: String? = null,
     ): Result<ServerProject> = withContext(Dispatchers.IO) {
         val clean = encodeId(id)
         if (clean.isEmpty()) {
@@ -227,6 +239,7 @@ class ProjectsApi(context: Context) {
         if (name != null) body.put("name", name)
         if (status != null) body.put("status", status)
         if (note != null) body.put("note", note)
+        if (snoozeAt != null) body.put("snoozeAt", snoozeAt.trim())
         call("PATCH", "/api/projects/$clean", body).map { parseOne(it) }
     }
 
