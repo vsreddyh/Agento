@@ -70,4 +70,33 @@ class ProjectSnoozeTest {
         assertTrue(ProjectSnooze.isFuture(Instant.ofEpochMilli(now + 61_000).toString(), now))
         assertFalse(ProjectSnooze.isFuture("nonsense", now))
     }
+
+    @Test
+    fun `missing ids age out on a short page but survive a full one`() {
+        val armed = mapOf("gone" to "2026-11-19T12:30:00Z")
+        // Short page: the whole board fit, so "gone" is deleted, not hidden.
+        val (firedShort, stillShort) = ProjectSnooze.splitArmed(armed, emptyList())
+        assertTrue(firedShort.isEmpty())
+        assertTrue(stillShort.isEmpty())
+        // Full page: possibly truncated, so "gone" stays armed.
+        val full = List(ProjectSnooze.LIST_LIMIT) { i ->
+            ServerProject(
+                id = "p$i", name = "p$i", status = "Paused",
+                snoozeAt = "2026-11-20T12:30:00Z",
+            )
+        }
+        val (firedFull, stillFull) = ProjectSnooze.splitArmed(armed, full)
+        assertTrue(firedFull.isEmpty())
+        assertEquals("2026-11-19T12:30:00Z", stillFull["gone"])
+        // ...but a real wake on a full page still notifies and clears.
+        val woken = ServerProject(
+            id = "w", name = "W", status = "Ongoing",
+            snoozeAt = "", snoozeFiredAt = "2026-11-19T12:30:00Z",
+        )
+        val (fired, still) = ProjectSnooze.splitArmed(
+            mapOf("w" to "2026-11-19T12:30:00Z"), full + woken,
+        )
+        assertEquals(listOf(woken), fired)
+        assertFalse(still.containsKey("w"))
+    }
 }

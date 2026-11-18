@@ -54,9 +54,10 @@ internal object ProjectSnooze {
     private const val PREFS = "project_snooze"
     private const val KEY_ARMED = "armed_ids"
 
-    /** Server-side list cap (projects.DefaultLimit/MaxLimit): one page sees
-     * the whole board, so a snoozed row cannot silently fall out of view. */
-    private const val LIST_LIMIT = 500
+    /** Server-side page cap (projects.MaxLimit). A short page is the whole
+     * board; a full one may be truncated — which is why [splitArmed] only
+     * ages missing ids out of the cache on a short page. */
+    internal const val LIST_LIMIT = 500
 
     /** Bound on the cache: only snoozed ids live here, so this is far above
      * any real board — it just stops a pathological set growing forever. */
@@ -131,13 +132,18 @@ internal object ProjectSnooze {
         writeArmed(context, readArmed(context) - id)
     }
 
-    /** True when this row is the ticker waking the exact snooze we cached.
+    /** True when this row is the ticker waking a snooze this device armed.
      *
      * The server stamps [ServerProject.snoozeFiredAt] with the snooze instant
      * it fired, so `fired >= armed` identifies a wake. A manual
      * Paused -> Ongoing move clears the snooze without a marker, which is why
      * "Ongoing with a blank snooze" alone is not enough — that shape is the
      * false-positive the first implementation produced on every other device.
+     *
+     * `>=`, not `==`: a row resnoozed (by the agent or another device) after
+     * this device cached T1 still ends in a genuine ticker wake at T2, and
+     * "snooze ended — moved to Ongoing" is true of it — so it notifies rather
+     * than going silent on a move the user asked to hear about.
      */
     fun isWake(project: ServerProject, armedAt: String): Boolean {
         if (!project.status.equals("Ongoing", ignoreCase = true)) return false
@@ -153,14 +159,9 @@ internal object ProjectSnooze {
     /**
      * One poll: list the board, notify for every cached project the ticker
      * actually woke, then rebuild the cache from what is Paused and snoozed
-     * now.
-     *
-     * Cached ids missing from the page are dropped: the list page is the
-     * server's maximum, so a tracked row cannot legitimately fall outside it,
-     * and keeping them is what let deleted ids leak in prefs forever. A row
-     * that is manually moved while snoozed is dropped silently — only the
-     * ticker's marker ([isWake]) notifies, because a manual move is not a
-     * snooze ending.
+     * now. The merge itself is [splitArmed]; a missing id ages out on a short
+     * page (the whole board fit, so it is gone) but stays armed on a full one
+     * (the page may be truncated, so it may simply be out of view).
      *
      * Returns a [Deferred] so [TaskSyncWorker] can await the run and count a
      * failure, like the widget and reminder refreshes.
@@ -182,18 +183,42 @@ internal object ProjectSnooze {
     private suspend fun checkInner(ctx: Context): RefreshOutcome {
         val rows = ProjectsApi(ctx).list("all", limit = LIST_LIMIT).getOrNull()
             ?: return RefreshOutcome.Failed
+        val (fired, stillArmed) = splitArmed(readArmed(ctx), rows)
+        for (p in fired) postNotification(ctx, p)
+        writeArmed(ctx, stillArmed)
+        return RefreshOutcome.Ok
+    }
+
+    /** Pure merge step of [checkInner], separated so the truncation rule is
+     * pinned without Android: returns the cached rows the ticker woke, and
+     * the cache to keep.
+     *
+     * A row that was manually moved while snoozed is dropped silently — only
+     * the ticker's marker ([isWake]) notifies, because a manual move is not a
+     * snooze ending.
+     */
+    internal fun splitArmed(
+        armed: Map<String, String>,
+        rows: List<ServerProject>,
+    ): Pair<List<ServerProject>, Map<String, String>> {
         val byId = rows.associateBy { it.id }
-        val armed = readArmed(ctx)
         val fired = armed.mapNotNull { (id, at) ->
             val p = byId[id] ?: return@mapNotNull null
             if (isWake(p, at)) p else null
         }
-        for (p in fired) postNotification(ctx, p)
-        val stillArmed = rows.filter {
+        val firedIds = fired.map { it.id }.toSet()
+        val still = rows.filter {
             it.status.equals("Paused", ignoreCase = true) && it.snoozeAt.isNotBlank()
-        }.associate { it.id to it.snoozeAt }
-        writeArmed(ctx, stillArmed - fired.map { it.id }.toSet())
-        return RefreshOutcome.Ok
+        }.associate { it.id to it.snoozeAt }.toMutableMap()
+        // A full page may be truncated: a tracked id outside it is
+        // indistinguishable from a deleted one, so it stays armed rather than
+        // risk dropping a real notification.
+        if (rows.size >= LIST_LIMIT) {
+            for ((id, at) in armed) {
+                if (id !in byId) still.putIfAbsent(id, at)
+            }
+        }
+        return fired to (still - firedIds)
     }
 
     private fun arm(context: Context, id: String, at: String) {

@@ -268,9 +268,11 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     if (result == SnackbarResult.ActionPerformed) {
                         busy = true
                         // Undo is a new row, but a snoozed Paused project keeps
-                        // its snooze when the instant is still in the future;
-                        // the server rejects anything else, and that surfaces as
-                        // the normal save error instead of a silent drop.
+                        // its snooze only when the instant is still valid: an
+                        // expired snooze is dropped before the create (the
+                        // server would 422 it and lose the whole restore), so
+                        // a stale arming restores the row unsnoozed instead of
+                        // failing.
                         api.create(
                             t.name,
                             normalizeStatus(t.status),
@@ -1010,7 +1012,7 @@ internal fun TaskDialog(
                 when {
                     at == null -> snoozeError = "Pick a date and a time"
                     !ProjectSnooze.isFuture(at) ->
-                        snoozeError = "Pick a time at least a minute ahead"
+                        snoozeError = "Pick a time more than a minute ahead"
                     else -> { snoozeAt = at; snoozeError = "" }
                 }
                 showSnoozeTime = false

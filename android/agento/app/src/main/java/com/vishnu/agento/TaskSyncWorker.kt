@@ -24,16 +24,16 @@ import kotlinx.coroutines.awaitAll
  * device that is simply asleep — silently starve the task list. This one
  * has one job and one cadence.
  *
- * Each call is a no-op when it has nothing to do: `refresh` returns at
- * once if reminders are off, and the widget's push returns if no placement
- * is installed. The snooze check is the exception — it lists the board every
- * tick, because seeing a snooze the *agent* or another device set is the only
- * way this device learns to expect its wake. That is one request on a tick
- * that is already running, not a second job.
+ * Two of the three calls are no-ops when they have nothing to do: `refresh`
+ * returns at once if reminders are off, and the widget's push returns if no
+ * placement is installed. The snooze check is the exception — it lists the
+ * board every tick, because seeing a snooze the *agent* or another device set
+ * is the only way this device learns to expect its wake. That is one request
+ * on a tick that is already running, not a second job.
  *
- * Neither call is gated on the task change marker (#178), and that is
- * deliberate. The marker answers "did the DATA change", but these two
- * surfaces also have to re-render because TIME moved: the widget's rows print
+ * None of the three calls is gated on the task change marker (#178), and that
+ * is deliberate. The marker answers "did the DATA change", but these surfaces
+ * also have to re-render because TIME moved: the widget's rows print
  * "Today"/"Tomorrow" from a date that ages, and reminder alarms are armed
  * against a horizon that advances with the clock. Gating on the marker would
  * leave an untouched list showing yesterday's labels and tomorrow's alarms
@@ -63,7 +63,7 @@ class TaskSyncWorker(
             // job: one wakeup, one network constraint, one retry policy.
             ProjectSnooze.check(applicationContext),
         )
-        // Both refreshes report failure by swallowing it, so neither throws
+        // All three report failure by swallowing it, so none throws
         // and a bare try/catch here would be a promise this class cannot
         // keep. Each returns its own outcome for this run instead — a
         // per-run value, not a shared field, because an in-app mutation
