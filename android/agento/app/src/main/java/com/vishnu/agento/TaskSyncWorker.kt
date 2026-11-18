@@ -8,8 +8,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitAll
 
 /**
- * Periodic refresh of the task surfaces: the home-screen widget and the
- * reminder alarms (#170).
+ * Periodic refresh of the task surfaces: the home-screen widget, the
+ * reminder alarms (#170) and project snoozes.
  *
  * These used to move only when the app was open and a task was changed *in
  * the app*. A task created or completed by the agent — the whole point of
@@ -26,7 +26,10 @@ import kotlinx.coroutines.awaitAll
  *
  * Each call is a no-op when it has nothing to do: `refresh` returns at
  * once if reminders are off, and the widget's push returns if no placement
- * is installed. A user with neither still pays one no-op wakeup.
+ * is installed. The snooze check is the exception — it lists the board every
+ * tick, because seeing a snooze the *agent* or another device set is the only
+ * way this device learns to expect its wake. That is one request on a tick
+ * that is already running, not a second job.
  *
  * Neither call is gated on the task change marker (#178), and that is
  * deliberate. The marker answers "did the DATA change", but these two

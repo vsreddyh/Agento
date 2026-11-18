@@ -275,7 +275,12 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             t.name,
                             normalizeStatus(t.status),
                             t.note,
-                            if (normalizeStatus(t.status) == "Paused") t.snoozeAt else "",
+                            // Restoring the row matters more than restoring an
+                            // expired arming: a stale snooze would 422 the
+                            // whole create, so it is dropped rather than sent.
+                            if (normalizeStatus(t.status) == "Paused" &&
+                                ProjectSnooze.isFuture(t.snoozeAt)
+                            ) t.snoozeAt else "",
                         ).fold(
                             onSuccess = { row ->
                                 ProjectSnooze.remember(context, row)
@@ -631,7 +636,18 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             onFailure = ::fail,
                         )
                     } else {
-                        api.update(saved.id, saved.name, saved.status, saved.note, saved.snoozeAt).fold(
+                        // Only a *changed* snooze is sent: re-sending an
+                        // unchanged instant would revalidate it against the
+                        // 1-minute lead, so a typo fix near expiry would 422
+                        // for no reason. Leaving Paused still clears it (the
+                        // server does that on the status change as well).
+                        val snoozeArg: String? = when {
+                            saved.status != "Paused" ->
+                                if (draft.snoozeAt.isBlank()) null else ""
+                            saved.snoozeAt == draft.snoozeAt -> null
+                            else -> saved.snoozeAt
+                        }
+                        api.update(saved.id, saved.name, saved.status, saved.note, snoozeArg).fold(
                             onSuccess = { row ->
                                 ProjectSnooze.remember(context, row)
                                 editing = null; refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success)

@@ -33,24 +33,28 @@ func TestCheckSnooze(t *testing.T) {
 	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 	later := now.Add(time.Hour)
 	// No snooze is always fine, whatever the status.
-	if err := checkSnooze("Todo", nil, now); err != nil {
+	if err := checkSnooze("Todo", nil, now, false); err != nil {
 		t.Fatalf("nil snooze: %v", err)
 	}
 	// A snooze is a Paused-only field.
-	if err := checkSnooze("Todo", &later, now); err == nil ||
+	if err := checkSnooze("Todo", &later, now, false); err == nil ||
 		!strings.Contains(err.Error(), "Paused") {
 		t.Fatalf("non-Paused: got %v", err)
 	}
 	// And it must be far enough ahead that the ticker cannot flip it instantly.
-	if err := checkSnooze("Paused", &later, now); err != nil {
+	if err := checkSnooze("Paused", &later, now, false); err != nil {
 		t.Fatalf("future Paused: %v", err)
 	}
 	soon := now.Add(SnoozeLead)
-	if err := checkSnooze("Paused", &soon, now); err == nil {
+	if err := checkSnooze("Paused", &soon, now, false); err == nil {
 		t.Fatal("snooze exactly at the lead should be rejected")
 	}
+	// ...but an unchanged instant must survive an unrelated edit near expiry.
+	if err := checkSnooze("Paused", &soon, now, true); err != nil {
+		t.Fatalf("unchanged instant should bypass the lead: %v", err)
+	}
 	past := now.Add(-time.Minute)
-	if err := checkSnooze("Paused", &past, now); err == nil {
+	if err := checkSnooze("Paused", &past, now, false); err == nil {
 		t.Fatal("past snooze should be rejected")
 	}
 }
@@ -92,6 +96,11 @@ func TestSnoozeRoundTripAndWake(t *testing.T) {
 	if _, ok := moved[0]["snoozeAt"]; ok {
 		t.Fatalf("snoozeAt should be cleared: %v", moved[0])
 	}
+	// The wake marker names the instant that fired, so a client can compare
+	// it with the snooze it cached and tell this from a manual move.
+	if got, _ := moved[0]["snoozeFiredAt"].(string); got != due.Format(time.RFC3339) {
+		t.Fatalf("snoozeFiredAt = %q, want %q", got, due.Format(time.RFC3339))
+	}
 	got, err := s.Get(ctx, id)
 	if err != nil || got["status"] != "Ongoing" {
 		t.Fatalf("Get after wake: %v %v", got, err)
@@ -124,11 +133,22 @@ func TestSnoozeUpdateRules(t *testing.T) {
 	if err != nil || got["snoozeAt"] == "" {
 		t.Fatalf("set snooze: %v %v", got, err)
 	}
-	// ...and leaving Paused clears it, so a stale instant can never sit on
-	// an Ongoing row.
-	got, err = s.Update(ctx, id, map[string]any{"status": "Ongoing"})
+	// Echoing the stored instant alongside an unrelated edit is accepted:
+	// the value has not changed, so the 1-minute lead is not re-applied.
+	echo, err := time.Parse(time.RFC3339, got["snoozeAt"].(string))
 	if err != nil {
-		t.Fatalf("leave Paused: %v", err)
+		t.Fatalf("stored snoozeAt: %v", err)
+	}
+	if _, err := s.Update(ctx, id, map[string]any{"note": "typo fix", "snoozeAt": echo}); err != nil {
+		t.Fatalf("unchanged snooze with a note edit: %v", err)
+	}
+	// ...and leaving Paused clears it, so a stale instant can never sit on
+	// an Ongoing row. The echoed instant must not be treated as an attempt
+	// to arm a snooze on a non-Paused row: that shape is exactly what a
+	// client sending its whole cached row looks like.
+	got, err = s.Update(ctx, id, map[string]any{"status": "Ongoing", "snoozeAt": echo})
+	if err != nil {
+		t.Fatalf("leave Paused with echoed snooze: %v", err)
 	}
 	if _, ok := got["snoozeAt"]; ok {
 		t.Fatalf("leaving Paused should clear snooze: %v", got)

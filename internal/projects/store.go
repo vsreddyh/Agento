@@ -172,17 +172,28 @@ func ParseSnoozeAt(raw string) (*time.Time, error) {
 // only exists on a Paused project, and only in the future. A date without a
 // time (or a time without a date) cannot arrive here — the stored type is an
 // instant — but rejecting it at parse time keeps that guarantee at the edge.
-func checkSnooze(status string, at *time.Time, now time.Time) error {
+//
+// unchanged exempts the future check: an edit that does not touch the snooze
+// must not fail just because the stored instant has drifted inside the lead
+// (a note fix one minute before the wake is not an error). The status rule
+// still applies to a new instant — arming a snooze on a non-Paused row is a
+// contradiction. Update handles the one case where an unchanged instant meets
+// a status change: leaving Paused clears the snooze anyway, so it is dropped
+// rather than rejected.
+func checkSnooze(status string, at *time.Time, now time.Time, unchanged bool) error {
 	if at == nil {
 		return nil
 	}
 	if status != "Paused" {
 		return fail("snooze requires status Paused, got '%s'", status)
 	}
+	if unchanged {
+		return nil
+	}
 	// WakeDue flips at snoozeAt-SnoozeLead; anything closer than that would
 	// transition immediately, which reads as a bug rather than a snooze.
 	if !at.After(now.Add(SnoozeLead)) {
-		return fail("snooze must be at least %s in the future", SnoozeLead)
+		return fail("snooze must be strictly more than %s in the future", SnoozeLead)
 	}
 	return nil
 }
@@ -224,7 +235,7 @@ func (s *Store) CreateWithSnooze(ctx context.Context, name, status, note string,
 	if err != nil {
 		return nil, err
 	}
-	if err := checkSnooze(status, snoozeAt, time.Now().UTC()); err != nil {
+	if err := checkSnooze(status, snoozeAt, time.Now().UTC(), false); err != nil {
 		return nil, err
 	}
 	position, err := s.nextPosition(ctx)
@@ -476,13 +487,34 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 		default:
 			return nil, fail("snoozeAt must be a date-time, or empty to clear")
 		}
-		if err := checkSnooze(status, at, time.Now().UTC()); err != nil {
+		// An instant the row already carries is not revalidated against the
+		// 1-minute lead: an unrelated edit (a note typo) near expiry must not
+		// fail because the client echoed the stored value back. Seconds
+		// precision because toDoc prints RFC3339 without sub-second digits.
+		unchanged := false
+		if at != nil {
+			if stored, ok := cur["snoozeAt"].(primitive.DateTime); ok {
+				unchanged = stored.Time().Truncate(time.Second).Equal(at.Truncate(time.Second))
+			}
+		}
+		// Moving a row out of Paused ends its snooze (the status block below
+		// clears it), so an instant echoed back on that same write is a clear,
+		// not an attempt to arm a snooze on a non-Paused row.
+		if unchanged && status != "Paused" {
+			at = nil
+		}
+		if err := checkSnooze(status, at, time.Now().UTC(), unchanged); err != nil {
 			return nil, err
 		}
 		if at == nil {
 			unset["snoozeAt"] = ""
+			unset["snoozeFiredAt"] = ""
 		} else {
 			set["snoozeAt"] = primitive.NewDateTimeFromTime(at.UTC())
+			// A newly set instant supersedes any earlier wake marker.
+			if !unchanged {
+				unset["snoozeFiredAt"] = ""
+			}
 		}
 	}
 	if len(set) == 0 && len(unset) == 0 {
@@ -503,6 +535,7 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 			set["position"] = position
 			if !strings.EqualFold(newStatus, "Paused") {
 				unset["snoozeAt"] = ""
+				unset["snoozeFiredAt"] = ""
 			}
 		}
 	}
@@ -526,7 +559,9 @@ func (s *Store) Update(ctx context.Context, id string, fields map[string]any) (m
 //
 // Only "now" is injected so tests can prove the lead; production passes
 // time.Now(). Nothing here notifies — clients detect the move from their own
-// snooze cache, which keeps notification state per device.
+// snooze cache. The write stamps snoozeFiredAt with the instant that fired
+// (not the tick time), so a client can tell a ticker wake from a manual
+// Paused -> Ongoing edit: a manual move carries no marker.
 func (s *Store) WakeDue(ctx context.Context, now time.Time) ([]map[string]any, error) {
 	dueBefore := now.Add(SnoozeLead)
 	cur, err := s.projects.Find(ctx, bson.M{
@@ -534,21 +569,26 @@ func (s *Store) WakeDue(ctx context.Context, now time.Time) ([]map[string]any, e
 		"snoozeAt": bson.M{"$lte": primitive.NewDateTimeFromTime(dueBefore.UTC())},
 	}, options.Find().
 		SetSort(bson.D{{Key: "snoozeAt", Value: 1}}).
-		SetProjection(bson.M{"_id": 1}).
+		// snoozeAt is read, not just filtered on: it is re-checked in the
+		// update below, so projecting it out would make the equality filter
+		// impossible to satisfy.
+		SetProjection(bson.M{"_id": 1, "snoozeAt": 1}).
 		SetLimit(MaxLimit))
 	if err != nil {
 		return nil, err
 	}
-	var ids []primitive.ObjectID
+	type dueRow struct {
+		ID       primitive.ObjectID `bson:"_id"`
+		SnoozeAt primitive.DateTime `bson:"snoozeAt"`
+	}
+	var due []dueRow
 	for cur.Next(ctx) {
-		var doc struct {
-			ID primitive.ObjectID `bson:"_id"`
-		}
+		var doc dueRow
 		if err := cur.Decode(&doc); err != nil {
 			cur.Close(ctx)
 			return nil, err
 		}
-		ids = append(ids, doc.ID)
+		due = append(due, doc)
 	}
 	if err := cur.Err(); err != nil {
 		cur.Close(ctx)
@@ -556,7 +596,7 @@ func (s *Store) WakeDue(ctx context.Context, now time.Time) ([]map[string]any, e
 	}
 	cur.Close(ctx)
 	out := []map[string]any{}
-	for _, oid := range ids {
+	for _, row := range due {
 		// Position comes from the counter, never prev+step: a fresh value is
 		// the only one that cannot collide with Create or a later move.
 		position, err := s.nextPosition(ctx)
@@ -565,12 +605,20 @@ func (s *Store) WakeDue(ctx context.Context, now time.Time) ([]map[string]any, e
 		}
 		var doc bson.M
 		err = s.projects.FindOneAndUpdate(ctx,
-			bson.M{"_id": oid, "status": "Paused"},
+			// The instant is part of the filter: a row resnoozed between the
+			// scan and this write must not be woken early or stamped with the
+			// old instant.
+			bson.M{"_id": row.ID, "status": "Paused", "snoozeAt": row.SnoozeAt},
 			bson.M{
 				"$set": bson.M{
 					"status":    "Ongoing",
 					"position":  position,
 					"updatedAt": primitive.NewDateTimeFromTime(now.UTC()),
+					// The marker carries the instant that fired, not the tick
+					// time: clients compare it with the snooze they cached, so
+					// only a ticker wake matches and a manual move (no marker)
+					// never reads as one.
+					"snoozeFiredAt": row.SnoozeAt,
 				},
 				"$unset": bson.M{"snoozeAt": ""},
 			},

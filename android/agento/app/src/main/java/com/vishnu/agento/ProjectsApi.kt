@@ -40,6 +40,11 @@ data class ServerProject(
      * (one minute early, at snoozeAt-1m), or blank when it is not snoozed.
      * Only Paused rows can carry one; the server clears it on the move. */
     val snoozeAt: String = "",
+    /** RFC3339 instant of the snooze a server ticker actually fired, blank on
+     * any row the ticker did not wake. It names the *snooze* instant, not the
+     * tick, so a client can compare it with what it cached and ignore a
+     * manual Paused -> Ongoing move. */
+    val snoozeFiredAt: String = "",
 )
 
 /** Parses an RFC3339 instant (server timestamps) to epoch millis for
@@ -87,6 +92,7 @@ internal fun parseProject(o: JSONObject): ServerProject? {
         updatedAt = optJsonStr(o, "updatedAt"),
         position = position,
         snoozeAt = optJsonStr(o, "snoozeAt"),
+        snoozeFiredAt = optJsonStr(o, "snoozeFiredAt"),
     )
 }
 
