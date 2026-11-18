@@ -151,7 +151,6 @@ func main() {
 	registerTasks(mux)
 	registerProjects(mux)
 	registerReports(mux)
-	startProjectSnoozeTicker()
 	// Rate limiting wraps everything, and lives here because main is the only place
 	// that knows the whole handler set (#176). The API is network-reachable and
 	// authed by shared password(s), so without a counter a stuck client retrying in

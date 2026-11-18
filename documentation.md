@@ -191,7 +191,7 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | `tasks` | Task-manager | `idempotency_key` (client key, UNIQUE+SPARSE — makes create idempotent, #176), `source` (app vs MCP), `name`, `description`, `due_date`, `due_time`, `estimated_minutes`, `repeat_rule` (verbatim) — no status field; `completedAt` null = open, done tasks TTL 3d via `expiresAt`; `skippedAt` + derived `skipped` on occurrences skipped via the skip verb (#287) — still read as "not done" |
 | `tasks_changes` | Task-manager | Single document (`_id: "revision"`) holding the collection-wide change counter every task write advances — create, update, complete (plus its rollover successor), skip, reopen, delete — from **both** writers, because the marker is bumped by the store itself (#178). Served read-only as `GET /api/tasks/changes?since=`; a collection that has never been written reports revision 0. **Permanent** |
 | `task_mutations` | Task-manager | The change log (#176): one row per mutation — `op`, `task_id`, `source`, `detail`, `at` — from **both** writers. Served read-only as `GET /api/tasks/mutations?task_id=&op=&since=&limit=` and as the `task_history` MCP tool (#350). It outlives its subject on purpose (done tasks are TTL-deleted after 3 days). Pruned at 90 days. Indexed `{task_id, at}` and `{at, _id}` |
-| `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Testing\|Paused\|Done), `note`, `position` (manual board order), `snoozeAt` (RFC3339 instant, Paused only), `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab. health-api wakes a due snooze to Ongoing and clears `snoozeAt` one minute early; no client schedules it |
+| `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Testing\|Paused\|Done), `note`, `position` (manual board order), `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab |
 | `counters` | Project-manager | Single doc `_id: "projects_position"` holding `seq`, the atomic source of `projects.position` (`findOneAndUpdate` `$inc`, seeded from the max in `EnsureSchema`). Inspect with `mongo get counters`; back up and restore with `projects` — a counter restored behind the max reissues an existing position |
 | `reports` | Reports (∃-Mail, #365) | `title`, `body_md` (markdown with `$..$`/`$$..$$` LaTeX, compiled server-side on read), `source`, `read`, `starred`, `createdAt` — **7-day conditional retention**: pruned when `createdAt < today - 7d AND read AND NOT starred` |
 
@@ -268,7 +268,7 @@ The custom Android app (`android/agento/`) uses ONE Server URL + Password — th
 |---|---|
 | `POST /api/health/sync` | Health Connect batch upsert |
 | `/api/tasks`, `/api/tasks/batch`, `/api/tasks/mutations`, `/api/tasks/changes` | Task CRUD, batch, audit log and change counter |
-| `/api/projects`, `POST /api/projects/reorder`, `POST /api/projects/move` | Project board CRUD + manual order (full-section rewrite, single-row move). health-api also runs the snooze ticker: every 30s it flips due `Paused` rows (`snoozeAt - 1m`) to `Ongoing` and clears `snoozeAt`, so the transition is server-owned and shared by every client |
+| `/api/projects`, `POST /api/projects/reorder`, `POST /api/projects/move` | Project board CRUD + manual order (full-section rewrite, single-row move) |
 | `/api/files`, `/api/files/upload`, `/api/files/download` | The Files tab shelf over `exports/` |
 | `/api/reports` | ∃-Mail inbox (markdown + LaTeX) |
 | `/health`, `/health/` | Liveness probe (unauthenticated) |

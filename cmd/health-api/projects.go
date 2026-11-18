@@ -10,7 +10,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	syncpkg "sync"
@@ -69,29 +68,18 @@ var (
 )
 
 func projectStore(w http.ResponseWriter) (*projects.Store, bool) {
-	store, err := projectStoreValue()
+	projectsStoreMu.Lock()
+	defer projectsStoreMu.Unlock()
+	if projectsCache != nil {
+		return projectsCache, true
+	}
+	store, err := projects.FromEnv()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "MONGODB_URI not set"})
 		return nil, false
 	}
-	return store, true
-}
-
-// projectStoreValue is projectStore without the HTTP response, for the snooze
-// ticker (which has no request to report a failure on). Successful opens are
-// cached; failures are not, so a bad env recovers without a restart.
-func projectStoreValue() (*projects.Store, error) {
-	projectsStoreMu.Lock()
-	defer projectsStoreMu.Unlock()
-	if projectsCache != nil {
-		return projectsCache, nil
-	}
-	store, err := projects.FromEnv()
-	if err != nil {
-		return nil, err
-	}
 	projectsCache = store
-	return store, nil
+	return store, true
 }
 
 // writeProjectErr maps store domain errors: unknown ids 404, validation
@@ -127,10 +115,8 @@ func decodeProjectBody(w http.ResponseWriter, r *http.Request) (map[string]any, 
 
 // checkProjectFields rejects mistyped values loudly so client bugs come
 // back as 422 instead of mystery no-ops. JSON null counts as absent.
-// snoozeAt is a string (RFC3339) here; the create/update paths convert it to
-// an instant after this guard, with "" meaning "clear".
 func checkProjectFields(fields map[string]any) error {
-	for _, k := range []string{"name", "status", "note", "snoozeAt"} {
+	for _, k := range []string{"name", "status", "note"} {
 		if v, ok := fields[k]; ok && v != nil {
 			if _, ok := v.(string); !ok {
 				return &projects.StoreError{Msg: k + " must be a string"}
@@ -161,14 +147,9 @@ func createProject(w http.ResponseWriter, r *http.Request) {
 		}
 		return ""
 	}
-	snoozeAt, err := projects.ParseSnoozeAt(strField("snoozeAt"))
-	if err != nil {
-		writeProjectErr(w, err)
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	doc, err := store.CreateWithSnooze(ctx, strField("name"), strField("status"), strField("note"), snoozeAt)
+	doc, err := store.Create(ctx, strField("name"), strField("status"), strField("note"))
 	if err != nil {
 		writeProjectErr(w, err)
 		return
@@ -250,18 +231,6 @@ func updateProject(w http.ResponseWriter, r *http.Request, id string) {
 		if v == nil {
 			delete(fields, k)
 		}
-	}
-	// snoozeAt arrives as a string because that is what JSON clients send;
-	// the store speaks instants. "" parses to nil, which the store reads as
-	// "clear", so clearing needs an explicit empty string rather than null
-	// (null already means "untouched" on every other field).
-	if raw, ok := fields["snoozeAt"].(string); ok {
-		at, err := projects.ParseSnoozeAt(raw)
-		if err != nil {
-			writeProjectErr(w, err)
-			return
-		}
-		fields["snoozeAt"] = at
 	}
 	store, ok := projectStore(w)
 	if !ok {
@@ -429,49 +398,4 @@ func registerProjects(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects/reorder", reorderProjects)
 	mux.HandleFunc("/api/projects/move", moveProjects)
 	mux.HandleFunc("/api/projects/", projectItem)
-}
-
-// projectSnoozeInterval is how often the ticker checks for due snoozes. The
-// transition itself fires at snoozeAt-SnoozeLead (see projects.SnoozeLead), so
-// this interval only bounds the delay after that moment — never before it.
-const projectSnoozeInterval = 30 * time.Second
-
-// startProjectSnoozeTicker runs the one place a snooze is acted on. It is
-// server-side on purpose: the board is shared by the app, the agent and any
-// future client, so a phone-side alarm would only work while that phone was
-// awake and would fire once per client. Clients never move a snoozed project
-// themselves — they detect the move from their own snooze cache and notify.
-func startProjectSnoozeTicker() {
-	if strings.TrimSpace(os.Getenv("MONGODB_URI")) == "" {
-		// Every project route already answers 500 in this state; a ticker
-		// retrying an unconfigured DB would only add log noise.
-		log.Print("projects: MONGODB_URI not set — snooze ticker disabled")
-		return
-	}
-	go func() {
-		for {
-			wakeSnoozedProjects()
-			time.Sleep(projectSnoozeInterval)
-		}
-	}()
-}
-
-// wakeSnoozedProjects runs one tick. Failures are logged and retried on the
-// next tick: a transient Atlas blip must not stop snoozes for the process's
-// lifetime.
-func wakeSnoozedProjects() {
-	store, err := projectStoreValue()
-	if err != nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
-	defer cancel()
-	moved, err := store.WakeDue(ctx, time.Now())
-	if err != nil {
-		log.Printf("projects: snooze tick failed: %v", err)
-		return
-	}
-	for _, p := range moved {
-		log.Printf("projects: snooze fired for %v (%v) -> Ongoing", p["name"], p["id"])
-	}
 }

@@ -8,20 +8,6 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
-## [9.2.0]
-- **Project snooze.** A Paused project now carries an optional snooze: pick a
-  date **and** a time (both required, defaulting to 6 PM tomorrow), and the
-  server wakes it back to **Ongoing** one minute before that moment, clearing
-  the snooze. The board shows "Snoozed until …" on the card, the edit sheet can
-  set, change or clear it, and a passed or half-filled time is rejected inline.
-- **Server-owned, so every client agrees.** The wake-up runs in health-api,
-  not on the phone: the agent (project-manager `snooze_at`) and any other client
-  see the same transition, and nothing fires twice because a second device
-  happened to be awake.
-- **One notification when the snooze ends.** "Snooze ended — moved to Ongoing"
-  lands on the same periodic worker that refreshes task reminders, on each
-  device that had seen the project snoozed, with its own notification channel.
-
 ## [9.1.0]
 - **Task widget rebuilt around the agenda (#532).** The home-screen widget
   now groups open tasks the way the Task Manager does — Overdue → Current →

@@ -46,9 +46,6 @@ type createProjectInput struct {
 	// not a missing one.
 	Status string `json:"status,omitempty"`
 	Note   string `json:"note,omitempty"`
-	// RFC3339 date and time, only valid with status Paused and in the future
-	// (the server wakes it at that time minus one minute). Empty = no snooze.
-	SnoozeAt string `json:"snooze_at,omitempty"`
 }
 
 type listProjectsInput struct {
@@ -70,9 +67,6 @@ type updateProjectInput struct {
 	Name   *string `json:"name,omitempty"`
 	Status *string `json:"status,omitempty"`
 	Note   *string `json:"note,omitempty"`
-	// RFC3339 date and time, only valid while the project is (or is being set
-	// to) Paused and in the future. Nil = untouched; "" = clear the snooze.
-	SnoozeAt *string `json:"snooze_at,omitempty"`
 }
 
 type deleteProjectInput struct {
@@ -88,13 +82,9 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "project-manager", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_project",
-		Description: "Create a project. name required; status Todo (default) | Ongoing | Testing | Paused | Done; note free-form. snooze_at is an RFC3339 date and time, only valid with status Paused and in the future (it wakes the project to Ongoing at that time minus one minute). Empty snooze_at = no snooze. New projects append to the end of their status section."},
+		Description: "Create a project. name required; status Todo (default) | Ongoing | Testing | Paused | Done; note free-form. New projects append to the end of their status section."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, map[string]any, error) {
-			snoozeAt, err := projects.ParseSnoozeAt(in.SnoozeAt)
-			if err != nil {
-				return fail(err)
-			}
-			doc, err := store.CreateWithSnooze(ctx, in.Name, in.Status, in.Note, snoozeAt)
+			doc, err := store.Create(ctx, in.Name, in.Status, in.Note)
 			if err != nil {
 				return fail(err)
 			}
@@ -122,7 +112,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_project",
-		Description: "Edit name/status/note/snooze_at (only sent keys change; blank name rejected). A status change moves the project to the end of its new section and leaving Paused clears the snooze. snooze_at is an RFC3339 date and time, valid only while Paused and in the future; \"\" clears it and omitting it leaves it untouched. The server wakes a snoozed project to Ongoing one minute before snooze_at."},
+		Description: "Edit name/status/note (only sent keys change; blank name rejected). A status change moves the project to the end of its new section."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateProjectInput) (*mcp.CallToolResult, map[string]any, error) {
 			fields := map[string]any{}
 			// Pointers tell absent from set: nil = untouched, non-nil
@@ -135,13 +125,6 @@ func main() {
 			}
 			if in.Note != nil {
 				fields["note"] = *in.Note
-			}
-			if in.SnoozeAt != nil {
-				at, err := projects.ParseSnoozeAt(*in.SnoozeAt)
-				if err != nil {
-					return fail(err)
-				}
-				fields["snoozeAt"] = at
 			}
 			if len(fields) == 0 {
 				// Explicit no-op marker so the agent knows nothing changed.
