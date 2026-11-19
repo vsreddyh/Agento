@@ -10,11 +10,12 @@ import org.junit.Test
 
 /**
  * Widget agenda contract (#532): the widget's sections, its title rule, the
- * compact threshold and the secondary line. The bucket order and the
- * dueBucket grouping live in the Task Manager's own code, so these pin the
- * half the widget adds — that it groups in that order, counts each group,
- * stays flat in Done, honors "show due dates" without losing the repeat
- * condition, and caps rows without leaving an orphan header behind.
+ * compact threshold and the row line. The bucket order and the dueBucket
+ * grouping live in the Task Manager's own code, so these pin the half the
+ * widget adds — that it groups in that order, counts each group, stays flat
+ * in Done, keeps the agenda order with headers off (#536), honors the
+ * placement's row-content switches independently (#536),
+ * and caps rows without leaving an orphan header behind.
  */
 class WidgetAgendaTest {
 
@@ -86,6 +87,22 @@ class WidgetAgendaTest {
         // No headers and no reordering: a bucket for finished work says
         // nothing, and the placement's sort already chose the order.
         assertEquals(listOf(WidgetItem.Row(a), WidgetItem.Row(b)), agenda)
+    }
+
+    @Test
+    fun `headers off keeps the agenda order without reordering`() {
+        val overdue = task("overdue", dueDate = "2026-08-08", dueTime = "09:00")
+        val later = task("later", dueDate = "2026-09-30", dueTime = "09:00")
+        // Fetch order disagrees with bucket order on purpose: the flat
+        // placement must still show agenda order, like the preview does.
+        val agenda = widgetAgenda(
+            listOf(later, overdue), grouped = true, today = today, now = now)
+            .withoutHeaders()
+        assertEquals(listOf(WidgetItem.Row(overdue), WidgetItem.Row(later)), agenda)
+        // The cap still counts rows, and with no headers there is nothing
+        // to dangle.
+        assertEquals(agenda, agenda.takeAgendaRows(99))
+        assertEquals(listOf(WidgetItem.Row(overdue)), agenda.takeAgendaRows(1))
     }
 
     @Test
@@ -236,20 +253,52 @@ class WidgetAgendaTest {
     }
 
     @Test
-    fun `secondary line ignores due dates but keeps the repeat condition`() {
+    fun `row line has three independent switches`() {
         val repeating = task(
             "a", dueDate = "2026-08-09", dueTime = "23:00", estimatedMinutes = 60,
             repeatEvery = 3, repeatUnit = "days", parallelable = true)
 
-        val withDue = widgetSecondaryLine(repeating, today, showDue = true)
-        assertEquals("Today, 22:00 → 23:00 · Every 3 days · parallel", withDue)
-
-        val withoutDue = widgetSecondaryLine(repeating, today, showDue = false)
-        assertEquals("Every 3 days · parallel", withoutDue)
+        // Defaults: everything on, the same line the widget has always shown.
+        assertEquals(
+            "Today, 22:00 → 23:00 · Every 3 days · parallel",
+            widgetRowLine(repeating, today),
+        )
+        // Each switch hides exactly its own bit (#536): the repeat
+        // condition survives the due part going away.
+        assertEquals(
+            "Every 3 days · parallel",
+            widgetRowLine(repeating, today, showDue = false),
+        )
+        assertEquals(
+            "Today, 22:00 → 23:00 · parallel",
+            widgetRowLine(repeating, today, showRepeat = false),
+        )
+        assertEquals(
+            "Today, 22:00 → 23:00 · Every 3 days",
+            widgetRowLine(repeating, today, showParallel = false),
+        )
+        assertEquals("", widgetRowLine(repeating, today, false, false, false))
     }
 
     @Test
-    fun `secondary line is empty for a plain one-shot task with due dates off`() {
-        assertEquals("", widgetSecondaryLine(task("a", dueDate = "2026-08-09"), today, false))
+    fun `row line is empty for a plain one-shot task with the due part off`() {
+        assertEquals(
+            "",
+            widgetRowLine(task("a", dueDate = "2026-08-09"), today, showDue = false),
+        )
+    }
+
+    @Test
+    fun `static row cap defaults to eight and resets unknown names`() {
+        // The default is the cap the plain-rows layout shipped with, so an
+        // untouched placement renders unchanged (#536).
+        assertEquals(TaskWidget.STATIC_ROW_LIMIT, TaskWidgetStaticRows.Eight.rows)
+        assertEquals(TaskWidgetStaticRows.Eight, widgetStaticRowsForName(null))
+        assertEquals(TaskWidgetStaticRows.Eight, widgetStaticRowsForName("Eight"))
+        assertEquals(TaskWidgetStaticRows.Four, widgetStaticRowsForName("Four"))
+        assertEquals(TaskWidgetStaticRows.Six, widgetStaticRowsForName("Six"))
+        assertNull(widgetStaticRowsCoercion(null))
+        assertNull(widgetStaticRowsCoercion("Six"))
+        assertEquals("\"bogus\"->Eight", widgetStaticRowsCoercion("bogus"))
     }
 }

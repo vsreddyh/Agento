@@ -159,6 +159,7 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 - **Tasks / Projects**: project board and the task manager; task reminders arrive as exact-alarm notifications and survive reboot.
 - **Files**: two-way file shelf over the VPS `exports/` folder (subfolders supported) — upload from the device picker, download to mobile Downloads; uploads never replace an existing file and refuse past 25 MiB with a named error.
 - **∃-Mail**: the agent-filed report inbox.
+- **Task widget**: every setting is per placement — custom title, Tasks shown (Open/Done/All), row style and order, section headers, the header's title and count lines, and three independent row-content switches (due date and time, repeat condition, parallel marker), so a placement can show a repeat condition without the date. The list scrolls, or shows a fixed 4/6/8 rows.
 - **Settings sections**: Connection / Health / Appearance / Widget / Notifications / Behaviour / Storage / About, plus app updates and settings backup.
 - Chat, Skills, Tools, Teach, Memory, Runs, Approvals, Questions, Connectors and model pickers were removed in 8.0.0 (#493); the agent now runs in T3/opencode.
 

@@ -106,19 +106,20 @@ object SettingsBackup {
 
     /**
      * Per-widget display settings, keyed by the widget id the user configured:
-     * `task_widget_{view,density,sort,title,due,scroll}_<appWidgetId>`,
-     * written by `TaskWidgetConfigActivity.onSave` and read by the widget
-     * rows (#169, #532).
+     * `task_widget_{view,density,sort,title,static_rows,due,repeat,parallel,
+     * sections,count,show_title,scroll}_<appWidgetId>`, written by
+     * `TaskWidgetConfigActivity.onSave` and read by the widget rows
+     * (#169, #532, #536).
      *
      * Per-widget display settings: enumerated live because the key ends in
      * a runtime id, and shaped tight so a hand-edited backup cannot
-     * inject arbitrary `task_widget_*` prefs: six prefixes, each with its own
-     * value type, and a numeric suffix (widget ids are ints — anything else
-     * matches nothing). Values are mixed: `view`, `density` and `sort` are
-     * enum names, `title` is free text, `due` and `scroll` are booleans, so
-     * export writes, and import accepts, each by its own type. A mistyped
-     * value in a hand-edited backup is skipped rather than coerced, exactly
-     * like every other key.
+     * inject arbitrary `task_widget_*` prefs: each prefix belongs to exactly
+     * one value type, and the suffix must be numeric (widget ids are ints —
+     * anything else matches nothing). Values are mixed: `view`, `density`,
+     * `sort` and `static_rows` are enum names, `title` is free text, the
+     * rest are booleans, so export writes, and import accepts, each by its
+     * own type. A mistyped value in a hand-edited backup is skipped rather
+     * than coerced, exactly like every other key.
      *
      * Deliberately NOT backed up, and the reason matters: the two other
      * `task_reminder_*` prefs are device-local alarm bookkeeping, not settings.
@@ -137,23 +138,33 @@ object SettingsBackup {
         // Custom header title (#532): free text, so it is restored verbatim
         // and trimmed/capped on read like every other title.
         "task_widget_title_",
+        // Non-scrolling row cap (#536): an enum name, coerced on read like
+        // view/density/sort (an unknown name reads back Eight).
+        "task_widget_static_rows_",
     )
     private val BOOLEAN_WIDGET_PREFIXES = listOf(
         "task_widget_due_",
+        "task_widget_repeat_",
+        "task_widget_parallel_",
+        "task_widget_sections_",
+        "task_widget_count_",
+        "task_widget_show_title_",
         "task_widget_scroll_",
     )
 
     /** True for a per-widget display key
-     * `task_widget_{view,density,sort,title,due,scroll}_<id>`. */
+     * `task_widget_{view,density,sort,title,static_rows,due,repeat,parallel,
+     * sections,count,show_title,scroll}_<id>`. */
     fun isWidgetDisplayKey(k: String): Boolean =
         isStringWidgetKey(k) || isBooleanWidgetKey(k)
 
-    /** True for a `task_widget_{view,density,sort,title}_<numeric id>` key
-     * (string-valued). */
+    /** True for a `task_widget_{view,density,sort,title,static_rows}_<numeric
+     * id>` key (string-valued). */
     fun isStringWidgetKey(k: String): Boolean =
         STRING_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
 
-    /** True for a `task_widget_{due,scroll}_<numeric id>` key (boolean-valued). */
+    /** True for a `task_widget_{due,repeat,parallel,sections,count,
+     * show_title,scroll}_<numeric id>` key (boolean-valued). */
     fun isBooleanWidgetKey(k: String): Boolean =
         BOOLEAN_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
 
@@ -320,9 +331,10 @@ object SettingsBackup {
                     }
                 }
                 // Per-widget display settings: the export allowlist mirrored
-                // per prefix — view/density/sort take strings only, due/scroll
-                // take booleans only. A cross-typed value in a hand-edited
-                // backup is skipped: the widget reads those keys with getBoolean.
+                // per prefix — view/density/sort/static_rows take strings
+                // only, the switches take booleans only. A cross-typed value
+                // in a hand-edited backup is skipped: the widget reads those
+                // keys with getBoolean/getString accordingly.
                 val names = values.keys().asSequence().toList()
                 for (k in names) {
                     if (isStringWidgetKey(k) && values.opt(k) is String) {

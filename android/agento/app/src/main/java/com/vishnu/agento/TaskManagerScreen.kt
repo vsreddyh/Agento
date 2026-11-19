@@ -1937,8 +1937,10 @@ internal fun ServerTaskRow(
                 textDecoration = if (done) TextDecoration.LineThrough else null,
                 color = nameColor,
             )
-            // One shared line (#532): due → repeat → parallel, so the widget
-            // and this row can never render two different "same" rows.
+            // One line, always all three (#532): due → repeat → parallel.
+            // The widget composes its own line from per-placement switches
+            // (#536), so it can drop any of the three; the in-app row does
+            // not.
             val dueBits = task.dueBits(today)
             if (dueBits.isNotEmpty()) {
                 Text(
