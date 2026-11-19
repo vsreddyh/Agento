@@ -9,6 +9,13 @@ Agent-side board via the `project-manager` MCP server (MongoDB). Same list as
 the app's Projects tab. Permanent: no TTL, no pruning.
 
 - `name` required; `status` Todo|Ongoing|Testing|Paused|Done (default Todo); `note` free-form.
+- **Snooze (Paused only):** `snooze_at` is an RFC3339 date **and** time,
+  **strictly more than 60 seconds ahead** of now, and only sticks while the
+  project is Paused. `""` clears it; omitting it leaves it untouched. Anything
+  ≤60s ahead is rejected because the server wakes the project at
+  `snooze_at - 1m`. The wake itself is server-side (health-api, not a phone) —
+  never move a snoozed project yourself, and never treat a passed `snoozeAt`
+  as still armed. The app notifies the user from its own per-device cache.
 - The board has a manual order the user controls on the phone. `create_project`
   appends to the end of its status section; `list_projects` returns the same
   status-grouped order the app shows (status, then manual position, then

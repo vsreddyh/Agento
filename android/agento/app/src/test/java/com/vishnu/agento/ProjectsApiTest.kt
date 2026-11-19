@@ -1,6 +1,8 @@
 package com.vishnu.agento
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -121,6 +123,41 @@ class ProjectsApiTest {
             listOf("known", "fresh"),
             sortProjectsManually(rows, listOf("known")).map { it.id },
         )
+    }
+
+    @Test
+    fun `snooze reads from the row and defaults blank`() {
+        val out = parseProjectList(
+            """{"projects":[
+                {"id":"a","name":"A","status":"Paused","snoozeAt":"2026-11-19T12:30:00Z"},
+                {"id":"b","name":"B","status":"Ongoing","snoozeAt":null}
+            ]}""",
+        )
+        assertEquals("2026-11-19T12:30:00Z", out[0].snoozeAt)
+        assertEquals("", out[1].snoozeAt)
+    }
+
+    @Test
+    fun `only a ticker wake notifies, not a manual move`() {
+        val armed = "2026-11-19T12:30:00Z"
+        // The server stamps the marker with the snooze instant it fired.
+        val woken = ServerProject(
+            id = "a", name = "A", status = "Ongoing",
+            snoozeAt = "", snoozeFiredAt = armed,
+        )
+        assertTrue(ProjectSnooze.isWake(woken, armed))
+        // Manual move: the server clears the snooze without a marker.
+        assertFalse(ProjectSnooze.isWake(woken.copy(snoozeFiredAt = ""), armed))
+        // An old marker from a previous wake cannot match a later snooze.
+        assertFalse(ProjectSnooze.isWake(woken.copy(snoozeFiredAt = "2026-11-18T12:30:00Z"), armed))
+        // A row snoozed again is not a wake for the cached instant.
+        assertFalse(
+            ProjectSnooze.isWake(
+                woken.copy(snoozeAt = "2026-11-20T12:30:00Z"),
+                armed,
+            )
+        )
+        assertFalse(ProjectSnooze.isWake(woken.copy(status = "Paused"), armed))
     }
 
     private fun project(id: String, status: String, position: Long?, updatedAt: String) =
