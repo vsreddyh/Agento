@@ -268,14 +268,21 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     if (result == SnackbarResult.ActionPerformed) {
                         busy = true
                         // Undo is a new row, but a snoozed Paused project keeps
-                        // its snooze when the instant is still in the future;
-                        // the server rejects anything else, and that surfaces as
-                        // the normal save error instead of a silent drop.
+                        // its snooze only when the instant is still valid: an
+                        // expired snooze is dropped before the create (the
+                        // server would 422 it and lose the whole restore), so
+                        // a stale arming restores the row unsnoozed instead of
+                        // failing.
                         api.create(
                             t.name,
                             normalizeStatus(t.status),
                             t.note,
-                            if (normalizeStatus(t.status) == "Paused") t.snoozeAt else "",
+                            // Restoring the row matters more than restoring an
+                            // expired arming: a stale snooze would 422 the
+                            // whole create, so it is dropped rather than sent.
+                            if (normalizeStatus(t.status) == "Paused" &&
+                                ProjectSnooze.isFuture(t.snoozeAt)
+                            ) t.snoozeAt else "",
                         ).fold(
                             onSuccess = { row ->
                                 ProjectSnooze.remember(context, row)
@@ -631,7 +638,18 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             onFailure = ::fail,
                         )
                     } else {
-                        api.update(saved.id, saved.name, saved.status, saved.note, saved.snoozeAt).fold(
+                        // Only a *changed* snooze is sent: re-sending an
+                        // unchanged instant would revalidate it against the
+                        // 1-minute lead, so a typo fix near expiry would 422
+                        // for no reason. Leaving Paused still clears it (the
+                        // server does that on the status change as well).
+                        val snoozeArg: String? = when {
+                            saved.status != "Paused" ->
+                                if (draft.snoozeAt.isBlank()) null else ""
+                            saved.snoozeAt == draft.snoozeAt -> null
+                            else -> saved.snoozeAt
+                        }
+                        api.update(saved.id, saved.name, saved.status, saved.note, snoozeArg).fold(
                             onSuccess = { row ->
                                 ProjectSnooze.remember(context, row)
                                 editing = null; refreshTick++; toast(Toasts.TASK_SAVED, ToastKind.Success)
@@ -994,7 +1012,7 @@ internal fun TaskDialog(
                 when {
                     at == null -> snoozeError = "Pick a date and a time"
                     !ProjectSnooze.isFuture(at) ->
-                        snoozeError = "Pick a time at least a minute ahead"
+                        snoozeError = "Pick a time more than a minute ahead"
                     else -> { snoozeAt = at; snoozeError = "" }
                 }
                 showSnoozeTime = false

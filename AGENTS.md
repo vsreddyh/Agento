@@ -120,9 +120,13 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   (`HEALTH_HOST_PORT` remaps), single-password `PASSWORD`; the proxy (`:8080`,
   `APP_PORT` remaps) is the app's one URL and routes `/api/*` + `/health`.
   health-api also owns the project-snooze ticker (an in-process goroutine, not
-  a container): a `Paused` project with `snoozeAt` wakes to `Ongoing` one
-  minute early, so the transition is shared by the app, the agent and any
-  future client; the app only notifies from its own per-device snooze cache.
+  a container): a `Paused` project with `snoozeAt` wakes to `Ongoing` at
+  `snoozeAt - 1m` and is stamped with `snoozeFiredAt`, so the transition is
+  shared by the app, the agent and any future client; a snooze must be strictly
+  more than 60s ahead, and the app only notifies from its own per-device cache
+  when that marker is at or past the instant it cached (a resnooze elsewhere
+  still ends in a genuine ticker wake, so it notifies too; a manual move never
+  notifies).
   Chat, resumable runs and the pi-gateway surface are gone
   with #494. The provider key lives only in the git-ignored `.env`.
 - CI: `android-apk.yml` (unit tests + lint on PRs; release APK on `main`) and `mcps-test.yml` (`go build` + `go vet` + `go test ./...` over `cmd/`/`internal/`, `main` only; DB tests skip without `MONGODB_URI`). `./gradlew lintDebug` (release variant on `main`) fails on errors; the report uploads always. Fix what it reports rather than baselining. Verify shell with `bash -n scripts/*.sh`,
