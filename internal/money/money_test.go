@@ -738,6 +738,25 @@ func TestDeleteDateFilterTrimsLikeWrites(t *testing.T) {
 	}
 }
 
+// An account literally named with 24 hex chars resolves by name (like
+// findAccount's $or), not just by `_id`: the old if/else preferred `_id` and
+// made hex-shaped names unreachable via `log`.
+func TestHexShapedAccountNameResolvesByName(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	hexName := "5f1d7f3a2b3c4d5e6f7a8b9c"
+	if _, err := s.CreateAccount(ctx, hexName, "cash", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", hexName, "", "", "", ""); err != nil {
+		t.Fatalf("hex-shaped account name failed via log path: %v", err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, &hexName)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("query by hex-shaped name got %d rows, %v", len(rows), err)
+	}
+}
+
 // An `_id` from `list_accounts` round-trips through archive/unarchive: they
 // accept id hex like every other account path, not name-only.
 func TestArchiveAcceptsIdHexLikeOtherPaths(t *testing.T) {
