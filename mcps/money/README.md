@@ -12,7 +12,6 @@ extended to **multiple accounts** with **atomic stored balances**.
 | `archive_account` | Soft-delete (history stays, blocked from new writes). Required: name |
 | `get_balances` | Per-account balances + total across active accounts. Takes no arguments |
 | `log_transaction` | Log income / expense / transfer. Required: type, amount, account. Optional: category (an empty or unrecognised one is filed under `other`), sending_to (required by the store for a transfer, rejected otherwise), note, date (defaults to today) |
-| `log_text` | Log from free-form text (`spent 300 on groceries`). Required: text. Optional: account override |
 | `query_transactions` | List in a date range. Required: start, end — both must be real `YYYY-MM-DD` dates or the call is rejected. Optional: type/category/account filter |
 | `summarize` | Income, expense, net + per-category breakdown. Give a period phrase **or** an explicit start/end pair — half a pair is rejected rather than ignored. Optional: account |
 | `fix_last_transaction` | Correct the most recent entry (balances adjusted). Required: amount |
@@ -88,5 +87,5 @@ go run ./cmd/miser-money          # stdio transport (or go build -o miser-money 
 
 - `cmd/miser-money/main.go` — MCP server + tool definitions
 - `internal/money/store.go` — accounts, atomic transactions, stored balances
-- `internal/money/parse.go` — free-form text parser
+- `internal/money/parse.go` — period resolution (`this month`, `June`, …)
 - `internal/money/money_test.go` — tests (`go test ./internal/money/`, needs `MONGODB_URI`)

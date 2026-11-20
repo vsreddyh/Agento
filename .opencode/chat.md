@@ -30,8 +30,8 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (11): `create_account`, `list_accounts`, `archive_account`,
-  `get_balances`, `log_transaction`, `log_text`, `query_transactions`,
+- **miser-money** (10): `create_account`, `list_accounts`, `archive_account`,
+  `get_balances`, `log_transaction`, `query_transactions`,
   `summarize`, `fix_last_transaction`, `delete_transactions`, `prune_old`.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),

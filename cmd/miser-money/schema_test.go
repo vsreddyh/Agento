@@ -35,7 +35,6 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		// by the handler, and sending_to is required by the store only for a transfer.
 		{"log_transaction", logTransactionInput{},
 			[]string{"type", "amount", "account"}},
-		{"log_text", logTextInput{}, []string{"text"}},
 		// Required because absence is silently wrong, not because the store rejects it.
 		{"query_transactions", queryTransactionsInput{}, []string{"start", "end"}},
 		// "period phrase OR explicit start/end" — at least one, so none.
@@ -84,7 +83,6 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"create_account":      {"type", "balance"},
 		"list_accounts":       {"include_archived"},
 		"log_transaction":     {"sending_to", "note", "date"},
-		"log_text":            {"account"},
 		"query_transactions":  {"type", "category", "account"},
 		"summarize":           {"period", "start", "end", "account"},
 		"delete_transactions": {"amount", "category", "date", "account"},
@@ -94,7 +92,6 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"create_account":      createAccountInput{},
 		"list_accounts":       listAccountsInput{},
 		"log_transaction":     logTransactionInput{},
-		"log_text":            logTextInput{},
 		"query_transactions":  queryTransactionsInput{},
 		"summarize":           summarizeInput{},
 		"delete_transactions": deleteTransactionsInput{},

@@ -70,47 +70,6 @@ func balances(t *testing.T, s *Store) map[string]float64 {
 	return m
 }
 
-func TestClassifyLog(t *testing.T) {
-	r := Classify("spent 300 on groceries")
-	if r.Action != "log_expense" || r.Amount == nil || *r.Amount != 300 {
-		t.Fatalf("got %+v", r)
-	}
-	if r.Category == nil || *r.Category != "groceries" {
-		t.Fatalf("got %+v", r)
-	}
-	r = Classify("got 5000 salary")
-	if r.Action != "log_income" || r.Amount == nil || *r.Amount != 5000 {
-		t.Fatalf("got %+v", r)
-	}
-}
-
-func TestClassifyQuery(t *testing.T) {
-	r := Classify("what did I spend this month?")
-	if r.Action != "query" {
-		t.Fatalf("got %+v", r)
-	}
-	if r.Type == nil || *r.Type != "expense" {
-		t.Fatalf("got %+v", r)
-	}
-	r = Classify("how much on eating out in June?")
-	if r.Action != "query" {
-		t.Fatalf("got %+v", r)
-	}
-	if len(r.Start) < 7 || r.Start[5:7] != "06" {
-		t.Fatalf("got %+v", r)
-	}
-}
-
-func TestClassifyEdit(t *testing.T) {
-	if r := Classify("remove the 300 groceries entry"); r.Action != "delete" {
-		t.Fatalf("got %+v", r)
-	}
-	r := Classify("fix that to 350")
-	if r.Action != "fix" || r.Amount == nil || *r.Amount != 350 {
-		t.Fatalf("got %+v", r)
-	}
-}
-
 func TestPeriods(t *testing.T) {
 	today := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
 	s, e, _ := ResolvePeriod("this month", today)
@@ -120,18 +79,6 @@ func TestPeriods(t *testing.T) {
 	s, e, _ = ResolvePeriod("last month", today)
 	if s != "2026-08-01" || e != "2026-08-31" {
 		t.Fatalf("got %s %s", s, e)
-	}
-}
-
-func TestCategories(t *testing.T) {
-	if NormalizeCategory("Uber ride") != "transport" {
-		t.Fatal("transport")
-	}
-	if NormalizeCategory("Netflix") != "fun" {
-		t.Fatal("fun")
-	}
-	if NormalizeCategory("blah blah") != "other" {
-		t.Fatal("other")
 	}
 }
 

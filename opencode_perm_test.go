@@ -43,7 +43,6 @@ var expectedAsk = []string{
 	"*create_account*",
 	"*delete*",
 	"*fix_last*",
-	"*log_text*",
 	"*log_transaction*",
 	"*modify_gmail_message_labels*",
 	"*prune_old*",
