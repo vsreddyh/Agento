@@ -260,7 +260,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "archive_account",
-		Description: "Soft-delete an account (history stays queryable; blocked from new writes)."},
+		Description: "Soft-delete an account (history stays queryable; blocked from new writes). Accepts a name or id hex (trimmed, so an _id from list_accounts round-trips). The name stays taken."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in archiveAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.ArchiveAccount(ctx, in.Name)
 			if err != nil {
@@ -273,7 +273,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "unarchive_account",
-		Description: "Restore an archived account so it accepts writes again (inverse of archive_account)."},
+		Description: "Restore an archived account so it accepts writes again (inverse of archive_account). Accepts a name or id hex (trimmed)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in unarchiveAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.UnarchiveAccount(ctx, in.Name)
 			if err != nil {
@@ -286,7 +286,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_balances",
-		Description: "Current per-account balances plus total across active accounts."},
+		Description: "Current per-account balances (including archived accounts) plus total across active accounts only — total is NOT the sum of the listed rows once anything is archived, unlike list_accounts which hides archived by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBalancesInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.Balances(ctx)
 			if err != nil {
@@ -297,7 +297,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today (must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). note capped at 300 bytes, source at 64 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request."},
+		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today (must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if strings.TrimSpace(day) == "" {
@@ -417,7 +417,15 @@ func registerTools(s *mcp.Server) {
 					filt["category"] = in.Category
 				}
 				if in.Date != "" {
-					filt["date"] = in.Date
+					// Trimmed + calendar-validated like writes/reads: without this,
+					// `date=" 2026-09-01 "` silently reports `would_delete: 0`
+					// for a row that exists, and `2026-02-30` matches nothing
+					// instead of being rejected.
+					d, err := validate.CheckDay(in.Date)
+					if err != nil {
+						return fail(fmt.Errorf("delete_transactions date: %w", err))
+					}
+					filt["date"] = d
 				}
 				if in.Account != "" {
 					filt["account"] = in.Account

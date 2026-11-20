@@ -226,8 +226,17 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 // ArchiveAccount soft-deletes; history stays, writes blocked via resolve.
 // The name is trimmed like every other account path (Create/resolve/findAccount/
 // Insert), so `archive " Cash "` finds what `create " Cash "` stored as `Cash`.
+// Accepts an id hex as well as a name (via findAccount), so an `_id` from
+// `list_accounts` round-trips instead of reporting "unknown account".
 func (s *Store) ArchiveAccount(ctx context.Context, name string) (bool, error) {
-	res, err := s.accts.UpdateOne(ctx, bson.M{"name": strings.TrimSpace(name)}, bson.M{"$set": bson.M{"archived": true}})
+	acct, err := s.findAccount(ctx, name)
+	if err != nil {
+		if _, ok := err.(*StoreError); ok {
+			return false, nil
+		}
+		return false, err
+	}
+	res, err := s.accts.UpdateOne(ctx, bson.M{"_id": acct["_id"]}, bson.M{"$set": bson.M{"archived": true}})
 	if err != nil {
 		return false, err
 	}
@@ -237,9 +246,17 @@ func (s *Store) ArchiveAccount(ctx context.Context, name string) (bool, error) {
 // UnarchiveAccount is the inverse of ArchiveAccount. Without it, archiving is a
 // one-way door: the unique name index keeps the archived name, so the account
 // can be neither restored nor re-created. Trimmed like ArchiveAccount so a
-// padded name restores what it archived.
+// padded name restores what it archived, and accepts an id hex for the same
+// round-trip reason.
 func (s *Store) UnarchiveAccount(ctx context.Context, name string) (bool, error) {
-	res, err := s.accts.UpdateOne(ctx, bson.M{"name": strings.TrimSpace(name)}, bson.M{"$set": bson.M{"archived": false}})
+	acct, err := s.findAccount(ctx, name)
+	if err != nil {
+		if _, ok := err.(*StoreError); ok {
+			return false, nil
+		}
+		return false, err
+	}
+	res, err := s.accts.UpdateOne(ctx, bson.M{"_id": acct["_id"]}, bson.M{"$set": bson.M{"archived": false}})
 	if err != nil {
 		return false, err
 	}
@@ -265,7 +282,10 @@ func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bs
 	return acct, nil
 }
 
-// Balances returns stored balances + total over active accounts.
+// Balances returns stored balances + total over active accounts. The `accounts`
+// list intentionally includes archived rows (unlike ListAccounts, which hides
+// them by default) while `total` skips them — so `total` is not the sum of the
+// listed balances once anything is archived. Documented on the tool + README.
 func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
@@ -805,6 +825,17 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 			// exist. Non-strings pass through for the driver to reject.
 			if vs, ok := v.(string); ok {
 				out[k] = strings.ToLower(strings.TrimSpace(vs))
+			} else {
+				out[k] = v
+			}
+		case "date":
+			// Trimmed like writes/reads so a padded delete filter finds what
+			// `log_transaction` stored trimmed instead of reporting
+			// `would_delete: 0`. Calendar validity is enforced in the handler
+			// via CheckDay (which rejects); the store stays a trim-only
+			// defense for direct callers.
+			if vs, ok := v.(string); ok {
+				out[k] = strings.TrimSpace(vs)
 			} else {
 				out[k] = v
 			}

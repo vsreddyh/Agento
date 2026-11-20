@@ -140,6 +140,23 @@ func TestLogTransactionRejectsNonCalendarDate(t *testing.T) {
 	}
 }
 
+// The delete date filter is validated like writes/reads, before any store
+// touch: a padded or non-calendar date must fail instead of silently matching
+// nothing as `would_delete: 0`.
+func TestDeleteTransactionsRejectsBadDate(t *testing.T) {
+	for _, date := range []string{"2026-02-30", "not-a-date"} {
+		_, errMsg := callTool(t, "delete_transactions", map[string]any{
+			"date": date, "dry_run": true,
+		})
+		if errMsg == "" {
+			t.Fatalf("delete date %q was accepted; expected a rejection, not a silent zero-match", date)
+		}
+		if !strings.Contains(errMsg, "delete_transactions") {
+			t.Errorf("error %q does not name the tool", errMsg)
+		}
+	}
+}
+
 func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
 	for _, c := range []struct{ name, start, end string }{
 		{"lone start", "2026-01-01", ""},

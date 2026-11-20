@@ -658,6 +658,55 @@ func TestAccountFilterMatchesEitherSideOfTransfer(t *testing.T) {
 	}
 }
 
+// The delete date filter trims like writes/reads: a padded filter finds what
+// `log_transaction` stored trimmed instead of reporting `would_delete: 0`.
+func TestDeleteDateFilterTrimsLikeWrites(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Match(ctx, map[string]any{"date": " 2026-09-01 "})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("padded delete filter matched %d rows, %v", len(rows), err)
+	}
+}
+
+// An `_id` from `list_accounts` round-trips through archive/unarchive: they
+// accept id hex like every other account path, not name-only.
+func TestArchiveAcceptsIdHexLikeOtherPaths(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListAccounts(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for _, a := range rows {
+		if a["name"] == "HDFC" {
+			id, _ = a["_id"].(string)
+		}
+	}
+	if id == "" {
+		t.Fatal("HDFC has no id to round-trip")
+	}
+	if ok, err := s.ArchiveAccount(ctx, id); err != nil || !ok {
+		t.Fatalf("archive by id missed: %v %v", ok, err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "HDFC", "", "", "", ""); err == nil {
+		t.Fatal("id-archived account still accepts writes")
+	}
+	if ok, err := s.UnarchiveAccount(ctx, id); err != nil || !ok {
+		t.Fatalf("unarchive by id missed: %v %v", ok, err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "HDFC", "", "", "", ""); err != nil {
+		t.Fatalf("id-unarchived account still refuses writes: %v", err)
+	}
+}
+
 func containsStr(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
