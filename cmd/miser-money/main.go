@@ -138,6 +138,7 @@ type deleteTransactionsInput struct {
 	// At least one filter (or id) is required, and the server rejects none — so no field
 	// can be marked required without forbidding a legitimate combination.
 	Amount   float64 `json:"amount,omitempty"`
+	Type     string  `json:"type,omitempty"`
 	Category string  `json:"category,omitempty"`
 	Date     string  `json:"date,omitempty"`
 	Account  string  `json:"account,omitempty"`
@@ -238,7 +239,7 @@ func main() {
 // signal that the guard was removed.
 func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
-		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique (trimmed); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank)."},
+		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty defaults to cash)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			if strings.TrimSpace(in.Type) == "" {
 				in.Type = "cash"
@@ -348,7 +349,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
-		Description: "Summarize income, expenses, net total and per-category breakdown. Optional account filter (matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, and an explicit pair wins over a period phrase if you send both."},
+		Description: "Summarize income, expenses, net total and per-category breakdown (transfers are counted but excluded from income/expense/net; by_category is expense-only, so income categories never rank). Optional account filter (matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, an explicit pair wins over a period phrase if you send both, and neither means this month."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in summarizeInput) (*mcp.CallToolResult, map[string]any, error) {
 			// An explicit range wins over `period` — see the tool description, which now
 			// says so instead of leaving the precedence to be discovered.
@@ -389,30 +390,33 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "fix_last_transaction",
-		Description: "Correct the most recent transaction's amount (balances adjusted atomically)."},
+		Description: "Correct the most recent transaction's amount (balances adjusted atomically; most-recent by insertion order, not date — read the returned id back to verify). Returns the fixed row's id + date so the shared read-back-by-id rule holds."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in fixLastTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
-			done, err := store.FixLast(ctx, in.Amount)
+			fid, fdate, done, err := store.FixLast(ctx, in.Amount)
 			if err != nil {
 				return fail(err)
 			}
 			if !done {
 				return result(map[string]any{"ok": false, "error": "No transactions to fix."})
 			}
-			return result(map[string]any{"ok": true, "amount": in.Amount})
+			return result(map[string]any{"ok": true, "id": fid, "date": fdate, "amount": in.Amount})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (balances inverted atomically). Target one row by id, or filter by amount/category/date/account — id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
+		Description: "Delete transactions (balances inverted atomically). Target one row by id, or filter by amount/type/category/date/account — id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			filt := map[string]any{}
 			if in.ID != "" {
-				if in.Amount != 0 || in.Category != "" || in.Date != "" || in.Account != "" {
-					return result(map[string]any{"ok": false, "error": "id cannot be combined with amount, category, date or account."})
+				if in.Amount != 0 || in.Type != "" || in.Category != "" || in.Date != "" || in.Account != "" {
+					return result(map[string]any{"ok": false, "error": "id cannot be combined with amount, type, category, date or account."})
 				}
 				filt["id"] = in.ID
 			} else {
 				if in.Amount != 0 {
 					filt["amount"] = in.Amount
+				}
+				if in.Type != "" {
+					filt["type"] = in.Type
 				}
 				if in.Category != "" {
 					filt["category"] = in.Category
@@ -432,7 +436,7 @@ func registerTools(s *mcp.Server) {
 					filt["account"] = in.Account
 				}
 				if len(filt) == 0 {
-					return result(map[string]any{"ok": false, "error": "Provide id, or at least one of amount, category, date, account."})
+					return result(map[string]any{"ok": false, "error": "Provide id, or at least one of amount, type, category, date, account."})
 				}
 			}
 			dry := true

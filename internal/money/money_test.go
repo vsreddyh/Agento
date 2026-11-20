@@ -260,9 +260,12 @@ func TestFixLastAdjustsBalances(t *testing.T) {
 	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	done, err := s.FixLast(ctx, 350)
+	fid, fdate, done, err := s.FixLast(ctx, 350)
 	if err != nil || !done {
 		t.Fatalf("got %v %v", done, err)
+	}
+	if fid == "" || fdate != "2026-09-01" {
+		t.Fatalf("FixLast returned id=%q date=%q, want id + 2026-09-01", fid, fdate)
 	}
 	if b := balances(t, s); b["Cash"] != -350 {
 		t.Fatalf("got %v", b)
@@ -726,6 +729,31 @@ func TestUnknownFilterValuesAreRejectedLikeWrites(t *testing.T) {
 	}
 	if _, err := s.Match(ctx, map[string]any{"category": "utilities"}); err == nil {
 		t.Fatal("unknown match category matched nothing instead of failing")
+	}
+}
+
+// `type` is a first-class delete filter like query: deleting by type narrows
+// to that type instead of being unreachable.
+func TestDeleteByTypeFilter(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 5000, "income", "salary", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Match(ctx, map[string]any{"type": "Expense"})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("case-insensitive type match got %d rows, %v", len(rows), err)
+	}
+	n, err := s.Delete(ctx, map[string]any{"type": "expense"})
+	if err != nil || n != 1 {
+		t.Fatalf("delete by type got %d, %v", n, err)
+	}
+	after, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(after) != 1 {
+		t.Fatalf("got %d rows after type delete, %v", len(after), err)
 	}
 }
 

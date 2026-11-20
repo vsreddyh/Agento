@@ -652,10 +652,16 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 }
 
 // FixLast adjusts newest tx by delta; scales each leg so transfers stay balanced.
-func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
+// FixLast adjusts newest tx by delta; scales each leg so transfers stay balanced.
+// Returns the fixed row's id hex + date so the caller can read it back by id:
+// without this, the shared "read back by id" rule is impossible for this write,
+// and the fix hits insertion-order last (`_id` desc), not date-latest, so the
+// wrong row is easy to guess after a backfill.
+func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string, bool, error) {
 	if newAmount <= 0 {
-		return false, fail("amount must be positive")
+		return "", "", false, fail("amount must be positive")
 	}
+	var fid, fdate string
 	fixed := false
 	err := s.transact(ctx, func(sc context.Context) error {
 		var last bson.M
@@ -665,6 +671,12 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
 				return nil
 			}
 			return err
+		}
+		fid = oidHex(last["_id"])
+		if d, _ := last["date"].(string); d != "" {
+			fdate = d
+		} else {
+			fdate = fmt.Sprint(last["date"])
 		}
 		delta := newAmount - toFloat(last["amount"])
 		if delta == 0 {
@@ -689,7 +701,7 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
 		fixed = true
 		return nil
 	})
-	return fixed, err
+	return fid, fdate, fixed, err
 }
 
 // Query date-range scan; account filter matches either side of transfers.
@@ -753,7 +765,10 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	return rows, nil
 }
 
-// Summarize income/expense/net + expense-only per-category ranking.
+// Summarize income/expense/net + expense-only per-category ranking. Transfers
+// are counted in `count` but excluded from income/expense/net, and `by_category`
+// ranks expenses only — so income categories never appear. Documented on the
+// tool + README so `count` vs totals does not misread.
 func (s *Store) Summarize(ctx context.Context, start, end string, account *string) (bson.M, error) {
 	rows, err := s.Query(ctx, start, end, nil, nil, account)
 	if err != nil {

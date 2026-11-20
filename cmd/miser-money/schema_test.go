@@ -87,7 +87,7 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
 		"query_transactions":  {"type", "category", "account"},
 		"summarize":           {"period", "start", "end", "account"},
-		"delete_transactions": {"id", "amount", "category", "date", "account", "dry_run"},
+		"delete_transactions": {"id", "amount", "type", "category", "date", "account", "dry_run"},
 		"prune_old":           {"days", "dry_run"},
 	}
 	inputs := map[string]any{
