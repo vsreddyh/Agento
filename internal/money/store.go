@@ -227,40 +227,54 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 // The name is trimmed like every other account path (Create/resolve/findAccount/
 // Insert), so `archive " Cash "` finds what `create " Cash "` stored as `Cash`.
 // Accepts an id hex as well as a name (via findAccount), so an `_id` from
-// `list_accounts` round-trips instead of reporting "unknown account".
-func (s *Store) ArchiveAccount(ctx context.Context, name string) (bool, error) {
+// `list_accounts` round-trips instead of reporting "unknown account". Returns
+// the resolved account name (trimmed), never the raw input — so the caller can
+// echo it without believing spaces/hex are the stored name.
+func (s *Store) ArchiveAccount(ctx context.Context, name string) (string, bool, error) {
 	acct, err := s.findAccount(ctx, name)
 	if err != nil {
 		if _, ok := err.(*StoreError); ok {
-			return false, nil
+			return "", false, nil
 		}
-		return false, err
+		return "", false, err
 	}
 	res, err := s.accts.UpdateOne(ctx, bson.M{"_id": acct["_id"]}, bson.M{"$set": bson.M{"archived": true}})
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return res.MatchedCount > 0, nil
+	if res.MatchedCount == 0 {
+		return "", false, nil
+	}
+	if n, _ := acct["name"].(string); n != "" {
+		return n, true, nil
+	}
+	return strings.TrimSpace(name), true, nil
 }
 
 // UnarchiveAccount is the inverse of ArchiveAccount. Without it, archiving is a
 // one-way door: the unique name index keeps the archived name, so the account
 // can be neither restored nor re-created. Trimmed like ArchiveAccount so a
 // padded name restores what it archived, and accepts an id hex for the same
-// round-trip reason.
-func (s *Store) UnarchiveAccount(ctx context.Context, name string) (bool, error) {
+// round-trip reason. Returns the resolved name, never the raw input.
+func (s *Store) UnarchiveAccount(ctx context.Context, name string) (string, bool, error) {
 	acct, err := s.findAccount(ctx, name)
 	if err != nil {
 		if _, ok := err.(*StoreError); ok {
-			return false, nil
+			return "", false, nil
 		}
-		return false, err
+		return "", false, err
 	}
 	res, err := s.accts.UpdateOne(ctx, bson.M{"_id": acct["_id"]}, bson.M{"$set": bson.M{"archived": false}})
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return res.MatchedCount > 0, nil
+	if res.MatchedCount == 0 {
+		return "", false, nil
+	}
+	if n, _ := acct["name"].(string); n != "" {
+		return n, true, nil
+	}
+	return strings.TrimSpace(name), true, nil
 }
 
 func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bson.M, error) {
@@ -680,7 +694,9 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
 
 // Query date-range scan; account filter matches either side of transfers.
 // Type/category filters are normalized exactly like writes (lowercase + trim),
-// so `Groceries` finds what was logged as `groceries`.
+// so `Groceries` finds what was logged as `groceries` — and unknown values are
+// rejected like writes (and like unknown accounts), instead of silently
+// returning zero rows for a typo.
 //
 // `_id` is returned as a hex string like Match does: without it, the documented
 // `delete by id` workflow is unreachable from a query — the caller would hold a
@@ -688,10 +704,18 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
 func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string) ([]bson.M, error) {
 	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
 	if typ != nil {
-		filt["type"] = strings.ToLower(strings.TrimSpace(*typ))
+		t := strings.ToLower(strings.TrimSpace(*typ))
+		if !contains(txTypes, t) {
+			return nil, fail("type %q does not exist — use one of %v", *typ, txTypes)
+		}
+		filt["type"] = t
 	}
 	if category != nil {
-		filt["category"] = strings.ToLower(strings.TrimSpace(*category))
+		c := strings.ToLower(strings.TrimSpace(*category))
+		if !contains(Categories, c) {
+			return nil, fail("category %q does not exist — use one of %v", *category, Categories)
+		}
+		filt["category"] = c
 	}
 	if account != nil {
 		acct, err := s.findAccount(ctx, *account)
@@ -822,9 +846,19 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 		case "type", "category":
 			// Normalized like writes: `Groceries` deletes what was logged as
 			// `groceries` instead of reporting "would_delete: 0" for rows that
-			// exist. Non-strings pass through for the driver to reject.
+			// exist — and unknown values are rejected like writes (and like
+			// unknown accounts), instead of silently matching nothing for a
+			// typo. Non-strings pass through for the driver to reject.
 			if vs, ok := v.(string); ok {
-				out[k] = strings.ToLower(strings.TrimSpace(vs))
+				norm := strings.ToLower(strings.TrimSpace(vs))
+				if k == "type" {
+					if !contains(txTypes, norm) {
+						return nil, fail("type %q does not exist — use one of %v", vs, txTypes)
+					}
+				} else if !contains(Categories, norm) {
+					return nil, fail("category %q does not exist — use one of %v", vs, Categories)
+				}
+				out[k] = norm
 			} else {
 				out[k] = v
 			}

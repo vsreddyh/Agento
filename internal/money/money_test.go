@@ -111,7 +111,7 @@ func TestAccountsCRUD(t *testing.T) {
 	if _, err := s.CreateAccount(ctx, "X", "spaceship", 0); err == nil {
 		t.Fatal("expected bad type error")
 	}
-	if ok, _ := s.ArchiveAccount(ctx, "HDFC"); !ok {
+	if _, ok, _ := s.ArchiveAccount(ctx, "HDFC"); !ok {
 		t.Fatal("archive failed")
 	}
 	rows, _ = s.ListAccounts(ctx, false)
@@ -196,7 +196,7 @@ func TestTransferValidation(t *testing.T) {
 			t.Fatalf("expected error for %+v", c)
 		}
 	}
-	if _, err := s.ArchiveAccount(ctx, "Cash"); err != nil {
+	if _, _, err := s.ArchiveAccount(ctx, "Cash"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 100, "transfer", "other", "HDFC", "Cash", "", "", ""); err == nil {
@@ -386,13 +386,13 @@ func TestOverlongIdempotencyKeyIsRejectedNotTruncated(t *testing.T) {
 func TestUnarchiveRestoresWrites(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if ok, err := s.ArchiveAccount(ctx, "Cash"); err != nil || !ok {
+	if _, ok, err := s.ArchiveAccount(ctx, "Cash"); err != nil || !ok {
 		t.Fatalf("archive: %v %v", ok, err)
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", "", "", ""); err == nil {
 		t.Fatal("an archived account accepted a write")
 	}
-	if ok, err := s.UnarchiveAccount(ctx, "Cash"); err != nil || !ok {
+	if _, ok, err := s.UnarchiveAccount(ctx, "Cash"); err != nil || !ok {
 		t.Fatalf("unarchive: %v %v", ok, err)
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", "", "", ""); err != nil {
@@ -401,17 +401,20 @@ func TestUnarchiveRestoresWrites(t *testing.T) {
 }
 
 // Every other account path trims; archive/unarchive must too, or the same
-// name succeeds in one tool and reports "unknown account" in another.
+// name succeeds in one tool and reports "unknown account" in another. They
+// return the resolved name, never the raw input.
 func TestArchiveUnarchiveTrimNamesLikeWrites(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if ok, err := s.ArchiveAccount(ctx, " Cash "); err != nil || !ok {
+	if name, ok, err := s.ArchiveAccount(ctx, " Cash "); err != nil || !ok {
 		t.Fatalf("padded archive missed: %v %v", ok, err)
+	} else if name != "Cash" {
+		t.Fatalf("archive echoed %q, want the stored name %q", name, "Cash")
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", "", "", ""); err == nil {
 		t.Fatal("a padded-archived account still accepts writes")
 	}
-	if ok, err := s.UnarchiveAccount(ctx, "  Cash  "); err != nil || !ok {
+	if _, ok, err := s.UnarchiveAccount(ctx, "  Cash  "); err != nil || !ok {
 		t.Fatalf("padded unarchive missed: %v %v", ok, err)
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", " Cash ", "", "", "", ""); err != nil {
@@ -693,17 +696,36 @@ func TestArchiveAcceptsIdHexLikeOtherPaths(t *testing.T) {
 	if id == "" {
 		t.Fatal("HDFC has no id to round-trip")
 	}
-	if ok, err := s.ArchiveAccount(ctx, id); err != nil || !ok {
+	if _, ok, err := s.ArchiveAccount(ctx, id); err != nil || !ok {
 		t.Fatalf("archive by id missed: %v %v", ok, err)
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "HDFC", "", "", "", ""); err == nil {
 		t.Fatal("id-archived account still accepts writes")
 	}
-	if ok, err := s.UnarchiveAccount(ctx, id); err != nil || !ok {
+	if _, ok, err := s.UnarchiveAccount(ctx, id); err != nil || !ok {
 		t.Fatalf("unarchive by id missed: %v %v", ok, err)
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "HDFC", "", "", "", ""); err != nil {
 		t.Fatalf("id-unarchived account still refuses writes: %v", err)
+	}
+}
+
+// Unknown type/category filters are rejected like writes (and like unknown
+// accounts), instead of silently returning zero rows for a typo.
+func TestUnknownFilterValuesAreRejectedLikeWrites(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	badType, badCat := "banana", "utilities"
+	if _, err := s.Query(ctx, "2026-09-01", "2026-09-30", &badType, nil, nil); err == nil {
+		t.Fatal("unknown query type matched nothing instead of failing")
+	} else if !containsStr(err.Error(), "does not exist") {
+		t.Fatalf("query type error %q does not name the problem", err)
+	}
+	if _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, &badCat, nil); err == nil {
+		t.Fatal("unknown query category matched nothing instead of failing")
+	}
+	if _, err := s.Match(ctx, map[string]any{"category": "utilities"}); err == nil {
+		t.Fatal("unknown match category matched nothing instead of failing")
 	}
 }
 

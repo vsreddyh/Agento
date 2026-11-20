@@ -75,7 +75,8 @@ type listAccountsInput struct {
 }
 
 type archiveAccountInput struct {
-	// The account is identified by name, so this one cannot be defaulted.
+	// A name or id hex (the hex goes in this same `name` field); trimmed and
+	// resolved, so this one cannot be defaulted.
 	Name string `json:"name"`
 }
 
@@ -146,12 +147,12 @@ type deleteTransactionsInput struct {
 }
 
 type unarchiveAccountInput struct {
-	// Identified by name, the inverse of archive_account.
+	// A name or id hex like archive_account (the hex goes in `name`).
 	Name string `json:"name"`
 }
 
 type pruneOldInput struct {
-	// 0 means 90 in the handler.
+	// Any value <= 0 means the 90-day retention window in handler + store.
 	Days int `json:"days,omitempty"`
 	// A pointer because nil is meaningful: nil means dry run, which is the safe default
 	// for anything that deletes.
@@ -260,29 +261,29 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "archive_account",
-		Description: "Soft-delete an account (history stays queryable; blocked from new writes). Accepts a name or id hex (trimmed, so an _id from list_accounts round-trips). The name stays taken."},
+		Description: "Soft-delete an account (history stays queryable; blocked from new writes). `name` accepts a name or id hex (trimmed, so an _id from list_accounts round-trips); the stored name is echoed back, never the raw input. The name stays taken."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in archiveAccountInput) (*mcp.CallToolResult, map[string]any, error) {
-			done, err := store.ArchiveAccount(ctx, in.Name)
+			resolved, done, err := store.ArchiveAccount(ctx, in.Name)
 			if err != nil {
 				return fail(err)
 			}
 			if !done {
 				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown account '%s'", in.Name)})
 			}
-			return result(map[string]any{"ok": true, "archived": in.Name})
+			return result(map[string]any{"ok": true, "archived": resolved})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "unarchive_account",
-		Description: "Restore an archived account so it accepts writes again (inverse of archive_account). Accepts a name or id hex (trimmed)."},
+		Description: "Restore an archived account so it accepts writes again (inverse of archive_account). `name` accepts a name or id hex (trimmed); the stored name is echoed back."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in unarchiveAccountInput) (*mcp.CallToolResult, map[string]any, error) {
-			done, err := store.UnarchiveAccount(ctx, in.Name)
+			resolved, done, err := store.UnarchiveAccount(ctx, in.Name)
 			if err != nil {
 				return fail(err)
 			}
 			if !done {
 				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown account '%s'", in.Name)})
 			}
-			return result(map[string]any{"ok": true, "unarchived": in.Name})
+			return result(map[string]any{"ok": true, "unarchived": resolved})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_balances",
@@ -297,7 +298,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today (must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request."},
+		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today (must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if strings.TrimSpace(day) == "" {
@@ -323,7 +324,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters; account matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts."},
+		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters; account matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
 			if in.Type != "" {
@@ -401,7 +402,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (balances inverted atomically). Target one row by id, or filter by amount/category/date/account — id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
+		Description: "Delete transactions (balances inverted atomically). Target one row by id, or filter by amount/category/date/account — id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			filt := map[string]any{}
 			if in.ID != "" {
@@ -454,10 +455,10 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",
-		Description: "Immediate 90-day purge (TTL handles this natively in the background). dry_run=true (default) only reports."},
+		Description: "Immediate purge, defaulting to the 90-day retention window (TTL handles this natively in the background). days <= 0 means 90 — including negatives, never an error. dry_run=true (default) only reports."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in pruneOldInput) (*mcp.CallToolResult, map[string]any, error) {
 			days := in.Days
-			if days == 0 {
+			if days <= 0 {
 				days = 90
 			}
 			dry := true
