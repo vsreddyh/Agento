@@ -102,12 +102,6 @@ type logTransactionInput struct {
 	Date string `json:"date,omitempty"`
 }
 
-type logTextInput struct {
-	Text string `json:"text"`
-	// "Optional account override" per the tool description; blank means resolve it.
-	Account string `json:"account,omitempty"`
-}
-
 type queryTransactionsInput struct {
 	// Required for the reason in the note above: the store does not validate these, so
 	// absent bounds return nothing silently rather than failing.
@@ -288,53 +282,6 @@ func registerTools(s *mcp.Server) {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "id": tid, "date": day, "type": typ, "amount": in.Amount})
-		})
-
-	mcp.AddTool(s, &mcp.Tool{Name: "log_text",
-		Description: "Log from free-form text ('spent 300 on groceries'). Optional account override; blank requires an existing account."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in logTextInput) (*mcp.CallToolResult, map[string]any, error) {
-			r := money.Classify(in.Text)
-			note := in.Text
-			if len(note) > 300 {
-				note = note[:300]
-			}
-			switch r.Action {
-			case "log_income", "log_expense":
-				if r.Amount == nil {
-					return result(map[string]any{"ok": false, "error": "No amount found — ask the user how much."})
-				}
-				txType := "income"
-				if r.Action == "log_expense" {
-					txType = "expense"
-				}
-				cat := "other"
-				if r.Category != nil {
-					cat = *r.Category
-				}
-				tid, err := store.Insert(ctx, today(), *r.Amount, txType, cat, in.Account, "", note, "log_text")
-				if err != nil {
-					return fail(err)
-				}
-				return result(map[string]any{"ok": true, "id": tid, "type": txType, "amount": *r.Amount, "category": cat})
-			case "log_transfer":
-				if r.Amount == nil {
-					return result(map[string]any{"ok": false, "error": "No amount found — ask the user how much."})
-				}
-				dest := ""
-				if r.SendingTo != nil {
-					dest = *r.SendingTo
-				}
-				if dest == "" {
-					return result(map[string]any{"ok": false, "error": "No destination account found — ask the user where to transfer to."})
-				}
-				tid, err := store.Insert(ctx, today(), *r.Amount, "transfer", "other", in.Account, dest, note, "log_text")
-				if err != nil {
-					return fail(err)
-				}
-				return result(map[string]any{"ok": true, "id": tid, "type": "transfer", "amount": *r.Amount, "sending_to": dest})
-			}
-			return result(map[string]any{"ok": false, "action": r.Action,
-				"error": fmt.Sprintf("Not a loggable statement (classified as '%s').", r.Action)})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
