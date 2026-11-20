@@ -237,9 +237,9 @@ func main() {
 // signal that the guard was removed.
 func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
-		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique; type cash|bank|card|wallet|other."},
+		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique (trimmed); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
-			if in.Type == "" {
+			if strings.TrimSpace(in.Type) == "" {
 				in.Type = "cash"
 			}
 			acct, err := store.CreateAccount(ctx, in.Name, in.Type, in.Balance)
@@ -297,11 +297,18 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today; category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). note capped at 300 bytes, source at 64 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request."},
+		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today (must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). note capped at 300 bytes, source at 64 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
-			if day == "" {
+			if strings.TrimSpace(day) == "" {
 				day = today()
+			}
+			// Validated like the read path, so a non-calendar date never stores:
+			// `CheckDay` trims + rejects bad format and impossible dates, and the
+			// normalized value is what reaches the store and the echo below.
+			var err error
+			if day, err = validate.CheckDay(day); err != nil {
+				return fail(fmt.Errorf("log_transaction date: %w", err))
 			}
 			// Normalized exactly like the store, so the echoed `type` equals the
 			// stored row: without the trim, `type=" Expense "` stored `expense`
@@ -316,7 +323,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters."},
+		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters; account matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
 			if in.Type != "" {
@@ -340,7 +347,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
-		Description: "Summarize income, expenses, net total and per-category breakdown. Optional account filter. Give a period phrase OR an explicit start/end pair — half a pair is rejected, and an explicit pair wins over a period phrase if you send both."},
+		Description: "Summarize income, expenses, net total and per-category breakdown. Optional account filter (matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, and an explicit pair wins over a period phrase if you send both."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in summarizeInput) (*mcp.CallToolResult, map[string]any, error) {
 			// An explicit range wins over `period` — see the tool description, which now
 			// says so instead of leaving the precedence to be discovered.
@@ -394,7 +401,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (balances inverted atomically). Target one row by id, or filter by amount/category/date/account — id cannot be combined with filters. dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
+		Description: "Delete transactions (balances inverted atomically). Target one row by id, or filter by amount/category/date/account — id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			filt := map[string]any{}
 			if in.ID != "" {

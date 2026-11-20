@@ -124,6 +124,22 @@ func TestLogTransactionRejectsUnknownCategory(t *testing.T) {
 	}
 }
 
+// A non-calendar date must be rejected like the read path rejects it, before
+// any store touch (`store` is nil here): `2026-02-30` used to store, then the
+// row's expiresAt fell back to year-1 and TTL purged it immediately while the
+// balance delta survived.
+func TestLogTransactionRejectsNonCalendarDate(t *testing.T) {
+	_, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount": 100, "account": "Cash", "date": "2026-02-30",
+	})
+	if errMsg == "" {
+		t.Fatal("a non-calendar date was accepted; query/summarize reject it")
+	}
+	if !strings.Contains(errMsg, "log_transaction") {
+		t.Errorf("error %q does not name the tool", errMsg)
+	}
+}
+
 func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
 	for _, c := range []struct{ name, start, end string }{
 		{"lone start", "2026-01-01", ""},

@@ -170,11 +170,16 @@ func (s *Store) transact(ctx context.Context, fn func(ctx context.Context) error
 }
 
 // CreateAccount with unique name (index-backed); archived defaults false.
+//
+// The name is trimmed and the type is lowercased+trimmed like transaction
+// types, so `create type="Bank"` stores `bank` instead of rejecting what
+// `log_transaction type="Bank"` accepts.
 func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance float64) (bson.M, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fail("account name is required")
 	}
+	typ = strings.ToLower(strings.TrimSpace(typ))
 	if !contains(accountTypes, typ) {
 		return nil, fail("account type must be one of %v", accountTypes)
 	}
@@ -293,8 +298,18 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 // against the stored row and a mismatch is rejected rather than returning the
 // old row as a false "replay".
 func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, category, account, sendingTo, note, source, idempotencyKey string) (string, bool, error) {
+	// Trimmed so writes agree with reads (`query_transactions` trims via
+	// CheckDay): `date=" 2026-09-01 "` stores `2026-09-01` instead of failing
+	// while the same string queries fine. Validated as a real calendar date,
+	// not just the regex — `2026-02-30` matches YYYY-MM-DD but `time.Parse`
+	// fails it, and storing it would set expiresAt to year-1 (immediate TTL
+	// purge with the balance delta surviving, by design).
+	date = strings.TrimSpace(date)
 	if !dateRE.MatchString(date) {
 		return "", false, fail("date must be YYYY-MM-DD")
+	}
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return "", false, fail("date %q is not a real calendar date — use YYYY-MM-DD", date)
 	}
 	if amount <= 0 {
 		return "", false, fail("amount must be positive")

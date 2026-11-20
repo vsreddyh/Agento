@@ -2,6 +2,7 @@ package money
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -589,6 +590,71 @@ func TestLongNoteTruncatesOnUTF8Boundary(t *testing.T) {
 	}
 	if !validString(note) {
 		t.Fatal("truncated note is not valid UTF-8: cut mid-rune")
+	}
+}
+
+// A non-calendar date must fail like the read path rejects it: storing
+// `2026-02-30` used to succeed while query/summarize rejected it, and the bad
+// row's expiresAt fell back to year-1 (immediate TTL purge, balance surviving).
+func TestInsertRejectsNonCalendarDate(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-02-30", 10, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("non-calendar date was stored; query/summarize reject it")
+	} else if !containsStr(err.Error(), "real calendar date") {
+		t.Fatalf("error %q does not explain the calendar problem", err)
+	}
+	if _, _, err := s.Insert(ctx, " 2026-09-01 ", 10, "expense", "other", "Cash", "", "", "", ""); err != nil {
+		t.Fatalf("padded date should trim like reads: %v", err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("padded write not stored trimmed: %d rows, %v", len(rows), err)
+	}
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-01" {
+		t.Fatalf("stored date %q is not trimmed", rows[0]["date"])
+	}
+}
+
+// Account types normalize like transaction types: `Bank` stores `bank`
+// instead of rejecting what `log_transaction type="Bank"` accepts.
+func TestCreateAccountNormalizesTypeLikeTransactions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "Padded", " Bank ", 0); err != nil {
+		t.Fatalf("padded/cased type rejected: %v", err)
+	}
+	rows, err := s.ListAccounts(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range rows {
+		if a["name"] == "Padded" && a["type"] != "bank" {
+			t.Fatalf("stored type %q, want bank", a["type"])
+		}
+	}
+}
+
+// The account filter matches EITHER side of a transfer by design ($or on
+// accountId/sending_to): document it and pin it, so a delete-by-account of
+// the receiver does not surprise.
+func TestAccountFilterMatchesEitherSideOfTransfer(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	receiver := "Cash"
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, &receiver)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("receiver-side query got %d rows, %v", len(rows), err)
+	}
+	matched, err := s.Match(ctx, map[string]any{"account": "Cash"})
+	if err != nil || len(matched) != 1 {
+		t.Fatalf("receiver-side match got %d rows, %v", len(matched), err)
 	}
 }
 
