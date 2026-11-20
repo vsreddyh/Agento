@@ -43,7 +43,9 @@ jobs:
 
       # DB tests skip without MONGODB_URI, which is why every High bug in the
       # money store shipped untested. Each test package uses its own throwaway
-      # database (`miser_test`, `tasks_test`, …), so this never touches `hermes`.
+      # database (`miser_test`, `tasks_test`, …) — except internal/reports,
+      # which honors MONGODB_DB and is the sole occupant of the shared
+      # `ci_test` in CI — so this never touches `hermes`.
       # MONGODB_DB is still mandatory: internal/reports falls back to `hermes`
       # when it is unset, which is the production database.
       - name: Run tests (DB tests skip without MONGODB_URI)

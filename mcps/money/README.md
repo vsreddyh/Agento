@@ -44,7 +44,7 @@ validators and no views — validation lives in the store.
 |---|---|
 | `query_transactions` with empty or non-`YYYY-MM-DD` bounds | rejected — used to match zero rows and return them as a real answer |
 | `query_transactions` with `start` after `end` | rejected — two valid dates, empty range, used to return zero rows as if that were the answer |
-| `query_transactions` with padded bounds (`" 2026-01-01 "`) | accepted, and the **trimmed** value is what reaches the store — validation trims while the filter compares raw strings |
+| `query_transactions` with padded bounds (`" 2026-01-01 "`) | accepted, and the **trimmed** value is what reaches the store and the filter — validation and filtering both trim, so padding is harmless |
 | `summarize` with `start` but no `end` (or the reverse) | rejected — used to fall through to the period branch and summarise a window nobody asked for |
 | `summarize` with `start` after `end` | rejected, like `query_transactions` — two valid dates in the wrong order, documented on the tool rather than left to be discovered |
 | `summarize` with neither bound | fine — the period phrase applies, defaulting to `this month` |
