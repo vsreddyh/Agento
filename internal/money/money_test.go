@@ -93,18 +93,29 @@ func TestPeriods(t *testing.T) {
 
 // Month names match on whole words: "maybe"/"mayhem" must not resolve to May,
 // "marching orders" must not resolve to March — they fall back to this month
-// like any other unrecognized phrase.
+// like any other unrecognized phrase. Same for the other keywords: "todays"
+// is not today, "monthly"/"last monthly report"/"trimonthly" do not hit the
+// month branches — "next month" and "monthly" still land on this month, but via
+// the whole-word `month` branch or the fallback, never via substring.
 func TestPeriodMonthMatchesWholeWordsOnly(t *testing.T) {
 	today := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
-	for _, phrase := range []string{"maybe", "mayhem", "marching orders", "banana"} {
+	for _, phrase := range []string{"maybe", "mayhem", "marching orders", "banana",
+		"todays", "monthly", "last monthly report", "trimonthly", "2025", "last year"} {
 		s, e, l := ResolvePeriod(phrase, today)
 		if s != "2026-09-01" || e != "2026-09-30" {
 			t.Fatalf("%q resolved to %s..%s (%s), want this month", phrase, s, e, l)
 		}
 	}
-	s, e, _ := ResolvePeriod("may", today)
-	if s != "2026-05-01" || e != "2026-05-31" {
-		t.Fatalf("whole-word may got %s %s", s, e)
+	for _, tc := range []struct{ in, s, e string }{
+		{"may", "2026-05-01", "2026-05-31"},
+		{"today", "2026-09-05", "2026-09-05"},
+		{"yesterday", "2026-09-04", "2026-09-04"},
+		{"thisweek", "2026-08-31", "2026-09-05"},
+	} {
+		s, e, _ := ResolvePeriod(tc.in, today)
+		if s != tc.s || e != tc.e {
+			t.Fatalf("%q got %s..%s, want %s..%s", tc.in, s, e, tc.s, tc.e)
+		}
 	}
 }
 

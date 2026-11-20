@@ -301,7 +301,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (atomic with balance update). account required (case-sensitive exact name or id hex); sending_to required for transfers; date YYYY-MM-DD defaults to today (must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). amount must be > 0. note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request. Returns the stored category/account/note (normalized, not the raw input), so the result is the read-back plus sending_to/sending_to_account for transfers."},
+		Description: "Log an income, expense, or transfer (atomic with balance update). account required (case-sensitive exact name or id hex); sending_to required for transfers; date YYYY-MM-DD defaults to today (must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). amount must be > 0. note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request. Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if strings.TrimSpace(day) == "" {
@@ -325,9 +325,14 @@ func registerTools(s *mcp.Server) {
 			// Read the stored row back by id so the result reports normalized
 			// values (category lowercased, blank→other; account resolved from
 			// hex; note truncated; both transfer legs) instead of the raw input.
+			// If the re-read itself fails, ok stays true — the write succeeded
+			// and retrying without a key would double-log — with readback_error
+			// naming the failure instead of silently omitting fields.
 			out := map[string]any{"ok": true, "id": tid, "date": day, "type": typ,
 				"amount": in.Amount, "created": created}
-			if rows, merr := store.Match(ctx, map[string]any{"id": tid}); merr == nil && len(rows) == 1 {
+			if rows, merr := store.Match(ctx, map[string]any{"id": tid}); merr != nil {
+				out["readback_error"] = merr.Error()
+			} else if len(rows) == 1 {
 				out["category"] = rows[0]["category"]
 				out["account"] = rows[0]["account"]
 				if n, ok := rows[0]["note"]; ok {
@@ -339,6 +344,8 @@ func registerTools(s *mcp.Server) {
 				if sta, ok := rows[0]["sending_to_account"]; ok {
 					out["sending_to_account"] = sta
 				}
+			} else {
+				out["readback_error"] = fmt.Sprintf("re-read by id %s returned %d rows", tid, len(rows))
 			}
 			return result(out)
 		})
@@ -368,7 +375,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
-		Description: "Summarize income, expenses, net total and per-category breakdown (transfers are counted but excluded from income/expense/net; by_category is expense-only, so income categories never rank). Optional account filter (matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, an explicit pair wins over a period phrase if you send both, neither means this month, and an unrecognized phrase means this month too (month names match on whole words, so maybe/mayhem do not mean May; banana → this month, not an error)."},
+		Description: "Summarize income, expenses, net total and per-category breakdown (transfers are counted but excluded from income/expense/net; by_category is expense-only, so income categories never rank). Optional account filter (matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, an explicit pair wins over a period phrase if you send both, neither means this month. Supported phrases: today, yesterday, this week, last month, month names with optional year (June, June 2025), this month / so far / month — matched on whole words throughout, so maybe/mayhem/todays/monthly do not hit a branch. Anything else means this month too (2025, last year and banana all return this month, not an error)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in summarizeInput) (*mcp.CallToolResult, map[string]any, error) {
 			// An explicit range wins over `period` — see the tool description, which now
 			// says so instead of leaving the precedence to be discovered.
