@@ -19,6 +19,12 @@ func testStore(t *testing.T) *Store {
 	if uri == "" {
 		t.Skip("MONGODB_URI not set")
 	}
+	// Intentionally ignores MONGODB_DB and uses `miser_test` unconditionally:
+	// `go test ./...` runs packages in parallel and this helper calls db.Drop
+	// on the whole database — sharing CI's `MONGODB_DB=ci_test` with reports
+	// (which reads the env) would drop another suite's rows mid-run. So
+	// `MONGODB_DB=miser_test go test ./internal/money` works, but the env var
+	// is a no-op for this package; isolation holds because the name is hardcoded.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	c, err := mongo.ConnectURI(uri)
@@ -460,6 +466,87 @@ func TestQueryNamesItsAccounts(t *testing.T) {
 		if id, _ := a["_id"].(string); id == "" {
 			t.Fatalf("account %v has no id", a["name"])
 		}
+	}
+}
+
+// Query must return hex `_id`s so the documented `delete by id` workflow is
+// reachable from a query: without this, `delete_transactions id=<queried id>`
+// cannot be built from `query_transactions` output.
+func TestQueryReturnsIdsForDeleteById(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+	id, _ := rows[0]["_id"].(string)
+	if id == "" {
+		t.Fatalf("query row has no _id: %v", rows[0])
+	}
+	n, err := s.Delete(ctx, map[string]any{"id": id})
+	if err != nil || n != 1 {
+		t.Fatalf("delete by queried id %q: deleted %d, %v", id, n, err)
+	}
+}
+
+// Writes lowercase category/type; reads must normalize the same way, or
+// `query category=Groceries` silently matches nothing logged as `groceries`.
+func TestFiltersAreCaseInsensitiveLikeWrites(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	upperType, upperCat := "Expense", "Groceries"
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", &upperType, &upperCat, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("case-insensitive query got %d rows, %v", len(rows), err)
+	}
+	matched, err := s.Match(ctx, map[string]any{"category": "Groceries", "type": "Expense"})
+	if err != nil || len(matched) != 1 {
+		t.Fatalf("case-insensitive match got %d rows, %v", len(matched), err)
+	}
+	n, err := s.Delete(ctx, map[string]any{"category": "GROCERIES"})
+	if err != nil || n != 1 {
+		t.Fatalf("case-insensitive delete got %d, %v", n, err)
+	}
+}
+
+// The same idempotency key with a different payload must fail, not return the
+// old row as a false "replay".
+func TestIdempotencyKeyRejectsDifferentPayload(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", "same-key"); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name                string
+		date                string
+		amount              float64
+		typ, cat, acct, dst string
+	}{
+		{"different amount", "2026-09-01", 999, "expense", "groceries", "Cash", ""},
+		{"different date", "2026-09-02", 300, "expense", "groceries", "Cash", ""},
+		{"different category", "2026-09-01", 300, "expense", "bills", "Cash", ""},
+		{"different type", "2026-09-01", 300, "income", "groceries", "Cash", ""},
+	}
+	for _, c := range cases {
+		if _, _, err := s.Insert(ctx, c.date, c.amount, c.typ, c.cat, c.acct, c.dst, "", "", "same-key"); err == nil {
+			t.Fatalf("%s was accepted under a reused key; expected a mismatch rejection", c.name)
+		} else if !containsStr(err.Error(), "idempotency_key") {
+			t.Fatalf("%s error %q does not name the key", c.name, err)
+		}
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("reused key wrote extra rows: %d, %v", len(rows), err)
+	}
+	if b := balances(t, s); b["Cash"] != -300 {
+		t.Fatalf("balance %v — the mismatched retry moved it", b)
 	}
 }
 

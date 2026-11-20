@@ -283,6 +283,11 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 // deltas. It returns (id, created, error): created is false when idempotencyKey
 // matched an existing row — that row's id comes back and nothing is written, so
 // a retried call is a no-op instead of a second entry.
+//
+// A key must never be reused across distinct payloads: when the key already
+// exists, the incoming date/amount/type/category/account/sending_to are compared
+// against the stored row and a mismatch is rejected rather than returning the
+// old row as a false "replay".
 func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, category, account, sendingTo, note, source, idempotencyKey string) (string, bool, error) {
 	if !dateRE.MatchString(date) {
 		return "", false, fail("date must be YYYY-MM-DD")
@@ -290,6 +295,11 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	if amount <= 0 {
 		return "", false, fail("amount must be positive")
 	}
+	// Normalized the same way read-path filters are: a write of "Groceries"
+	// and a read of "groceries" refer to the same category, and likewise for
+	// type. Without this, `query_transactions type=Expense` silently matches
+	// nothing logged as `expense`.
+	typ = strings.ToLower(strings.TrimSpace(typ))
 	if !contains(txTypes, typ) {
 		return "", false, fail("type must be one of %v", txTypes)
 	}
@@ -312,12 +322,15 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 			len(idempotencyKey), IdempotencyKeyMax)
 	}
 	if idempotencyKey != "" {
-		id, found, err := s.byIdempotencyKey(ctx, idempotencyKey)
+		existing, found, err := s.byIdempotencyKey(ctx, idempotencyKey)
 		if err != nil {
 			return "", false, err
 		}
 		if found {
-			return id, false, nil
+			if err := s.checkIdempotencyPayload(ctx, existing, idempotencyKey, date, amount, typ, category, account, sendingTo); err != nil {
+				return "", false, err
+			}
+			return oidHex(existing["_id"]), false, nil
 		}
 	}
 	var tid string
@@ -400,10 +413,14 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	})
 	if err != nil {
 		// Lost a race on the unique key: the row the other writer inserted is
-		// the answer, not an error.
+		// the answer — but only when the payload matches. A different payload
+		// under the same key is a caller bug, not a replay.
 		if idempotencyKey != "" && mongoDrv.IsDuplicateKeyError(err) {
-			if id, found, rerr := s.byIdempotencyKey(ctx, idempotencyKey); rerr == nil && found {
-				return id, false, nil
+			if existing, found, rerr := s.byIdempotencyKey(ctx, idempotencyKey); rerr == nil && found {
+				if cerr := s.checkIdempotencyPayload(ctx, existing, idempotencyKey, date, amount, typ, category, account, sendingTo); cerr != nil {
+					return "", false, cerr
+				}
+				return oidHex(existing["_id"]), false, nil
 			}
 		}
 		return "", false, err
@@ -411,17 +428,72 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	return tid, true, nil
 }
 
-// byIdempotencyKey reports the transaction already carrying key.
-func (s *Store) byIdempotencyKey(ctx context.Context, key string) (string, bool, error) {
+// byIdempotencyKey reports the transaction already carrying key, with the full
+// row so the caller can verify the replay carries the same payload.
+func (s *Store) byIdempotencyKey(ctx context.Context, key string) (bson.M, bool, error) {
 	var doc bson.M
 	err := s.txns.FindOne(ctx, bson.M{"idempotencyKey": key}).Decode(&doc)
 	if err == mongoDrv.ErrNoDocuments {
-		return "", false, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
-	return oidHex(doc["_id"]), true, nil
+	return doc, true, nil
+}
+
+// checkIdempotencyPayload rejects a reused key carrying a different payload.
+// Only the core semantic fields are compared (date/amount/type/category +
+// both sides of a transfer); note/source are free-form annotations and are
+// excluded so a retried call with a tweaked note is still a no-op.
+func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, key, date string, amount float64, typ, category, account, sendingTo string) error {
+	mismatch := func(field string) error {
+		return fail("idempotency_key %q was already used for a different transaction (mismatch in %s) — use a new key", key, field)
+	}
+	if fmt.Sprint(existing["date"]) != date {
+		return mismatch("date")
+	}
+	if toFloat(existing["amount"]) != amount {
+		return mismatch("amount")
+	}
+	if fmt.Sprint(existing["type"]) != typ {
+		return mismatch("type")
+	}
+	if fmt.Sprint(existing["category"]) != category {
+		return mismatch("category")
+	}
+	if strings.TrimSpace(account) == "" {
+		return mismatch("account")
+	}
+	acct, err := s.findAccount(ctx, strings.TrimSpace(account))
+	if err != nil {
+		return mismatch("account")
+	}
+	if idHex(existing["accountId"]) != oidHex(acct["_id"]) {
+		return mismatch("account")
+	}
+	incomingDst := strings.TrimSpace(sendingTo)
+	_, hasExisting := existing["sending_to"]
+	if typ == "transfer" {
+		if incomingDst == "" {
+			return mismatch("sending_to")
+		}
+		dst, err := s.findAccount(ctx, incomingDst)
+		if err != nil {
+			return mismatch("sending_to")
+		}
+		if !hasExisting {
+			return mismatch("sending_to")
+		}
+		if idHex(existing["sending_to"]) != oidHex(dst["_id"]) {
+			return mismatch("sending_to")
+		}
+	} else {
+		if hasExisting || incomingDst != "" {
+			return mismatch("sending_to")
+		}
+	}
+	return nil
 }
 
 // Match returns the rows a delete filter would remove, without removing them —
@@ -569,13 +641,19 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
 }
 
 // Query date-range scan; account filter matches either side of transfers.
+// Type/category filters are normalized exactly like writes (lowercase + trim),
+// so `Groceries` finds what was logged as `groceries`.
+//
+// `_id` is returned as a hex string like Match does: without it, the documented
+// `delete by id` workflow is unreachable from a query — the caller would hold a
+// row with no id to delete it by.
 func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string) ([]bson.M, error) {
 	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
 	if typ != nil {
-		filt["type"] = *typ
+		filt["type"] = strings.ToLower(strings.TrimSpace(*typ))
 	}
 	if category != nil {
-		filt["category"] = *category
+		filt["category"] = strings.ToLower(strings.TrimSpace(*category))
 	}
 	if account != nil {
 		acct, err := s.findAccount(ctx, *account)
@@ -584,7 +662,7 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 		}
 		filt["$or"] = []bson.M{{"accountId": acct["_id"]}, {"sending_to": acct["_id"]}}
 	}
-	cur, err := s.txns.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}).SetProjection(bson.M{"_id": 0}))
+	cur, err := s.txns.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -602,6 +680,7 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 		return nil, err
 	}
 	for _, r := range rows {
+		r["_id"] = oidHex(r["_id"])
 		r["accountId"] = idHex(r["accountId"])
 		r["account"] = names[idHex(r["accountId"])]
 		if st, ok := r["sending_to"]; ok {
@@ -672,6 +751,7 @@ func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (int64, error)
 }
 
 func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
+	v = strings.TrimSpace(v)
 	ors := []bson.M{{"name": v}}
 	if oid, err := primitive.ObjectIDFromHex(v); err == nil {
 		ors = append(ors, bson.M{"_id": oid})
@@ -701,6 +781,15 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 				return nil, fail("'%s' is not a transaction id", vs)
 			}
 			out["_id"] = oid
+		case "type", "category":
+			// Normalized like writes: `Groceries` deletes what was logged as
+			// `groceries` instead of reporting "would_delete: 0" for rows that
+			// exist. Non-strings pass through for the driver to reject.
+			if vs, ok := v.(string); ok {
+				out[k] = strings.ToLower(strings.TrimSpace(vs))
+			} else {
+				out[k] = v
+			}
 		default:
 			out[k] = v
 		}
