@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -218,8 +219,10 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 }
 
 // ArchiveAccount soft-deletes; history stays, writes blocked via resolve.
+// The name is trimmed like every other account path (Create/resolve/findAccount/
+// Insert), so `archive " Cash "` finds what `create " Cash "` stored as `Cash`.
 func (s *Store) ArchiveAccount(ctx context.Context, name string) (bool, error) {
-	res, err := s.accts.UpdateOne(ctx, bson.M{"name": name}, bson.M{"$set": bson.M{"archived": true}})
+	res, err := s.accts.UpdateOne(ctx, bson.M{"name": strings.TrimSpace(name)}, bson.M{"$set": bson.M{"archived": true}})
 	if err != nil {
 		return false, err
 	}
@@ -228,9 +231,10 @@ func (s *Store) ArchiveAccount(ctx context.Context, name string) (bool, error) {
 
 // UnarchiveAccount is the inverse of ArchiveAccount. Without it, archiving is a
 // one-way door: the unique name index keeps the archived name, so the account
-// can be neither restored nor re-created.
+// can be neither restored nor re-created. Trimmed like ArchiveAccount so a
+// padded name restores what it archived.
 func (s *Store) UnarchiveAccount(ctx context.Context, name string) (bool, error) {
-	res, err := s.accts.UpdateOne(ctx, bson.M{"name": name}, bson.M{"$set": bson.M{"archived": false}})
+	res, err := s.accts.UpdateOne(ctx, bson.M{"name": strings.TrimSpace(name)}, bson.M{"$set": bson.M{"archived": false}})
 	if err != nil {
 		return false, err
 	}
@@ -361,15 +365,14 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 		if err != nil {
 			return err
 		}
-		if len(note) > 300 {
-			note = note[:300]
-		}
+		// Capped at 300/64 bytes and cut on a UTF-8 boundary, never mid-rune:
+		// the caps are documented on the tool + README rather than rejected,
+		// so a long note reads back truncated — but never as corrupt bytes.
+		note = truncateBytes(note, 300)
 		if source == "" {
 			source = "mcp"
 		}
-		if len(source) > 64 {
-			source = source[:64]
-		}
+		source = truncateBytes(source, 64)
 		doc := bson.M{"date": date, "amount": amount, "type": typ,
 			"category": category, "note": note, "source": source,
 			"accountId": src["_id"],
@@ -804,6 +807,19 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// truncateBytes caps s at n bytes without splitting a UTF-8 rune: a naive
+// s[:n] can cut a multi-byte character mid-sequence and store invalid bytes.
+func truncateBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 func toFloat(v any) float64 {

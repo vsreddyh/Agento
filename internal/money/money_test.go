@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/mongo"
 
@@ -398,6 +399,25 @@ func TestUnarchiveRestoresWrites(t *testing.T) {
 	}
 }
 
+// Every other account path trims; archive/unarchive must too, or the same
+// name succeeds in one tool and reports "unknown account" in another.
+func TestArchiveUnarchiveTrimNamesLikeWrites(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if ok, err := s.ArchiveAccount(ctx, " Cash "); err != nil || !ok {
+		t.Fatalf("padded archive missed: %v %v", ok, err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("a padded-archived account still accepts writes")
+	}
+	if ok, err := s.UnarchiveAccount(ctx, "  Cash  "); err != nil || !ok {
+		t.Fatalf("padded unarchive missed: %v %v", ok, err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", " Cash ", "", "", "", ""); err != nil {
+		t.Fatalf("unarchived account still refuses padded writes: %v", err)
+	}
+}
+
 func TestDeleteByIDLeavesSiblings(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -550,6 +570,28 @@ func TestIdempotencyKeyRejectsDifferentPayload(t *testing.T) {
 	}
 }
 
+// Notes cap at 300 bytes on a UTF-8 boundary, never mid-rune: a naive s[:300]
+// can split a multi-byte character and store invalid bytes.
+func TestLongNoteTruncatesOnUTF8Boundary(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	long := strings.Repeat("é", 200) // 400 bytes, 200 runes
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", long, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+	note, _ := rows[0]["note"].(string)
+	if len(note) > 300 {
+		t.Fatalf("note is %d bytes, over the 300-byte cap", len(note))
+	}
+	if !validString(note) {
+		t.Fatal("truncated note is not valid UTF-8: cut mid-rune")
+	}
+}
+
 func containsStr(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
@@ -558,6 +600,8 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+func validString(s string) bool { return utf8.ValidString(s) }
 
 func fnum(v any) float64 {
 	switch n := v.(type) {

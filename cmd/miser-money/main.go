@@ -297,13 +297,16 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today; category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). idempotency_key makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request."},
+		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today; category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). note capped at 300 bytes, source at 64 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if day == "" {
 				day = today()
 			}
-			typ := strings.ToLower(in.Type)
+			// Normalized exactly like the store, so the echoed `type` equals the
+			// stored row: without the trim, `type=" Expense "` stored `expense`
+			// but returned `" expense "`.
+			typ := strings.ToLower(strings.TrimSpace(in.Type))
 			tid, created, err := store.Insert(ctx, day, in.Amount, typ, in.Category, in.Account, in.SendingTo, in.Note, "log_transaction", in.IdempotencyKey)
 			if err != nil {
 				return fail(err)
