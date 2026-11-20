@@ -24,7 +24,7 @@ var months = map[string]int{
 var monthNames = []string{"", "January", "February", "March", "April", "May", "June",
 	"July", "August", "September", "October", "November", "December"}
 
-var monthRE = regexp.MustCompile(`(january|february|march|april|may|june|july|august|september|october|november|december)`)
+var monthRE = regexp.MustCompile(`\b(january|february|march|april|may|june|july|august|september|october|november|december)\b`)
 var yearRE = regexp.MustCompile(`(19|20)\d{2}`)
 
 func monthRange(year, month int) (string, string) {

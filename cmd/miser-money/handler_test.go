@@ -171,6 +171,20 @@ func TestDeleteTransactionsRejectsIdWithType(t *testing.T) {
 	}
 }
 
+// An explicit 0 amount is rejected like writes, before any store touch: 0
+// would otherwise silently widen to every row matching the other filters.
+func TestDeleteTransactionsRejectsZeroAmount(t *testing.T) {
+	_, errMsg := callTool(t, "delete_transactions", map[string]any{
+		"amount": 0.0, "category": "groceries", "dry_run": true,
+	})
+	if errMsg == "" {
+		t.Fatal("amount=0 was accepted; 0 means absent and cannot narrow a delete")
+	}
+	if !strings.Contains(errMsg, "> 0") {
+		t.Errorf("error %q does not state the positive-amount rule", errMsg)
+	}
+}
+
 func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
 	for _, c := range []struct{ name, start, end string }{
 		{"lone start", "2026-01-01", ""},

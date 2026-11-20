@@ -91,6 +91,23 @@ func TestPeriods(t *testing.T) {
 	}
 }
 
+// Month names match on whole words: "maybe"/"mayhem" must not resolve to May,
+// "marching orders" must not resolve to March — they fall back to this month
+// like any other unrecognized phrase.
+func TestPeriodMonthMatchesWholeWordsOnly(t *testing.T) {
+	today := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	for _, phrase := range []string{"maybe", "mayhem", "marching orders", "banana"} {
+		s, e, l := ResolvePeriod(phrase, today)
+		if s != "2026-09-01" || e != "2026-09-30" {
+			t.Fatalf("%q resolved to %s..%s (%s), want this month", phrase, s, e, l)
+		}
+	}
+	s, e, _ := ResolvePeriod("may", today)
+	if s != "2026-05-01" || e != "2026-05-31" {
+		t.Fatalf("whole-word may got %s %s", s, e)
+	}
+}
+
 func TestAccountsCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
