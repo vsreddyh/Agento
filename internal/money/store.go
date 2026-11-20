@@ -280,11 +280,17 @@ func (s *Store) UnarchiveAccount(ctx context.Context, name string) (string, bool
 }
 
 func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bson.M, error) {
+	// Trimmed before hex-parse like findAccount: without this, a padded
+	// id-hex misses `_id` (hex-parse fails on spaces) and falls back to a
+	// name lookup for the hex, so `sending_to="  <hex>  "` fails while the
+	// same padding on `account` works. The error quotes the trimmed value
+	// like every other account path.
+	nameOrID = strings.TrimSpace(nameOrID)
 	q := bson.M{}
 	if oid, err := primitive.ObjectIDFromHex(nameOrID); err == nil {
 		q = bson.M{"_id": oid}
 	} else {
-		q = bson.M{"name": strings.TrimSpace(nameOrID)}
+		q = bson.M{"name": nameOrID}
 	}
 	var acct bson.M
 	if err := s.accts.FindOne(ctx, q).Decode(&acct); err != nil {

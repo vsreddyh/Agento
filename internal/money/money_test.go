@@ -202,6 +202,36 @@ func TestTransferBalances(t *testing.T) {
 	}
 }
 
+// A padded id-hex transfer receiver resolves like a padded account: `resolve`
+// trims before hex-parse like `findAccount`, so `sending_to="  <hex>  "`
+// finds the `_id` instead of looking up a name that equals the hex.
+func TestTransferToPaddedIdHex(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListAccounts(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cashID string
+	for _, a := range rows {
+		if a["name"] == "Cash" {
+			cashID, _ = a["_id"].(string)
+		}
+	}
+	if cashID == "" {
+		t.Fatal("Cash has no id")
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "  "+cashID+"  ", "", "", ""); err != nil {
+		t.Fatalf("padded hex sending_to failed: %v", err)
+	}
+	if b := balances(t, s); b["HDFC"] != 800 || b["Cash"] != 200 {
+		t.Fatalf("got %v", b)
+	}
+}
+
 func TestTransferValidation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
