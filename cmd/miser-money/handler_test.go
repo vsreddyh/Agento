@@ -185,6 +185,34 @@ func TestDeleteTransactionsRejectsZeroAmount(t *testing.T) {
 	}
 }
 
+// Whitespace-only filters trim to absent like summarize's bounds: a padded
+// account that trims to nothing must not error as "unknown account".
+func TestDeleteTransactionsTrimsWhitespaceFilters(t *testing.T) {
+	_, errMsg := callTool(t, "delete_transactions", map[string]any{
+		"account": "   ", "dry_run": true,
+	})
+	if errMsg == "" {
+		t.Fatal("whitespace-only account was accepted as a filter")
+	}
+	if !strings.Contains(errMsg, "Provide id") {
+		t.Errorf("error %q should be the empty-filter error, not an unknown-account error", errMsg)
+	}
+}
+
+// A reversed explicit pair is rejected like query — stated on the tool, not
+// discovered. Validated before any store touch.
+func TestSummarizeRejectsReversedRange(t *testing.T) {
+	_, errMsg := callTool(t, "summarize", map[string]any{
+		"start": "2026-03-31", "end": "2026-01-01",
+	})
+	if errMsg == "" {
+		t.Fatal("reversed summarize range was accepted; expected a rejection, not a silently empty summary")
+	}
+	if !strings.Contains(errMsg, "after end") {
+		t.Errorf("error %q does not explain the reversal", errMsg)
+	}
+}
+
 func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
 	for _, c := range []struct{ name, start, end string }{
 		{"lone start", "2026-01-01", ""},
