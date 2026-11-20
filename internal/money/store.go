@@ -224,6 +224,8 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 }
 
 // ArchiveAccount soft-deletes; history stays, writes blocked via resolve.
+// Only `log_transaction` is blocked: `delete`/`fix_last` still invert/adjust the
+// archived account's balance by design (history stays mutable to the owner).
 // The name is trimmed like every other account path (Create/resolve/findAccount/
 // Insert), so `archive " Cash "` finds what `create " Cash "` stored as `Cash`.
 // Accepts an id hex as well as a name (via findAccount), so an `_id` from

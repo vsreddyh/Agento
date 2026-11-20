@@ -157,6 +157,20 @@ func TestDeleteTransactionsRejectsBadDate(t *testing.T) {
 	}
 }
 
+// `id` cannot be combined with any filter, including the new `type` filter —
+// validated before any store touch.
+func TestDeleteTransactionsRejectsIdWithType(t *testing.T) {
+	_, errMsg := callTool(t, "delete_transactions", map[string]any{
+		"id": "68fakeid0000000000000000", "type": "expense", "dry_run": true,
+	})
+	if errMsg == "" {
+		t.Fatal("id+type was accepted; id must be exclusive")
+	}
+	if !strings.Contains(errMsg, "cannot be combined") {
+		t.Errorf("error %q does not explain exclusivity", errMsg)
+	}
+}
+
 func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
 	for _, c := range []struct{ name, start, end string }{
 		{"lone start", "2026-01-01", ""},
