@@ -41,7 +41,15 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # DB tests skip without MONGODB_URI, which is why every High bug in the
+      # money store shipped untested. Each test package uses its own throwaway
+      # database (`miser_test`, `tasks_test`, …), so this never touches `hermes`.
+      # MONGODB_DB is still mandatory: internal/reports falls back to `hermes`
+      # when it is unset, which is the production database.
       - name: Run tests (DB tests skip without MONGODB_URI)
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: ci_test
         run: go test ./...
 
   # scripts/hermes.sh and friends are the documented entry point for the whole

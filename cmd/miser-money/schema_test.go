@@ -28,11 +28,13 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		{"create_account", createAccountInput{}, []string{"name"}},
 		{"list_accounts", listAccountsInput{}, nil},
 		{"archive_account", archiveAccountInput{}, []string{"name"}},
+		{"unarchive_account", unarchiveAccountInput{}, []string{"name"}},
 		{"get_balances", getBalancesInput{}, nil},
-		// store.Insert rejects amount <= 0 and an unknown type; `category` is NOT in this
-		// list because an empty or unrecognised one is filed under "other" rather than
-		// rejected. `account` is rejected with a list of valid names. date is filled in
-		// by the handler, and sending_to is required by the store only for a transfer.
+		// store.Insert rejects amount <= 0, an unknown type, and an unknown
+		// category; `category` is NOT in this list because *blank* still means
+		// "other", so the field stays optional. `account` is rejected with a
+		// list of valid names. date is filled in by the handler, and sending_to
+		// is required by the store only for a transfer.
 		{"log_transaction", logTransactionInput{},
 			[]string{"type", "amount", "account"}},
 		// Required because absence is silently wrong, not because the store rejects it.
@@ -82,10 +84,10 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 	optional := map[string][]string{
 		"create_account":      {"type", "balance"},
 		"list_accounts":       {"include_archived"},
-		"log_transaction":     {"sending_to", "note", "date"},
+		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
 		"query_transactions":  {"type", "category", "account"},
 		"summarize":           {"period", "start", "end", "account"},
-		"delete_transactions": {"amount", "category", "date", "account"},
+		"delete_transactions": {"id", "amount", "category", "date", "account", "dry_run"},
 		"prune_old":           {"days", "dry_run"},
 	}
 	inputs := map[string]any{

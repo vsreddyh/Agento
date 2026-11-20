@@ -3,6 +3,7 @@ package money
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,10 +130,10 @@ func TestInsertBalances(t *testing.T) {
 	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "HDFC", "", "", ""); err != nil {
+	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "HDFC", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Insert(ctx, "2026-09-02", 5000, "income", "salary", "HDFC", "", "", ""); err != nil {
+	if _, _, err := s.Insert(ctx, "2026-09-02", 5000, "income", "salary", "HDFC", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	b := balances(t, s)
@@ -147,7 +148,7 @@ func TestTransferBalances(t *testing.T) {
 	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", ""); err != nil {
+	if _, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	b := balances(t, s)
@@ -183,14 +184,14 @@ func TestTransferValidation(t *testing.T) {
 		if c.extra != "" {
 			st = "Cash"
 		}
-		if _, err := s.Insert(ctx, "2026-09-01", 100, c.typ, "other", "HDFC", st, "", ""); err == nil {
+		if _, _, err := s.Insert(ctx, "2026-09-01", 100, c.typ, "other", "HDFC", st, "", "", ""); err == nil {
 			t.Fatalf("expected error for %+v", c)
 		}
 	}
 	if _, err := s.ArchiveAccount(ctx, "Cash"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Insert(ctx, "2026-09-01", 100, "transfer", "other", "HDFC", "Cash", "", ""); err == nil {
+	if _, _, err := s.Insert(ctx, "2026-09-01", 100, "transfer", "other", "HDFC", "Cash", "", "", ""); err == nil {
 		t.Fatal("expected archived-dest error")
 	}
 	rows, err := s.Query(ctx, "2026-01-01", "2026-12-31", nil, nil, nil)
@@ -208,7 +209,7 @@ func TestBlankAccountRequiresSetup(t *testing.T) {
 	if _, err := s.accts.DeleteMany(ctx, bson.M{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "other", "", "", "", ""); err == nil {
+	if _, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "other", "", "", "", "", ""); err == nil {
 		t.Fatal("expected no-accounts error")
 	} else if es := err.Error(); len(es) < 10 || !containsStr(es, "no accounts found") {
 		t.Fatalf("got %v", err)
@@ -216,7 +217,7 @@ func TestBlankAccountRequiresSetup(t *testing.T) {
 	if _, err := s.CreateAccount(ctx, "Cash", "cash", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "other", "", "", "", ""); err == nil {
+	if _, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "other", "", "", "", "", ""); err == nil {
 		t.Fatal("expected account-required error")
 	} else if !containsStr(err.Error(), "account is required") {
 		t.Fatalf("got %v", err)
@@ -233,7 +234,7 @@ func TestDeleteInvertsBalances(t *testing.T) {
 	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", ""); err != nil {
+	if _, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	n, err := s.Delete(ctx, map[string]any{"category": "other"})
@@ -248,7 +249,7 @@ func TestDeleteInvertsBalances(t *testing.T) {
 func TestFixLastAdjustsBalances(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", ""); err != nil {
+	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	done, err := s.FixLast(ctx, 350)
@@ -273,7 +274,7 @@ func TestConcurrentInserts(t *testing.T) {
 	done := make(chan error, 20)
 	for i := 0; i < 20; i++ {
 		go func() {
-			_, err := s.Insert(ctx, "2026-09-01", 10, "income", "salary", "HDFC", "", "", "")
+			_, _, err := s.Insert(ctx, "2026-09-01", 10, "income", "salary", "HDFC", "", "", "", "")
 			done <- err
 		}()
 	}
@@ -293,7 +294,7 @@ func TestReconciliationAfterPrune(t *testing.T) {
 	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Insert(ctx, "2020-01-01", 100, "expense", "other", "HDFC", "", "", ""); err != nil {
+	if _, _, err := s.Insert(ctx, "2020-01-01", 100, "expense", "other", "HDFC", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if b := balances(t, s); b["HDFC"] != 900 {
@@ -309,6 +310,156 @@ func TestReconciliationAfterPrune(t *testing.T) {
 	rows, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("got %v %v", rows, err)
+	}
+}
+
+func TestUnknownCategoryIsRejected(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "utilities", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("an unknown category was accepted; it used to be refiled under 'other'")
+	} else if !containsStr(err.Error(), "does not exist") {
+		t.Fatalf("got %v", err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "", "Cash", "", "", "", ""); err != nil {
+		t.Fatalf("blank category should still default to other: %v", err)
+	}
+}
+
+func TestIdempotencyKeyMakesARetryANoOp(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	id1, created1, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", "retry-1")
+	if err != nil || !created1 {
+		t.Fatalf("first: created=%v err=%v", created1, err)
+	}
+	id2, created2, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", "retry-1")
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if created2 {
+		t.Fatal("the retry wrote a second row")
+	}
+	if id1 != id2 {
+		t.Fatalf("retry returned %s, want the original %s", id2, id1)
+	}
+	if b := balances(t, s); b["Cash"] != -300 {
+		t.Fatalf("balance %v — the retry moved it", b)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+}
+
+// An overlong key is rejected, never truncated: truncating to the cap makes a
+// 201-byte key byte-identical to the 200-byte key that is its own prefix, so
+// the unique index sees a duplicate and a genuinely different request is handed
+// the first one's row as a "replay".
+func TestOverlongIdempotencyKeyIsRejectedNotTruncated(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	atLimit := strings.Repeat("k", IdempotencyKeyMax)
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", "", "", atLimit); err != nil {
+		t.Fatalf("a key of exactly the limit must be accepted: %v", err)
+	}
+	over := atLimit + "X"
+	if _, _, err := s.Insert(ctx, "2026-09-01", 99, "expense", "other", "Cash", "", "", "", over); err == nil {
+		t.Fatal("an overlong key was accepted; it would collide with its own prefix")
+	} else if !containsStr(err.Error(), "shorter key") {
+		t.Fatalf("the error does not say how to fix it: %v", err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, %v — the overlong request wrote", len(rows), err)
+	}
+}
+
+func TestUnarchiveRestoresWrites(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if ok, err := s.ArchiveAccount(ctx, "Cash"); err != nil || !ok {
+		t.Fatalf("archive: %v %v", ok, err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("an archived account accepted a write")
+	}
+	if ok, err := s.UnarchiveAccount(ctx, "Cash"); err != nil || !ok {
+		t.Fatalf("unarchive: %v %v", ok, err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", "", "", ""); err != nil {
+		t.Fatalf("unarchived account still refuses writes: %v", err)
+	}
+}
+
+func TestDeleteByIDLeavesSiblings(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	id1, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.Delete(ctx, map[string]any{"id": id1})
+	if err != nil || n != 1 {
+		t.Fatalf("deleted %d, %v", n, err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, %v — the sibling went too", len(rows), err)
+	}
+	if b := balances(t, s); b["Cash"] != -300 {
+		t.Fatalf("balance %v", b)
+	}
+}
+
+func TestMatchIsADryRun(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.Match(ctx, map[string]any{"category": "groceries"})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("matched %d, %v", len(rows), err)
+	}
+	if rows[0]["account"] != "Cash" {
+		t.Fatalf("row has no account name: %v", rows[0])
+	}
+	after, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(after) != 2 {
+		t.Fatalf("Match deleted rows: %d, %v", len(after), err)
+	}
+}
+
+func TestQueryNamesItsAccounts(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+	if rows[0]["account"] != "HDFC" || rows[0]["sending_to_account"] != "Cash" {
+		t.Fatalf("names missing from the row: %v", rows[0])
+	}
+	accts, err := s.ListAccounts(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range accts {
+		if id, _ := a["_id"].(string); id == "" {
+			t.Fatalf("account %v has no id", a["name"])
+		}
 	}
 }
 

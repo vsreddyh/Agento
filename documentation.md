@@ -181,7 +181,8 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 
 | Collection | Associated server | Schema / Keys |
 |---|---|---|
-| `money_transactions` | Miser-money | `date` (YYYY-MM-DD), `amount` (float), `type` (income\|expense), `category` (normalized string), `note` (string) |
+| `money_accounts` | Miser-money | `name` (unique), `type`, `balance` (stored running balance), `archived`, `createdAt` — **permanent**. An archived name stays taken; `unarchive_account` restores it |
+| `money_transactions` | Miser-money | `date` (YYYY-MM-DD), `amount` (float, >0), `type` (income\|expense\|transfer), `category` (one of the fixed list; unknown names are rejected), `note`, `source`, `accountId` (required), `sending_to` (transfers only), `idempotencyKey` (optional, UNIQUE+SPARSE — a retried log returns the original row instead of writing a second), `createdAt`, `expiresAt` (TTL, `date` + 90d) |
 | `hc_meals` | Health-check | `date` (YYYY-MM-DD), `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, `totals` (computed), `createdAt` |
 | `hc_days` | Health-check / Health Sync | `date` (YYYY-MM-DD, unique), `steps` (int), `active_kcal` (float), `sleep_hours` (float), `workouts[{type, minutes, kcal}]`, `updatedAt` |
 | `hc_weight` | Health-check | `date` (YYYY-MM-DD, unique), `kg` (float) — **exempt from retention pruning** |

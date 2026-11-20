@@ -8,14 +8,15 @@ extended to **multiple accounts** with **atomic stored balances**.
 | Tool | Purpose |
 |---|---|
 | `create_account` | Create an account with starting balance. Required: name. Optional: type (defaults to cash), balance |
-| `list_accounts` | List accounts with stored balances. Optional: include_archived |
-| `archive_account` | Soft-delete (history stays, blocked from new writes). Required: name |
+| `list_accounts` | List accounts with stored balances **and ids** — transaction rows reference accounts by id, so this is the id→name map. Optional: include_archived |
+| `archive_account` | Soft-delete (history stays, blocked from new writes). The name stays taken. Required: name |
+| `unarchive_account` | Restore an archived account so it accepts writes again (inverse of `archive_account`). Required: name |
 | `get_balances` | Per-account balances + total across active accounts. Takes no arguments |
-| `log_transaction` | Log income / expense / transfer. Required: type, amount, account. Optional: category (an empty or unrecognised one is filed under `other`), sending_to (required by the store for a transfer, rejected otherwise), note, date (defaults to today) |
+| `log_transaction` | Log income / expense / transfer. Required: type, amount, account. Optional: category (blank = `other`; an unknown name is **rejected**, not silently refiled), sending_to (required by the store for a transfer, rejected otherwise), note, date (defaults to today), idempotency_key (a retry returns the original id with `created: false` instead of double-logging) |
 | `query_transactions` | List in a date range. Required: start, end — both must be real `YYYY-MM-DD` dates or the call is rejected. Optional: type/category/account filter |
 | `summarize` | Income, expense, net + per-category breakdown. Give a period phrase **or** an explicit start/end pair — half a pair is rejected rather than ignored. Optional: account |
 | `fix_last_transaction` | Correct the most recent entry (balances adjusted). Required: amount |
-| `delete_transactions` | Delete by amount/category/date/account (balances inverted). At least one filter is required, so no single argument is marked required in the schema |
+| `delete_transactions` | Delete by `id`, or by amount/category/date/account (balances inverted). `id` cannot be combined with the filters. `dry_run` defaults to **true** and only reports the matching rows; pass `dry_run=false` to delete |
 | `prune_old` | Immediate 90-day purge (TTL does this natively; manual override). Optional: days (0 means 90), dry_run (absent means true) |
 
 ## Schema (MongoDB `hermes` DB)
@@ -25,10 +26,13 @@ extended to **multiple accounts** with **atomic stored balances**.
 
 **`money_transactions`** — `date` (YYYY-MM-DD), `amount` (>0), `type`
 (income|expense|transfer), `category`, `note`, `source`, `accountId`
-(required), `sending_to` (transfers only: receiving account), `createdAt`, `expiresAt`
+(required), `sending_to` (transfers only: receiving account), `idempotencyKey`
+(optional, unique + sparse), `createdAt`, `expiresAt`
 (= date + 90d, TTL target).
 
-Strict `$jsonSchema` validators + indexes (TTL, account/date, category/date)
+Indexes: `uniq_name` (accounts), `ttl_expiresAt`, `uniq_idempotency`,
+`acct_date`, `sendingto_date`, `date_type`, `cat_date`. No `$jsonSchema`
+validators and no views — validation lives in the store.
 
 ## Rejected input
 
@@ -48,20 +52,18 @@ Strict `$jsonSchema` validators + indexes (TTL, account/date, category/date)
 
 `store.Prune` re-defaults any `days <= 0` to the retention window, so a negative `prune_old.days`
 does not reach the delete with a nonsense cutoff.
-+ views (`money_monthly_summary`, `money_category_breakdown`, `money_balances`).
-See `schema.py`.
 
 ### Key invariants
 
 - **Atomicity:** every mutation runs in a multi-document transaction that
   writes the doc(s) *and* the `$inc` balance delta(s) together. Never write
-  these collections directly — only via `store.py`.
+  these collections directly — only via `store.go`.
 - **Balances survive expiry:** retention purges (TTL or `prune_old`) delete
   docs *without* touching balances. Only user-initiated `delete` inverts.
   Balance = all activity ever absorbed (not just the
   surviving 90-day window).
 - **Transfers** are a single doc (`accountId` = from, `sending_to` = to);
-  enforced in `store.py`: both accounts exist, unarchived, from ≠ to.
+  enforced in `store.go`: both accounts exist, unarchived, from ≠ to.
 
 ## Run
 

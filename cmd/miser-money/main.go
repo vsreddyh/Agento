@@ -87,10 +87,10 @@ type logTransactionInput struct {
 	// store.Insert rejects a non-positive amount and an unknown type.
 	Type   string  `json:"type"`
 	Amount float64 `json:"amount"`
-	// NOT required: the store lowercases an empty category to "other" and does the same
-	// for one it does not recognise, so an absent category is never rejected — it is
-	// filed under "other". Marking it required would reject a call the server accepts,
-	// which is the failure mode this change exists to remove.
+	// NOT required: the store lowercases an empty category to "other", so an
+	// absent category is never rejected. An *unknown* name is rejected — the
+	// caller must learn that it does not exist — but marking the field required
+	// would reject a call the server accepts (blank means "other").
 	Category string `json:"category,omitempty"`
 	// "account required" per the tool description.
 	Account string `json:"account"`
@@ -100,6 +100,9 @@ type logTransactionInput struct {
 	Note      string `json:"note,omitempty"`
 	// The handler fills in today() when absent.
 	Date string `json:"date,omitempty"`
+	// Makes a retried call a no-op: the first write wins and the same id comes
+	// back. Optional, so a caller that never retries need not supply one.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 type queryTransactionsInput struct {
@@ -128,12 +131,23 @@ type fixLastTransactionInput struct {
 }
 
 type deleteTransactionsInput struct {
-	// At least one filter is required, and the server rejects none — so no field can be
-	// marked required without forbidding a legitimate combination.
+	// Targets exactly one row. Cannot be combined with the filters below —
+	// "the entry I just logged" must not turn into "every row like it".
+	ID string `json:"id,omitempty"`
+	// At least one filter (or id) is required, and the server rejects none — so no field
+	// can be marked required without forbidding a legitimate combination.
 	Amount   float64 `json:"amount,omitempty"`
 	Category string  `json:"category,omitempty"`
 	Date     string  `json:"date,omitempty"`
 	Account  string  `json:"account,omitempty"`
+	// A pointer because nil is meaningful: nil means dry run, which is the safe
+	// default for anything that deletes.
+	DryRun *bool `json:"dry_run,omitempty"`
+}
+
+type unarchiveAccountInput struct {
+	// Identified by name, the inverse of archive_account.
+	Name string `json:"name"`
 }
 
 type pruneOldInput struct {
@@ -236,7 +250,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_accounts",
-		Description: "List accounts with their current (stored) balances."},
+		Description: "List accounts with their current (stored) balances and ids. Transaction rows reference accounts by id, so this is how an id maps back to a name."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listAccountsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListAccounts(ctx, in.IncludeArchived)
 			if err != nil {
@@ -258,6 +272,19 @@ func registerTools(s *mcp.Server) {
 			return result(map[string]any{"ok": true, "archived": in.Name})
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "unarchive_account",
+		Description: "Restore an archived account so it accepts writes again (inverse of archive_account)."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in unarchiveAccountInput) (*mcp.CallToolResult, map[string]any, error) {
+			done, err := store.UnarchiveAccount(ctx, in.Name)
+			if err != nil {
+				return fail(err)
+			}
+			if !done {
+				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown account '%s'", in.Name)})
+			}
+			return result(map[string]any{"ok": true, "unarchived": in.Name})
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "get_balances",
 		Description: "Current per-account balances plus total across active accounts."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBalancesInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -270,18 +297,19 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today."},
+		Description: "Log an income, expense, or transfer (atomic with balance update). account required; sending_to required for transfers; date YYYY-MM-DD defaults to today; category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank = other; anything else is rejected). idempotency_key makes a retry a no-op."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if day == "" {
 				day = today()
 			}
 			typ := strings.ToLower(in.Type)
-			tid, err := store.Insert(ctx, day, in.Amount, typ, in.Category, in.Account, in.SendingTo, in.Note, "log_transaction")
+			tid, created, err := store.Insert(ctx, day, in.Amount, typ, in.Category, in.Account, in.SendingTo, in.Note, "log_transaction", in.IdempotencyKey)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "id": tid, "date": day, "type": typ, "amount": in.Amount})
+			return result(map[string]any{"ok": true, "id": tid, "date": day, "type": typ,
+				"amount": in.Amount, "created": created})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
@@ -363,29 +391,48 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete matching transactions (balances inverted atomically). At least one filter required."},
+		Description: "Delete transactions (balances inverted atomically). Target one row by id, or filter by amount/category/date/account — id cannot be combined with filters. dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			filt := map[string]any{}
-			if in.Amount != 0 {
-				filt["amount"] = in.Amount
+			if in.ID != "" {
+				if in.Amount != 0 || in.Category != "" || in.Date != "" || in.Account != "" {
+					return result(map[string]any{"ok": false, "error": "id cannot be combined with amount, category, date or account."})
+				}
+				filt["id"] = in.ID
+			} else {
+				if in.Amount != 0 {
+					filt["amount"] = in.Amount
+				}
+				if in.Category != "" {
+					filt["category"] = in.Category
+				}
+				if in.Date != "" {
+					filt["date"] = in.Date
+				}
+				if in.Account != "" {
+					filt["account"] = in.Account
+				}
+				if len(filt) == 0 {
+					return result(map[string]any{"ok": false, "error": "Provide id, or at least one of amount, category, date, account."})
+				}
 			}
-			if in.Category != "" {
-				filt["category"] = in.Category
+			dry := true
+			if in.DryRun != nil {
+				dry = *in.DryRun
 			}
-			if in.Date != "" {
-				filt["date"] = in.Date
-			}
-			if in.Account != "" {
-				filt["account"] = in.Account
-			}
-			if len(filt) == 0 {
-				return result(map[string]any{"ok": false, "error": "Provide at least one of amount, category, date, account."})
+			if dry {
+				rows, err := store.Match(ctx, filt)
+				if err != nil {
+					return fail(err)
+				}
+				return result(map[string]any{"ok": true, "dry_run": true,
+					"would_delete": len(rows), "transactions": rows})
 			}
 			n, err := store.Delete(ctx, filt)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "deleted": n})
+			return result(map[string]any{"ok": true, "dry_run": false, "deleted": n})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",

@@ -107,6 +107,23 @@ func TestQueryTransactionsRejectsUnusableBounds(t *testing.T) {
 	}
 }
 
+// An unknown category used to be refiled under "other" and reported as if it had
+// been stored: the caller asked for "utilities", got "other", and only found out
+// by reading the row back. The store now rejects it before any write, so the
+// handler surfaces a real error. `store` is nil here — the rejection happens
+// before the receiver is dereferenced.
+func TestLogTransactionRejectsUnknownCategory(t *testing.T) {
+	_, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount": 100, "account": "Cash", "category": "utilities",
+	})
+	if errMsg == "" {
+		t.Fatal("an unknown category was accepted; it used to be silently stored as 'other'")
+	}
+	if !strings.Contains(errMsg, "does not exist") || !strings.Contains(errMsg, "utilities") {
+		t.Errorf("error %q does not name the offending category", errMsg)
+	}
+}
+
 func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
 	for _, c := range []struct{ name, start, end string }{
 		{"lone start", "2026-01-01", ""},
