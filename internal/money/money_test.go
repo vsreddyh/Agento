@@ -111,6 +111,8 @@ func TestPeriodMonthMatchesWholeWordsOnly(t *testing.T) {
 		{"today", "2026-09-05", "2026-09-05"},
 		{"yesterday", "2026-09-04", "2026-09-04"},
 		{"thisweek", "2026-08-31", "2026-09-05"},
+		{"lastmonth", "2026-08-01", "2026-08-31"},
+		{"june 2100", "2100-06-01", "2100-06-30"},
 	} {
 		s, e, _ := ResolvePeriod(tc.in, today)
 		if s != tc.s || e != tc.e {

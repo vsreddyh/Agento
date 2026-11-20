@@ -241,7 +241,7 @@ func main() {
 // signal that the guard was removed.
 func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
-		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty defaults to cash)."},
+		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty defaults to cash). Optional opening balance in the same call (defaults to 0, so no separate funding entry is needed)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			if strings.TrimSpace(in.Type) == "" {
 				in.Type = "cash"
@@ -375,7 +375,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
-		Description: "Summarize income, expenses, net total and per-category breakdown (transfers are counted but excluded from income/expense/net; by_category is expense-only, so income categories never rank). Optional account filter (matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, an explicit pair wins over a period phrase if you send both, neither means this month. Supported phrases: today, yesterday, this week, last month, month names with optional year (June, June 2025), this month / so far / month — matched on whole words throughout, so maybe/mayhem/todays/monthly do not hit a branch. Anything else means this month too (2025, last year and banana all return this month, not an error)."},
+		Description: "Summarize income, expenses, net total and per-category breakdown (transfers are counted but excluded from income/expense/net; by_category is expense-only, so income categories never rank). Optional account filter (matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, an explicit pair wins over a period phrase if you send both, neither means this month. Supported phrases: today, yesterday, this week, last month (spaceless lastmonth works), month names with optional 1000-2999 year (June, June 2025, June 2100), this month / so far / month — matched on whole words throughout, so maybe/mayhem/todays/monthly do not hit a branch. Anything else means this month too (2025, last year and banana all return this month, not an error)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in summarizeInput) (*mcp.CallToolResult, map[string]any, error) {
 			// An explicit range wins over `period` — see the tool description, which now
 			// says so instead of leaving the precedence to be discovered.
@@ -502,7 +502,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",
-		Description: "Immediate purge, defaulting to the 90-day retention window (TTL handles this natively in the background). days <= 0 means 90 — including negatives, never an error. dry_run=true (default) only reports."},
+		Description: "Immediate purge, defaulting to the 90-day retention window (TTL handles this natively in the background). Does NOT touch balances — unlike delete_transactions, which inverts them. days <= 0 means 90 — including negatives, never an error. dry_run=true (default) only reports."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in pruneOldInput) (*mcp.CallToolResult, map[string]any, error) {
 			days := in.Days
 			if days <= 0 {
