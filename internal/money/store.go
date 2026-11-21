@@ -1071,17 +1071,21 @@ func oidHex(v any) string {
 // this codebase, but a stray one converts exactly like a double rather than
 // being left behind as the sole decimal in a long world.
 // Rounding heals old float dust (99.9999999999 rupees → 10000 paise) instead
-// of preserving it.
-//
+// of preserving it. Sub-paise dust (0.001–0.004, allowed by the old
+// `amount <= 0` check) floors to the 1-paise minimum on transactions: a 0
+// amount would violate the new >0 invariant and be undeletable by amount
+// (the tool rejects 0 as "absent"). Balances keep a floored 0 — an empty
+// account legitimately holds nothing.
 // The whole migration runs inside one transaction (see transact): a
 // read-then-$set loop racing a concurrent balance $inc could otherwise
 // clobber the increment on first boot after deploy.
 func (s *Store) migrateFloatMoney(ctx context.Context) error {
 	return s.transact(ctx, func(sc context.Context) error {
 		for _, m := range []struct {
-			coll  *mongoDrv.Collection
-			field string
-		}{{s.accts, "balance"}, {s.txns, "amount"}} {
+			coll     *mongoDrv.Collection
+			field    string
+			floorOne bool // transactions: no 0-paise rows may exist
+		}{{s.accts, "balance", false}, {s.txns, "amount", true}} {
 			cur, err := m.coll.Find(sc, bson.M{m.field: bson.M{"$type": []string{"double", "decimal"}}})
 			if err != nil {
 				return err
@@ -1092,6 +1096,9 @@ func (s *Store) migrateFloatMoney(ctx context.Context) error {
 			}
 			for _, r := range rows {
 				paise := paiseOf(r[m.field])
+				if m.floorOne && paise < 1 {
+					paise = 1
+				}
 				if _, err := m.coll.UpdateOne(sc, bson.M{"_id": r["_id"]},
 					bson.M{"$set": bson.M{m.field: paise}}); err != nil {
 					return err

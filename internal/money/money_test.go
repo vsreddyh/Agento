@@ -896,6 +896,16 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 		"expiresAt": expiry("2026-09-02", RetentionDays)}); err != nil {
 		t.Fatal(err)
 	}
+	// Legacy sub-paise dust (allowed by the old amount<=0 check) floors to
+	// the 1-paise minimum instead of becoming a 0 row the new code calls
+	// invalid and the tool cannot delete by amount.
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-03", "amount": 0.004,
+		"type": "expense", "category": "groceries", "note": "", "source": "mcp",
+		"accountId": primitive.NewObjectID(),
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+		"expiresAt": expiry("2026-09-03", RetentionDays)}); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.EnsureSchema(ctx); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
@@ -919,6 +929,31 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	}
 	if amt, ok := decTxn["amount"].(int64); !ok || amt != 302 {
 		t.Fatalf("decimal amount migrated to %v (%T), want int64 302", decTxn["amount"], decTxn["amount"])
+	}
+	var dustTxn bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"date": "2026-09-03"}).Decode(&dustTxn); err != nil {
+		t.Fatal(err)
+	}
+	if amt, ok := dustTxn["amount"].(int64); !ok || amt != 1 {
+		t.Fatalf("sub-paise amount migrated to %v (%T), want int64 1 (floored, never 0)", dustTxn["amount"], dustTxn["amount"])
+	}
+	// No zero-amount rows exist post-migration, so the tool's 0-rejection
+	// ("no zero rows exist") holds on migrated DBs too.
+	n, err := s.txns.CountDocuments(ctx, bson.M{"amount": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("migration left %d zero-amount rows, which the tool cannot delete by amount", n)
+	}
+	// The floored row reads back as 0.01 rupees and is matchable by its
+	// paise value.
+	matched, err := s.Match(ctx, map[string]any{"amount": int64(1)})
+	if err != nil || len(matched) != 1 {
+		t.Fatalf("paise-1 match got %d rows, %v", len(matched), err)
+	}
+	if fnum(matched[0]["amount"]) != 0.01 {
+		t.Fatalf("floored row reads back as %v, want 0.01", matched[0]["amount"])
 	}
 	// Idempotent: a second run changes nothing and errors nothing.
 	if err := s.EnsureSchema(ctx); err != nil {
