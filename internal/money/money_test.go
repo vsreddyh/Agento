@@ -92,6 +92,44 @@ func TestPeriods(t *testing.T) {
 	}
 }
 
+// Operator "today" is IST, not server UTC: a log at 00:30 IST must land on
+// the user's date, not UTC's yesterday. IST has no DST, so the fixed zone is
+// exact with no tzdata dependency — and these midnight-boundary cases pin
+// that down with fixed instants instead of racing time.Now().
+func TestTodayInHandlesMidnightBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"2026-01-01T18:29:59Z", "2026-01-01"}, // 23:59:59 IST, still Jan 1
+		{"2026-01-01T18:30:00Z", "2026-01-02"}, // 00:00 IST, already Jan 2
+		{"2026-06-15T00:00:00Z", "2026-06-15"}, // 05:30 IST, same day
+	} {
+		in, err := time.Parse(time.RFC3339, tc.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := todayIn(IST, in); got != tc.want {
+			t.Errorf("todayIn(IST, %s) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Smoke test: TodayIST agrees with a UTC+5:30 shift of now. Both sides read
+// the clock, so an IST-midnight tick between the two reads is accepted
+// (either adjacent date is correct); anything else is a zone bug.
+func TestTodayISTMatchesUTCPlus530(t *testing.T) {
+	before := time.Now().UTC().Add(5*time.Hour + 30*time.Minute).Format("2006-01-02")
+	got := TodayIST()
+	after := time.Now().UTC().Add(5*time.Hour + 30*time.Minute).Format("2006-01-02")
+	if got != before && got != after {
+		t.Fatalf("TodayIST() = %s, want %s (or %s across a midnight tick)", got, before, after)
+	}
+	if NowIST().Location().String() != "IST" {
+		t.Fatalf("NowIST zone = %s, want IST", NowIST().Location())
+	}
+}
+
 // Month names match on whole words: "maybe"/"mayhem" must not resolve to May,
 // "marching orders" must not resolve to March — they fall back to this month
 // like any other unrecognized phrase. Same for the other keywords: "todays"

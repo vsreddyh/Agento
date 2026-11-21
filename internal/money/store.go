@@ -49,6 +49,11 @@ func fail(format string, args ...any) *StoreError {
 	return &StoreError{Msg: fmt.Sprintf(format, args...)}
 }
 
+// expiry maps a YYYY-MM-DD date to its TTL instant: UTC midnight of that
+// date, plus the retention window — i.e. about 05:30 IST on the target day,
+// not IST midnight. So a row dated Sep 1 expires at 00:00 UTC Nov 30
+// (≈05:30 IST), and an operator watching for it at IST midnight will wait
+// five and a half hours. Documented wherever expiry surfaces.
 func expiry(day string, days int) primitive.DateTime {
 	d, _ := time.Parse("2006-01-02", day)
 	return primitive.NewDateTimeFromTime(d.AddDate(0, 0, days))
@@ -954,6 +959,13 @@ func (s *Store) Summarize(ctx context.Context, start, end string, account *strin
 }
 
 // Prune deletes old docs WITHOUT inverting balances (TTL parity).
+// The cutoff uses the same UTC frame as the TTL index it mirrors (expiresAt
+// is a UTC instant): prune is a maintenance operation keyed to TTL's frame,
+// not a user-visible date. Boundary note: prune keeps `date == cutoff`
+// (`$lt`) while TTL expires that same row at 00:00 UTC today (plus monitor
+// lag), so dry-run counts can trail TTL by a day — same frame, not same
+// instant. User-visible dates (default log date, period phrases) are IST;
+// instants and retention math are UTC.
 func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (int64, error) {
 	if days <= 0 {
 		days = RetentionDays
