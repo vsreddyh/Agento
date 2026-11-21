@@ -976,8 +976,9 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 
 // Pagination slices by date order with a stable _id tiebreak, and reports
 // the unpaged total so a short page is never mistaken for the end.
-// limit<=0 means no cap (offset still applies); Summarize bypasses Query
-// via queryFilter + raw Find since it must total everything.
+// limit==0 means no cap (offset still applies); negative limits are rejected
+// like negative offsets. Summarize bypasses Query via queryFilter + raw Find
+// since it must total everything.
 func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -1024,6 +1025,13 @@ func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	// Negative offsets fail here too, not just in the handler.
 	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, -1); err == nil {
 		t.Fatal("negative store offset was accepted; expected a rejection")
+	}
+	// A negative limit fails instead of silently dumping everything: only
+	// an explicit 0 means no cap.
+	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, -1, 0); err == nil {
+		t.Fatal("negative store limit was accepted as unlimited; expected a rejection")
+	} else if !containsStr(err.Error(), "limit") {
+		t.Fatalf("error %q does not name the limit", err)
 	}
 }
 

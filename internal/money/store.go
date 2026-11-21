@@ -827,12 +827,14 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 // `delete by id` workflow is unreachable from a query — the caller would hold a
 // row with no id to delete it by.
 //
-// Pagination: limit<=0 means no cap — offset still applies, so a direct
-// store caller pages the full match with limit 0 + growing offsets. At most
-// `limit` rows starting at `offset`, with `total` reporting the unpaged match
-// count so the caller can tell a short page from the end. Sort is date, then
-// `_id`, so pages are stable across calls. Negative offsets are rejected
-// (typo, not page 0); the handler checks first with a tool-named error.
+// Pagination: limit==0 means no cap (direct store use only — the handler
+// clamps to 1..500, so MCP has no unlimited page); limits below zero are
+// rejected like negative offsets, since an unbounded dump must never be the
+// result of a typo. At most `limit` rows starting at `offset`, with `total`
+// reporting the unpaged match count so the caller can tell a short page from
+// the end. Sort is date, then `_id`, so pages are stable across calls.
+// Negative offsets are rejected (typo, not page 0); the handler checks first
+// with a tool-named error.
 
 func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string, limit, offset int) ([]bson.M, int64, error) {
 	filt, err := s.queryFilter(ctx, start, end, typ, category, account)
@@ -841,9 +843,14 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	}
 	// Rejected like the handler does: a negative skip is a typo, not page 0.
 	// The handler checks first (tool-named error); this is defense for
-	// direct store callers, who otherwise get a driver error.
+	// direct store callers, who otherwise get a driver error. A negative
+	// limit is the same class of typo (unlimited must be asked for with
+	// exactly 0, never implied), so it fails here too.
 	if offset < 0 {
 		return nil, 0, fail("query_transactions offset must be >= 0 — got %d", offset)
+	}
+	if limit < 0 {
+		return nil, 0, fail("query_transactions limit must be >= 0 — got %d (0 means no cap)", limit)
 	}
 	total, err := s.txns.CountDocuments(ctx, filt)
 	if err != nil {
