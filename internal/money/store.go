@@ -953,13 +953,16 @@ func (s *Store) Summarize(ctx context.Context, start, end string, account *strin
 }
 
 // Prune deletes old docs WITHOUT inverting balances (TTL parity).
-// The cutoff is computed from the IST calendar day, like every other
-// user-visible date boundary in this package.
+// The cutoff stays on UTC like the TTL index it mirrors (expiresAt is a UTC
+// instant): prune is a maintenance operation keyed to TTL's frame, not a
+// user-visible date, so matching TTL exactly matters more than matching the
+// operator's calendar on boundary dates. User-visible dates (default log
+// date, period phrases) are IST; instants and retention math are UTC.
 func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (int64, error) {
 	if days <= 0 {
 		days = RetentionDays
 	}
-	cutoff := NowIST().AddDate(0, 0, -days).Format("2006-01-02")
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
 	filt := bson.M{"date": bson.M{"$lt": cutoff}}
 	if dryRun {
 		return s.txns.CountDocuments(ctx, filt)

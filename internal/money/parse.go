@@ -32,7 +32,11 @@ var monthNames = []string{"", "January", "February", "March", "April", "May", "J
 var IST = time.FixedZone("IST", 5*3600+30*60)
 
 // TodayIST reports the current calendar day for the operator.
-func TodayIST() string { return time.Now().In(IST).Format("2006-01-02") }
+func TodayIST() string { return todayIn(IST, time.Now()) }
+
+// todayIn renders a calendar day in the given zone. Split out so tests can
+// pin midnight boundaries with fixed instants instead of racing time.Now().
+func todayIn(loc *time.Location, t time.Time) string { return t.In(loc).Format("2006-01-02") }
 
 // NowIST reports the current instant in the operator zone, for period
 // resolution and date-arithmetic cutoffs.
