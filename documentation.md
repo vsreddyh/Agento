@@ -217,7 +217,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 
 | Target | Retention Window | Action |
 |---|---|---|
-| `money_transactions` | > 90 days | Autowiped when `date < today - 90d` |
+| `money_transactions` | > 90 days | Autowiped when `date < (UTC today − 90d)` — UTC like the TTL index, though dates log in IST by default, so a boundary date can read a day off 00:00–05:30 IST; `date == cutoff` is kept (`<`, not `<=`) |
 | `hc_meals` | > 30 days | Pruned when `date < today - 30d` |
 | `hc_days` | > 30 days | Pruned when `date < today - 30d` |
 | `hc_weight` | Permanent | **Never pruned** |
