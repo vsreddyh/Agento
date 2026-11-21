@@ -860,7 +860,7 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	if limit > 0 {
 		findOpts.SetLimit(int64(limit))
 	}
-	// Skips apply with or without a limit: limit<=0 means "no cap", not
+	// Skips apply with or without a limit: limit==0 means "no cap", not
 	// "ignore the offset" — otherwise an offset page silently restarts.
 	findOpts.SetSkip(int64(offset))
 	cur, err := s.txns.Find(ctx, filt, findOpts)
