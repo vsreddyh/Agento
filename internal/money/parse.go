@@ -24,6 +24,20 @@ var months = map[string]int{
 var monthNames = []string{"", "January", "February", "March", "April", "May", "June",
 	"July", "August", "September", "October", "November", "December"}
 
+// IST is the operator timezone (UTC+5:30, no DST — ever — so a FixedZone is
+// exact with no tzdata dependency). Server clocks run UTC; every user-visible
+// "today" (default log date, period resolution, prune cutoff) is computed in
+// IST so a log at 00:30 IST lands on the user's date, not UTC's yesterday.
+// Instants (createdAt) stay UTC — only calendar-day boundaries use IST.
+var IST = time.FixedZone("IST", 5*3600+30*60)
+
+// TodayIST reports the current calendar day for the operator.
+func TodayIST() string { return time.Now().In(IST).Format("2006-01-02") }
+
+// NowIST reports the current instant in the operator zone, for period
+// resolution and date-arithmetic cutoffs.
+func NowIST() time.Time { return time.Now().In(IST) }
+
 var monthRE = regexp.MustCompile(`\b(january|february|march|april|may|june|july|august|september|october|november|december)\b`)
 
 // Year matches whole 1000-2999 numbers, so "June 2100" resolves to 2100

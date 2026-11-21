@@ -92,6 +92,19 @@ func TestPeriods(t *testing.T) {
 	}
 }
 
+// Operator "today" is IST, not server UTC: a log at 00:30 IST must land on
+// the user's date, not UTC's yesterday. IST has no DST, so the fixed zone is
+// exact with no tzdata dependency.
+func TestTodayISTMatchesUTCPlus530(t *testing.T) {
+	want := time.Now().UTC().Add(5*time.Hour + 30*time.Minute).Format("2006-01-02")
+	if got := TodayIST(); got != want {
+		t.Fatalf("TodayIST() = %s, want %s (UTC+5:30)", got, want)
+	}
+	if NowIST().Location().String() != "IST" {
+		t.Fatalf("NowIST zone = %s, want IST", NowIST().Location())
+	}
+}
+
 // Month names match on whole words: "maybe"/"mayhem" must not resolve to May,
 // "marching orders" must not resolve to March — they fall back to this month
 // like any other unrecognized phrase. Same for the other keywords: "todays"

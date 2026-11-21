@@ -12,7 +12,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"agento/internal/money"
 	"agento/internal/validate"
@@ -39,7 +38,7 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 	}, out, nil
 }
 
-func today() string { return time.Now().Format("2006-01-02") }
+func today() string { return money.TodayIST() }
 
 // Input types are named rather than inline so `schema_test.go` can infer the schema from
 // the same types `AddTool` publishes. Nothing in this file carried `omitempty`, so all
@@ -311,7 +310,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (atomic with balance update). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today (empty or whitespace-only also means today, unlike query's rejected empty bounds; must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed; any real date stores with immediate balance effect, even a far-future one hidden from relative period-phrase summaries until then (a month+year phrase or explicit start/end shows future rows immediately) or a far-past one the TTL purges quickly while the balance stays). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded or floated). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
+		Description: "Log an income, expense, or transfer (atomic with balance update). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today in IST (empty or whitespace-only also means today, unlike query's rejected empty bounds; must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed; any real date stores with immediate balance effect, even a far-future one hidden from relative period-phrase summaries until then (a month+year phrase or explicit start/end shows future rows immediately) or a far-past one the TTL purges quickly while the balance stays). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded or floated). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if strings.TrimSpace(day) == "" {
@@ -417,7 +416,7 @@ func registerTools(s *mcp.Server) {
 				if in.Period == "" {
 					in.Period = "this month"
 				}
-				s, e, l := money.ResolvePeriod(in.Period, time.Now())
+				s, e, l := money.ResolvePeriod(in.Period, money.NowIST())
 				start, end, label = s, e, l
 			}
 			var acct *string
