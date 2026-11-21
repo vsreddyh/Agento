@@ -1035,6 +1035,36 @@ func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	}
 }
 
+// Same-day rows come back in insertion (_id) order: the date sort ties, so
+// without the _id tiebreak their order would be unspecified. Distinct amounts
+// mark insertion order unambiguously.
+func TestQuerySameDayRowsFollowInsertionOrder(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, amt := range []float64{100, 200, 300} {
+		if _, _, err := s.Insert(ctx, "2026-09-15", amt, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 10, 0)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+	for i, want := range []float64{100, 200, 300} {
+		if fnum(rows[i]["amount"]) != want {
+			t.Fatalf("row %d amount %v, want %v (insertion order)", i, rows[i]["amount"], want)
+		}
+	}
+	prev := ""
+	for i, r := range rows {
+		id, _ := r["_id"].(string)
+		if id == "" || (prev != "" && id <= prev) {
+			t.Fatalf("row %d id %q not strictly increasing: tiebreak broken", i, id)
+		}
+		prev = id
+	}
+}
+
 // An account literally named with 24 hex chars resolves by name (like
 // findAccount's $or), not just by `_id`: the old if/else preferred `_id` and
 // made hex-shaped names unreachable via `log`.
