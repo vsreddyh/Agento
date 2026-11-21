@@ -1041,7 +1041,9 @@ func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 // Same-day rows come back in insertion (_id) order: the date sort ties, so
 // without the _id tiebreak their order would be unspecified. Distinct amounts
 // mark insertion order unambiguously. Fetched across page boundaries (not one
-// fetch) so a date-only sort cannot pass by luck on Mongo's natural order.
+// fetch) so a date-only sort is less likely to pass by luck on Mongo's
+// natural order (which on a fresh test collection often matches insertion
+// order — paging reduces, not eliminates, that luck).
 func TestQuerySameDayRowsFollowInsertionOrder(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
