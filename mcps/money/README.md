@@ -46,7 +46,7 @@ validators and no views — validation lives in the store.
 | `query_transactions` with `start` after `end` | rejected — two valid dates, empty range, used to return zero rows as if that were the answer |
 | `query_transactions` with padded bounds (`" 2026-01-01 "`) | accepted, and the **trimmed** value is what reaches the store and the filter — validation and filtering both trim, so padding is harmless |
 | `query_transactions` with `offset: -1` | rejected — a negative skip is a typo, not page 0 (validated in handler and store) |
-| `query_transactions` with `limit: 0` (or negative) | not unlimited: the MCP default of 100 applies; unlimited is store-internal only |
+| `query_transactions` with `limit: 0` (or negative) | not unlimited: the MCP default of 100 applies (check the echoed `limit` — expect 100); unlimited is store-internal only |
 | `query_transactions` with `limit: 9999` | clamped to 500 — check the echoed `limit` (and `count` vs `total`): large pages still come back paged, with `total`/`truncated`/`next_offset` saying so |
 | `summarize` with `start` but no `end` (or the reverse) | rejected — used to fall through to the period branch and summarise a window nobody asked for |
 | `summarize` with `start` after `end` | rejected, like `query_transactions` — two valid dates in the wrong order, documented on the tool rather than left to be discovered |

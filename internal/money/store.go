@@ -830,7 +830,8 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 // Pagination: limit==0 means no cap (direct store use only — the handler
 // maps <=0 to 100 and caps >500 at 500, so MCP has no unlimited page); limits below zero are
 // rejected like negative offsets, since an unbounded dump must never be the
-// result of a typo. At most `limit` rows starting at `offset`, with `total`
+// result of a typo. When limit>0, at most `limit` rows starting at `offset`;
+// when limit==0, all rows from `offset` (no cap). `total`
 // reporting the unpaged match count so the caller can tell a short page from
 // the end. Sort key is date, then `_id` — deterministic order, but not a
 // snapshot: a concurrent log or TTL expiry between page fetches can shift
