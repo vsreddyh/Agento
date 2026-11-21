@@ -976,7 +976,8 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 
 // Pagination slices by date order with a stable _id tiebreak, and reports
 // the unpaged total so a short page is never mistaken for the end.
-// limit<=0 means unlimited (how Summarize asks for everything it totals).
+// limit<=0 means no cap (offset still applies); Summarize bypasses Query
+// via queryFilter + raw Find since it must total everything.
 func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -1011,6 +1012,18 @@ func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 5 || total != 5 {
 		t.Fatalf("unlimited: got %d rows total %d, %v", len(rows), total, err)
+	}
+	// Offset applies without a limit: limit 0 means no cap, not restart.
+	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 2)
+	if err != nil || len(rows) != 3 || total != 5 {
+		t.Fatalf("uncapped offset page: got %d rows total %d, %v", len(rows), total, err)
+	}
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-03" {
+		t.Fatalf("uncapped offset starts %v, want 2026-09-03", rows[0]["date"])
+	}
+	// Negative offsets fail here too, not just in the handler.
+	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, -1); err == nil {
+		t.Fatal("negative store offset was accepted; expected a rejection")
 	}
 }
 

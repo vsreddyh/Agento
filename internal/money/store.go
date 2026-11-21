@@ -636,7 +636,9 @@ func (s *Store) Match(ctx context.Context, filt map[string]any) ([]bson.M, error
 	if err != nil {
 		return nil, err
 	}
-	cur, err := s.txns.Find(ctx, mongoFilt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}))
+	// Same date+_id order as Query: a dry-run lists rows in the order a
+	// delete would report and a query displays them.
+	cur, err := s.txns.Find(ctx, mongoFilt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}, {Key: "_id", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -825,12 +827,23 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 // `delete by id` workflow is unreachable from a query — the caller would hold a
 // row with no id to delete it by.
 //
-// Pagination: pass limit<=0 for no limit (direct store use only — the handler clamps to 1..500). Otherwise at most `limit` rows starting at `offset`, with `total` reporting the unpaged match count so the caller can tell a short page from the end. Sort is date, then `_id`, so pages are stable across calls. The handler validates offset>=0; the store stays trim-only defense for direct callers.
+// Pagination: limit<=0 means no cap — offset still applies, so a direct
+// store caller pages the full match with limit 0 + growing offsets. At most
+// `limit` rows starting at `offset`, with `total` reporting the unpaged match
+// count so the caller can tell a short page from the end. Sort is date, then
+// `_id`, so pages are stable across calls. Negative offsets are rejected
+// (typo, not page 0); the handler checks first with a tool-named error.
 
 func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string, limit, offset int) ([]bson.M, int64, error) {
 	filt, err := s.queryFilter(ctx, start, end, typ, category, account)
 	if err != nil {
 		return nil, 0, err
+	}
+	// Rejected like the handler does: a negative skip is a typo, not page 0.
+	// The handler checks first (tool-named error); this is defense for
+	// direct store callers, who otherwise get a driver error.
+	if offset < 0 {
+		return nil, 0, fail("query_transactions offset must be >= 0 — got %d", offset)
 	}
 	total, err := s.txns.CountDocuments(ctx, filt)
 	if err != nil {
@@ -838,8 +851,11 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	}
 	findOpts := options.Find().SetSort(bson.D{{Key: "date", Value: 1}, {Key: "_id", Value: 1}})
 	if limit > 0 {
-		findOpts.SetLimit(int64(limit)).SetSkip(int64(offset))
+		findOpts.SetLimit(int64(limit))
 	}
+	// Skips apply with or without a limit: limit<=0 means "no cap", not
+	// "ignore the offset" — otherwise an offset page silently restarts.
+	findOpts.SetSkip(int64(offset))
 	cur, err := s.txns.Find(ctx, filt, findOpts)
 	if err != nil {
 		return nil, 0, err
