@@ -26,9 +26,10 @@ var monthNames = []string{"", "January", "February", "March", "April", "May", "J
 
 // IST is the operator timezone (UTC+5:30, no DST — ever — so a FixedZone is
 // exact with no tzdata dependency). Server clocks run UTC; every user-visible
-// "today" (default log date, period resolution, prune cutoff) is computed in
-// IST so a log at 00:30 IST lands on the user's date, not UTC's yesterday.
-// Instants (createdAt) stay UTC — only calendar-day boundaries use IST.
+// "today" (default log date, period resolution) is computed in IST so a log
+// at 00:30 IST lands on the user's date, not UTC's yesterday.
+// Instants (createdAt) stay UTC. Retention math (prune cutoff, TTL) also stays
+// UTC to mirror the TTL index exactly — see Store.Prune.
 var IST = time.FixedZone("IST", 5*3600+30*60)
 
 // TodayIST reports the current calendar day for the operator.
@@ -39,7 +40,7 @@ func TodayIST() string { return todayIn(IST, time.Now()) }
 func todayIn(loc *time.Location, t time.Time) string { return t.In(loc).Format("2006-01-02") }
 
 // NowIST reports the current instant in the operator zone, for period
-// resolution and date-arithmetic cutoffs.
+// resolution (the only date-arithmetic consumer left; prune follows TTL/UTC).
 func NowIST() time.Time { return time.Now().In(IST) }
 
 var monthRE = regexp.MustCompile(`\b(january|february|march|april|may|june|july|august|september|october|november|december)\b`)
