@@ -241,7 +241,7 @@ func main() {
 // signal that the guard was removed.
 func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
-		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty or whitespace-only defaults to cash). Optional opening balance in the same call (defaults to 0, so no separate funding entry is needed)."},
+		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty or whitespace-only defaults to cash). Optional opening balance in the same call (defaults to 0, must be an exact paise value like every amount, so no separate funding entry is needed)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			if strings.TrimSpace(in.Type) == "" {
 				in.Type = "cash"

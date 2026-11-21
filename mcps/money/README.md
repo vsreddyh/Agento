@@ -7,7 +7,7 @@ extended to **multiple accounts** with **atomic stored balances**.
 
 | Tool | Purpose |
 |---|---|
-| `create_account` | Create an account with starting balance. Required: name (trimmed, case-sensitive — `Cash` and `cash` are different accounts). Optional: type (defaults to cash, empty or whitespace-only; case-insensitive + trimmed, so `Bank` stores `bank` like transaction types), balance (opening balance in the same call, defaults to 0) |
+| `create_account` | Create an account with starting balance. Required: name (trimmed, case-sensitive — `Cash` and `cash` are different accounts). Optional: type (defaults to cash, empty or whitespace-only; case-insensitive + trimmed, so `Bank` stores `bank` like transaction types), balance (opening balance in the same call, defaults to 0, must be exact paise like every amount) |
 | `list_accounts` | List accounts with stored balances **and ids** — hides archived by default; pass `include_archived=true` to see them. Transaction rows reference accounts by id, so this is the id→name map. Optional: include_archived |
 | `archive_account` | Soft-delete (history stays queryable; blocked from new `log_transaction` writes — `delete`/`fix_last` can still move its balance). `name` accepts a name or id hex (trimmed, so an `_id` from `list_accounts` round-trips); the stored name is echoed back, never the raw input. The name stays taken. Required: `name` (put the hex here for id) |
 | `unarchive_account` | Restore an archived account so it accepts writes again (inverse of `archive_account`). `name` accepts a name or id hex (trimmed); the stored name is echoed back. Required: `name` (put the hex here for id) |

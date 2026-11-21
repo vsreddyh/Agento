@@ -949,10 +949,13 @@ func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
 }
 
 func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M, error) {
-	// Amounts are int64 paise here: ints pass through, rupee floats must be
-	// exact paise (round-trip check) or fail — a float used to silently miss
-	// post-migration (stored 1010 vs filter 10.1), the silent-zero-match
-	// class of bug. Non-numerics fail instead of matching nothing.
+	// Amounts are int64 paise here: ints pass through AS PAISE (10 means 10
+	// paise, not ₹10 — the store's contract is paise-native since the int64
+	// migration, and the MCP handler converts rupees before calling).
+	// Rupee floats must be exact paise (round-trip check) or fail — a float
+	// used to silently miss post-migration (stored 1010 vs filter 10.1),
+	// the silent-zero-match class of bug. Non-numerics fail instead of
+	// matching nothing.
 	out := bson.M{}
 	for k, v := range filt {
 		switch k {
