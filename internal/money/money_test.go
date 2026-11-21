@@ -999,12 +999,15 @@ func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	if err != nil || len(rows) != 2 || total != 5 {
 		t.Fatalf("page 2: got %d rows total %d, %v", len(rows), total, err)
 	}
-	if fmt.Sprint(rows[0]["date"]) != "2026-09-03" {
-		t.Fatalf("page 2 starts %v, want 2026-09-03", rows[0]["date"])
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-03" || fmt.Sprint(rows[1]["date"]) != "2026-09-04" {
+		t.Fatalf("page 2 order wrong: %v, %v", rows[0]["date"], rows[1]["date"])
 	}
 	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 4)
 	if err != nil || len(rows) != 1 || total != 5 {
 		t.Fatalf("page 3: got %d rows total %d, %v", len(rows), total, err)
+	}
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-05" {
+		t.Fatalf("page 3 row %v, want 2026-09-05", rows[0]["date"])
 	}
 	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 5)
 	if err != nil || len(rows) != 0 || total != 5 {
@@ -1019,8 +1022,8 @@ func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	if err != nil || len(rows) != 3 || total != 5 {
 		t.Fatalf("uncapped offset page: got %d rows total %d, %v", len(rows), total, err)
 	}
-	if fmt.Sprint(rows[0]["date"]) != "2026-09-03" {
-		t.Fatalf("uncapped offset starts %v, want 2026-09-03", rows[0]["date"])
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-03" || fmt.Sprint(rows[1]["date"]) != "2026-09-04" || fmt.Sprint(rows[2]["date"]) != "2026-09-05" {
+		t.Fatalf("uncapped offset order wrong: %v, %v, %v", rows[0]["date"], rows[1]["date"], rows[2]["date"])
 	}
 	// Negative offsets fail here too, not just in the handler.
 	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, -1); err == nil {
@@ -1037,7 +1040,8 @@ func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 
 // Same-day rows come back in insertion (_id) order: the date sort ties, so
 // without the _id tiebreak their order would be unspecified. Distinct amounts
-// mark insertion order unambiguously.
+// mark insertion order unambiguously. Fetched across page boundaries (not one
+// fetch) so a date-only sort cannot pass by luck on Mongo's natural order.
 func TestQuerySameDayRowsFollowInsertionOrder(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -1046,10 +1050,25 @@ func TestQuerySameDayRowsFollowInsertionOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 10, 0)
-	if err != nil || len(rows) != 3 {
-		t.Fatalf("got %d rows, %v", len(rows), err)
+	// Page across the same-day set: 2 + 1, asserting amounts per page so a
+	// date-only sort that returns same-day rows in any other order fails.
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 0)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("same-day page 1: got %d rows, %v", len(rows), err)
 	}
+	for i, want := range []float64{100, 200} {
+		if fnum(rows[i]["amount"]) != want {
+			t.Fatalf("page 1 row %d amount %v, want %v (insertion order)", i, rows[i]["amount"], want)
+		}
+	}
+	rows2, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 2)
+	if err != nil || len(rows2) != 1 {
+		t.Fatalf("same-day page 2: got %d rows, %v", len(rows2), err)
+	}
+	if fnum(rows2[0]["amount"]) != 300 {
+		t.Fatalf("page 2 amount %v, want 300 (insertion order)", rows2[0]["amount"])
+	}
+	rows = append(rows, rows2...)
 	for i, want := range []float64{100, 200, 300} {
 		if fnum(rows[i]["amount"]) != want {
 			t.Fatalf("row %d amount %v, want %v (insertion order)", i, rows[i]["amount"], want)

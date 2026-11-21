@@ -225,8 +225,9 @@ func normalizeDayRangePair(what, start, end string) (string, string, error) {
 
 // clampLimit maps the requested query page size to the applied one: absent
 // or non-positive means the 100-row default, above 500 clamps to the cap.
-// There is no unlimited MCP page — only the store's internal callers pass
-// limit<=0 (Summarize totals everything via queryFilter, bypassing Query).
+// There is no unlimited MCP page — only Query itself accepts limit==0 for
+// no cap (direct store use only). Summarize never passes a limit to Query:
+// it totals everything with its own unbounded Find via queryFilter.
 func clampLimit(in int) int {
 	if in <= 0 {
 		return 100

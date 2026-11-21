@@ -828,7 +828,7 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 // row with no id to delete it by.
 //
 // Pagination: limit==0 means no cap (direct store use only — the handler
-// clamps to 1..500, so MCP has no unlimited page); limits below zero are
+// maps <=0 to 100 and caps >500 at 500, so MCP has no unlimited page); limits below zero are
 // rejected like negative offsets, since an unbounded dump must never be the
 // result of a typo. At most `limit` rows starting at `offset`, with `total`
 // reporting the unpaged match count so the caller can tell a short page from

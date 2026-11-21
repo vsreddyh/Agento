@@ -241,7 +241,7 @@ func TestSummarizeRejectsReversedRange(t *testing.T) {
 	}
 }
 
-// Paging math lives in pure helpers so it is testable without a store:
+// Paging math lives in pure helpers with unit tests (no handler wiring):
 // absent/negative limits map to the 100 default (clamped to 500), and the
 // window reports truncated/next_offset with an exact-multiple page reading
 // as done (next_offset present as null, never omitted).
