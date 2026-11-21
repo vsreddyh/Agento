@@ -65,10 +65,22 @@ func idHex(v any) string {
 // Paise keeps money exact: 1 rupee = 100 paise. The tool surface speaks
 // rupees (float, unchanged contract); BSON stores int64 paise, so accumulated
 // balances can never drift (0.1+0.2 stays 30 paise, not 0.30000000000000004).
-// ToPaise rounds half away from zero: 10.555 rupees lands on 1056 paise only
-// if the binary float is at/over the halfway mark — sub-paise dust from float
-// input is absorbed here, once, instead of accumulating in stored balances.
+// ToPaise rounds rupees to the nearest paise. It never validates: use
+// ExactPaise at every entry point so a >2-decimal input is rejected rather
+// than silently rounded.
 func ToPaise(amount float64) int64 { return int64(math.Round(amount * 100)) }
+
+// ExactPaise converts rupees to paise only when the value is exact to the
+// paise — i.e. a round trip loses nothing. Sub-paise inputs (0.001) and
+// >2-decimal inputs (0.005, 10.555) report false instead of being silently
+// rounded: 0.005 must not become a 1-paise row.
+func ExactPaise(amount float64) (int64, bool) {
+	p := ToPaise(amount)
+	if ToRupees(p) != amount {
+		return 0, false
+	}
+	return p, true
+}
 
 // ToRupees renders stored paise for the tool surface. Whole rupees round-trip
 // exactly; fractions use the shortest float repr (10.55, not dust).
@@ -221,8 +233,12 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 	if !contains(accountTypes, typ) {
 		return nil, fail("account type must be one of %v", accountTypes)
 	}
-	// Stored as int64 paise (see ToPaise); the returned doc echoes rupees.
-	balPaise := ToPaise(balance)
+	// Exact paise like every other write: an opening balance of 0.005 is
+	// rejected, not silently stored as 1 paise.
+	balPaise, ok := ExactPaise(balance)
+	if !ok {
+		return nil, fail("balance %v is not an exact paise value — use at most 2 decimals", balance)
+	}
 	doc := bson.M{"name": name, "type": typ, "balance": balPaise,
 		"archived": false, "createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	res, err := s.accts.InsertOne(ctx, doc)
@@ -403,10 +419,11 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	if amount <= 0 {
 		return "", false, fail("amount must be positive")
 	}
-	// Stored as int64 paise (exact); sub-paise input has no representation.
-	paise := ToPaise(amount)
-	if paise <= 0 {
-		return "", false, fail("amount must be at least 1 paise (₹0.01)")
+	// Exact paise only: a >2-decimal input is rejected, never silently
+	// rounded (0.005 must not become a 1-paise row).
+	paise, ok := ExactPaise(amount)
+	if !ok {
+		return "", false, fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", amount)
 	}
 	// Normalized the same way read-path filters are: a write of "Groceries"
 	// and a read of "groceries" refer to the same category, and likewise for
@@ -714,7 +731,6 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 }
 
 // FixLast adjusts newest tx by delta; scales each leg so transfers stay balanced.
-// FixLast adjusts newest tx by delta; scales each leg so transfers stay balanced.
 // Returns the fixed row's id hex + date so the caller can read it back by id:
 // without this, the shared "read back by id" rule is impossible for this write,
 // and the fix hits insertion-order last (`_id` desc), not date-latest, so the
@@ -723,9 +739,9 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string,
 	if newAmount <= 0 {
 		return "", "", false, fail("amount must be positive")
 	}
-	newPaise := ToPaise(newAmount)
-	if newPaise <= 0 {
-		return "", "", false, fail("amount must be at least 1 paise (₹0.01)")
+	newPaise, ok := ExactPaise(newAmount)
+	if !ok {
+		return "", "", false, fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", newAmount)
 	}
 	var fid, fdate string
 	fixed := false
@@ -779,7 +795,10 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string,
 // `_id` is returned as a hex string like Match does: without it, the documented
 // `delete by id` workflow is unreachable from a query — the caller would hold a
 // row with no id to delete it by.
-func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string) ([]bson.M, error) {
+// queryFilter builds the normalized Mongo filter both Query and Summarize
+// share: date range plus optional type/category/account (either side of a
+// transfer). Normalization and membership checks live here, once.
+func (s *Store) queryFilter(ctx context.Context, start, end string, typ, category, account *string) (bson.M, error) {
 	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
 	if typ != nil {
 		t := strings.ToLower(strings.TrimSpace(*typ))
@@ -801,6 +820,14 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 			return nil, err
 		}
 		filt["$or"] = []bson.M{{"accountId": acct["_id"]}, {"sending_to": acct["_id"]}}
+	}
+	return filt, nil
+}
+
+func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string) ([]bson.M, error) {
+	filt, err := s.queryFilter(ctx, start, end, typ, category, account)
+	if err != nil {
+		return nil, err
 	}
 	cur, err := s.txns.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}))
 	if err != nil {
@@ -836,10 +863,24 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 // are counted in `count` but excluded from income/expense/net, and `by_category`
 // ranks expenses only — so income categories never appear. Documented on the
 // tool + README so `count` vs totals does not misread.
+// Sums read stored paise directly (shared queryFilter, raw Find) — never the
+// rendered rupee floats — so large totals stay integer-exact no matter how
+// rendering evolves.
 func (s *Store) Summarize(ctx context.Context, start, end string, account *string) (bson.M, error) {
-	rows, err := s.Query(ctx, start, end, nil, nil, account)
+	filt, err := s.queryFilter(ctx, start, end, nil, nil, account)
 	if err != nil {
 		return nil, err
+	}
+	cur, err := s.txns.Find(ctx, filt)
+	if err != nil {
+		return nil, err
+	}
+	var rows []bson.M
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = []bson.M{}
 	}
 	var incomePaise, expensePaise int64
 	byCat := map[string]int64{}
@@ -908,11 +949,37 @@ func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
 }
 
 func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M, error) {
-	// Amounts are int64 paise here (the handler converts rupees before
-	// calling); the default branch passes numbers through untouched.
+	// Amounts are int64 paise here: ints pass through, rupee floats must be
+	// exact paise (round-trip check) or fail — a float used to silently miss
+	// post-migration (stored 1010 vs filter 10.1), the silent-zero-match
+	// class of bug. Non-numerics fail instead of matching nothing.
 	out := bson.M{}
 	for k, v := range filt {
 		switch k {
+		case "amount":
+			switch n := v.(type) {
+			case int64:
+				out[k] = n
+			case int32:
+				out[k] = int64(n)
+			case int:
+				out[k] = int64(n)
+			case float64:
+				p, ok := ExactPaise(n)
+				if !ok {
+					return nil, fail("amount %v is not an exact paise value — use at most 2 decimals", n)
+				}
+				out[k] = p
+			case float32:
+				f := float64(n)
+				p, ok := ExactPaise(f)
+				if !ok {
+					return nil, fail("amount %v is not an exact paise value — use at most 2 decimals", n)
+				}
+				out[k] = p
+			default:
+				return nil, fail("amount must be a number (int64 paise, or an exact-paise float)")
+			}
 		case "account":
 			vs, _ := v.(string)
 			acct, err := s.findAccount(ctx, vs)
@@ -993,42 +1060,52 @@ func oidHex(v any) string {
 	return fmt.Sprint(v)
 }
 
-// migrateFloatMoney converts legacy float-rupee amounts/balances to int64
-// paise, once, idempotently: only double-typed fields match, so post-migration
-// runs (and fresh databases) find nothing to do. Rounding heals old float
-// dust (99.9999999999 rupees → 10000 paise) instead of preserving it.
+// migrateFloatMoney converts legacy rupee numbers to int64 paise, once,
+// idempotently: only double/decimal documents match, so post-migration runs
+// (all longs) and fresh databases find nothing to do. int32/int64 are
+// deliberately excluded — new code writes those as paise already, so an old
+// int can only mean paise, never legacy rupees. Decimal128 never shipped from
+// this codebase, but a stray one converts exactly like a double rather than
+// being left behind as the sole decimal in a long world.
+// Rounding heals old float dust (99.9999999999 rupees → 10000 paise) instead
+// of preserving it.
+//
+// The whole migration runs inside one transaction (see transact): a
+// read-then-$set loop racing a concurrent balance $inc could otherwise
+// clobber the increment on first boot after deploy.
 func (s *Store) migrateFloatMoney(ctx context.Context) error {
-	for _, m := range []struct {
-		coll  *mongoDrv.Collection
-		field string
-	}{{s.accts, "balance"}, {s.txns, "amount"}} {
-		cur, err := m.coll.Find(ctx, bson.M{m.field: bson.M{"$type": "double"}})
-		if err != nil {
-			return err
-		}
-		var rows []bson.M
-		if err := cur.All(ctx, &rows); err != nil {
-			return err
-		}
-		for _, r := range rows {
-			paise := paiseOf(r[m.field])
-			if _, err := m.coll.UpdateOne(ctx, bson.M{"_id": r["_id"]},
-				bson.M{"$set": bson.M{m.field: paise}}); err != nil {
+	return s.transact(ctx, func(sc context.Context) error {
+		for _, m := range []struct {
+			coll  *mongoDrv.Collection
+			field string
+		}{{s.accts, "balance"}, {s.txns, "amount"}} {
+			cur, err := m.coll.Find(sc, bson.M{m.field: bson.M{"$type": []string{"double", "decimal"}}})
+			if err != nil {
 				return err
 			}
+			var rows []bson.M
+			if err := cur.All(sc, &rows); err != nil {
+				return err
+			}
+			for _, r := range rows {
+				paise := paiseOf(r[m.field])
+				if _, err := m.coll.UpdateOne(sc, bson.M{"_id": r["_id"]},
+					bson.M{"$set": bson.M{m.field: paise}}); err != nil {
+					return err
+				}
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
-// EnsureSchema creates collections + indexes (idempotent). Called by New
-// so fresh databases get the unique-name and TTL indexes immediately.
+// EnsureSchema creates collections + indexes (idempotent). Indexes come
+// first: if the data migration below fails transiently, the TTL/unique
+// guarantees are already in place for the restart. Called by New so fresh
+// databases get the unique-name and TTL indexes immediately.
 // Also migrates legacy float rupees to int64 paise (see ToPaise) — new code
 // writes longs only, so the migration converges on first boot.
 func (s *Store) EnsureSchema(ctx context.Context) error {
-	if err := s.migrateFloatMoney(ctx); err != nil {
-		return err
-	}
 	for _, c := range []struct {
 		name string
 		keys bson.D
@@ -1047,5 +1124,5 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return s.migrateFloatMoney(ctx)
 }

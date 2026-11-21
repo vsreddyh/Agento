@@ -530,6 +530,51 @@ func TestMatchIsADryRun(t *testing.T) {
 	}
 }
 
+// A rupee-float delete filter converts to paise: Match on 10.1 finds the row
+// stored as 1010. Inexact floats and strings fail instead of silently
+// matching nothing.
+func TestMatchFloatAmountConvertsToPaise(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10.1, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Match(ctx, map[string]any{"amount": 10.1})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("float-amount match got %d rows, %v", len(rows), err)
+	}
+	if _, err := s.Match(ctx, map[string]any{"amount": 10.555}); err == nil {
+		t.Fatal("inexact-paise amount matched instead of failing")
+	}
+	if _, err := s.Match(ctx, map[string]any{"amount": "ten"}); err == nil {
+		t.Fatal("string amount matched instead of failing")
+	}
+}
+
+// Opening balances validate like every other write: 0.005 is rejected,
+// not silently stored as 1 paise. Zero and negatives still pass exactness.
+func TestCreateAccountRejectsInexactPaise(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "Dust", "cash", 0.005); err == nil {
+		t.Fatal("0.005 opening balance was rounded instead of rejected")
+	} else if !containsStr(err.Error(), "exact paise") {
+		t.Fatalf("error %q does not demand exact paise", err)
+	}
+	if _, err := s.CreateAccount(ctx, "Dust", "cash", 10.55); err != nil {
+		t.Fatalf("exact-paise 10.55 rejected: %v", err)
+	}
+	rows, err := s.ListAccounts(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r["name"] == "Dust" && fnum(r["balance"]) != 10.55 {
+			t.Fatalf("balance %v, want exactly 10.55", r["balance"])
+		}
+	}
+}
+
 func TestQueryNamesItsAccounts(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -761,6 +806,18 @@ func TestPaiseArithmeticIsExact(t *testing.T) {
 			t.Fatalf("amount %v, want exactly 0.1", r["amount"])
 		}
 	}
+	// Summaries total stored paise, not re-rounded floats.
+	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fnum(sum["expense"]) != 0.3 {
+		t.Fatalf("summarized expense %v, want exactly 0.3", sum["expense"])
+	}
+	pairs, _ := sum["by_category"].([]map[string]any)
+	if len(pairs) != 1 || fnum(pairs[0]["total"]) != 0.3 {
+		t.Fatalf("by_category %v, want [{groceries 0.3}]", sum["by_category"])
+	}
 }
 
 func TestFractionalRupeesRoundTrip(t *testing.T) {
@@ -789,13 +846,29 @@ func TestSubPaiseAmountsAreRejected(t *testing.T) {
 	} else if !containsStr(err.Error(), "paise") {
 		t.Fatalf("error %q does not name the paise floor", err)
 	}
+	// >2-decimal inputs are rejected, never silently rounded (0.005 must not
+	// become a 1-paise row, 10.555 must not become 1056 paise).
+	if _, _, err := s.Insert(ctx, "2026-09-01", 0.005, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("0.005 was rounded instead of rejected")
+	} else if !containsStr(err.Error(), "exact paise") {
+		t.Fatalf("error %q does not demand exact paise", err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10.555, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("10.555 was rounded instead of rejected")
+	}
 	if _, _, _, err := s.FixLast(ctx, 0.004); err == nil {
 		t.Fatal("a sub-paise correction was accepted")
+	}
+	// Exact 2-decimal inputs pass, including floats no binary can represent
+	// exactly (10.55 stores 1055 paise and reads back equal).
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10.55, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatalf("exact-paise 10.55 rejected: %v", err)
 	}
 }
 
 // Legacy float-rupee docs migrate to int64 paise on EnsureSchema, idempotently:
-// the filter only matches doubles, so reruns and fresh databases find nothing.
+// the filter matches doubles and decimals only (ints are already paise),
+// so reruns and fresh databases find nothing.
 func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -809,6 +882,18 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 		"accountId": primitive.NewObjectID(),
 		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
 		"expiresAt": expiry("2026-09-01", RetentionDays)}); err != nil {
+		t.Fatal(err)
+	}
+	// A stray Decimal128 converts exactly like a double, not left behind.
+	dec, err := primitive.ParseDecimal128("3.02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-02", "amount": dec,
+		"type": "expense", "category": "bills", "note": "", "source": "mcp",
+		"accountId": primitive.NewObjectID(),
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+		"expiresAt": expiry("2026-09-02", RetentionDays)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.EnsureSchema(ctx); err != nil {
@@ -827,6 +912,13 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	}
 	if amt, ok := txn["amount"].(int64); !ok || amt != 1010 {
 		t.Fatalf("amount migrated to %v (%T), want int64 1010", txn["amount"], txn["amount"])
+	}
+	var decTxn bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"date": "2026-09-02"}).Decode(&decTxn); err != nil {
+		t.Fatal(err)
+	}
+	if amt, ok := decTxn["amount"].(int64); !ok || amt != 302 {
+		t.Fatalf("decimal amount migrated to %v (%T), want int64 302", decTxn["amount"], decTxn["amount"])
 	}
 	// Idempotent: a second run changes nothing and errors nothing.
 	if err := s.EnsureSchema(ctx); err != nil {
