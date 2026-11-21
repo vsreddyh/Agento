@@ -30,9 +30,10 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (10): `create_account`, `list_accounts`, `archive_account`,
-  `get_balances`, `log_transaction`, `query_transactions`,
-  `summarize`, `fix_last_transaction`, `delete_transactions`, `prune_old`.
+- **miser-money** (11): `create_account`, `list_accounts`, `archive_account`,
+  `unarchive_account`, `get_balances`, `log_transaction`,
+  `query_transactions`, `summarize`, `fix_last_transaction`,
+  `delete_transactions`, `prune_old`.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),
   `update_recipe`, `scale_recipe` (pure arithmetic),
@@ -96,6 +97,13 @@ Destructive tools ask first through the harness permission prompt
 removes its cook logs), `delete_ingredient`, `delete_task`,
 `delete_project`. There is no `delete_cook`; say so instead of reaching
 for it.
+
+`delete_transactions` dry-runs by default: it returns the rows it would
+remove and deletes nothing unless you pass `dry_run=false`. Show those
+rows, then delete only once the user confirms. Prefer `id` over a filter
+when the target is one entry. `unarchive_account` also prompts (it matches
+the `*archive_account*` pattern) even though it restores rather than
+destroys.
 
 Reads (`list_*`, `get_*`, `query_*`, `summarize`, `daily_summary`,
 `get_balances`, `scale_recipe`) need no confirmation. `fix_last_*` updates

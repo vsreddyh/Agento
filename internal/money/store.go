@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -26,6 +27,10 @@ const (
 	transactions = "money_transactions"
 	// RetentionDays drives the TTL target (tx date + window).
 	RetentionDays = 90
+	// IdempotencyKeyMax caps the client key, in BYTES (what BSON and the unique
+	// index measure), so it is a limit no caller can mistake for a character
+	// count. A UUID is 36.
+	IdempotencyKeyMax = 200
 )
 
 var (
@@ -165,11 +170,16 @@ func (s *Store) transact(ctx context.Context, fn func(ctx context.Context) error
 }
 
 // CreateAccount with unique name (index-backed); archived defaults false.
+//
+// The name is trimmed and the type is lowercased+trimmed like transaction
+// types, so `create type="Bank"` stores `bank` instead of rejecting what
+// `log_transaction type="Bank"` accepts.
 func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance float64) (bson.M, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fail("account name is required")
 	}
+	typ = strings.ToLower(strings.TrimSpace(typ))
 	if !contains(accountTypes, typ) {
 		return nil, fail("account type must be one of %v", accountTypes)
 	}
@@ -187,12 +197,16 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 }
 
 // ListAccounts alphabetical; archived hidden unless requested.
+//
+// `_id` is returned as a hex string. Transaction rows carry account ids, so
+// without this the mapping id -> name is unknowable from the tool surface and
+// a multi-account query result cannot be read.
 func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.M, error) {
 	filt := bson.M{}
 	if !includeArchived {
 		filt = bson.M{"archived": false}
 	}
-	cur, err := s.accts.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}).SetProjection(bson.M{"_id": 0}))
+	cur, err := s.accts.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -203,27 +217,84 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 	if rows == nil {
 		rows = []bson.M{}
 	}
+	for _, r := range rows {
+		r["_id"] = oidHex(r["_id"])
+	}
 	return rows, nil
 }
 
 // ArchiveAccount soft-deletes; history stays, writes blocked via resolve.
-func (s *Store) ArchiveAccount(ctx context.Context, name string) (bool, error) {
-	res, err := s.accts.UpdateOne(ctx, bson.M{"name": name}, bson.M{"$set": bson.M{"archived": true}})
+// Only `log_transaction` is blocked: `delete`/`fix_last` still invert/adjust the
+// archived account's balance by design (history stays mutable to the owner).
+// The name is trimmed like every other account path (Create/resolve/findAccount/
+// Insert), so `archive " Cash "` finds what `create " Cash "` stored as `Cash`.
+// Accepts an id hex as well as a name (via findAccount), so an `_id` from
+// `list_accounts` round-trips instead of reporting "unknown account". Returns
+// the resolved account name (trimmed), never the raw input — so the caller can
+// echo it without believing spaces/hex are the stored name.
+func (s *Store) ArchiveAccount(ctx context.Context, name string) (string, bool, error) {
+	acct, err := s.findAccount(ctx, name)
 	if err != nil {
-		return false, err
+		if _, ok := err.(*StoreError); ok {
+			return "", false, nil
+		}
+		return "", false, err
 	}
-	return res.MatchedCount > 0, nil
+	res, err := s.accts.UpdateOne(ctx, bson.M{"_id": acct["_id"]}, bson.M{"$set": bson.M{"archived": true}})
+	if err != nil {
+		return "", false, err
+	}
+	if res.MatchedCount == 0 {
+		return "", false, nil
+	}
+	if n, _ := acct["name"].(string); n != "" {
+		return n, true, nil
+	}
+	return strings.TrimSpace(name), true, nil
+}
+
+// UnarchiveAccount is the inverse of ArchiveAccount. Without it, archiving is a
+// one-way door: the unique name index keeps the archived name, so the account
+// can be neither restored nor re-created. Trimmed like ArchiveAccount so a
+// padded name restores what it archived, and accepts an id hex for the same
+// round-trip reason. Returns the resolved name, never the raw input.
+func (s *Store) UnarchiveAccount(ctx context.Context, name string) (string, bool, error) {
+	acct, err := s.findAccount(ctx, name)
+	if err != nil {
+		if _, ok := err.(*StoreError); ok {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	res, err := s.accts.UpdateOne(ctx, bson.M{"_id": acct["_id"]}, bson.M{"$set": bson.M{"archived": false}})
+	if err != nil {
+		return "", false, err
+	}
+	if res.MatchedCount == 0 {
+		return "", false, nil
+	}
+	if n, _ := acct["name"].(string); n != "" {
+		return n, true, nil
+	}
+	return strings.TrimSpace(name), true, nil
 }
 
 func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bson.M, error) {
-	q := bson.M{}
+	// Trimmed before hex-parse like findAccount: without this, a padded
+	// id-hex misses `_id` (hex-parse fails on spaces) and falls back to a
+	// name lookup for the hex, so `sending_to="  <hex>  "` fails while the
+	// same padding on `account` works. Both name and `_id` are tried via
+	// `$or` (like findAccount), so an account literally named with 24 hex
+	// chars resolves by name instead of missing as an unknown `_id` — the
+	// old if/else preferred `_id` and made hex-shaped names unreachable via
+	// `log`. The error quotes the trimmed value like every other path.
+	nameOrID = strings.TrimSpace(nameOrID)
+	ors := []bson.M{{"name": nameOrID}}
 	if oid, err := primitive.ObjectIDFromHex(nameOrID); err == nil {
-		q = bson.M{"_id": oid}
-	} else {
-		q = bson.M{"name": strings.TrimSpace(nameOrID)}
+		ors = append(ors, bson.M{"_id": oid})
 	}
 	var acct bson.M
-	if err := s.accts.FindOne(ctx, q).Decode(&acct); err != nil {
+	if err := s.accts.FindOne(ctx, bson.M{"$or": ors}).Decode(&acct); err != nil {
 		return nil, fail("unknown account '%s'", nameOrID)
 	}
 	if forWrite {
@@ -234,9 +305,12 @@ func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bs
 	return acct, nil
 }
 
-// Balances returns stored balances + total over active accounts.
+// Balances returns stored balances + total over active accounts. The `accounts`
+// list intentionally includes archived rows (unlike ListAccounts, which hides
+// them by default) while `total` skips them — so `total` is not the sum of the
+// listed balances once anything is archived. Documented on the tool + README.
 func (s *Store) Balances(ctx context.Context) (bson.M, error) {
-	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}).SetProjection(bson.M{"_id": 0}))
+	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +323,7 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	}
 	var total float64
 	for _, r := range rows {
+		r["_id"] = oidHex(r["_id"])
 		if arch, _ := r["archived"].(bool); !arch {
 			total += toFloat(r["balance"])
 		}
@@ -256,23 +331,69 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	return bson.M{"accounts": rows, "total": total}, nil
 }
 
-// Insert validates date/amount/type, then atomically writes doc + $inc deltas.
-func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, category, account, sendingTo, note, source string) (string, error) {
+// Insert validates date/amount/type/category, then atomically writes doc + $inc
+// deltas. It returns (id, created, error): created is false when idempotencyKey
+// matched an existing row — that row's id comes back and nothing is written, so
+// a retried call is a no-op instead of a second entry.
+//
+// A key must never be reused across distinct payloads: when the key already
+// exists, the incoming date/amount/type/category/account/sending_to are compared
+// against the stored row and a mismatch is rejected rather than returning the
+// old row as a false "replay".
+func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, category, account, sendingTo, note, source, idempotencyKey string) (string, bool, error) {
+	// Trimmed so writes agree with reads (`query_transactions` trims via
+	// CheckDay): `date=" 2026-09-01 "` stores `2026-09-01` instead of failing
+	// while the same string queries fine. Validated as a real calendar date,
+	// not just the regex — `2026-02-30` matches YYYY-MM-DD but `time.Parse`
+	// fails it, and storing it would set expiresAt to year-1 (immediate TTL
+	// purge with the balance delta surviving, by design).
+	date = strings.TrimSpace(date)
 	if !dateRE.MatchString(date) {
-		return "", fail("date must be YYYY-MM-DD")
+		return "", false, fail("date must be YYYY-MM-DD")
+	}
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return "", false, fail("date %q is not a real calendar date — use YYYY-MM-DD", date)
 	}
 	if amount <= 0 {
-		return "", fail("amount must be positive")
+		return "", false, fail("amount must be positive")
 	}
+	// Normalized the same way read-path filters are: a write of "Groceries"
+	// and a read of "groceries" refer to the same category, and likewise for
+	// type. Without this, `query_transactions type=Expense` silently matches
+	// nothing logged as `expense`.
+	typ = strings.ToLower(strings.TrimSpace(typ))
 	if !contains(txTypes, typ) {
-		return "", fail("type must be one of %v", txTypes)
+		return "", false, fail("type must be one of %v", txTypes)
 	}
 	category = strings.ToLower(strings.TrimSpace(category))
 	if category == "" {
 		category = "other"
 	}
+	// An unknown category is rejected rather than silently refiled under
+	// "other": the caller must learn that the name it used does not exist.
 	if !contains(Categories, category) {
-		category = "other"
+		return "", false, fail("category %q does not exist — use one of %v", category, Categories)
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	// Rejected, never truncated: a truncated key makes a 250-byte key
+	// byte-identical to the 200-byte key that is its own prefix, so the unique
+	// index reports a duplicate and a genuinely different request is handed the
+	// first one's row as a "replay".
+	if len(idempotencyKey) > IdempotencyKeyMax {
+		return "", false, fail("idempotency_key is %d bytes; the limit is %d — send a shorter key (a UUID is 36)",
+			len(idempotencyKey), IdempotencyKeyMax)
+	}
+	if idempotencyKey != "" {
+		existing, found, err := s.byIdempotencyKey(ctx, idempotencyKey)
+		if err != nil {
+			return "", false, err
+		}
+		if found {
+			if err := s.checkIdempotencyPayload(ctx, existing, idempotencyKey, date, amount, typ, category, account, sendingTo); err != nil {
+				return "", false, err
+			}
+			return oidHex(existing["_id"]), false, nil
+		}
 	}
 	var tid string
 	err := s.transact(ctx, func(sc context.Context) error {
@@ -302,20 +423,23 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 		if err != nil {
 			return err
 		}
-		if len(note) > 300 {
-			note = note[:300]
-		}
+		// Capped at 300/64 bytes and cut on a UTF-8 boundary, never mid-rune:
+		// the caps are documented on the tool + README rather than rejected,
+		// so a long note reads back truncated — but never as corrupt bytes.
+		note = truncateBytes(note, 300)
 		if source == "" {
 			source = "mcp"
 		}
-		if len(source) > 64 {
-			source = source[:64]
-		}
+		source = truncateBytes(source, 64)
 		doc := bson.M{"date": date, "amount": amount, "type": typ,
 			"category": category, "note": note, "source": source,
 			"accountId": src["_id"],
 			"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
 			"expiresAt": expiry(date, RetentionDays)}
+		// Omitted when empty so the sparse unique index ignores the document.
+		if idempotencyKey != "" {
+			doc["idempotencyKey"] = idempotencyKey
+		}
 		if typ == "transfer" {
 			if strings.TrimSpace(sendingTo) == "" {
 				return fail("transfer requires sending_to")
@@ -348,7 +472,143 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 		tid = oidHex(res.InsertedID)
 		return nil
 	})
-	return tid, err
+	if err != nil {
+		// Lost a race on the unique key: the row the other writer inserted is
+		// the answer — but only when the payload matches. A different payload
+		// under the same key is a caller bug, not a replay.
+		if idempotencyKey != "" && mongoDrv.IsDuplicateKeyError(err) {
+			if existing, found, rerr := s.byIdempotencyKey(ctx, idempotencyKey); rerr == nil && found {
+				if cerr := s.checkIdempotencyPayload(ctx, existing, idempotencyKey, date, amount, typ, category, account, sendingTo); cerr != nil {
+					return "", false, cerr
+				}
+				return oidHex(existing["_id"]), false, nil
+			}
+		}
+		return "", false, err
+	}
+	return tid, true, nil
+}
+
+// byIdempotencyKey reports the transaction already carrying key, with the full
+// row so the caller can verify the replay carries the same payload.
+func (s *Store) byIdempotencyKey(ctx context.Context, key string) (bson.M, bool, error) {
+	var doc bson.M
+	err := s.txns.FindOne(ctx, bson.M{"idempotencyKey": key}).Decode(&doc)
+	if err == mongoDrv.ErrNoDocuments {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return doc, true, nil
+}
+
+// checkIdempotencyPayload rejects a reused key carrying a different payload.
+// Only the core semantic fields are compared (date/amount/type/category +
+// both sides of a transfer); note/source are free-form annotations and are
+// excluded so a retried call with a tweaked note is still a no-op.
+func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, key, date string, amount float64, typ, category, account, sendingTo string) error {
+	mismatch := func(field string) error {
+		return fail("idempotency_key %q was already used for a different transaction (mismatch in %s) — use a new key", key, field)
+	}
+	if fmt.Sprint(existing["date"]) != date {
+		return mismatch("date")
+	}
+	if toFloat(existing["amount"]) != amount {
+		return mismatch("amount")
+	}
+	if fmt.Sprint(existing["type"]) != typ {
+		return mismatch("type")
+	}
+	if fmt.Sprint(existing["category"]) != category {
+		return mismatch("category")
+	}
+	if strings.TrimSpace(account) == "" {
+		return mismatch("account")
+	}
+	acct, err := s.findAccount(ctx, strings.TrimSpace(account))
+	if err != nil {
+		return mismatch("account")
+	}
+	if idHex(existing["accountId"]) != oidHex(acct["_id"]) {
+		return mismatch("account")
+	}
+	incomingDst := strings.TrimSpace(sendingTo)
+	_, hasExisting := existing["sending_to"]
+	if typ == "transfer" {
+		if incomingDst == "" {
+			return mismatch("sending_to")
+		}
+		dst, err := s.findAccount(ctx, incomingDst)
+		if err != nil {
+			return mismatch("sending_to")
+		}
+		if !hasExisting {
+			return mismatch("sending_to")
+		}
+		if idHex(existing["sending_to"]) != oidHex(dst["_id"]) {
+			return mismatch("sending_to")
+		}
+	} else {
+		if hasExisting || incomingDst != "" {
+			return mismatch("sending_to")
+		}
+	}
+	return nil
+}
+
+// Match returns the rows a delete filter would remove, without removing them —
+// the dry-run half of delete_transactions.
+func (s *Store) Match(ctx context.Context, filt map[string]any) ([]bson.M, error) {
+	if len(filt) == 0 {
+		return nil, fail("refusing to match without a filter")
+	}
+	mongoFilt, err := s.toMongoFilter(ctx, filt)
+	if err != nil {
+		return nil, err
+	}
+	cur, err := s.txns.Find(ctx, mongoFilt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	var rows []bson.M
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = []bson.M{}
+	}
+	names, err := s.accountNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		r["_id"] = oidHex(r["_id"])
+		r["accountId"] = idHex(r["accountId"])
+		r["account"] = names[idHex(r["accountId"])]
+		if st, ok := r["sending_to"]; ok {
+			r["sending_to"] = idHex(st)
+			r["sending_to_account"] = names[idHex(st)]
+		}
+	}
+	return rows, nil
+}
+
+// accountNames maps account-id hex -> name, for annotating transaction rows.
+func (s *Store) accountNames(ctx context.Context) (map[string]string, error) {
+	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"name": 1}))
+	if err != nil {
+		return nil, err
+	}
+	var rows []bson.M
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, a := range rows {
+		out[oidHex(a["_id"])] = fmt.Sprint(a["name"])
+	}
+	return out, nil
 }
 
 // Delete by app-level filter; inverts balance deltas atomically.
@@ -401,10 +661,16 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 }
 
 // FixLast adjusts newest tx by delta; scales each leg so transfers stay balanced.
-func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
+// FixLast adjusts newest tx by delta; scales each leg so transfers stay balanced.
+// Returns the fixed row's id hex + date so the caller can read it back by id:
+// without this, the shared "read back by id" rule is impossible for this write,
+// and the fix hits insertion-order last (`_id` desc), not date-latest, so the
+// wrong row is easy to guess after a backfill.
+func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string, bool, error) {
 	if newAmount <= 0 {
-		return false, fail("amount must be positive")
+		return "", "", false, fail("amount must be positive")
 	}
+	var fid, fdate string
 	fixed := false
 	err := s.transact(ctx, func(sc context.Context) error {
 		var last bson.M
@@ -414,6 +680,12 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
 				return nil
 			}
 			return err
+		}
+		fid = oidHex(last["_id"])
+		if d, _ := last["date"].(string); d != "" {
+			fdate = d
+		} else {
+			fdate = fmt.Sprint(last["date"])
 		}
 		delta := newAmount - toFloat(last["amount"])
 		if delta == 0 {
@@ -438,17 +710,33 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (bool, error) {
 		fixed = true
 		return nil
 	})
-	return fixed, err
+	return fid, fdate, fixed, err
 }
 
 // Query date-range scan; account filter matches either side of transfers.
+// Type/category filters are normalized exactly like writes (lowercase + trim),
+// so `Groceries` finds what was logged as `groceries` — and unknown values are
+// rejected like writes (and like unknown accounts), instead of silently
+// returning zero rows for a typo.
+//
+// `_id` is returned as a hex string like Match does: without it, the documented
+// `delete by id` workflow is unreachable from a query — the caller would hold a
+// row with no id to delete it by.
 func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string) ([]bson.M, error) {
 	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
 	if typ != nil {
-		filt["type"] = *typ
+		t := strings.ToLower(strings.TrimSpace(*typ))
+		if !contains(txTypes, t) {
+			return nil, fail("type %q does not exist — use one of %v", *typ, txTypes)
+		}
+		filt["type"] = t
 	}
 	if category != nil {
-		filt["category"] = *category
+		c := strings.ToLower(strings.TrimSpace(*category))
+		if !contains(Categories, c) {
+			return nil, fail("category %q does not exist — use one of %v", *category, Categories)
+		}
+		filt["category"] = c
 	}
 	if account != nil {
 		acct, err := s.findAccount(ctx, *account)
@@ -457,7 +745,7 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 		}
 		filt["$or"] = []bson.M{{"accountId": acct["_id"]}, {"sending_to": acct["_id"]}}
 	}
-	cur, err := s.txns.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}).SetProjection(bson.M{"_id": 0}))
+	cur, err := s.txns.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -468,16 +756,28 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	if rows == nil {
 		rows = []bson.M{}
 	}
+	// Rows carry account ids; the names come along so a multi-account result is
+	// readable without a second lookup.
+	names, err := s.accountNames(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range rows {
+		r["_id"] = oidHex(r["_id"])
 		r["accountId"] = idHex(r["accountId"])
+		r["account"] = names[idHex(r["accountId"])]
 		if st, ok := r["sending_to"]; ok {
 			r["sending_to"] = idHex(st)
+			r["sending_to_account"] = names[idHex(st)]
 		}
 	}
 	return rows, nil
 }
 
-// Summarize income/expense/net + expense-only per-category ranking.
+// Summarize income/expense/net + expense-only per-category ranking. Transfers
+// are counted in `count` but excluded from income/expense/net, and `by_category`
+// ranks expenses only — so income categories never appear. Documented on the
+// tool + README so `count` vs totals does not misread.
 func (s *Store) Summarize(ctx context.Context, start, end string, account *string) (bson.M, error) {
 	rows, err := s.Query(ctx, start, end, nil, nil, account)
 	if err != nil {
@@ -537,6 +837,7 @@ func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (int64, error)
 }
 
 func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
+	v = strings.TrimSpace(v)
 	ors := []bson.M{{"name": v}}
 	if oid, err := primitive.ObjectIDFromHex(v); err == nil {
 		ors = append(ors, bson.M{"_id": oid})
@@ -551,14 +852,52 @@ func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
 func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M, error) {
 	out := bson.M{}
 	for k, v := range filt {
-		if k == "account" {
+		switch k {
+		case "account":
 			vs, _ := v.(string)
 			acct, err := s.findAccount(ctx, vs)
 			if err != nil {
 				return nil, err
 			}
 			out["$or"] = []bson.M{{"accountId": acct["_id"]}, {"sending_to": acct["_id"]}}
-		} else {
+		case "id":
+			vs, _ := v.(string)
+			oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(vs))
+			if err != nil {
+				return nil, fail("'%s' is not a transaction id", vs)
+			}
+			out["_id"] = oid
+		case "type", "category":
+			// Normalized like writes: `Groceries` deletes what was logged as
+			// `groceries` instead of reporting "would_delete: 0" for rows that
+			// exist — and unknown values are rejected like writes (and like
+			// unknown accounts), instead of silently matching nothing for a
+			// typo. Non-strings pass through for the driver to reject.
+			if vs, ok := v.(string); ok {
+				norm := strings.ToLower(strings.TrimSpace(vs))
+				if k == "type" {
+					if !contains(txTypes, norm) {
+						return nil, fail("type %q does not exist — use one of %v", vs, txTypes)
+					}
+				} else if !contains(Categories, norm) {
+					return nil, fail("category %q does not exist — use one of %v", vs, Categories)
+				}
+				out[k] = norm
+			} else {
+				out[k] = v
+			}
+		case "date":
+			// Trimmed like writes/reads so a padded delete filter finds what
+			// `log_transaction` stored trimmed instead of reporting
+			// `would_delete: 0`. Calendar validity is enforced in the handler
+			// via CheckDay (which rejects); the store stays a trim-only
+			// defense for direct callers.
+			if vs, ok := v.(string); ok {
+				out[k] = strings.TrimSpace(vs)
+			} else {
+				out[k] = v
+			}
+		default:
 			out[k] = v
 		}
 	}
@@ -572,6 +911,19 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// truncateBytes caps s at n bytes without splitting a UTF-8 rune: a naive
+// s[:n] can cut a multi-byte character mid-sequence and store invalid bytes.
+func truncateBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 func toFloat(v any) float64 {
@@ -611,6 +963,8 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	}{
 		{accounts, bson.D{{Key: "name", Value: 1}}, options.Index().SetUnique(true).SetName("uniq_name")},
 		{transactions, bson.D{{Key: "expiresAt", Value: 1}}, options.Index().SetName("ttl_expiresAt").SetExpireAfterSeconds(0)},
+		{transactions, bson.D{{Key: "idempotencyKey", Value: 1}},
+			options.Index().SetName("uniq_idempotency").SetUnique(true).SetSparse(true)},
 		{transactions, bson.D{{Key: "accountId", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("acct_date")},
 		{transactions, bson.D{{Key: "sending_to", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("sendingto_date").SetSparse(true)},
 		{transactions, bson.D{{Key: "date", Value: 1}, {Key: "type", Value: 1}}, options.Index().SetName("date_type")},

@@ -107,6 +107,112 @@ func TestQueryTransactionsRejectsUnusableBounds(t *testing.T) {
 	}
 }
 
+// An unknown category used to be refiled under "other" and reported as if it had
+// been stored: the caller asked for "utilities", got "other", and only found out
+// by reading the row back. The store now rejects it before any write, so the
+// handler surfaces a real error. `store` is nil here — the rejection happens
+// before the receiver is dereferenced.
+func TestLogTransactionRejectsUnknownCategory(t *testing.T) {
+	_, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount": 100, "account": "Cash", "category": "utilities",
+	})
+	if errMsg == "" {
+		t.Fatal("an unknown category was accepted; it used to be silently stored as 'other'")
+	}
+	if !strings.Contains(errMsg, "does not exist") || !strings.Contains(errMsg, "utilities") {
+		t.Errorf("error %q does not name the offending category", errMsg)
+	}
+}
+
+// A non-calendar date must be rejected like the read path rejects it, before
+// any store touch (`store` is nil here): `2026-02-30` used to store, then the
+// row's expiresAt fell back to year-1 and TTL purged it immediately while the
+// balance delta survived.
+func TestLogTransactionRejectsNonCalendarDate(t *testing.T) {
+	_, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount": 100, "account": "Cash", "date": "2026-02-30",
+	})
+	if errMsg == "" {
+		t.Fatal("a non-calendar date was accepted; query/summarize reject it")
+	}
+	if !strings.Contains(errMsg, "log_transaction") {
+		t.Errorf("error %q does not name the tool", errMsg)
+	}
+}
+
+// The delete date filter is validated like writes/reads, before any store
+// touch: a padded or non-calendar date must fail instead of silently matching
+// nothing as `would_delete: 0`.
+func TestDeleteTransactionsRejectsBadDate(t *testing.T) {
+	for _, date := range []string{"2026-02-30", "not-a-date"} {
+		_, errMsg := callTool(t, "delete_transactions", map[string]any{
+			"date": date, "dry_run": true,
+		})
+		if errMsg == "" {
+			t.Fatalf("delete date %q was accepted; expected a rejection, not a silent zero-match", date)
+		}
+		if !strings.Contains(errMsg, "delete_transactions") {
+			t.Errorf("error %q does not name the tool", errMsg)
+		}
+	}
+}
+
+// `id` cannot be combined with any filter, including the new `type` filter —
+// validated before any store touch.
+func TestDeleteTransactionsRejectsIdWithType(t *testing.T) {
+	_, errMsg := callTool(t, "delete_transactions", map[string]any{
+		"id": "68fakeid0000000000000000", "type": "expense", "dry_run": true,
+	})
+	if errMsg == "" {
+		t.Fatal("id+type was accepted; id must be exclusive")
+	}
+	if !strings.Contains(errMsg, "cannot be combined") {
+		t.Errorf("error %q does not explain exclusivity", errMsg)
+	}
+}
+
+// An explicit 0 amount is rejected like writes, before any store touch: 0
+// would otherwise silently widen to every row matching the other filters.
+func TestDeleteTransactionsRejectsZeroAmount(t *testing.T) {
+	_, errMsg := callTool(t, "delete_transactions", map[string]any{
+		"amount": 0.0, "category": "groceries", "dry_run": true,
+	})
+	if errMsg == "" {
+		t.Fatal("amount=0 was accepted; 0 means absent and cannot narrow a delete")
+	}
+	if !strings.Contains(errMsg, "> 0") {
+		t.Errorf("error %q does not state the positive-amount rule", errMsg)
+	}
+}
+
+// Whitespace-only filters trim to absent like summarize's bounds: a padded
+// account that trims to nothing must not error as "unknown account".
+func TestDeleteTransactionsTrimsWhitespaceFilters(t *testing.T) {
+	_, errMsg := callTool(t, "delete_transactions", map[string]any{
+		"account": "   ", "dry_run": true,
+	})
+	if errMsg == "" {
+		t.Fatal("whitespace-only account was accepted as a filter")
+	}
+	if !strings.Contains(errMsg, "Provide id") {
+		t.Errorf("error %q should be the empty-filter error, not an unknown-account error", errMsg)
+	}
+}
+
+// A reversed explicit pair is rejected like query — stated on the tool, not
+// discovered. Validated before any store touch.
+func TestSummarizeRejectsReversedRange(t *testing.T) {
+	_, errMsg := callTool(t, "summarize", map[string]any{
+		"start": "2026-03-31", "end": "2026-01-01",
+	})
+	if errMsg == "" {
+		t.Fatal("reversed summarize range was accepted; expected a rejection, not a silently empty summary")
+	}
+	if !strings.Contains(errMsg, "after end") {
+		t.Errorf("error %q does not explain the reversal", errMsg)
+	}
+}
+
 func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
 	for _, c := range []struct{ name, start, end string }{
 		{"lone start", "2026-01-01", ""},
