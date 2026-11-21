@@ -185,6 +185,20 @@ func TestDeleteTransactionsRejectsZeroAmount(t *testing.T) {
 	}
 }
 
+// A >2-decimal filter is rejected, not rounded onto paise it never stored
+// (`store` is nil here — ExactPaise is pure, so this fails before any touch).
+func TestDeleteTransactionsRejectsInexactPaise(t *testing.T) {
+	_, errMsg := callTool(t, "delete_transactions", map[string]any{
+		"amount": 10.555, "dry_run": true,
+	})
+	if errMsg == "" {
+		t.Fatal("amount=10.555 was accepted; it would match paise it never stored")
+	}
+	if !strings.Contains(errMsg, "exact paise") {
+		t.Errorf("error %q does not demand exact paise", errMsg)
+	}
+}
+
 // Whitespace-only filters trim to absent like summarize's bounds: a padded
 // account that trims to nothing must not error as "unknown account".
 func TestDeleteTransactionsTrimsWhitespaceFilters(t *testing.T) {

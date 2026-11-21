@@ -12,6 +12,7 @@ import (
 	"agento/internal/mongo"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -529,6 +530,51 @@ func TestMatchIsADryRun(t *testing.T) {
 	}
 }
 
+// A rupee-float delete filter converts to paise: Match on 10.1 finds the row
+// stored as 1010. Inexact floats and strings fail instead of silently
+// matching nothing.
+func TestMatchFloatAmountConvertsToPaise(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10.1, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Match(ctx, map[string]any{"amount": 10.1})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("float-amount match got %d rows, %v", len(rows), err)
+	}
+	if _, err := s.Match(ctx, map[string]any{"amount": 10.555}); err == nil {
+		t.Fatal("inexact-paise amount matched instead of failing")
+	}
+	if _, err := s.Match(ctx, map[string]any{"amount": "ten"}); err == nil {
+		t.Fatal("string amount matched instead of failing")
+	}
+}
+
+// Opening balances validate like every other write: 0.005 is rejected,
+// not silently stored as 1 paise. Zero and negatives still pass exactness.
+func TestCreateAccountRejectsInexactPaise(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "Dust", "cash", 0.005); err == nil {
+		t.Fatal("0.005 opening balance was rounded instead of rejected")
+	} else if !containsStr(err.Error(), "exact paise") {
+		t.Fatalf("error %q does not demand exact paise", err)
+	}
+	if _, err := s.CreateAccount(ctx, "Dust", "cash", 10.55); err != nil {
+		t.Fatalf("exact-paise 10.55 rejected: %v", err)
+	}
+	rows, err := s.ListAccounts(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r["name"] == "Dust" && fnum(r["balance"]) != 10.55 {
+			t.Fatalf("balance %v, want exactly 10.55", r["balance"])
+		}
+	}
+}
+
 func TestQueryNamesItsAccounts(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -735,6 +781,196 @@ func TestDeleteDateFilterTrimsLikeWrites(t *testing.T) {
 	rows, err := s.Match(ctx, map[string]any{"date": " 2026-09-01 "})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("padded delete filter matched %d rows, %v", len(rows), err)
+	}
+}
+
+// Paise storage is exact: three 10-paise writes total exactly 30 paise.
+// With float64 storage the balance compared as -0.30000000000000004 != -0.3.
+func TestPaiseArithmeticIsExact(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, _, err := s.Insert(ctx, "2026-09-01", 0.10, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b := balances(t, s); b["Cash"] != -0.3 {
+		t.Fatalf("balance %v, want exactly -0.3", b)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+	for _, r := range rows {
+		if fnum(r["amount"]) != 0.1 {
+			t.Fatalf("amount %v, want exactly 0.1", r["amount"])
+		}
+	}
+	// Summaries total stored paise, not re-rounded floats.
+	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fnum(sum["expense"]) != 0.3 {
+		t.Fatalf("summarized expense %v, want exactly 0.3", sum["expense"])
+	}
+	pairs, _ := sum["by_category"].([]map[string]any)
+	if len(pairs) != 1 || fnum(pairs[0]["total"]) != 0.3 {
+		t.Fatalf("by_category %v, want [{groceries 0.3}]", sum["by_category"])
+	}
+}
+
+func TestFractionalRupeesRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10.55, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+	if fnum(rows[0]["amount"]) != 10.55 {
+		t.Fatalf("amount %v, want exactly 10.55", rows[0]["amount"])
+	}
+	if b := balances(t, s); b["Cash"] != -10.55 {
+		t.Fatalf("balance %v, want exactly -10.55", b)
+	}
+}
+
+func TestSubPaiseAmountsAreRejected(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 0.001, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("a sub-paise amount was stored; it has no paise representation")
+	} else if !containsStr(err.Error(), "paise") {
+		t.Fatalf("error %q does not name the paise floor", err)
+	}
+	// >2-decimal inputs are rejected, never silently rounded (0.005 must not
+	// become a 1-paise row, 10.555 must not become 1056 paise).
+	if _, _, err := s.Insert(ctx, "2026-09-01", 0.005, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("0.005 was rounded instead of rejected")
+	} else if !containsStr(err.Error(), "exact paise") {
+		t.Fatalf("error %q does not demand exact paise", err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10.555, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("10.555 was rounded instead of rejected")
+	}
+	if _, _, _, err := s.FixLast(ctx, 0.004); err == nil {
+		t.Fatal("a sub-paise correction was accepted")
+	}
+	// Exact 2-decimal inputs pass, including floats no binary can represent
+	// exactly (10.55 stores 1055 paise and reads back equal).
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10.55, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatalf("exact-paise 10.55 rejected: %v", err)
+	}
+}
+
+// Legacy float-rupee docs migrate to int64 paise on EnsureSchema, idempotently:
+// the filter matches doubles and decimals only (ints are already paise),
+// so reruns and fresh databases find nothing.
+func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.accts.InsertOne(ctx, bson.M{"name": "Legacy", "type": "cash",
+		"balance": 100.5, "archived": false,
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-01", "amount": 10.1,
+		"type": "expense", "category": "groceries", "note": "", "source": "mcp",
+		"accountId": primitive.NewObjectID(),
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+		"expiresAt": expiry("2026-09-01", RetentionDays)}); err != nil {
+		t.Fatal(err)
+	}
+	// A stray Decimal128 converts exactly like a double, not left behind.
+	dec, err := primitive.ParseDecimal128("3.02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-02", "amount": dec,
+		"type": "expense", "category": "bills", "note": "", "source": "mcp",
+		"accountId": primitive.NewObjectID(),
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+		"expiresAt": expiry("2026-09-02", RetentionDays)}); err != nil {
+		t.Fatal(err)
+	}
+	// Legacy sub-paise dust (allowed by the old amount<=0 check) floors to
+	// the 1-paise minimum instead of becoming a 0 row the new code calls
+	// invalid and the tool cannot delete by amount.
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-03", "amount": 0.004,
+		"type": "expense", "category": "groceries", "note": "", "source": "mcp",
+		"accountId": primitive.NewObjectID(),
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+		"expiresAt": expiry("2026-09-03", RetentionDays)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	var a bson.M
+	if err := s.accts.FindOne(ctx, bson.M{"name": "Legacy"}).Decode(&a); err != nil {
+		t.Fatal(err)
+	}
+	if bal, ok := a["balance"].(int64); !ok || bal != 10050 {
+		t.Fatalf("balance migrated to %v (%T), want int64 10050", a["balance"], a["balance"])
+	}
+	var txn bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"date": "2026-09-01"}).Decode(&txn); err != nil {
+		t.Fatal(err)
+	}
+	if amt, ok := txn["amount"].(int64); !ok || amt != 1010 {
+		t.Fatalf("amount migrated to %v (%T), want int64 1010", txn["amount"], txn["amount"])
+	}
+	var decTxn bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"date": "2026-09-02"}).Decode(&decTxn); err != nil {
+		t.Fatal(err)
+	}
+	if amt, ok := decTxn["amount"].(int64); !ok || amt != 302 {
+		t.Fatalf("decimal amount migrated to %v (%T), want int64 302", decTxn["amount"], decTxn["amount"])
+	}
+	var dustTxn bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"date": "2026-09-03"}).Decode(&dustTxn); err != nil {
+		t.Fatal(err)
+	}
+	if amt, ok := dustTxn["amount"].(int64); !ok || amt != 1 {
+		t.Fatalf("sub-paise amount migrated to %v (%T), want int64 1 (floored, never 0)", dustTxn["amount"], dustTxn["amount"])
+	}
+	// No zero-amount rows exist post-migration, so the tool's 0-rejection
+	// ("no zero rows exist") holds on migrated DBs too.
+	n, err := s.txns.CountDocuments(ctx, bson.M{"amount": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("migration left %d zero-amount rows, which the tool cannot delete by amount", n)
+	}
+	// The floored row reads back as 0.01 rupees and is matchable by its
+	// paise value.
+	matched, err := s.Match(ctx, map[string]any{"amount": int64(1)})
+	if err != nil || len(matched) != 1 {
+		t.Fatalf("paise-1 match got %d rows, %v", len(matched), err)
+	}
+	if fnum(matched[0]["amount"]) != 0.01 {
+		t.Fatalf("floored row reads back as %v, want 0.01", matched[0]["amount"])
+	}
+	// Idempotent: a second run changes nothing and errors nothing.
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("second EnsureSchema: %v", err)
+	}
+	// New writes compose with migrated balances exactly.
+	if _, _, err := s.Insert(ctx, "2026-09-02", 0.5, "expense", "other", "Legacy", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListAccounts(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r["name"] == "Legacy" && fnum(r["balance"]) != 100.0 {
+			t.Fatalf("balance %v, want exactly 100.0", r["balance"])
+		}
 	}
 }
 
