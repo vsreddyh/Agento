@@ -953,11 +953,13 @@ func (s *Store) Summarize(ctx context.Context, start, end string, account *strin
 }
 
 // Prune deletes old docs WITHOUT inverting balances (TTL parity).
-// The cutoff stays on UTC like the TTL index it mirrors (expiresAt is a UTC
-// instant): prune is a maintenance operation keyed to TTL's frame, not a
-// user-visible date, so matching TTL exactly matters more than matching the
-// operator's calendar on boundary dates. User-visible dates (default log
-// date, period phrases) are IST; instants and retention math are UTC.
+// The cutoff uses the same UTC frame as the TTL index it mirrors (expiresAt
+// is a UTC instant): prune is a maintenance operation keyed to TTL's frame,
+// not a user-visible date. Boundary note: prune keeps `date == cutoff`
+// (`$lt`) while TTL expires that same row at 00:00 UTC today (plus monitor
+// lag), so dry-run counts can trail TTL by a day — same frame, not same
+// instant. User-visible dates (default log date, period phrases) are IST;
+// instants and retention math are UTC.
 func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (int64, error) {
 	if days <= 0 {
 		days = RetentionDays
