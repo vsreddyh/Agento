@@ -28,8 +28,10 @@ var monthNames = []string{"", "January", "February", "March", "April", "May", "J
 // exact with no tzdata dependency). Server clocks run UTC; every user-visible
 // "today" (default log date, period resolution) is computed in IST so a log
 // at 00:30 IST lands on the user's date, not UTC's yesterday.
-// Instants (createdAt) stay UTC. Retention math (prune cutoff, TTL) also stays
-// UTC to mirror the TTL index exactly — see Store.Prune.
+// Instants (createdAt) stay UTC. Retention math (prune cutoff, TTL) also uses
+// the same UTC frame as the TTL index (never IST) — see Store.Prune for the
+// boundary note: prune keeps `date == cutoff` while TTL expires it at 00:00
+// UTC, so the frame matches but the instants do not.
 var IST = time.FixedZone("IST", 5*3600+30*60)
 
 // TodayIST reports the current calendar day for the operator.
