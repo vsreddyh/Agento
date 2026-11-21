@@ -115,6 +115,12 @@ type queryTransactionsInput struct {
 	Type     string `json:"type,omitempty"`
 	Category string `json:"category,omitempty"`
 	Account  string `json:"account,omitempty"`
+	// Page size; <=0 means the 100-row default, clamped to 500. The store
+	// speaks limit<=0 as unlimited, but the handler never forwards that —
+	// an unbounded MCP read is how 90-day dumps happen.
+	Limit int `json:"limit,omitempty"`
+	// Page start; negative is rejected like a reversed range.
+	Offset int `json:"offset,omitempty"`
 }
 
 type summarizeInput struct {
@@ -215,6 +221,33 @@ func normalizeDayRangePair(what, start, end string) (string, string, error) {
 		return "", "", nil
 	}
 	return normalizeDayRange(what, st, et)
+}
+
+// clampLimit maps the requested query page size to the applied one: absent
+// or non-positive means the 100-row default, above 500 clamps to the cap.
+// There is no unlimited MCP page — only Query itself accepts limit==0 for
+// no cap (direct store use only). Summarize never passes a limit to Query:
+// it totals everything with its own unbounded Find via queryFilter.
+func clampLimit(in int) int {
+	if in <= 0 {
+		return 100
+	}
+	if in > 500 {
+		return 500
+	}
+	return in
+}
+
+// pageWindow reports whether more rows remain after this page and the offset
+// to fetch them with. `next` is nil when done — always present as JSON null,
+// never omitted — so a client can distinguish "last page" from a missing
+// field. An exact-multiple page (count reaches total exactly) is not
+// truncated: there is nothing after it.
+func pageWindow(offset, count int, total int64) (truncated bool, next any) {
+	if int64(offset+count) < total {
+		return true, offset + count
+	}
+	return false, nil
 }
 
 func main() {
@@ -355,7 +388,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero)."},
+		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited; limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited page on MCP — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log or TTL expiry between page fetches can shift rows across page boundaries, unlike fix_last_transaction, which is explicitly insertion-order)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
 			if t := strings.TrimSpace(in.Type); t != "" {
@@ -371,11 +404,18 @@ func registerTools(s *mcp.Server) {
 			if err != nil {
 				return fail(err)
 			}
-			rows, err := store.Query(ctx, start, end, typ, cat, acct)
+			limit := clampLimit(in.Limit)
+			if in.Offset < 0 {
+				return fail(fmt.Errorf("query_transactions offset must be >= 0 — got %d", in.Offset))
+			}
+			rows, total, err := store.Query(ctx, start, end, typ, cat, acct, limit, in.Offset)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "transactions": rows})
+			truncated, next := pageWindow(in.Offset, len(rows), total)
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": truncated, "next_offset": next, "limit": limit,
+				"transactions": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
@@ -433,7 +473,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (balances inverted atomically). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount (exact paise: > 0, at most 2 decimals; an explicit 0 or >2-decimal value is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent, like summarize); id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
+		Description: "Delete transactions (balances inverted atomically). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount (exact paise: > 0, at most 2 decimals; an explicit 0 or >2-decimal value is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent, like summarize); id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like summarize's bounds, so
 			// whitespace-only means absent (not an "unknown account" error):

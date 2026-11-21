@@ -263,7 +263,7 @@ func TestTransferValidation(t *testing.T) {
 	if _, _, err := s.Insert(ctx, "2026-09-01", 100, "transfer", "other", "HDFC", "Cash", "", "", ""); err == nil {
 		t.Fatal("expected archived-dest error")
 	}
-	rows, err := s.Query(ctx, "2026-01-01", "2026-12-31", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-01-01", "2026-12-31", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("got %v %v", rows, err)
 	}
@@ -291,7 +291,7 @@ func TestBlankAccountRequiresSetup(t *testing.T) {
 	} else if !containsStr(err.Error(), "account is required") {
 		t.Fatalf("got %v", err)
 	}
-	rows, err := s.Query(ctx, "2026-01-01", "2026-12-31", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-01-01", "2026-12-31", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("got %v %v", rows, err)
 	}
@@ -379,7 +379,7 @@ func TestReconciliationAfterPrune(t *testing.T) {
 	if b := balances(t, s); b["HDFC"] != 900 {
 		t.Fatalf("got %v", b)
 	}
-	rows, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("got %v %v", rows, err)
 	}
@@ -418,7 +418,7 @@ func TestIdempotencyKeyMakesARetryANoOp(t *testing.T) {
 	if b := balances(t, s); b["Cash"] != -300 {
 		t.Fatalf("balance %v — the retry moved it", b)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %d rows, %v", len(rows), err)
 	}
@@ -441,7 +441,7 @@ func TestOverlongIdempotencyKeyIsRejectedNotTruncated(t *testing.T) {
 	} else if !containsStr(err.Error(), "shorter key") {
 		t.Fatalf("the error does not say how to fix it: %v", err)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %d rows, %v — the overlong request wrote", len(rows), err)
 	}
@@ -500,7 +500,7 @@ func TestDeleteByIDLeavesSiblings(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("deleted %d, %v", n, err)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %d rows, %v — the sibling went too", len(rows), err)
 	}
@@ -524,7 +524,7 @@ func TestMatchIsADryRun(t *testing.T) {
 	if rows[0]["account"] != "Cash" {
 		t.Fatalf("row has no account name: %v", rows[0])
 	}
-	after, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	after, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(after) != 2 {
 		t.Fatalf("Match deleted rows: %d, %v", len(after), err)
 	}
@@ -584,7 +584,7 @@ func TestQueryNamesItsAccounts(t *testing.T) {
 	if _, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %d rows, %v", len(rows), err)
 	}
@@ -611,7 +611,7 @@ func TestQueryReturnsIdsForDeleteById(t *testing.T) {
 	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %d rows, %v", len(rows), err)
 	}
@@ -634,7 +634,7 @@ func TestFiltersAreCaseInsensitiveLikeWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	upperType, upperCat := "Expense", "Groceries"
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", &upperType, &upperCat, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", &upperType, &upperCat, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("case-insensitive query got %d rows, %v", len(rows), err)
 	}
@@ -674,7 +674,7 @@ func TestIdempotencyKeyRejectsDifferentPayload(t *testing.T) {
 			t.Fatalf("%s error %q does not name the key", c.name, err)
 		}
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("reused key wrote extra rows: %d, %v", len(rows), err)
 	}
@@ -692,7 +692,7 @@ func TestLongNoteTruncatesOnUTF8Boundary(t *testing.T) {
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", "Cash", "", long, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %d rows, %v", len(rows), err)
 	}
@@ -719,7 +719,7 @@ func TestInsertRejectsNonCalendarDate(t *testing.T) {
 	if _, _, err := s.Insert(ctx, " 2026-09-01 ", 10, "expense", "other", "Cash", "", "", "", ""); err != nil {
 		t.Fatalf("padded date should trim like reads: %v", err)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("padded write not stored trimmed: %d rows, %v", len(rows), err)
 	}
@@ -760,7 +760,7 @@ func TestAccountFilterMatchesEitherSideOfTransfer(t *testing.T) {
 		t.Fatal(err)
 	}
 	receiver := "Cash"
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, &receiver)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, &receiver, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("receiver-side query got %d rows, %v", len(rows), err)
 	}
@@ -797,7 +797,7 @@ func TestPaiseArithmeticIsExact(t *testing.T) {
 	if b := balances(t, s); b["Cash"] != -0.3 {
 		t.Fatalf("balance %v, want exactly -0.3", b)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 3 {
 		t.Fatalf("got %d rows, %v", len(rows), err)
 	}
@@ -826,7 +826,7 @@ func TestFractionalRupeesRoundTrip(t *testing.T) {
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10.55, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %d rows, %v", len(rows), err)
 	}
@@ -974,6 +974,118 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	}
 }
 
+// Pagination slices by date order with a stable _id tiebreak, and reports
+// the unpaged total so a short page is never mistaken for the end.
+// limit==0 means no cap (offset still applies); negative limits are rejected
+// like negative offsets. Summarize bypasses Query via queryFilter + raw Find
+// since it must total everything.
+func TestQueryPaginationSlicesAndTotals(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 1; i <= 5; i++ {
+		day := fmt.Sprintf("2026-09-%02d", i)
+		if _, _, err := s.Insert(ctx, day, float64(i*100), "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, total, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 0)
+	if err != nil || len(rows) != 2 || total != 5 {
+		t.Fatalf("page 1: got %d rows total %d, %v", len(rows), total, err)
+	}
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-01" || fmt.Sprint(rows[1]["date"]) != "2026-09-02" {
+		t.Fatalf("page 1 order wrong: %v, %v", rows[0]["date"], rows[1]["date"])
+	}
+	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 2)
+	if err != nil || len(rows) != 2 || total != 5 {
+		t.Fatalf("page 2: got %d rows total %d, %v", len(rows), total, err)
+	}
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-03" || fmt.Sprint(rows[1]["date"]) != "2026-09-04" {
+		t.Fatalf("page 2 order wrong: %v, %v", rows[0]["date"], rows[1]["date"])
+	}
+	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 4)
+	if err != nil || len(rows) != 1 || total != 5 {
+		t.Fatalf("page 3: got %d rows total %d, %v", len(rows), total, err)
+	}
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-05" {
+		t.Fatalf("page 3 row %v, want 2026-09-05", rows[0]["date"])
+	}
+	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 5)
+	if err != nil || len(rows) != 0 || total != 5 {
+		t.Fatalf("past-end page: got %d rows total %d, %v", len(rows), total, err)
+	}
+	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
+	if err != nil || len(rows) != 5 || total != 5 {
+		t.Fatalf("unlimited: got %d rows total %d, %v", len(rows), total, err)
+	}
+	// Offset applies without a limit: limit 0 means no cap, not restart.
+	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 2)
+	if err != nil || len(rows) != 3 || total != 5 {
+		t.Fatalf("uncapped offset page: got %d rows total %d, %v", len(rows), total, err)
+	}
+	if fmt.Sprint(rows[0]["date"]) != "2026-09-03" || fmt.Sprint(rows[1]["date"]) != "2026-09-04" || fmt.Sprint(rows[2]["date"]) != "2026-09-05" {
+		t.Fatalf("uncapped offset order wrong: %v, %v, %v", rows[0]["date"], rows[1]["date"], rows[2]["date"])
+	}
+	// Negative offsets fail here too, not just in the handler.
+	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, -1); err == nil {
+		t.Fatal("negative store offset was accepted; expected a rejection")
+	}
+	// A negative limit fails instead of silently dumping everything: only
+	// an explicit 0 means no cap.
+	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, -1, 0); err == nil {
+		t.Fatal("negative store limit was accepted as unlimited; expected a rejection")
+	} else if !containsStr(err.Error(), "limit") {
+		t.Fatalf("error %q does not name the limit", err)
+	}
+}
+
+// Same-day rows come back in insertion (_id) order: the date sort ties, so
+// without the _id tiebreak their order would be unspecified. Distinct amounts
+// mark insertion order unambiguously. Fetched across page boundaries (not one
+// fetch) so a date-only sort is less likely to pass by luck on Mongo's
+// natural order (which on a fresh test collection often matches insertion
+// order — paging reduces, not eliminates, that luck).
+func TestQuerySameDayRowsFollowInsertionOrder(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, amt := range []float64{100, 200, 300} {
+		if _, _, err := s.Insert(ctx, "2026-09-15", amt, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Page across the same-day set: 2 + 1, asserting amounts per page so a
+	// date-only sort that returns same-day rows in any other order fails.
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 0)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("same-day page 1: got %d rows, %v", len(rows), err)
+	}
+	for i, want := range []float64{100, 200} {
+		if fnum(rows[i]["amount"]) != want {
+			t.Fatalf("page 1 row %d amount %v, want %v (insertion order)", i, rows[i]["amount"], want)
+		}
+	}
+	rows2, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 2, 2)
+	if err != nil || len(rows2) != 1 {
+		t.Fatalf("same-day page 2: got %d rows, %v", len(rows2), err)
+	}
+	if fnum(rows2[0]["amount"]) != 300 {
+		t.Fatalf("page 2 amount %v, want 300 (insertion order)", rows2[0]["amount"])
+	}
+	rows = append(rows, rows2...)
+	for i, want := range []float64{100, 200, 300} {
+		if fnum(rows[i]["amount"]) != want {
+			t.Fatalf("row %d amount %v, want %v (insertion order)", i, rows[i]["amount"], want)
+		}
+	}
+	prev := ""
+	for i, r := range rows {
+		id, _ := r["_id"].(string)
+		if id == "" || (prev != "" && id <= prev) {
+			t.Fatalf("row %d id %q not strictly increasing: tiebreak broken", i, id)
+		}
+		prev = id
+	}
+}
+
 // An account literally named with 24 hex chars resolves by name (like
 // findAccount's $or), not just by `_id`: the old if/else preferred `_id` and
 // made hex-shaped names unreachable via `log`.
@@ -987,7 +1099,7 @@ func TestHexShapedAccountNameResolvesByName(t *testing.T) {
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10, "expense", "other", hexName, "", "", "", ""); err != nil {
 		t.Fatalf("hex-shaped account name failed via log path: %v", err)
 	}
-	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, &hexName)
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, &hexName, 0, 0)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("query by hex-shaped name got %d rows, %v", len(rows), err)
 	}
@@ -1034,12 +1146,12 @@ func TestUnknownFilterValuesAreRejectedLikeWrites(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	badType, badCat := "banana", "utilities"
-	if _, err := s.Query(ctx, "2026-09-01", "2026-09-30", &badType, nil, nil); err == nil {
+	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", &badType, nil, nil, 0, 0); err == nil {
 		t.Fatal("unknown query type matched nothing instead of failing")
 	} else if !containsStr(err.Error(), "does not exist") {
 		t.Fatalf("query type error %q does not name the problem", err)
 	}
-	if _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, &badCat, nil); err == nil {
+	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, &badCat, nil, 0, 0); err == nil {
 		t.Fatal("unknown query category matched nothing instead of failing")
 	}
 	if _, err := s.Match(ctx, map[string]any{"category": "utilities"}); err == nil {
@@ -1066,7 +1178,7 @@ func TestDeleteByTypeFilter(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("delete by type got %d, %v", n, err)
 	}
-	after, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	after, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(after) != 1 {
 		t.Fatalf("got %d rows after type delete, %v", len(after), err)
 	}
