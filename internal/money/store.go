@@ -832,9 +832,10 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 // rejected like negative offsets, since an unbounded dump must never be the
 // result of a typo. At most `limit` rows starting at `offset`, with `total`
 // reporting the unpaged match count so the caller can tell a short page from
-// the end. Sort is date, then `_id`, so pages are stable across calls.
-// Negative offsets are rejected (typo, not page 0); the handler checks first
-// with a tool-named error.
+// the end. Sort key is date, then `_id` — deterministic order, but not a
+// snapshot: a concurrent log or TTL expiry between page fetches can shift
+// rows across page boundaries (dupes/skips on a live ledger). Negative
+// offsets fail the same way (typo, not page 0).
 
 func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string, limit, offset int) ([]bson.M, int64, error) {
 	filt, err := s.queryFilter(ctx, start, end, typ, category, account)

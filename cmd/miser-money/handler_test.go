@@ -241,6 +241,41 @@ func TestSummarizeRejectsReversedRange(t *testing.T) {
 	}
 }
 
+// Paging math lives in pure helpers so it is testable without a store:
+// absent/negative limits map to the 100 default (clamped to 500), and the
+// window reports truncated/next_offset with an exact-multiple page reading
+// as done (next_offset present as null, never omitted).
+func TestClampLimit(t *testing.T) {
+	for _, tc := range []struct {
+		in, want int
+	}{{-5, 100}, {0, 100}, {1, 1}, {100, 100}, {500, 500}, {501, 500}, {9999, 500}} {
+		if got := clampLimit(tc.in); got != tc.want {
+			t.Errorf("clampLimit(%d) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestPageWindow(t *testing.T) {
+	truncated, next := pageWindow(0, 2, 5)
+	if !truncated || next != 2 {
+		t.Fatalf("partial page: truncated=%v next=%v, want true/2", truncated, next)
+	}
+	truncated, next = pageWindow(2, 2, 5)
+	if !truncated || next != 4 {
+		t.Fatalf("mid page: truncated=%v next=%v, want true/4", truncated, next)
+	}
+	// Exact multiple: offset+count reaches total exactly — done, not truncated.
+	truncated, next = pageWindow(0, 5, 5)
+	if truncated || next != nil {
+		t.Fatalf("exact-multiple page: truncated=%v next=%v, want false/nil", truncated, next)
+	}
+	// Past the end: empty page, still done and still null (not missing).
+	truncated, next = pageWindow(5, 0, 5)
+	if truncated || next != nil {
+		t.Fatalf("past-end page: truncated=%v next=%v, want false/nil", truncated, next)
+	}
+}
+
 func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
 	for _, c := range []struct{ name, start, end string }{
 		{"lone start", "2026-01-01", ""},

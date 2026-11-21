@@ -223,6 +223,32 @@ func normalizeDayRangePair(what, start, end string) (string, string, error) {
 	return normalizeDayRange(what, st, et)
 }
 
+// clampLimit maps the requested query page size to the applied one: absent
+// or non-positive means the 100-row default, above 500 clamps to the cap.
+// There is no unlimited MCP page — only the store's internal callers pass
+// limit<=0 (Summarize totals everything via queryFilter, bypassing Query).
+func clampLimit(in int) int {
+	if in <= 0 {
+		return 100
+	}
+	if in > 500 {
+		return 500
+	}
+	return in
+}
+
+// pageWindow reports whether more rows remain after this page and the offset
+// to fetch them with. `next` is nil when done — always present as JSON null,
+// never omitted — so a client can distinguish "last page" from a missing
+// field. An exact-multiple page (count reaches total exactly) is not
+// truncated: there is nothing after it.
+func pageWindow(offset, count int, total int64) (truncated bool, next any) {
+	if int64(offset+count) < total {
+		return true, offset + count
+	}
+	return false, nil
+}
+
 func main() {
 	var err error
 	store, err = money.FromEnv()
@@ -361,7 +387,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited page on MCP — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first, stable across pages — unlike fix_last_transaction, which is explicitly insertion-order)."},
+		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited page on MCP — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log or TTL expiry between page fetches can shift rows across page boundaries, unlike fix_last_transaction, which is explicitly insertion-order)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
 			if t := strings.TrimSpace(in.Type); t != "" {
@@ -377,13 +403,7 @@ func registerTools(s *mcp.Server) {
 			if err != nil {
 				return fail(err)
 			}
-			limit := in.Limit
-			if limit <= 0 {
-				limit = 100
-			}
-			if limit > 500 {
-				limit = 500
-			}
+			limit := clampLimit(in.Limit)
 			if in.Offset < 0 {
 				return fail(fmt.Errorf("query_transactions offset must be >= 0 — got %d", in.Offset))
 			}
@@ -391,11 +411,7 @@ func registerTools(s *mcp.Server) {
 			if err != nil {
 				return fail(err)
 			}
-			truncated := int64(in.Offset+len(rows)) < total
-			var next any
-			if truncated {
-				next = in.Offset + len(rows)
-			}
+			truncated, next := pageWindow(in.Offset, len(rows), total)
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": truncated, "next_offset": next, "limit": limit,
 				"transactions": rows})
