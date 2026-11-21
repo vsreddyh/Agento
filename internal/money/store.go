@@ -786,15 +786,6 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string,
 	return fid, fdate, fixed, err
 }
 
-// Query date-range scan; account filter matches either side of transfers.
-// Type/category filters are normalized exactly like writes (lowercase + trim),
-// so `Groceries` finds what was logged as `groceries` — and unknown values are
-// rejected like writes (and like unknown accounts), instead of silently
-// returning zero rows for a typo.
-//
-// `_id` is returned as a hex string like Match does: without it, the documented
-// `delete by id` workflow is unreachable from a query — the caller would hold a
-// row with no id to delete it by.
 // queryFilter builds the normalized Mongo filter both Query and Summarize
 // share: date range plus optional type/category/account (either side of a
 // transfer). Normalization and membership checks live here, once.
@@ -824,18 +815,38 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 	return filt, nil
 }
 
-func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string) ([]bson.M, error) {
+// Query date-range scan; account filter matches either side of transfers.
+// Type/category filters are normalized exactly like writes (lowercase + trim),
+// so `Groceries` finds what was logged as `groceries` — and unknown values are
+// rejected like writes (and like unknown accounts), instead of silently
+// returning zero rows for a typo.
+//
+// `_id` is returned as a hex string like Match does: without it, the documented
+// `delete by id` workflow is unreachable from a query — the caller would hold a
+// row with no id to delete it by.
+//
+// Pagination: pass limit<=0 for no limit (direct store use only — the handler clamps to 1..500). Otherwise at most `limit` rows starting at `offset`, with `total` reporting the unpaged match count so the caller can tell a short page from the end. Sort is date, then `_id`, so pages are stable across calls. The handler validates offset>=0; the store stays trim-only defense for direct callers.
+
+func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string, limit, offset int) ([]bson.M, int64, error) {
 	filt, err := s.queryFilter(ctx, start, end, typ, category, account)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	cur, err := s.txns.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: "date", Value: 1}}))
+	total, err := s.txns.CountDocuments(ctx, filt)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	findOpts := options.Find().SetSort(bson.D{{Key: "date", Value: 1}, {Key: "_id", Value: 1}})
+	if limit > 0 {
+		findOpts.SetLimit(int64(limit)).SetSkip(int64(offset))
+	}
+	cur, err := s.txns.Find(ctx, filt, findOpts)
+	if err != nil {
+		return nil, 0, err
 	}
 	var rows []bson.M
 	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if rows == nil {
 		rows = []bson.M{}
@@ -844,7 +855,7 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	// readable without a second lookup.
 	names, err := s.accountNames(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for _, r := range rows {
 		r["_id"] = oidHex(r["_id"])
@@ -856,7 +867,7 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 			r["sending_to_account"] = names[idHex(st)]
 		}
 	}
-	return rows, nil
+	return rows, total, nil
 }
 
 // Summarize income/expense/net + expense-only per-category ranking. Transfers

@@ -107,6 +107,20 @@ func TestQueryTransactionsRejectsUnusableBounds(t *testing.T) {
 	}
 }
 
+// A negative offset is rejected like a reversed range, before any store
+// touch (`store` is nil here): paging backwards is a typo, not page zero.
+func TestQueryTransactionsRejectsNegativeOffset(t *testing.T) {
+	_, errMsg := callTool(t, "query_transactions", map[string]any{
+		"start": "2026-01-01", "end": "2026-01-31", "offset": -1,
+	})
+	if errMsg == "" {
+		t.Fatal("a negative offset was accepted; expected a rejection")
+	}
+	if !strings.Contains(errMsg, "offset") {
+		t.Errorf("error %q does not name the offset", errMsg)
+	}
+}
+
 // An unknown category used to be refiled under "other" and reported as if it had
 // been stored: the caller asked for "utilities", got "other", and only found out
 // by reading the row back. The store now rejects it before any write, so the

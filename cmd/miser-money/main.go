@@ -115,6 +115,12 @@ type queryTransactionsInput struct {
 	Type     string `json:"type,omitempty"`
 	Category string `json:"category,omitempty"`
 	Account  string `json:"account,omitempty"`
+	// Page size; <=0 means the 100-row default, clamped to 500. The store
+	// speaks limit<=0 as unlimited, but the handler never forwards that —
+	// an unbounded MCP read is how 90-day dumps happen.
+	Limit int `json:"limit,omitempty"`
+	// Page start; negative is rejected like a reversed range.
+	Offset int `json:"offset,omitempty"`
 }
 
 type summarizeInput struct {
@@ -355,7 +361,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero)."},
+		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; the response carries total, truncated and next_offset so a short page is never mistaken for the end."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
 			if t := strings.TrimSpace(in.Type); t != "" {
@@ -371,11 +377,28 @@ func registerTools(s *mcp.Server) {
 			if err != nil {
 				return fail(err)
 			}
-			rows, err := store.Query(ctx, start, end, typ, cat, acct)
+			limit := in.Limit
+			if limit <= 0 {
+				limit = 100
+			}
+			if limit > 500 {
+				limit = 500
+			}
+			if in.Offset < 0 {
+				return fail(fmt.Errorf("query_transactions offset must be >= 0 — got %d", in.Offset))
+			}
+			rows, total, err := store.Query(ctx, start, end, typ, cat, acct, limit, in.Offset)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "transactions": rows})
+			truncated := int64(in.Offset+len(rows)) < total
+			var next any
+			if truncated {
+				next = in.Offset + len(rows)
+			}
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": truncated, "next_offset": next, "limit": limit,
+				"transactions": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
