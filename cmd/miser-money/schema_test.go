@@ -85,7 +85,7 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"create_account":      {"type", "balance"},
 		"list_accounts":       {"include_archived"},
 		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
-		"query_transactions":  {"type", "category", "account"},
+		"query_transactions":  {"type", "category", "account", "limit", "offset"},
 		"summarize":           {"period", "start", "end", "account"},
 		"delete_transactions": {"id", "amount", "type", "category", "date", "account", "dry_run"},
 		"prune_old":           {"days", "dry_run"},

@@ -12,7 +12,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"agento/internal/money"
 	"agento/internal/validate"
@@ -39,7 +38,7 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 	}, out, nil
 }
 
-func today() string { return time.Now().Format("2006-01-02") }
+func today() string { return money.TodayIST() }
 
 // Input types are named rather than inline so `schema_test.go` can infer the schema from
 // the same types `AddTool` publishes. Nothing in this file carried `omitempty`, so all
@@ -115,6 +114,12 @@ type queryTransactionsInput struct {
 	Type     string `json:"type,omitempty"`
 	Category string `json:"category,omitempty"`
 	Account  string `json:"account,omitempty"`
+	// Page size; <=0 means the 100-row default, clamped to 500. The store
+	// speaks limit<=0 as unlimited, but the handler never forwards that —
+	// an unbounded MCP read is how 90-day dumps happen.
+	Limit int `json:"limit,omitempty"`
+	// Page start; negative is rejected like a reversed range.
+	Offset int `json:"offset,omitempty"`
 }
 
 type summarizeInput struct {
@@ -217,6 +222,33 @@ func normalizeDayRangePair(what, start, end string) (string, string, error) {
 	return normalizeDayRange(what, st, et)
 }
 
+// clampLimit maps the requested query page size to the applied one: absent
+// or non-positive means the 100-row default, above 500 clamps to the cap.
+// There is no unlimited MCP page — only Query itself accepts limit==0 for
+// no cap (direct store use only). Summarize never passes a limit to Query:
+// it totals everything with its own unbounded Find via queryFilter.
+func clampLimit(in int) int {
+	if in <= 0 {
+		return 100
+	}
+	if in > 500 {
+		return 500
+	}
+	return in
+}
+
+// pageWindow reports whether more rows remain after this page and the offset
+// to fetch them with. `next` is nil when done — always present as JSON null,
+// never omitted — so a client can distinguish "last page" from a missing
+// field. An exact-multiple page (count reaches total exactly) is not
+// truncated: there is nothing after it.
+func pageWindow(offset, count int, total int64) (truncated bool, next any) {
+	if int64(offset+count) < total {
+		return true, offset + count
+	}
+	return false, nil
+}
+
 func main() {
 	var err error
 	store, err = money.FromEnv()
@@ -241,7 +273,7 @@ func main() {
 // signal that the guard was removed.
 func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
-		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty or whitespace-only defaults to cash). Optional opening balance in the same call (defaults to 0, so no separate funding entry is needed)."},
+		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty or whitespace-only defaults to cash). Optional opening balance in the same call (defaults to 0, must be an exact paise value like every amount, so no separate funding entry is needed)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			if strings.TrimSpace(in.Type) == "" {
 				in.Type = "cash"
@@ -305,7 +337,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (atomic with balance update). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today (empty or whitespace-only also means today, unlike query's rejected empty bounds; must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed; any real date stores with immediate balance effect, even a far-future one hidden from relative period-phrase summaries until then (a month+year phrase or explicit start/end shows future rows immediately) or a far-past one the TTL purges quickly while the balance stays). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be > 0. note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
+		Description: "Log an income, expense, or transfer (atomic with balance update). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today in IST (empty or whitespace-only also means today, unlike query's rejected empty bounds; must be a real calendar date — 2026-02-30 is rejected, like query/summarize — and padded dates are trimmed; any real date stores with immediate balance effect, even a far-future one hidden from relative period-phrase summaries until then (a month+year phrase or explicit start/end shows future rows immediately) or a far-past one the TTL purges quickly while the balance stays). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded or floated). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if strings.TrimSpace(day) == "" {
@@ -355,7 +387,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero)."},
+		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (summarize and delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log or TTL expiry between page fetches can shift rows across page boundaries, unlike fix_last_transaction, which is explicitly insertion-order)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
 			if t := strings.TrimSpace(in.Type); t != "" {
@@ -371,15 +403,22 @@ func registerTools(s *mcp.Server) {
 			if err != nil {
 				return fail(err)
 			}
-			rows, err := store.Query(ctx, start, end, typ, cat, acct)
+			limit := clampLimit(in.Limit)
+			if in.Offset < 0 {
+				return fail(fmt.Errorf("query_transactions offset must be >= 0 — got %d", in.Offset))
+			}
+			rows, total, err := store.Query(ctx, start, end, typ, cat, acct, limit, in.Offset)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "transactions": rows})
+			truncated, next := pageWindow(in.Offset, len(rows), total)
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": truncated, "next_offset": next, "limit": limit,
+				"transactions": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "summarize",
-		Description: "Summarize income, expenses, net total and per-category breakdown (transfers are counted but excluded from income/expense/net; by_category is expense-only, so income categories never rank). Optional account filter (case-sensitive exact name or id hex, unlike type/category; whitespace-only means absent, like bounds; matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, a reversed pair is rejected like query, an explicit pair wins over a period phrase if you send both, neither means this month (bounds are trimmed, so padded values work; whitespace-only counts as absent, like account). Supported phrases: today, yesterday, this week (Monday-first), last month (spaceless thisweek/thismonth/lastmonth all work), month names with optional 1000-2999 year (June, June 2025, June 2100; a year outside 1000-2999 is ignored and the recency rule applies; a bare month means the most recent occurrence, so December in November 2026 is Dec 2025), this month / so far / month — matched on whole words throughout, so maybe/mayhem/todays/monthly do not hit a branch. Anything else means this month too (2025, last year and banana all return this month, not an error)."},
+		Description: "Summarize income, expenses, net total and per-category breakdown (transfers are counted but excluded from income/expense/net; by_category is expense-only, so income categories never rank). Optional account filter (case-sensitive exact name or id hex, unlike type/category; whitespace-only means absent, like bounds; matches EITHER side of a transfer, like query). Give a period phrase OR an explicit start/end pair — half a pair is rejected, a reversed pair is rejected like query, an explicit pair wins over a period phrase if you send both, neither means this month (bounds are trimmed, so padded values work; whitespace-only counts as absent, like account). Period phrases are evaluated in IST, like the default log date; an explicit start/end pair is used verbatim (no conversion). Supported phrases: today, yesterday, this week (Monday-first), last month (spaceless thisweek/thismonth/lastmonth all work), month names with optional 1000-2999 year (June, June 2025, June 2100; a year outside 1000-2999 is ignored and the recency rule applies; a bare month means the most recent occurrence, so December in November 2026 is Dec 2025), this month / so far / month — matched on whole words throughout, so maybe/mayhem/todays/monthly do not hit a branch. Anything else means this month too (2025, last year and banana all return this month, not an error)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in summarizeInput) (*mcp.CallToolResult, map[string]any, error) {
 			// An explicit range wins over `period` — see the tool description, which now
 			// says so instead of leaving the precedence to be discovered.
@@ -394,7 +433,7 @@ func registerTools(s *mcp.Server) {
 				if in.Period == "" {
 					in.Period = "this month"
 				}
-				s, e, l := money.ResolvePeriod(in.Period, time.Now())
+				s, e, l := money.ResolvePeriod(in.Period, money.NowIST())
 				start, end, label = s, e, l
 			}
 			var acct *string
@@ -420,7 +459,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "fix_last_transaction",
-		Description: "Correct the most recent transaction's amount (must be > 0; balances adjusted atomically; most-recent by insertion order, not date — read the returned id back to verify). Returns the fixed row's id + date so the shared read-back-by-id rule holds."},
+		Description: "Correct the most recent transaction's amount (must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded); balances adjusted atomically; most-recent by insertion order, not date — read the returned id back to verify). Returns the fixed row's id + date so the shared read-back-by-id rule holds."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in fixLastTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			fid, fdate, done, err := store.FixLast(ctx, in.Amount)
 			if err != nil {
@@ -433,7 +472,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (balances inverted atomically). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount (> 0; an explicit 0 is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent, like summarize); id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go; pass dry_run=false to delete."},
+		Description: "Delete transactions (balances inverted atomically). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount (exact paise: > 0, at most 2 decimals; an explicit 0 or >2-decimal value is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent, like summarize); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like summarize's bounds, so
 			// whitespace-only means absent (not an "unknown account" error):
@@ -453,11 +492,17 @@ func registerTools(s *mcp.Server) {
 				if in.Amount != nil {
 					// Rejected like writes: 0 is not a narrower filter (no
 					// zero-amount rows exist), it would silently widen to
-					// every row matching the remaining filters.
+					// every row matching the remaining filters. Converted to
+					// paise with exactness enforced: a >2-decimal filter
+					// would match paise it never stored.
 					if *in.Amount <= 0 {
 						return fail(fmt.Errorf("delete_transactions amount must be > 0 — 0 means absent and cannot narrow a delete"))
 					}
-					filt["amount"] = *in.Amount
+					paise, ok := money.ExactPaise(*in.Amount)
+					if !ok {
+						return fail(fmt.Errorf("delete_transactions amount %v is not an exact paise value — use at most 2 decimals", *in.Amount))
+					}
+					filt["amount"] = paise
 				}
 				if in.Type != "" {
 					filt["type"] = in.Type
@@ -514,7 +559,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",
-		Description: "Immediate purge, defaulting to the 90-day retention window (TTL handles this natively in the background). Does NOT touch balances — unlike delete_transactions, which inverts them. days <= 0 means 90 — including negatives, never an error. dry_run=true (default) only reports."},
+		Description: "Immediate purge, defaulting to the 90-day retention window (TTL handles this natively in the background). Cutoff uses the same UTC frame as TTL (not IST like user-visible dates); boundary note: prune keeps `date == cutoff` while TTL expires it at 00:00 UTC today, so dry-run counts can trail TTL by a day. Does NOT touch balances — unlike delete_transactions, which inverts them. days <= 0 means 90 — including negatives, never an error. dry_run=true (default) only reports."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in pruneOldInput) (*mcp.CallToolResult, map[string]any, error) {
 			days := in.Days
 			if days <= 0 {
