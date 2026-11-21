@@ -12,6 +12,7 @@ import (
 	"agento/internal/mongo"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -735,6 +736,114 @@ func TestDeleteDateFilterTrimsLikeWrites(t *testing.T) {
 	rows, err := s.Match(ctx, map[string]any{"date": " 2026-09-01 "})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("padded delete filter matched %d rows, %v", len(rows), err)
+	}
+}
+
+// Paise storage is exact: three 10-paise writes total exactly 30 paise.
+// With float64 storage the balance compared as -0.30000000000000004 != -0.3.
+func TestPaiseArithmeticIsExact(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, _, err := s.Insert(ctx, "2026-09-01", 0.10, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b := balances(t, s); b["Cash"] != -0.3 {
+		t.Fatalf("balance %v, want exactly -0.3", b)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+	for _, r := range rows {
+		if fnum(r["amount"]) != 0.1 {
+			t.Fatalf("amount %v, want exactly 0.1", r["amount"])
+		}
+	}
+}
+
+func TestFractionalRupeesRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10.55, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %d rows, %v", len(rows), err)
+	}
+	if fnum(rows[0]["amount"]) != 10.55 {
+		t.Fatalf("amount %v, want exactly 10.55", rows[0]["amount"])
+	}
+	if b := balances(t, s); b["Cash"] != -10.55 {
+		t.Fatalf("balance %v, want exactly -10.55", b)
+	}
+}
+
+func TestSubPaiseAmountsAreRejected(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 0.001, "expense", "other", "Cash", "", "", "", ""); err == nil {
+		t.Fatal("a sub-paise amount was stored; it has no paise representation")
+	} else if !containsStr(err.Error(), "paise") {
+		t.Fatalf("error %q does not name the paise floor", err)
+	}
+	if _, _, _, err := s.FixLast(ctx, 0.004); err == nil {
+		t.Fatal("a sub-paise correction was accepted")
+	}
+}
+
+// Legacy float-rupee docs migrate to int64 paise on EnsureSchema, idempotently:
+// the filter only matches doubles, so reruns and fresh databases find nothing.
+func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.accts.InsertOne(ctx, bson.M{"name": "Legacy", "type": "cash",
+		"balance": 100.5, "archived": false,
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-01", "amount": 10.1,
+		"type": "expense", "category": "groceries", "note": "", "source": "mcp",
+		"accountId": primitive.NewObjectID(),
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+		"expiresAt": expiry("2026-09-01", RetentionDays)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	var a bson.M
+	if err := s.accts.FindOne(ctx, bson.M{"name": "Legacy"}).Decode(&a); err != nil {
+		t.Fatal(err)
+	}
+	if bal, ok := a["balance"].(int64); !ok || bal != 10050 {
+		t.Fatalf("balance migrated to %v (%T), want int64 10050", a["balance"], a["balance"])
+	}
+	var txn bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"date": "2026-09-01"}).Decode(&txn); err != nil {
+		t.Fatal(err)
+	}
+	if amt, ok := txn["amount"].(int64); !ok || amt != 1010 {
+		t.Fatalf("amount migrated to %v (%T), want int64 1010", txn["amount"], txn["amount"])
+	}
+	// Idempotent: a second run changes nothing and errors nothing.
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("second EnsureSchema: %v", err)
+	}
+	// New writes compose with migrated balances exactly.
+	if _, _, err := s.Insert(ctx, "2026-09-02", 0.5, "expense", "other", "Legacy", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListAccounts(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r["name"] == "Legacy" && fnum(r["balance"]) != 100.0 {
+			t.Fatalf("balance %v, want exactly 100.0", r["balance"])
+		}
 	}
 }
 

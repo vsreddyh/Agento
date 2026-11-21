@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,10 +62,47 @@ func idHex(v any) string {
 	return fmt.Sprint(v)
 }
 
-// signedDeltas maps account-id hex -> balance delta implied by a txn doc.
-func signedDeltas(doc bson.M) map[string]float64 {
-	amt := toFloat(doc["amount"])
-	out := map[string]float64{}
+// Paise keeps money exact: 1 rupee = 100 paise. The tool surface speaks
+// rupees (float, unchanged contract); BSON stores int64 paise, so accumulated
+// balances can never drift (0.1+0.2 stays 30 paise, not 0.30000000000000004).
+// ToPaise rounds half away from zero: 10.555 rupees lands on 1056 paise only
+// if the binary float is at/over the halfway mark — sub-paise dust from float
+// input is absorbed here, once, instead of accumulating in stored balances.
+func ToPaise(amount float64) int64 { return int64(math.Round(amount * 100)) }
+
+// ToRupees renders stored paise for the tool surface. Whole rupees round-trip
+// exactly; fractions use the shortest float repr (10.55, not dust).
+func ToRupees(paise int64) float64 { return float64(paise) / 100 }
+
+// paiseOf reads a stored amount/balance in paise, tolerating legacy doubles:
+// pre-migration docs hold rupee floats, post-migration docs hold paise longs.
+// After the EnsureSchema migration runs, only the int branches trigger.
+func paiseOf(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int32:
+		return int64(n)
+	case int:
+		return int64(n)
+	case float64:
+		return int64(math.Round(n * 100))
+	case float32:
+		return int64(math.Round(float64(n) * 100))
+	case primitive.Decimal128:
+		f, _ := strconv.ParseFloat(n.String(), 64)
+		return int64(math.Round(f * 100))
+	default:
+		return 0
+	}
+}
+
+// signedPaise maps account-id hex -> balance delta in paise implied by a txn
+// doc. Integer math throughout: $inc stays int64 on int64 fields, so Mongo
+// never silently re-floats a balance.
+func signedPaise(doc bson.M) map[string]int64 {
+	amt := paiseOf(doc["amount"])
+	out := map[string]int64{}
 	aid := idHex(doc["accountId"])
 	switch doc["type"] {
 	case "income":
@@ -183,7 +221,9 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 	if !contains(accountTypes, typ) {
 		return nil, fail("account type must be one of %v", accountTypes)
 	}
-	doc := bson.M{"name": name, "type": typ, "balance": balance,
+	// Stored as int64 paise (see ToPaise); the returned doc echoes rupees.
+	balPaise := ToPaise(balance)
+	doc := bson.M{"name": name, "type": typ, "balance": balPaise,
 		"archived": false, "createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	res, err := s.accts.InsertOne(ctx, doc)
 	if err != nil {
@@ -193,6 +233,7 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 		return nil, err
 	}
 	doc["_id"] = oidHex(res.InsertedID)
+	doc["balance"] = ToRupees(balPaise)
 	return doc, nil
 }
 
@@ -219,6 +260,8 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 	}
 	for _, r := range rows {
 		r["_id"] = oidHex(r["_id"])
+		// Stored paise, rendered rupees (see ToPaise).
+		r["balance"] = ToRupees(paiseOf(r["balance"]))
 	}
 	return rows, nil
 }
@@ -309,6 +352,7 @@ func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bs
 // list intentionally includes archived rows (unlike ListAccounts, which hides
 // them by default) while `total` skips them — so `total` is not the sum of the
 // listed balances once anything is archived. Documented on the tool + README.
+// Balances are int64 paise in BSON, rendered as rupee floats here.
 func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
@@ -321,14 +365,16 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	if rows == nil {
 		rows = []bson.M{}
 	}
-	var total float64
+	var totalPaise int64
 	for _, r := range rows {
 		r["_id"] = oidHex(r["_id"])
+		balPaise := paiseOf(r["balance"])
+		r["balance"] = ToRupees(balPaise)
 		if arch, _ := r["archived"].(bool); !arch {
-			total += toFloat(r["balance"])
+			totalPaise += balPaise
 		}
 	}
-	return bson.M{"accounts": rows, "total": total}, nil
+	return bson.M{"accounts": rows, "total": ToRupees(totalPaise)}, nil
 }
 
 // Insert validates date/amount/type/category, then atomically writes doc + $inc
@@ -356,6 +402,11 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	}
 	if amount <= 0 {
 		return "", false, fail("amount must be positive")
+	}
+	// Stored as int64 paise (exact); sub-paise input has no representation.
+	paise := ToPaise(amount)
+	if paise <= 0 {
+		return "", false, fail("amount must be at least 1 paise (₹0.01)")
 	}
 	// Normalized the same way read-path filters are: a write of "Groceries"
 	// and a read of "groceries" refer to the same category, and likewise for
@@ -389,7 +440,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 			return "", false, err
 		}
 		if found {
-			if err := s.checkIdempotencyPayload(ctx, existing, idempotencyKey, date, amount, typ, category, account, sendingTo); err != nil {
+			if err := s.checkIdempotencyPayload(ctx, existing, idempotencyKey, date, paise, typ, category, account, sendingTo); err != nil {
 				return "", false, err
 			}
 			return oidHex(existing["_id"]), false, nil
@@ -431,7 +482,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 			source = "mcp"
 		}
 		source = truncateBytes(source, 64)
-		doc := bson.M{"date": date, "amount": amount, "type": typ,
+		doc := bson.M{"date": date, "amount": paise, "type": typ,
 			"category": category, "note": note, "source": source,
 			"accountId": src["_id"],
 			"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
@@ -459,7 +510,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 		if err != nil {
 			return err
 		}
-		for aid, delta := range signedDeltas(doc) {
+		for aid, delta := range signedPaise(doc) {
 			oid, err := primitive.ObjectIDFromHex(aid)
 			if err != nil {
 				return err
@@ -478,7 +529,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 		// under the same key is a caller bug, not a replay.
 		if idempotencyKey != "" && mongoDrv.IsDuplicateKeyError(err) {
 			if existing, found, rerr := s.byIdempotencyKey(ctx, idempotencyKey); rerr == nil && found {
-				if cerr := s.checkIdempotencyPayload(ctx, existing, idempotencyKey, date, amount, typ, category, account, sendingTo); cerr != nil {
+				if cerr := s.checkIdempotencyPayload(ctx, existing, idempotencyKey, date, paise, typ, category, account, sendingTo); cerr != nil {
 					return "", false, cerr
 				}
 				return oidHex(existing["_id"]), false, nil
@@ -507,14 +558,15 @@ func (s *Store) byIdempotencyKey(ctx context.Context, key string) (bson.M, bool,
 // Only the core semantic fields are compared (date/amount/type/category +
 // both sides of a transfer); note/source are free-form annotations and are
 // excluded so a retried call with a tweaked note is still a no-op.
-func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, key, date string, amount float64, typ, category, account, sendingTo string) error {
+func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, key, date string, paise int64, typ, category, account, sendingTo string) error {
 	mismatch := func(field string) error {
 		return fail("idempotency_key %q was already used for a different transaction (mismatch in %s) — use a new key", key, field)
 	}
 	if fmt.Sprint(existing["date"]) != date {
 		return mismatch("date")
 	}
-	if toFloat(existing["amount"]) != amount {
+	// Integer compare: exact, unlike the old float equality.
+	if paiseOf(existing["amount"]) != paise {
 		return mismatch("amount")
 	}
 	if fmt.Sprint(existing["type"]) != typ {
@@ -584,6 +636,7 @@ func (s *Store) Match(ctx context.Context, filt map[string]any) ([]bson.M, error
 	}
 	for _, r := range rows {
 		r["_id"] = oidHex(r["_id"])
+		r["amount"] = ToRupees(paiseOf(r["amount"]))
 		r["accountId"] = idHex(r["accountId"])
 		r["account"] = names[idHex(r["accountId"])]
 		if st, ok := r["sending_to"]; ok {
@@ -634,10 +687,10 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 			return nil
 		}
 		ids := make([]any, 0, len(matched))
-		agg := map[string]float64{}
+		agg := map[string]int64{}
 		for _, d := range matched {
 			ids = append(ids, d["_id"])
-			for aid, delta := range signedDeltas(d) {
+			for aid, delta := range signedPaise(d) {
 				agg[aid] -= delta // inverse
 			}
 		}
@@ -670,6 +723,10 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string,
 	if newAmount <= 0 {
 		return "", "", false, fail("amount must be positive")
 	}
+	newPaise := ToPaise(newAmount)
+	if newPaise <= 0 {
+		return "", "", false, fail("amount must be at least 1 paise (₹0.01)")
+	}
 	var fid, fdate string
 	fixed := false
 	err := s.transact(ctx, func(sc context.Context) error {
@@ -687,17 +744,17 @@ func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string,
 		} else {
 			fdate = fmt.Sprint(last["date"])
 		}
-		delta := newAmount - toFloat(last["amount"])
+		delta := newPaise - paiseOf(last["amount"])
 		if delta == 0 {
 			fixed = true
 			return nil
 		}
 		if _, err := s.txns.UpdateOne(sc, bson.M{"_id": last["_id"]},
-			bson.M{"$set": bson.M{"amount": newAmount}}); err != nil {
+			bson.M{"$set": bson.M{"amount": newPaise}}); err != nil {
 			return err
 		}
-		last["amount"] = 1.0
-		for aid, signed := range signedDeltas(last) {
+		last["amount"] = int64(1)
+		for aid, signed := range signedPaise(last) {
 			oid, err := primitive.ObjectIDFromHex(aid)
 			if err != nil {
 				return err
@@ -764,6 +821,7 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	}
 	for _, r := range rows {
 		r["_id"] = oidHex(r["_id"])
+		r["amount"] = ToRupees(paiseOf(r["amount"]))
 		r["accountId"] = idHex(r["accountId"])
 		r["account"] = names[idHex(r["accountId"])]
 		if st, ok := r["sending_to"]; ok {
@@ -783,22 +841,22 @@ func (s *Store) Summarize(ctx context.Context, start, end string, account *strin
 	if err != nil {
 		return nil, err
 	}
-	var income, expense float64
-	byCat := map[string]float64{}
+	var incomePaise, expensePaise int64
+	byCat := map[string]int64{}
 	for _, r := range rows {
-		amt := toFloat(r["amount"])
+		amt := paiseOf(r["amount"])
 		switch r["type"] {
 		case "income":
-			income += amt
+			incomePaise += amt
 		case "expense":
-			expense += amt
+			expensePaise += amt
 			cat, _ := r["category"].(string)
 			byCat[cat] += amt
 		}
 	}
 	type kv struct {
 		K string
-		V float64
+		V int64
 	}
 	top := []kv{}
 	for k, v := range byCat {
@@ -813,9 +871,9 @@ func (s *Store) Summarize(ctx context.Context, start, end string, account *strin
 	}
 	rank := make([]map[string]any, 0, len(top))
 	for _, e := range top {
-		rank = append(rank, map[string]any{"category": e.K, "total": e.V})
+		rank = append(rank, map[string]any{"category": e.K, "total": ToRupees(e.V)})
 	}
-	return bson.M{"income": income, "expense": expense, "net": income - expense,
+	return bson.M{"income": ToRupees(incomePaise), "expense": ToRupees(expensePaise), "net": ToRupees(incomePaise - expensePaise),
 		"count": len(rows), "by_category": rank}, nil
 }
 
@@ -850,6 +908,8 @@ func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
 }
 
 func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M, error) {
+	// Amounts are int64 paise here (the handler converts rupees before
+	// calling); the default branch passes numbers through untouched.
 	out := bson.M{}
 	for k, v := range filt {
 		switch k {
@@ -926,26 +986,6 @@ func truncateBytes(s string, n int) string {
 	return s
 }
 
-func toFloat(v any) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case float32:
-		return float64(n)
-	case int:
-		return float64(n)
-	case int32:
-		return float64(n)
-	case int64:
-		return float64(n)
-	case primitive.Decimal128:
-		f, _ := strconv.ParseFloat(n.String(), 64)
-		return f
-	default:
-		return 0
-	}
-}
-
 func oidHex(v any) string {
 	if oid, ok := v.(primitive.ObjectID); ok {
 		return oid.Hex()
@@ -953,9 +993,42 @@ func oidHex(v any) string {
 	return fmt.Sprint(v)
 }
 
+// migrateFloatMoney converts legacy float-rupee amounts/balances to int64
+// paise, once, idempotently: only double-typed fields match, so post-migration
+// runs (and fresh databases) find nothing to do. Rounding heals old float
+// dust (99.9999999999 rupees → 10000 paise) instead of preserving it.
+func (s *Store) migrateFloatMoney(ctx context.Context) error {
+	for _, m := range []struct {
+		coll  *mongoDrv.Collection
+		field string
+	}{{s.accts, "balance"}, {s.txns, "amount"}} {
+		cur, err := m.coll.Find(ctx, bson.M{m.field: bson.M{"$type": "double"}})
+		if err != nil {
+			return err
+		}
+		var rows []bson.M
+		if err := cur.All(ctx, &rows); err != nil {
+			return err
+		}
+		for _, r := range rows {
+			paise := paiseOf(r[m.field])
+			if _, err := m.coll.UpdateOne(ctx, bson.M{"_id": r["_id"]},
+				bson.M{"$set": bson.M{m.field: paise}}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // EnsureSchema creates collections + indexes (idempotent). Called by New
 // so fresh databases get the unique-name and TTL indexes immediately.
+// Also migrates legacy float rupees to int64 paise (see ToPaise) — new code
+// writes longs only, so the migration converges on first boot.
 func (s *Store) EnsureSchema(ctx context.Context) error {
+	if err := s.migrateFloatMoney(ctx); err != nil {
+		return err
+	}
 	for _, c := range []struct {
 		name string
 		keys bson.D
