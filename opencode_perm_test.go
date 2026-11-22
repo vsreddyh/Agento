@@ -65,7 +65,7 @@ var workspaceMCPWriteTools = []string{
 // record calls free); a tool in neither list fails the coverage test.
 // Update this in the same change as any tool add/rename.
 var freeTools = map[string][]string{
-	"miser-money": {"list_accounts", "get_balances", "query_transactions", "summarize"},
+	"miser-money": {"list_accounts", "get_balances", "query_transactions"},
 	"cookbook": {"add_ingredient", "list_ingredients", "add_recipe", "get_recipe",
 		"list_recipes", "update_recipe", "scale_recipe", "log_cook", "list_cooks"},
 	"health-check": {"log_meal", "query_meals", "log_weight", "log_sleep",
