@@ -10,20 +10,21 @@ import (
 )
 
 // These tests exist because the previous round of tests in this package proved the
-// validators behave and said nothing about whether the handlers call them. Deleting the
-// guard from `summarize` left every unit test green.
+// validators behave and said nothing about whether the handlers call them. Deleting a
+// handler-side guard once left every unit test green, which is how a validation
+// could be present and unwired at the same time.
 //
 // So the server is built exactly as main builds it — `registerTools` over an in-memory
 // transport — and the tools are called through a real MCP client. `store` stays nil: a
 // handler that reaches MongoDB before validating panics, and that panic is exactly the
 // failure this file is here to catch.
 //
-// The gap being closed, in both tools:
+// The gap being closed:
 //
 //   - `query_transactions` with empty bounds built `date >= "" && date <= ""`, matching
 //     nothing: the caller saw zero transactions and no reason why.
-//   - `summarize` with a lone `start` fell through to the period branch and summarised a
-//     window nobody asked for.
+//   - a lone `start` with no `end` (or the reverse) is rejected instead of being
+//     silently ignored: the pair is either complete or absent, never half-applied.
 func callTool(t *testing.T, name string, args map[string]any) (string, string) {
 	t.Helper()
 
@@ -121,6 +122,21 @@ func TestQueryTransactionsRejectsNegativeOffset(t *testing.T) {
 	}
 }
 
+// An edit with no fields is rejected like a reversed range, before any
+// store touch (`store` is nil here): setting nothing is a no-op the caller
+// almost certainly did not mean.
+func TestEditTransactionRejectsEmptyEdit(t *testing.T) {
+	_, errMsg := callTool(t, "edit_transaction", map[string]any{
+		"id": "68fakeid0000000000000000",
+	})
+	if errMsg == "" {
+		t.Fatal("an empty edit was accepted; expected a rejection, not a silent no-op")
+	}
+	if !strings.Contains(errMsg, "at least one") {
+		t.Errorf("error %q does not state the one-field rule", errMsg)
+	}
+}
+
 // An unknown category used to be refiled under "other" and reported as if it had
 // been stored: the caller asked for "utilities", got "other", and only found out
 // by reading the row back. The store now rejects it before any write, so the
@@ -139,15 +155,14 @@ func TestLogTransactionRejectsUnknownCategory(t *testing.T) {
 }
 
 // A non-calendar date must be rejected like the read path rejects it, before
-// any store touch (`store` is nil here): `2026-02-30` used to store, then the
-// row's expiresAt fell back to year-1 and TTL purged it immediately while the
-// balance delta survived.
+// any store touch (`store` is nil here): `2026-02-30` matches YYYY-MM-DD but
+// is not a real date, so the write is invalid.
 func TestLogTransactionRejectsNonCalendarDate(t *testing.T) {
 	_, errMsg := callTool(t, "log_transaction", map[string]any{
 		"type": "expense", "amount": 100, "account": "Cash", "date": "2026-02-30",
 	})
 	if errMsg == "" {
-		t.Fatal("a non-calendar date was accepted; query/summarize reject it")
+		t.Fatal("a non-calendar date was accepted; the query bounds reject it")
 	}
 	if !strings.Contains(errMsg, "log_transaction") {
 		t.Errorf("error %q does not name the tool", errMsg)
@@ -213,7 +228,7 @@ func TestDeleteTransactionsRejectsInexactPaise(t *testing.T) {
 	}
 }
 
-// Whitespace-only filters trim to absent like summarize's bounds: a padded
+// Whitespace-only filters trim to absent like the query bounds: a padded
 // account that trims to nothing must not error as "unknown account".
 func TestDeleteTransactionsTrimsWhitespaceFilters(t *testing.T) {
 	_, errMsg := callTool(t, "delete_transactions", map[string]any{
@@ -224,20 +239,6 @@ func TestDeleteTransactionsTrimsWhitespaceFilters(t *testing.T) {
 	}
 	if !strings.Contains(errMsg, "Provide id") {
 		t.Errorf("error %q should be the empty-filter error, not an unknown-account error", errMsg)
-	}
-}
-
-// A reversed explicit pair is rejected like query — stated on the tool, not
-// discovered. Validated before any store touch.
-func TestSummarizeRejectsReversedRange(t *testing.T) {
-	_, errMsg := callTool(t, "summarize", map[string]any{
-		"start": "2026-03-31", "end": "2026-01-01",
-	})
-	if errMsg == "" {
-		t.Fatal("reversed summarize range was accepted; expected a rejection, not a silently empty summary")
-	}
-	if !strings.Contains(errMsg, "after end") {
-		t.Errorf("error %q does not explain the reversal", errMsg)
 	}
 }
 
@@ -273,25 +274,5 @@ func TestPageWindow(t *testing.T) {
 	truncated, next = pageWindow(5, 0, 5)
 	if truncated || next != nil {
 		t.Fatalf("past-end page: truncated=%v next=%v, want false/nil", truncated, next)
-	}
-}
-
-func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
-	for _, c := range []struct{ name, start, end string }{
-		{"lone start", "2026-01-01", ""},
-		{"lone end", "", "2026-01-31"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			_, errMsg := callTool(t, "summarize", map[string]any{
-				"start": c.start, "end": c.end,
-			})
-			if errMsg == "" {
-				t.Fatalf("summarize(start=%q, end=%q) was accepted; it used to ignore the "+
-					"bound and summarise the default period instead", c.start, c.end)
-			}
-			if !strings.Contains(errMsg, "both start and end") {
-				t.Errorf("error %q does not explain the either/or constraint", errMsg)
-			}
-		})
 	}
 }

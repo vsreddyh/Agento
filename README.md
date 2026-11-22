@@ -49,7 +49,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Domain | Storage | Retention policy |
 |---|---|---|
-| Money | `money_transactions` | >90d autowipe |
+| Money | `money_transactions` | **Permanent** — rows never expire; only `delete_transactions` removes them |
 | Cookbook | `cookbook_*` | **Permanent** |
 | Health tracking | `hc_meals`, `hc_days`, `hc_weight` + Health Connect sync via `health-api` | `hc_meals`/`hc_days` >30d; `hc_weight` **never pruned** |
 | Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |
@@ -181,7 +181,7 @@ go run ./cmd/mongo aggregate money_transactions '[{"$group":{"_id":"$category","
 ```
 
 Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`, `scripts/retention.sh run`):
-- `money_transactions`: Purges records where `date < today - 90d`.
+- `money_transactions`: **Permanent retention** (never expires; only `delete_transactions` removes rows).
 - `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
 - `hc_weight`: **Permanent retention** (never pruned).
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).

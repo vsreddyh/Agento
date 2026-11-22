@@ -10,7 +10,7 @@
 // profile happened to be running when the agent filed it, so there is
 // deliberately no `profile` field.
 //
-// Retention rule (like money/health, unlike cookbook-permanent): a report is
+// Retention rule (like health — unlike money/cookbook, which are permanent): a report is
 // deleted when age(createdAt) > 7d AND read == true AND starred == false.
 // Unread stays regardless of age; starred stays regardless of age. See
 // cmd/retention.

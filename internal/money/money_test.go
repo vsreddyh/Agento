@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func testStore(t *testing.T) *Store {
@@ -80,18 +81,6 @@ func balances(t *testing.T, s *Store) map[string]float64 {
 	return m
 }
 
-func TestPeriods(t *testing.T) {
-	today := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
-	s, e, _ := ResolvePeriod("this month", today)
-	if s != "2026-09-01" || e != "2026-09-30" {
-		t.Fatalf("got %s %s", s, e)
-	}
-	s, e, _ = ResolvePeriod("last month", today)
-	if s != "2026-08-01" || e != "2026-08-31" {
-		t.Fatalf("got %s %s", s, e)
-	}
-}
-
 // Operator "today" is IST, not server UTC: a log at 00:30 IST must land on
 // the user's date, not UTC's yesterday. IST has no DST, so the fixed zone is
 // exact with no tzdata dependency — and these midnight-boundary cases pin
@@ -124,39 +113,6 @@ func TestTodayISTMatchesUTCPlus530(t *testing.T) {
 	after := time.Now().UTC().Add(5*time.Hour + 30*time.Minute).Format("2006-01-02")
 	if got != before && got != after {
 		t.Fatalf("TodayIST() = %s, want %s (or %s across a midnight tick)", got, before, after)
-	}
-	if NowIST().Location().String() != "IST" {
-		t.Fatalf("NowIST zone = %s, want IST", NowIST().Location())
-	}
-}
-
-// Month names match on whole words: "maybe"/"mayhem" must not resolve to May,
-// "marching orders" must not resolve to March — they fall back to this month
-// like any other unrecognized phrase. Same for the other keywords: "todays"
-// is not today, "monthly"/"last monthly report"/"trimonthly" do not hit the
-// month branches — "next month" and "monthly" still land on this month, but via
-// the whole-word `month` branch or the fallback, never via substring.
-func TestPeriodMonthMatchesWholeWordsOnly(t *testing.T) {
-	today := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
-	for _, phrase := range []string{"maybe", "mayhem", "marching orders", "banana",
-		"todays", "monthly", "last monthly report", "trimonthly", "2025", "last year"} {
-		s, e, l := ResolvePeriod(phrase, today)
-		if s != "2026-09-01" || e != "2026-09-30" {
-			t.Fatalf("%q resolved to %s..%s (%s), want this month", phrase, s, e, l)
-		}
-	}
-	for _, tc := range []struct{ in, s, e string }{
-		{"may", "2026-05-01", "2026-05-31"},
-		{"today", "2026-09-05", "2026-09-05"},
-		{"yesterday", "2026-09-04", "2026-09-04"},
-		{"thisweek", "2026-08-31", "2026-09-05"},
-		{"lastmonth", "2026-08-01", "2026-08-31"},
-		{"june 2100", "2100-06-01", "2100-06-30"},
-	} {
-		s, e, _ := ResolvePeriod(tc.in, today)
-		if s != tc.s || e != tc.e {
-			t.Fatalf("%q got %s..%s, want %s..%s", tc.in, s, e, tc.s, tc.e)
-		}
 	}
 }
 
@@ -231,13 +187,6 @@ func TestTransferBalances(t *testing.T) {
 	b := balances(t, s)
 	if b["HDFC"] != 800 || b["Cash"] != 200 {
 		t.Fatalf("got %v", b)
-	}
-	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fnum(sum["income"]) != 0 || fnum(sum["expense"]) != 0 || inum(sum["count"]) != 1 {
-		t.Fatalf("got %v", sum)
 	}
 }
 
@@ -353,25 +302,176 @@ func TestDeleteInvertsBalances(t *testing.T) {
 	}
 }
 
-func TestFixLastAdjustsBalances(t *testing.T) {
+func TestEditTransactionAmountAdjustsBalance(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+	tid, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	fid, fdate, done, err := s.FixLast(ctx, 350)
-	if err != nil || !done {
-		t.Fatalf("got %v %v", done, err)
-	}
-	if fid == "" || fdate != "2026-09-01" {
-		t.Fatalf("FixLast returned id=%q date=%q, want id + 2026-09-01", fid, fdate)
+	amt := 350.0
+	changed, err := s.EditTransaction(ctx, tid, &amt, nil, nil, nil, nil, nil, nil)
+	if err != nil || !changed {
+		t.Fatalf("got changed=%v err=%v", changed, err)
 	}
 	if b := balances(t, s); b["Cash"] != -350 {
 		t.Fatalf("got %v", b)
 	}
-	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
-	if err != nil || fnum(sum["expense"]) != 350 {
-		t.Fatalf("got %v %v", sum, err)
+	// Same-value edit is a no-op success: no error, changed=false.
+	changed, err = s.EditTransaction(ctx, tid, &amt, nil, nil, nil, nil, nil, nil)
+	if err != nil || changed {
+		t.Fatalf("got changed=%v err=%v", changed, err)
+	}
+}
+
+func TestEditTransactionMovesTransferLegs(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAccount(ctx, "Savings", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	tid, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, amt := "Savings", 300.0
+	changed, err := s.EditTransaction(ctx, tid, &amt, nil, nil, nil, &dst, nil, nil)
+	if err != nil || !changed {
+		t.Fatalf("got changed=%v err=%v", changed, err)
+	}
+	if b := balances(t, s); b["HDFC"] != 700 || b["Cash"] != 0 || b["Savings"] != 300 {
+		t.Fatalf("got %v", b)
+	}
+}
+
+func TestEditTransactionRejectsBadEdits(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	badAmt := 0.005
+	if _, err := s.EditTransaction(ctx, tid, &badAmt, nil, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("inexact-paise edit was accepted")
+	}
+	zero := 0.0
+	if _, err := s.EditTransaction(ctx, tid, &zero, nil, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("zero-amount edit was accepted")
+	}
+	toTransfer := "transfer"
+	if _, err := s.EditTransaction(ctx, tid, nil, &toTransfer, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("type change to transfer without sending_to was accepted")
+	}
+	dst := "Cash"
+	if _, err := s.EditTransaction(ctx, tid, nil, nil, nil, nil, &dst, nil, nil); err == nil {
+		t.Fatal("sending_to on a non-transfer was accepted")
+	}
+	bogus := "nope"
+	if _, err := s.EditTransaction(ctx, tid, nil, nil, &bogus, nil, nil, nil, nil); err == nil {
+		t.Fatal("unknown category edit was accepted")
+	}
+	if _, err := s.EditTransaction(ctx, "68fakeid0000000000000000", nil, nil, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("unknown id edit was accepted")
+	}
+	// Row untouched by the rejected edits.
+	if b := balances(t, s); b["Cash"] != -100 {
+		t.Fatalf("got %v", b)
+	}
+}
+
+// Resupplying the leg a row already sits on is not a move: it must work even
+// when that account is archived, or the read-then-edit flow (copy `account`
+// from a query back into the edit) breaks on exactly the rows the docs say
+// stay editable. Moving the leg TO an archived account still rejects.
+func TestEditTransactionKeepsArchivedLegWhenUnmoved(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ArchiveAccount(ctx, "Cash"); err != nil {
+		t.Fatal(err)
+	}
+	same := "Cash"
+	note := "still archived"
+	changed, err := s.EditTransaction(ctx, tid, nil, nil, nil, &same, nil, nil, &note)
+	if err != nil {
+		t.Fatalf("resupplying the archived leg rejected: %v", err)
+	}
+	if !changed {
+		t.Fatal("note change on an archived leg reported no change")
+	}
+	if b := balances(t, s); b["Cash"] != -100 {
+		t.Fatalf("got %v — editing around an archived leg moved the balance", b)
+	}
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ArchiveAccount(ctx, "HDFC"); err != nil {
+		t.Fatal(err)
+	}
+	other := "HDFC"
+	if _, err := s.EditTransaction(ctx, tid, nil, nil, nil, &other, nil, nil, nil); err == nil {
+		t.Fatal("moving a leg onto an archived account was accepted")
+	}
+}
+
+// Converting AWAY from a transfer drops the destination leg; resupplying
+// the same destination is the read-then-edit flow copying both legs back,
+// not a contradiction, so it is ignored rather than rejected. A different
+// destination on the way out, or converting INTO a transfer with none, is
+// still rejected.
+func TestEditTransactionConvertAwayFromTransfer(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAccount(ctx, "Savings", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	tid, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Savings", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	toExpense := "expense"
+	sameDst := "Savings"
+	changed, err := s.EditTransaction(ctx, tid, nil, &toExpense, nil, nil, &sameDst, nil, nil)
+	if err != nil {
+		t.Fatalf("converting away while resupplying the old destination rejected: %v", err)
+	}
+	if !changed {
+		t.Fatal("conversion reported no change")
+	}
+	if b := balances(t, s); b["HDFC"] != 800 || b["Savings"] != 0 {
+		t.Fatalf("got %v — the transfer legs did not collapse into the expense leg", b)
+	}
+	rows, err := s.Match(ctx, map[string]any{"id": tid})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("re-read: %v %v", rows, err)
+	}
+	if _, ok := rows[0]["sending_to"]; ok {
+		t.Fatalf("destination leg survived the conversion: %v", rows[0])
+	}
+
+	// A different destination on the way out is still a contradiction.
+	tid2, _, err := s.Insert(ctx, "2026-09-02", 50, "transfer", "other", "HDFC", "Savings", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDst := "Cash"
+	if _, err := s.EditTransaction(ctx, tid2, nil, &toExpense, nil, nil, &otherDst, nil, nil); err == nil {
+		t.Fatal("converting away with a different destination was accepted")
+	}
+	// Converting INTO a transfer with no destination is still rejected.
+	toTransfer := "transfer"
+	if _, err := s.EditTransaction(ctx, tid, nil, &toTransfer, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("converting into a transfer without sending_to was accepted")
 	}
 }
 
@@ -398,28 +498,99 @@ func TestConcurrentInserts(t *testing.T) {
 	}
 }
 
-func TestReconciliationAfterPrune(t *testing.T) {
+// Rows are permanent: there is no expiry surface at all — no `expiresAt`
+// field, no TTL index — so a 2020 row is still here, queryable, with its
+// balance leg intact. The migration in EnsureSchema also strips both from
+// databases created by older builds (drops ttl_expiresAt, unsets the field).
+func TestRowsNeverExpire(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Insert(ctx, "2020-01-01", 100, "expense", "other", "HDFC", "", "", "", ""); err != nil {
+	old, _, err := s.Insert(ctx, "2020-01-01", 100, "expense", "other", "HDFC", "", "", "", "")
+	if err != nil {
 		t.Fatal(err)
 	}
+	rows, err := s.Match(ctx, map[string]any{"id": old})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("re-read: %v %v", rows, err)
+	}
+	if _, ok := rows[0]["expiresAt"]; ok {
+		t.Fatalf("row carries expiresAt %v — nothing reads it, nothing should write it", rows[0]["expiresAt"])
+	}
+	got, _, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil, 0, 0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %d rows %v — the old row is gone with no delete", len(got), err)
+	}
 	if b := balances(t, s); b["HDFC"] != 900 {
 		t.Fatalf("got %v", b)
 	}
-	n, err := s.Prune(ctx, 90, false)
-	if err != nil || n != 1 {
-		t.Fatalf("got %d %v", n, err)
+	cur, err := s.txns.Indexes().List(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if b := balances(t, s); b["HDFC"] != 900 {
-		t.Fatalf("got %v", b)
+	for cur.Next(ctx) {
+		var spec bson.M
+		if err := cur.Decode(&spec); err != nil {
+			t.Fatal(err)
+		}
+		if name, _ := spec["name"].(string); name == "ttl_expiresAt" {
+			t.Fatal("ttl_expiresAt index still exists — it would keep deleting rows")
+		}
 	}
-	rows, _, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil, 0, 0)
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("got %v %v", rows, err)
+	if err := cur.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Upgrade path: a database created by an older build still carries the
+// ttl_expiresAt index and expiresAt fields. The first EnsureSchema after
+// deploy must remove both — otherwise the retired index keeps deleting rows
+// with no code referencing it. Seeds that legacy state, re-runs EnsureSchema
+// (testStore already ran it once on a fresh DB), and asserts removal while
+// the row itself survives. The seeded expiry is future-dated so the test
+// never races a live TTL firing mid-run.
+func TestEnsureSchemaDropsLegacyExpiry(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2020-01-01", "amount": int64(100),
+		"type": "expense", "category": "other", "note": "", "source": "mcp",
+		"accountId": primitive.NewObjectID(),
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+		"expiresAt": primitive.NewDateTimeFromTime(time.Now().UTC().AddDate(0, 0, 90))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.txns.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
+		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+		Options: options.Index().SetName("ttl_expiresAt").SetExpireAfterSeconds(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	var doc bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"date": "2020-01-01"}).Decode(&doc); err != nil {
+		t.Fatalf("legacy row missing after migration: %v", err)
+	}
+	if _, ok := doc["expiresAt"]; ok {
+		t.Fatalf("expiresAt survived the migration: %v", doc["expiresAt"])
+	}
+	cur, err := s.txns.Indexes().List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for cur.Next(ctx) {
+		var spec bson.M
+		if err := cur.Decode(&spec); err != nil {
+			t.Fatal(err)
+		}
+		if name, _ := spec["name"].(string); name == "ttl_expiresAt" {
+			t.Fatal("ttl_expiresAt index still exists — it would keep deleting rows")
+		}
+	}
+	if err := cur.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -743,14 +914,14 @@ func TestLongNoteTruncatesOnUTF8Boundary(t *testing.T) {
 	}
 }
 
-// A non-calendar date must fail like the read path rejects it: storing
-// `2026-02-30` used to succeed while query/summarize rejected it, and the bad
-// row's expiresAt fell back to year-1 (immediate TTL purge, balance surviving).
+// A non-calendar date must fail like the read path rejects it: `2026-02-30`
+// matches YYYY-MM-DD but is not a real date, so the write is invalid —
+// unlike a bad bound, which the query would silently match nothing on.
 func TestInsertRejectsNonCalendarDate(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	if _, _, err := s.Insert(ctx, "2026-02-30", 10, "expense", "other", "Cash", "", "", "", ""); err == nil {
-		t.Fatal("non-calendar date was stored; query/summarize reject it")
+		t.Fatal("non-calendar date was stored; the query bounds reject it")
 	} else if !containsStr(err.Error(), "real calendar date") {
 		t.Fatalf("error %q does not explain the calendar problem", err)
 	}
@@ -844,18 +1015,6 @@ func TestPaiseArithmeticIsExact(t *testing.T) {
 			t.Fatalf("amount %v, want exactly 0.1", r["amount"])
 		}
 	}
-	// Summaries total stored paise, not re-rounded floats.
-	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fnum(sum["expense"]) != 0.3 {
-		t.Fatalf("summarized expense %v, want exactly 0.3", sum["expense"])
-	}
-	pairs, _ := sum["by_category"].([]map[string]any)
-	if len(pairs) != 1 || fnum(pairs[0]["total"]) != 0.3 {
-		t.Fatalf("by_category %v, want [{groceries 0.3}]", sum["by_category"])
-	}
 }
 
 func TestFractionalRupeesRoundTrip(t *testing.T) {
@@ -894,9 +1053,6 @@ func TestSubPaiseAmountsAreRejected(t *testing.T) {
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10.555, "expense", "other", "Cash", "", "", "", ""); err == nil {
 		t.Fatal("10.555 was rounded instead of rejected")
 	}
-	if _, _, _, err := s.FixLast(ctx, 0.004); err == nil {
-		t.Fatal("a sub-paise correction was accepted")
-	}
 	// Exact 2-decimal inputs pass, including floats no binary can represent
 	// exactly (10.55 stores 1055 paise and reads back equal).
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10.55, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
@@ -918,8 +1074,7 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-01", "amount": 10.1,
 		"type": "expense", "category": "groceries", "note": "", "source": "mcp",
 		"accountId": primitive.NewObjectID(),
-		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
-		"expiresAt": expiry("2026-09-01", RetentionDays)}); err != nil {
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
 		t.Fatal(err)
 	}
 	// A stray Decimal128 converts exactly like a double, not left behind.
@@ -930,8 +1085,7 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-02", "amount": dec,
 		"type": "expense", "category": "bills", "note": "", "source": "mcp",
 		"accountId": primitive.NewObjectID(),
-		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
-		"expiresAt": expiry("2026-09-02", RetentionDays)}); err != nil {
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
 		t.Fatal(err)
 	}
 	// Legacy sub-paise dust (allowed by the old amount<=0 check) floors to
@@ -940,8 +1094,7 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-03", "amount": 0.004,
 		"type": "expense", "category": "groceries", "note": "", "source": "mcp",
 		"accountId": primitive.NewObjectID(),
-		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
-		"expiresAt": expiry("2026-09-03", RetentionDays)}); err != nil {
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.EnsureSchema(ctx); err != nil {
@@ -1015,8 +1168,7 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 // Pagination slices by date order with a stable _id tiebreak, and reports
 // the unpaged total so a short page is never mistaken for the end.
 // limit==0 means no cap (offset still applies); negative limits are rejected
-// like negative offsets. Summarize bypasses Query via queryFilter + raw Find
-// since it must total everything.
+// like negative offsets.
 func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -1246,5 +1398,3 @@ func fnum(v any) float64 {
 	}
 	return 0
 }
-
-func inum(v any) int { return int(fnum(v)) }

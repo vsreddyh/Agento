@@ -1,6 +1,6 @@
 // Command retention enforces the Agento domains' data lifecycle.
 //
-//	money         transactions autowiped when older than 90 days
+//	money         permanent — no-op (rows never expire; only delete removes)
 //	health-check  hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
 //	cookbook      permanent — no-op
 //	reports       read+unstarred pruned after 7 days; unread/starred NEVER touched
@@ -47,21 +47,6 @@ func run() int {
 		prefix = "[retention] DRY-RUN: "
 	}
 
-	moneyCutoff := today.AddDate(0, 0, -90).Format("2006-01-02")
-	moneyFilt := bson.M{"date": bson.M{"$lt": moneyCutoff}}
-	n, err := d.Collection("money_transactions").CountDocuments(ctx, moneyFilt)
-	if err != nil {
-		fmt.Printf("[retention] money count failed: %v\n", err)
-		return 1
-	}
-	if !*dry {
-		if _, err := d.Collection("money_transactions").DeleteMany(ctx, moneyFilt); err != nil {
-			fmt.Printf("[retention] money prune failed: %v\n", err)
-			return 1
-		}
-	}
-	fmt.Printf("%smoney: would remove %d transactions older than %s\n", prefix, n, moneyCutoff)
-
 	foodCutoff := today.AddDate(0, 0, -30).Format("2006-01-02")
 	for _, c := range []string{"hc_meals", "hc_days"} {
 		filt := bson.M{"date": bson.M{"$lt": foodCutoff}}
@@ -84,7 +69,7 @@ func run() int {
 	// regardless of age (never delete what the user has not seen), starred
 	// stays regardless of age (the star is an explicit keep). createdAt is a
 	// BSON DateTime, so the cutoff is a DateTime like task_mutations, not a
-	// date string like money/health.
+	// date string like health.
 	reportsCutoff := primitive.NewDateTimeFromTime(today.AddDate(0, 0, -7))
 	reportsFilt := bson.M{
 		"createdAt": bson.M{"$lt": reportsCutoff},
@@ -116,10 +101,9 @@ func run() int {
 	// data is wrong.
 	reconcileTasks(ctx)
 
-	// The task mutation log (#176). Pruned like money_transactions: it is an audit
-	// trail, so it has to outlive any single task, but it must not grow forever.
-	// 90 days matches the money window — long enough to answer "who changed this,
-	// and when did they stop?" after the fact.
+	// The task mutation log (#176). An audit trail: it has to outlive any
+	// single task, but it must not grow forever. 90 days is long enough to
+	// answer "who changed this, and when did they stop?" after the fact.
 	logCutoff := primitive.NewDateTimeFromTime(today.AddDate(0, 0, -90))
 	auditN, err := d.Collection("task_mutations").CountDocuments(ctx,
 		bson.M{"at": bson.M{"$lt": logCutoff}})
@@ -139,7 +123,7 @@ func run() int {
 			prefix, auditN, logCutoff.Time().UTC().Format("2006-01-02"))
 	}
 
-	fmt.Println("[retention] story/resumes/cookbook/projects: no retention policy (git repos / permanent).")
+	fmt.Println("[retention] story/resumes/cookbook/projects/money: no retention policy (git repos / permanent).")
 	return 0
 }
 
@@ -148,7 +132,7 @@ func run() int {
 // Two deliberate choices, both about not letting a *report* break a job:
 //
 //   - Its OWN timeout, not the caller's — genuinely own, see the WithoutCancel note
-//     below. Retention's 60s context is already eaten into by the money and health
+//     below. Retention's 60s context is already eaten into by the health
 //     deletes, and this pass walks up to ReconcileLimit candidates. Inheriting the
 //     remainder meant a slow night produced "context deadline exceeded", so a problem
 //     REPORT would have stopped tasks being pruned — and, since the reconciler was
@@ -181,7 +165,7 @@ func reconcileTasks(parent context.Context) {
 	// has left".
 	//
 	// It was WithTimeout(parent, 45s), which sounds like an own budget and is not:
-	// the parent is retention's 60s, already partly spent on the money and health
+	// the parent is retention's 60s, already partly spent on the health
 	// deletes. On a slow night the reconciler inherited whatever was left — possibly
 	// a second or nothing — and produced "context deadline exceeded", i.e. the exact
 	// silent night this job exists to prevent, after the comment above already

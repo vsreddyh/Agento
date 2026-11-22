@@ -15,7 +15,8 @@ package agento_test
 //
 // Sensitivity record (what prompts): money writes, account lifecycle
 // (`create_account`/`archive_account`), every `delete_*`, destructive
-// rewrites (`fix_last_*`), prunes that delete. The harness cannot
+// rewrites (`edit_transaction`, plus health-check's `fix_last_meal` via the
+// surviving `*fix_last*` pattern), prunes that delete. The harness cannot
 // see arguments, so even a counting prune with dry_run=true prompts.
 //
 // Servers registered under `cmd/*` are not the whole agent surface: the
@@ -42,6 +43,7 @@ var expectedAsk = []string{
 	"*batch_modify_gmail_message_labels*",
 	"*create_account*",
 	"*delete*",
+	"*edit_transaction*",
 	"*fix_last*",
 	"*log_transaction*",
 	"*modify_gmail_message_labels*",
@@ -63,7 +65,7 @@ var workspaceMCPWriteTools = []string{
 // record calls free); a tool in neither list fails the coverage test.
 // Update this in the same change as any tool add/rename.
 var freeTools = map[string][]string{
-	"miser-money": {"list_accounts", "get_balances", "query_transactions", "summarize"},
+	"miser-money": {"list_accounts", "get_balances", "query_transactions"},
 	"cookbook": {"add_ingredient", "list_ingredients", "add_recipe", "get_recipe",
 		"list_recipes", "update_recipe", "scale_recipe", "log_cook", "list_cooks"},
 	"health-check": {"log_meal", "query_meals", "log_weight", "log_sleep",

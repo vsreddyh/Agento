@@ -1,8 +1,10 @@
 // Package money: MongoDB storage with transactional balance maintenance.
 //
-// Collections: money_accounts (name unique, never expires), money_transactions
-// (90d TTL via expiresAt). Every mutation runs in a multi-document
-// transaction writing doc(s) AND $inc balance delta(s) atomically.
+// Collections: money_accounts (name unique), money_transactions — both
+// permanent. Rows never expire: the only way a row disappears is a
+// user-initiated delete (which inverts its balance legs). Every mutation
+// runs in a multi-document transaction writing doc(s) AND $inc balance
+// delta(s) atomically.
 package money
 
 import (
@@ -26,8 +28,6 @@ import (
 const (
 	accounts     = "money_accounts"
 	transactions = "money_transactions"
-	// RetentionDays drives the TTL target (tx date + window).
-	RetentionDays = 90
 	// IdempotencyKeyMax caps the client key, in BYTES (what BSON and the unique
 	// index measure), so it is a limit no caller can mistake for a character
 	// count. A UUID is 36.
@@ -47,16 +47,6 @@ func (e *StoreError) Error() string { return e.Msg }
 
 func fail(format string, args ...any) *StoreError {
 	return &StoreError{Msg: fmt.Sprintf(format, args...)}
-}
-
-// expiry maps a YYYY-MM-DD date to its TTL instant: UTC midnight of that
-// date, plus the retention window — i.e. about 05:30 IST on the target day,
-// not IST midnight. So a row dated Sep 1 expires at 00:00 UTC Nov 30
-// (≈05:30 IST), and an operator watching for it at IST midnight will wait
-// five and a half hours. Documented wherever expiry surfaces.
-func expiry(day string, days int) primitive.DateTime {
-	d, _ := time.Parse("2006-01-02", day)
-	return primitive.NewDateTimeFromTime(d.AddDate(0, 0, days))
 }
 
 // idHex extracts hex from ObjectID or string id values.
@@ -288,8 +278,12 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 }
 
 // ArchiveAccount soft-deletes; history stays, writes blocked via resolve.
-// Only `log_transaction` is blocked: `delete`/`fix_last` still invert/adjust the
-// archived account's balance by design (history stays mutable to the owner).
+// Only a NEW write is blocked: `log_transaction` rejects an archived account,
+// while `delete_transaction` and `edit_transaction` still move an archived
+// account's balance by design (history stays mutable to the owner). Editing a
+// row that already sits on an archived leg is therefore fine too — including
+// resupplying that leg, since the gate is on moving a leg TO an archived
+// account, not on naming the one already there.
 // The name is trimmed like every other account path (Create/resolve/findAccount/
 // Insert), so `archive " Cash "` finds what `create " Cash "` stored as `Cash`.
 // Accepts an id hex as well as a name (via findAccount), so an `_id` from
@@ -412,8 +406,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	// CheckDay): `date=" 2026-09-01 "` stores `2026-09-01` instead of failing
 	// while the same string queries fine. Validated as a real calendar date,
 	// not just the regex — `2026-02-30` matches YYYY-MM-DD but `time.Parse`
-	// fails it, and storing it would set expiresAt to year-1 (immediate TTL
-	// purge with the balance delta surviving, by design).
+	// fails it.
 	date = strings.TrimSpace(date)
 	if !dateRE.MatchString(date) {
 		return "", false, fail("date must be YYYY-MM-DD")
@@ -507,8 +500,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 		doc := bson.M{"date": date, "amount": paise, "type": typ,
 			"category": category, "note": note, "source": source,
 			"accountId": src["_id"],
-			"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
-			"expiresAt": expiry(date, RetentionDays)}
+			"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 		// Omitted when empty so the sparse unique index ignores the document.
 		if idempotencyKey != "" {
 			doc["idempotencyKey"] = idempotencyKey
@@ -737,64 +729,212 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 	return deleted, err
 }
 
-// FixLast adjusts newest tx by delta; scales each leg so transfers stay balanced.
-// Returns the fixed row's id hex + date so the caller can read it back by id:
-// without this, the shared "read back by id" rule is impossible for this write,
-// and the fix hits insertion-order last (`_id` desc), not date-latest, so the
-// wrong row is easy to guess after a backfill.
-func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string, bool, error) {
-	if newAmount <= 0 {
-		return "", "", false, fail("amount must be positive")
+// EditTransaction updates one row by id, rebalancing atomically. Nil means
+// leave the field alone (the handler passes nil for absent or
+// whitespace-only inputs, like delete filters) — except converting
+// a row INTO a transfer, which still requires sending_to; at least one field
+// must change. New values validate exactly like Insert: exact-paise amounts,
+// known type/category, resolved accounts, transfer rules, real calendar
+// dates. Old legs are reversed and new legs applied in the same transaction,
+// so a type/account/amount move can never half-land. A date change just moves
+// the row's date — rows never expire, so any past date stays put. Note is
+// truncated like a write. Moving a leg TO an archived
+// account rejects, like a new log; resupplying the leg already on the row
+// does not (it is not a move, so the read-then-edit flow keeps working —
+// including converting AWAY from a transfer, where the resupplied destination
+// is ignored and the leg drops).
+// Old legs always reverse, so rows on archived accounts stay editable like
+// deletes do.
+func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64, typ, category, account, sendingTo, date, note *string) (bool, error) {
+	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
+	if err != nil {
+		return false, fail("'%s' is not a transaction id", id)
 	}
-	newPaise, ok := ExactPaise(newAmount)
-	if !ok {
-		return "", "", false, fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", newAmount)
-	}
-	var fid, fdate string
-	fixed := false
-	err := s.transact(ctx, func(sc context.Context) error {
-		var last bson.M
-		if err := s.txns.FindOne(sc, bson.M{},
-			options.FindOne().SetSort(bson.D{{Key: "_id", Value: -1}})).Decode(&last); err != nil {
+	changed := false
+	err = s.transact(ctx, func(sc context.Context) error {
+		var old bson.M
+		if err := s.txns.FindOne(sc, bson.M{"_id": oid}).Decode(&old); err != nil {
 			if err == mongoDrv.ErrNoDocuments {
-				return nil
+				return fail("unknown transaction id '%s'", strings.TrimSpace(id))
 			}
 			return err
 		}
-		fid = oidHex(last["_id"])
-		if d, _ := last["date"].(string); d != "" {
-			fdate = d
-		} else {
-			fdate = fmt.Sprint(last["date"])
+		newPaise := paiseOf(old["amount"])
+		newType := fmt.Sprint(old["type"])
+		newCat, _ := old["category"].(string)
+		newDate := fmt.Sprint(old["date"])
+		newNote, _ := old["note"].(string)
+		newAcctOID, _ := old["accountId"].(primitive.ObjectID)
+		newDstOID, hadDst := old["sending_to"].(primitive.ObjectID)
+		if amount != nil {
+			if *amount <= 0 {
+				return fail("amount must be positive")
+			}
+			p, ok := ExactPaise(*amount)
+			if !ok {
+				return fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", *amount)
+			}
+			if p != newPaise {
+				changed = true
+			}
+			newPaise = p
 		}
-		delta := newPaise - paiseOf(last["amount"])
-		if delta == 0 {
-			fixed = true
-			return nil
+		if typ != nil {
+			t := strings.ToLower(strings.TrimSpace(*typ))
+			if !contains(txTypes, t) {
+				return fail("type must be one of %v", txTypes)
+			}
+			if t != newType {
+				changed = true
+			}
+			newType = t
 		}
-		if _, err := s.txns.UpdateOne(sc, bson.M{"_id": last["_id"]},
-			bson.M{"$set": bson.M{"amount": newPaise}}); err != nil {
-			return err
+		if category != nil {
+			c := strings.ToLower(strings.TrimSpace(*category))
+			if !contains(Categories, c) {
+				return fail("category %q does not exist — use one of %v", *category, Categories)
+			}
+			if c != newCat {
+				changed = true
+			}
+			newCat = c
 		}
-		last["amount"] = int64(1)
-		for aid, signed := range signedPaise(last) {
-			oid, err := primitive.ObjectIDFromHex(aid)
+		if account != nil {
+			// Resolved without the write gate first: resupplying the leg the
+			// row already sits on is not a move, so an archived account only
+			// rejects when the edit actually moves the leg elsewhere — the
+			// read-then-edit flow (copy `account` from `query_transactions`
+			// back into `edit_transaction`) must not fail on exactly the rows
+			// the docs say stay editable.
+			acct, err := s.resolve(sc, *account, false)
 			if err != nil {
 				return err
 			}
-			if _, err := s.accts.UpdateOne(sc, bson.M{"_id": oid},
-				bson.M{"$inc": bson.M{"balance": signed * delta}}); err != nil {
+			aoid, ok := acct["_id"].(primitive.ObjectID)
+			if !ok {
+				return fail("unknown account '%s'", strings.TrimSpace(*account))
+			}
+			if aoid != newAcctOID {
+				if arch, _ := acct["archived"].(bool); arch {
+					return fail("account '%v' is archived", acct["name"])
+				}
+				changed = true
+			}
+			newAcctOID = aoid
+		}
+		wantDst := sendingTo != nil
+		if newType == "transfer" {
+			if sendingTo != nil {
+				// Same rule as `account` above: naming the destination leg
+				// already on the row is not a move, so it never rejects —
+				// only moving TO an archived account does.
+				dst, err := s.resolve(sc, *sendingTo, false)
+				if err != nil {
+					return err
+				}
+				doid, ok := dst["_id"].(primitive.ObjectID)
+				if !ok {
+					return fail("unknown account '%s'", strings.TrimSpace(*sendingTo))
+				}
+				if !hadDst || doid != newDstOID {
+					if arch, _ := dst["archived"].(bool); arch {
+						return fail("account '%v' is archived", dst["name"])
+					}
+					changed = true
+				}
+				newDstOID, hadDst = doid, true
+			} else if !hadDst {
+				return fail("transfer requires sending_to")
+			}
+			if newDstOID == newAcctOID {
+				return fail("transfer source and destination must differ")
+			}
+		} else if wantDst {
+			// Converting away from a transfer while resupplying the leg
+			// already on the row is not a contradiction: it is the
+			// read-then-edit flow copying both legs back before fixing the
+			// type. Same OID means "the old leg", so it is ignored — the
+			// drop below still applies. A different destination, or any
+			// sending_to on a row that never had one, is still rejected.
+			if !hadDst {
+				return fail("sending_to is only valid for transfers")
+			}
+			dst, err := s.resolve(sc, *sendingTo, false)
+			if err != nil {
+				return err
+			}
+			if doid, ok := dst["_id"].(primitive.ObjectID); !ok || doid != newDstOID {
+				return fail("sending_to is only valid for transfers")
+			}
+		}
+		if newType != "transfer" && hadDst {
+			hadDst = false
+			changed = true
+		}
+		if date != nil {
+			d := strings.TrimSpace(*date)
+			if !dateRE.MatchString(d) {
+				return fail("date must be YYYY-MM-DD")
+			}
+			if _, err := time.Parse("2006-01-02", d); err != nil {
+				return fail("date %q is not a real calendar date — use YYYY-MM-DD", d)
+			}
+			if d != newDate {
+				changed = true
+			}
+			newDate = d
+		}
+		if note != nil {
+			if n := truncateBytes(*note, 300); n != newNote {
+				changed = true
+			}
+			newNote = truncateBytes(*note, 300)
+		}
+		set := bson.M{"amount": newPaise, "type": newType, "category": newCat,
+			"date": newDate, "note": newNote, "accountId": newAcctOID}
+		unset := bson.M{}
+		if hadDst {
+			set["sending_to"] = newDstOID
+		} else {
+			unset["sending_to"] = ""
+		}
+		update := bson.M{"$set": set}
+		if len(unset) > 0 {
+			update["$unset"] = unset
+		}
+		if _, err := s.txns.UpdateOne(sc, bson.M{"_id": oid}, update); err != nil {
+			return err
+		}
+		newDoc := bson.M{"amount": newPaise, "type": newType, "accountId": newAcctOID}
+		if hadDst {
+			newDoc["sending_to"] = newDstOID
+		}
+		agg := map[string]int64{}
+		for aid, d := range signedPaise(old) {
+			agg[aid] -= d
+		}
+		for aid, d := range signedPaise(newDoc) {
+			agg[aid] += d
+		}
+		for aid, delta := range agg {
+			if delta == 0 {
+				continue
+			}
+			aoid, err := primitive.ObjectIDFromHex(aid)
+			if err != nil {
+				return err
+			}
+			if _, err := s.accts.UpdateOne(sc, bson.M{"_id": aoid},
+				bson.M{"$inc": bson.M{"balance": delta}}); err != nil {
 				return err
 			}
 		}
-		fixed = true
 		return nil
 	})
-	return fid, fdate, fixed, err
+	return changed, err
 }
 
-// queryFilter builds the normalized Mongo filter both Query and Summarize
-// share: date range plus optional type/category/account (either side of a
+// queryFilter builds the normalized Mongo filter Query scans: date range plus optional type/category/account (either side of a
 // transfer). Normalization and membership checks live here, once.
 func (s *Store) queryFilter(ctx context.Context, start, end string, typ, category, account *string) (bson.M, error) {
 	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
@@ -839,7 +979,7 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 // when limit==0, all rows from `offset` (no cap). `total`
 // reporting the unpaged match count so the caller can tell a short page from
 // the end. Sort key is date, then `_id` — deterministic order, but not a
-// snapshot: a concurrent log or TTL expiry between page fetches can shift
+// snapshot: a concurrent log between page fetches can shift
 // rows across page boundaries (dupes/skips on a live ledger). Negative
 // offsets fail the same way (typo, not page 0).
 
@@ -898,89 +1038,6 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 		}
 	}
 	return rows, total, nil
-}
-
-// Summarize income/expense/net + expense-only per-category ranking. Transfers
-// are counted in `count` but excluded from income/expense/net, and `by_category`
-// ranks expenses only — so income categories never appear. Documented on the
-// tool + README so `count` vs totals does not misread.
-// Sums read stored paise directly (shared queryFilter, raw Find) — never the
-// rendered rupee floats — so large totals stay integer-exact no matter how
-// rendering evolves.
-func (s *Store) Summarize(ctx context.Context, start, end string, account *string) (bson.M, error) {
-	filt, err := s.queryFilter(ctx, start, end, nil, nil, account)
-	if err != nil {
-		return nil, err
-	}
-	cur, err := s.txns.Find(ctx, filt)
-	if err != nil {
-		return nil, err
-	}
-	var rows []bson.M
-	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
-	}
-	if rows == nil {
-		rows = []bson.M{}
-	}
-	var incomePaise, expensePaise int64
-	byCat := map[string]int64{}
-	for _, r := range rows {
-		amt := paiseOf(r["amount"])
-		switch r["type"] {
-		case "income":
-			incomePaise += amt
-		case "expense":
-			expensePaise += amt
-			cat, _ := r["category"].(string)
-			byCat[cat] += amt
-		}
-	}
-	type kv struct {
-		K string
-		V int64
-	}
-	top := []kv{}
-	for k, v := range byCat {
-		top = append(top, kv{k, v})
-	}
-	for i := 0; i < len(top); i++ {
-		for j := i + 1; j < len(top); j++ {
-			if top[j].V > top[i].V {
-				top[i], top[j] = top[j], top[i]
-			}
-		}
-	}
-	rank := make([]map[string]any, 0, len(top))
-	for _, e := range top {
-		rank = append(rank, map[string]any{"category": e.K, "total": ToRupees(e.V)})
-	}
-	return bson.M{"income": ToRupees(incomePaise), "expense": ToRupees(expensePaise), "net": ToRupees(incomePaise - expensePaise),
-		"count": len(rows), "by_category": rank}, nil
-}
-
-// Prune deletes old docs WITHOUT inverting balances (TTL parity).
-// The cutoff uses the same UTC frame as the TTL index it mirrors (expiresAt
-// is a UTC instant): prune is a maintenance operation keyed to TTL's frame,
-// not a user-visible date. Boundary note: prune keeps `date == cutoff`
-// (`$lt`) while TTL expires that same row at 00:00 UTC today (plus monitor
-// lag), so dry-run counts can trail TTL by a day — same frame, not same
-// instant. User-visible dates (default log date, period phrases) are IST;
-// instants and retention math are UTC.
-func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (int64, error) {
-	if days <= 0 {
-		days = RetentionDays
-	}
-	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
-	filt := bson.M{"date": bson.M{"$lt": cutoff}}
-	if dryRun {
-		return s.txns.CountDocuments(ctx, filt)
-	}
-	res, err := s.txns.DeleteMany(ctx, filt)
-	if err != nil {
-		return 0, err
-	}
-	return res.DeletedCount, nil
 }
 
 func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
@@ -1157,20 +1214,29 @@ func (s *Store) migrateFloatMoney(ctx context.Context) error {
 	})
 }
 
-// EnsureSchema creates collections + indexes (idempotent). Indexes come
-// first: if the data migration below fails transiently, the TTL/unique
-// guarantees are already in place for the restart. Called by New so fresh
-// databases get the unique-name and TTL indexes immediately.
+// EnsureSchema creates collections + indexes (idempotent). The legacy
+// expiry drop runs first: if it fails transiently, nothing else has run yet,
+// so the restart retries the same first step. Then indexes: if the data
+// migration below fails transiently, the unique guarantees are already in
+// place for the restart. Called by New so fresh databases get the
+// unique-name and query indexes immediately.
 // Also migrates legacy float rupees to int64 paise (see ToPaise) — new code
 // writes longs only, so the migration converges on first boot.
+//
+// Expiry is gone: rows are permanent unless deleted. A database created by
+// an older build still carries the ttl_expiresAt index (which would keep
+// deleting) and inert expiresAt fields, so both are removed here,
+// idempotently — after the first boot there is nothing left to remove.
 func (s *Store) EnsureSchema(ctx context.Context) error {
+	if err := s.dropLegacyExpiry(ctx); err != nil {
+		return err
+	}
 	for _, c := range []struct {
 		name string
 		keys bson.D
 		opts *options.IndexOptions
 	}{
 		{accounts, bson.D{{Key: "name", Value: 1}}, options.Index().SetUnique(true).SetName("uniq_name")},
-		{transactions, bson.D{{Key: "expiresAt", Value: 1}}, options.Index().SetName("ttl_expiresAt").SetExpireAfterSeconds(0)},
 		{transactions, bson.D{{Key: "idempotencyKey", Value: 1}},
 			options.Index().SetName("uniq_idempotency").SetUnique(true).SetSparse(true)},
 		{transactions, bson.D{{Key: "accountId", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("acct_date")},
@@ -1183,4 +1249,35 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		}
 	}
 	return s.migrateFloatMoney(ctx)
+}
+
+// dropLegacyExpiry removes the expiry machinery an older build installed:
+// the ttl_expiresAt index (which would otherwise keep deleting rows) and the
+// now-unread expiresAt fields. Plain ops, never in a transaction — index
+// drops are not allowed inside one. Both steps match nothing on a fresh or
+// already-migrated database, so reruns are cheap no-ops.
+func (s *Store) dropLegacyExpiry(ctx context.Context) error {
+	cur, err := s.txns.Indexes().List(ctx)
+	if err != nil {
+		return err
+	}
+	for cur.Next(ctx) {
+		var spec bson.M
+		if err := cur.Decode(&spec); err != nil {
+			return err
+		}
+		if name, _ := spec["name"].(string); name == "ttl_expiresAt" {
+			if _, err := s.txns.Indexes().DropOne(ctx, name); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	if err := cur.Err(); err != nil {
+		return err
+	}
+	_, err = s.txns.UpdateMany(ctx,
+		bson.M{"expiresAt": bson.M{"$exists": true}},
+		bson.M{"$unset": bson.M{"expiresAt": ""}})
+	return err
 }

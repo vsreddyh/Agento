@@ -9,15 +9,15 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// Nothing in this file carried `omitempty`, so all thirty fields across ten tools were
-// advertised as required. The required set below is drawn from store validation, from the
-// tool descriptions, and — for `query_transactions` — from the fact that absent date
-// bounds produce a silently empty result rather than an error, which is a stronger reason
-// to require a field than a rejection is.
+// Fields without `omitempty` are advertised as required. The required set below is drawn
+// from store validation, from the tool descriptions, and — for `query_transactions` —
+// from the fact that absent date bounds produce a silently empty result rather than an
+// error, which is a stronger reason to require a field than a rejection is.
 //
-// Two tools deliberately require nothing: `summarize` and `delete_transactions` both take
-// "at least one of" arguments, which no field can express without forbidding a legitimate
-// combination. The constraint is enforced server-side and documented in the type comment.
+// One tool deliberately requires nothing: `delete_transactions` takes
+// "at least one filter" arguments, which no field can express without
+// forbidding a legitimate combination. The constraint is enforced
+// server-side and documented in the type comment.
 func TestToolInputSchemaRequired(t *testing.T) {
 	cases := []struct {
 		tool     string
@@ -39,13 +39,9 @@ func TestToolInputSchemaRequired(t *testing.T) {
 			[]string{"type", "amount", "account"}},
 		// Required because absence is silently wrong, not because the store rejects it.
 		{"query_transactions", queryTransactionsInput{}, []string{"start", "end"}},
-		// "period phrase OR explicit start/end" — at least one, so none.
-		{"summarize", summarizeInput{}, nil},
-		{"fix_last_transaction", fixLastTransactionInput{}, []string{"amount"}},
+		{"edit_transaction", editTransactionInput{}, []string{"id"}},
 		// "At least one filter required", so no single field can be.
 		{"delete_transactions", deleteTransactionsInput{}, nil},
-		// days=0 means 90 in the handler; dry_run=nil means dry run.
-		{"prune_old", pruneOldInput{}, nil},
 	}
 
 	for _, c := range cases {
@@ -86,18 +82,14 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"list_accounts":       {"include_archived"},
 		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
 		"query_transactions":  {"type", "category", "account", "limit", "offset"},
-		"summarize":           {"period", "start", "end", "account"},
 		"delete_transactions": {"id", "amount", "type", "category", "date", "account", "dry_run"},
-		"prune_old":           {"days", "dry_run"},
 	}
 	inputs := map[string]any{
 		"create_account":      createAccountInput{},
 		"list_accounts":       listAccountsInput{},
 		"log_transaction":     logTransactionInput{},
 		"query_transactions":  queryTransactionsInput{},
-		"summarize":           summarizeInput{},
 		"delete_transactions": deleteTransactionsInput{},
-		"prune_old":           pruneOldInput{},
 	}
 
 	for tool, names := range optional {
