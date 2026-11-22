@@ -288,8 +288,12 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 }
 
 // ArchiveAccount soft-deletes; history stays, writes blocked via resolve.
-// Only `log_transaction` is blocked: `delete` still inverts the
-// archived account's balance by design (history stays mutable to the owner).
+// Only a NEW write is blocked: `log_transaction` rejects an archived account,
+// while `delete_transaction` and `edit_transaction` still move an archived
+// account's balance by design (history stays mutable to the owner). Editing a
+// row that already sits on an archived leg is therefore fine too — including
+// resupplying that leg, since the gate is on moving a leg TO an archived
+// account, not on naming the one already there.
 // The name is trimmed like every other account path (Create/resolve/findAccount/
 // Insert), so `archive " Cash "` finds what `create " Cash "` stored as `Cash`.
 // Accepts an id hex as well as a name (via findAccount), so an `_id` from
@@ -744,9 +748,11 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 // known type/category, resolved accounts, transfer rules, real calendar
 // dates. Old legs are reversed and new legs applied in the same transaction,
 // so a type/account/amount move can never half-land. A date change recomputes
-// expiresAt; note is truncated like a write. New account/destination legs
-// must be active (archived rejects, like a new log); old legs always reverse,
-// so rows on archived accounts stay editable like deletes do.
+// expiresAt; note is truncated like a write. Moving a leg TO an archived
+// account rejects, like a new log; resupplying the leg already on the row
+// does not (it is not a move, so the read-then-edit flow keeps working).
+// Old legs always reverse, so rows on archived accounts stay editable like
+// deletes do.
 func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64, typ, category, account, sendingTo, date, note *string) (bool, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
@@ -802,24 +808,46 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64,
 			newCat = c
 		}
 		if account != nil {
-			acct, err := s.resolve(sc, *account, true)
+			// Resolved without the write gate first: resupplying the leg the
+			// row already sits on is not a move, so an archived account only
+			// rejects when the edit actually moves the leg elsewhere — the
+			// read-then-edit flow (copy `account` from `query_transactions`
+			// back into `edit_transaction`) must not fail on exactly the rows
+			// the docs say stay editable.
+			acct, err := s.resolve(sc, *account, false)
 			if err != nil {
 				return err
 			}
-			if aoid, ok := acct["_id"].(primitive.ObjectID); !ok || aoid != newAcctOID {
+			aoid, ok := acct["_id"].(primitive.ObjectID)
+			if !ok {
+				return fail("unknown account '%s'", strings.TrimSpace(*account))
+			}
+			if aoid != newAcctOID {
+				if arch, _ := acct["archived"].(bool); arch {
+					return fail("account '%v' is archived", acct["name"])
+				}
 				changed = true
 			}
-			newAcctOID = acct["_id"].(primitive.ObjectID)
+			newAcctOID = aoid
 		}
 		wantDst := sendingTo != nil
 		if newType == "transfer" {
 			if sendingTo != nil {
-				dst, err := s.resolve(sc, *sendingTo, true)
+				// Same rule as `account` above: naming the destination leg
+				// already on the row is not a move, so it never rejects —
+				// only moving TO an archived account does.
+				dst, err := s.resolve(sc, *sendingTo, false)
 				if err != nil {
 					return err
 				}
-				doid := dst["_id"].(primitive.ObjectID)
+				doid, ok := dst["_id"].(primitive.ObjectID)
+				if !ok {
+					return fail("unknown account '%s'", strings.TrimSpace(*sendingTo))
+				}
 				if !hadDst || doid != newDstOID {
+					if arch, _ := dst["archived"].(bool); arch {
+						return fail("account '%v' is archived", dst["name"])
+					}
 					changed = true
 				}
 				newDstOID, hadDst = doid, true

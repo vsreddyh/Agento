@@ -558,7 +558,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "edit_transaction",
-		Description: "Edit one transaction by id (balances rebalanced atomically — old legs reversed, new legs applied, so a type/account/amount move can never half-land). Required: id (a missing id is rejected, not a silent 0). Optional: amount (exact paise: > 0, at most 2 decimals; explicit 0 rejected), type/category (normalized + validated like writes; unknown rejected), account/sending_to (name or id hex like writes; transfer requires sending_to and it must differ, forbidden on non-transfers; new legs must be active — archived rejects), date (real YYYY-MM-DD calendar date, IST day like writes; moves expiresAt with it), note (capped at 300 bytes like writes; blank means leave alone, it cannot be cleared). Absent or whitespace-only means no change; at least one field must change. Returns the edited row read back by id."},
+		Description: "Edit one transaction by id (balances rebalanced atomically — old legs reversed, new legs applied, so a type/account/amount move can never half-land). Required: id (a missing id is rejected, not a silent 0). Optional: amount (exact paise: > 0, at most 2 decimals; explicit 0 rejected), type/category (normalized + validated like writes; unknown rejected), account/sending_to (name or id hex like writes; transfer requires sending_to and it must differ, forbidden on non-transfers; moving a leg onto an archived account rejects, but resupplying the leg already on the row does not — it is not a move, so copying `account` from a query back into the edit keeps working), date (real YYYY-MM-DD calendar date, IST day like writes; moves expiresAt with it), note (capped at 300 bytes like writes; blank means leave alone, it cannot be cleared). Absent or whitespace-only means no change; at least one field must change. Returns the edited row read back by id."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in editTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like delete's filters, so
 			// whitespace-only means absent (no change) instead of an error.
@@ -618,7 +618,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",
-		Description: "Immediate purge, defaulting to the 90-day retention window (TTL handles this natively in the background). Cutoff uses the same UTC frame as TTL (not IST like user-visible dates); boundary note: prune keeps `date == cutoff` while TTL expires it at 00:00 UTC today, so dry-run counts can trail TTL by a day. Does NOT touch balances — unlike delete_transactions, which inverts them. days <= 0 means 90 — including negatives, never an error. dry_run=true (default) only reports."},
+		Description: "Immediate purge, defaulting to the 90-day retention window (TTL handles this natively in the background). Cutoff uses the same UTC frame as TTL (not IST like user-visible dates); boundary note: prune keeps `date == cutoff` while TTL expires it at 00:00 UTC today, so dry-run counts can trail TTL by a day. Does NOT touch balances — unlike delete_transactions, which inverts the legs, and edit_transaction, which reverses/applies them. days <= 0 means 90 — including negatives, never an error. dry_run=true (default) only reports."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in pruneOldInput) (*mcp.CallToolResult, map[string]any, error) {
 			days := in.Days
 			if days <= 0 {

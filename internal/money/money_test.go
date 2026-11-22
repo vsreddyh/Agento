@@ -438,6 +438,44 @@ func TestEditTransactionRejectsBadEdits(t *testing.T) {
 	}
 }
 
+// Resupplying the leg a row already sits on is not a move: it must work even
+// when that account is archived, or the read-then-edit flow (copy `account`
+// from a query back into the edit) breaks on exactly the rows the docs say
+// stay editable. Moving the leg TO an archived account still rejects.
+func TestEditTransactionKeepsArchivedLegWhenUnmoved(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ArchiveAccount(ctx, "Cash"); err != nil {
+		t.Fatal(err)
+	}
+	same := "Cash"
+	note := "still archived"
+	changed, err := s.EditTransaction(ctx, tid, nil, nil, nil, &same, nil, nil, &note)
+	if err != nil {
+		t.Fatalf("resupplying the archived leg rejected: %v", err)
+	}
+	if !changed {
+		t.Fatal("note change on an archived leg reported no change")
+	}
+	if b := balances(t, s); b["Cash"] != -100 {
+		t.Fatalf("got %v — editing around an archived leg moved the balance", b)
+	}
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ArchiveAccount(ctx, "HDFC"); err != nil {
+		t.Fatal(err)
+	}
+	other := "HDFC"
+	if _, err := s.EditTransaction(ctx, tid, nil, nil, nil, &other, nil, nil, nil); err == nil {
+		t.Fatal("moving a leg onto an archived account was accepted")
+	}
+}
+
 func TestConcurrentInserts(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
