@@ -121,6 +121,21 @@ func TestQueryTransactionsRejectsNegativeOffset(t *testing.T) {
 	}
 }
 
+// An edit with no fields is rejected like a reversed range, before any
+// store touch (`store` is nil here): setting nothing is a no-op the caller
+// almost certainly did not mean.
+func TestEditTransactionRejectsEmptyEdit(t *testing.T) {
+	_, errMsg := callTool(t, "edit_transaction", map[string]any{
+		"id": "68fakeid0000000000000000",
+	})
+	if errMsg == "" {
+		t.Fatal("an empty edit was accepted; expected a rejection, not a silent no-op")
+	}
+	if !strings.Contains(errMsg, "at least one") {
+		t.Errorf("error %q does not state the one-field rule", errMsg)
+	}
+}
+
 // An unknown category used to be refiled under "other" and reported as if it had
 // been stored: the caller asked for "utilities", got "other", and only found out
 // by reading the row back. The store now rejects it before any write, so the

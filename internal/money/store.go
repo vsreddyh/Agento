@@ -737,6 +737,169 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 	return deleted, err
 }
 
+// EditTransaction updates one row by id, rebalancing atomically. Nil means
+// leave the field alone (the handler passes nil for absent or
+// whitespace-only inputs, like delete/summarize filters); at least one field
+// must change. New values validate exactly like Insert: exact-paise amounts,
+// known type/category, resolved accounts, transfer rules, real calendar
+// dates. Old legs are reversed and new legs applied in the same transaction,
+// so a type/account/amount move can never half-land. A date change recomputes
+// expiresAt; note is truncated like a write. New account/destination legs
+// must be active (archived rejects, like a new log); old legs always reverse,
+// so rows on archived accounts stay editable like deletes do.
+func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64, typ, category, account, sendingTo, date, note *string) (bool, error) {
+	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
+	if err != nil {
+		return false, fail("'%s' is not a transaction id", id)
+	}
+	changed := false
+	err = s.transact(ctx, func(sc context.Context) error {
+		var old bson.M
+		if err := s.txns.FindOne(sc, bson.M{"_id": oid}).Decode(&old); err != nil {
+			if err == mongoDrv.ErrNoDocuments {
+				return fail("unknown transaction id '%s'", strings.TrimSpace(id))
+			}
+			return err
+		}
+		newPaise := paiseOf(old["amount"])
+		newType := fmt.Sprint(old["type"])
+		newCat, _ := old["category"].(string)
+		newDate := fmt.Sprint(old["date"])
+		newNote, _ := old["note"].(string)
+		newAcctOID, _ := old["accountId"].(primitive.ObjectID)
+		newDstOID, hadDst := old["sending_to"].(primitive.ObjectID)
+		if amount != nil {
+			if *amount <= 0 {
+				return fail("amount must be positive")
+			}
+			p, ok := ExactPaise(*amount)
+			if !ok {
+				return fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", *amount)
+			}
+			if p != newPaise {
+				changed = true
+			}
+			newPaise = p
+		}
+		if typ != nil {
+			t := strings.ToLower(strings.TrimSpace(*typ))
+			if !contains(txTypes, t) {
+				return fail("type must be one of %v", txTypes)
+			}
+			if t != newType {
+				changed = true
+			}
+			newType = t
+		}
+		if category != nil {
+			c := strings.ToLower(strings.TrimSpace(*category))
+			if !contains(Categories, c) {
+				return fail("category %q does not exist — use one of %v", *category, Categories)
+			}
+			if c != newCat {
+				changed = true
+			}
+			newCat = c
+		}
+		if account != nil {
+			acct, err := s.resolve(sc, *account, true)
+			if err != nil {
+				return err
+			}
+			if aoid, ok := acct["_id"].(primitive.ObjectID); !ok || aoid != newAcctOID {
+				changed = true
+			}
+			newAcctOID = acct["_id"].(primitive.ObjectID)
+		}
+		wantDst := sendingTo != nil
+		if newType == "transfer" {
+			if sendingTo != nil {
+				dst, err := s.resolve(sc, *sendingTo, true)
+				if err != nil {
+					return err
+				}
+				doid := dst["_id"].(primitive.ObjectID)
+				if !hadDst || doid != newDstOID {
+					changed = true
+				}
+				newDstOID, hadDst = doid, true
+			} else if !hadDst {
+				return fail("transfer requires sending_to")
+			}
+			if newDstOID == newAcctOID {
+				return fail("transfer source and destination must differ")
+			}
+		} else if wantDst {
+			return fail("sending_to is only valid for transfers")
+		}
+		if newType != "transfer" && hadDst {
+			hadDst = false
+			changed = true
+		}
+		if date != nil {
+			d := strings.TrimSpace(*date)
+			if !dateRE.MatchString(d) {
+				return fail("date must be YYYY-MM-DD")
+			}
+			if _, err := time.Parse("2006-01-02", d); err != nil {
+				return fail("date %q is not a real calendar date — use YYYY-MM-DD", d)
+			}
+			if d != newDate {
+				changed = true
+			}
+			newDate = d
+		}
+		if note != nil {
+			if n := truncateBytes(*note, 300); n != newNote {
+				changed = true
+			}
+			newNote = truncateBytes(*note, 300)
+		}
+		set := bson.M{"amount": newPaise, "type": newType, "category": newCat,
+			"date": newDate, "note": newNote, "accountId": newAcctOID,
+			"expiresAt": expiry(newDate, RetentionDays)}
+		unset := bson.M{}
+		if hadDst {
+			set["sending_to"] = newDstOID
+		} else {
+			unset["sending_to"] = ""
+		}
+		update := bson.M{"$set": set}
+		if len(unset) > 0 {
+			update["$unset"] = unset
+		}
+		if _, err := s.txns.UpdateOne(sc, bson.M{"_id": oid}, update); err != nil {
+			return err
+		}
+		newDoc := bson.M{"amount": newPaise, "type": newType, "accountId": newAcctOID}
+		if hadDst {
+			newDoc["sending_to"] = newDstOID
+		}
+		agg := map[string]int64{}
+		for aid, d := range signedPaise(old) {
+			agg[aid] -= d
+		}
+		for aid, d := range signedPaise(newDoc) {
+			agg[aid] += d
+		}
+		for aid, delta := range agg {
+			if delta == 0 {
+				continue
+			}
+			aoid, err := primitive.ObjectIDFromHex(aid)
+			if err != nil {
+				return err
+			}
+			if _, err := s.accts.UpdateOne(sc, bson.M{"_id": aoid},
+				bson.M{"$inc": bson.M{"balance": delta}}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return changed, err
+}
+
 // queryFilter builds the normalized Mongo filter both Query and Summarize
 // share: date range plus optional type/category/account (either side of a
 // transfer). Normalization and membership checks live here, once.

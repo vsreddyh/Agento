@@ -149,6 +149,23 @@ type deleteTransactionsInput struct {
 	DryRun *bool `json:"dry_run,omitempty"`
 }
 
+type editTransactionInput struct {
+	// A transaction id hex; the row must exist (a missing id is rejected,
+	// not a silent 0, like delete by id).
+	ID string `json:"id"`
+	// Every edit field is optional: absent or whitespace-only means leave it
+	// alone (a note cannot be cleared this way — blank means no change).
+	// Amount is a pointer so an explicit 0 is rejected, not mistaken for
+	// absent; at least one field must change or the call is rejected.
+	Amount    *float64 `json:"amount,omitempty"`
+	Type      string   `json:"type,omitempty"`
+	Category  string   `json:"category,omitempty"`
+	Account   string   `json:"account,omitempty"`
+	SendingTo string   `json:"sending_to,omitempty"`
+	Date      string   `json:"date,omitempty"`
+	Note      string   `json:"note,omitempty"`
+}
+
 type unarchiveAccountInput struct {
 	// A name or id hex like archive_account (the hex goes in `name`).
 	Name string `json:"name"`
@@ -291,7 +308,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "archive_account",
-		Description: "Soft-delete an account (history stays queryable; blocked from new log_transaction writes — delete can still move its balance). `name` accepts a name or id hex (trimmed, so an _id from list_accounts round-trips); the stored name is echoed back, never the raw input. The name stays taken."},
+		Description: "Soft-delete an account (history stays queryable; blocked from new log_transaction writes — delete/edit can still move its balance). `name` accepts a name or id hex (trimmed, so an _id from list_accounts round-trips); the stored name is echoed back, never the raw input. The name stays taken."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in archiveAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed up front so the unknown-account error quotes the same
 			// value the success path echoes and the store looked up.
@@ -538,6 +555,66 @@ func registerTools(s *mcp.Server) {
 				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown transaction id '%s'", in.ID)})
 			}
 			return result(map[string]any{"ok": true, "dry_run": false, "deleted": n})
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "edit_transaction",
+		Description: "Edit one transaction by id (balances rebalanced atomically — old legs reversed, new legs applied, so a type/account/amount move can never half-land). Required: id (a missing id is rejected, not a silent 0). Optional: amount (exact paise: > 0, at most 2 decimals; explicit 0 rejected), type/category (normalized + validated like writes; unknown rejected), account/sending_to (name or id hex like writes; transfer requires sending_to and it must differ, forbidden on non-transfers; new legs must be active — archived rejects), date (real YYYY-MM-DD calendar date, IST day like writes; moves expiresAt with it), note (capped at 300 bytes like writes; blank means leave alone, it cannot be cleared). Absent or whitespace-only means no change; at least one field must change. Returns the edited row read back by id."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in editTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
+			// Trimmed before the emptiness checks like delete's filters, so
+			// whitespace-only means absent (no change) instead of an error.
+			in.ID = strings.TrimSpace(in.ID)
+			if in.ID == "" {
+				return result(map[string]any{"ok": false, "error": "transaction id is required."})
+			}
+			in.Type = strings.TrimSpace(in.Type)
+			in.Category = strings.TrimSpace(in.Category)
+			in.Account = strings.TrimSpace(in.Account)
+			in.SendingTo = strings.TrimSpace(in.SendingTo)
+			in.Date = strings.TrimSpace(in.Date)
+			var typ, cat, acct, dst, date, note *string
+			if in.Type != "" {
+				typ = &in.Type
+			}
+			if in.Category != "" {
+				cat = &in.Category
+			}
+			if in.Account != "" {
+				acct = &in.Account
+			}
+			if in.SendingTo != "" {
+				dst = &in.SendingTo
+			}
+			if in.Date != "" {
+				// Calendar-validated like delete's filter: a padded or
+				// non-calendar date fails instead of storing an expiry the
+				// TTL reads as year-1.
+				d, err := validate.CheckDay(in.Date)
+				if err != nil {
+					return fail(fmt.Errorf("edit_transaction date: %w", err))
+				}
+				date = &d
+			}
+			if strings.TrimSpace(in.Note) != "" {
+				note = &in.Note
+			}
+			if in.Amount == nil && typ == nil && cat == nil && acct == nil && dst == nil && date == nil && note == nil {
+				return result(map[string]any{"ok": false, "error": "provide at least one of amount, type, category, account, sending_to, date, note."})
+			}
+			changed, err := store.EditTransaction(ctx, in.ID, in.Amount, typ, cat, acct, dst, date, note)
+			if err != nil {
+				return fail(err)
+			}
+			// Read the edited row back by id so the result reports stored
+			// values (normalized, truncated, re-legged) instead of the input.
+			out := map[string]any{"ok": true, "id": in.ID, "changed": changed}
+			if rows, merr := store.Match(ctx, map[string]any{"id": in.ID}); merr != nil {
+				out["readback_error"] = merr.Error()
+			} else if len(rows) == 1 {
+				out["transaction"] = rows[0]
+			} else {
+				out["readback_error"] = fmt.Sprintf("re-read by id %s returned %d rows", in.ID, len(rows))
+			}
+			return result(out)
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",

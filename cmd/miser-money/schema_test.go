@@ -41,6 +41,7 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		{"query_transactions", queryTransactionsInput{}, []string{"start", "end"}},
 		// "period phrase OR explicit start/end" — at least one, so none.
 		{"summarize", summarizeInput{}, nil},
+		{"edit_transaction", editTransactionInput{}, []string{"id"}},
 		// "At least one filter required", so no single field can be.
 		{"delete_transactions", deleteTransactionsInput{}, nil},
 		// days=0 means 90 in the handler; dry_run=nil means dry run.

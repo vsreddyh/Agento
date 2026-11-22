@@ -353,6 +353,91 @@ func TestDeleteInvertsBalances(t *testing.T) {
 	}
 }
 
+func TestEditTransactionAmountAdjustsBalance(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	amt := 350.0
+	changed, err := s.EditTransaction(ctx, tid, &amt, nil, nil, nil, nil, nil, nil)
+	if err != nil || !changed {
+		t.Fatalf("got changed=%v err=%v", changed, err)
+	}
+	if b := balances(t, s); b["Cash"] != -350 {
+		t.Fatalf("got %v", b)
+	}
+	// Same-value edit is a no-op success: no error, changed=false.
+	changed, err = s.EditTransaction(ctx, tid, &amt, nil, nil, nil, nil, nil, nil)
+	if err != nil || changed {
+		t.Fatalf("got changed=%v err=%v", changed, err)
+	}
+	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
+	if err != nil || fnum(sum["expense"]) != 350 {
+		t.Fatalf("got %v %v", sum, err)
+	}
+}
+
+func TestEditTransactionMovesTransferLegs(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAccount(ctx, "Savings", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	tid, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Cash", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, amt := "Savings", 300.0
+	changed, err := s.EditTransaction(ctx, tid, &amt, nil, nil, nil, &dst, nil, nil)
+	if err != nil || !changed {
+		t.Fatalf("got changed=%v err=%v", changed, err)
+	}
+	if b := balances(t, s); b["HDFC"] != 700 || b["Cash"] != 0 || b["Savings"] != 300 {
+		t.Fatalf("got %v", b)
+	}
+}
+
+func TestEditTransactionRejectsBadEdits(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	badAmt := 0.005
+	if _, err := s.EditTransaction(ctx, tid, &badAmt, nil, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("inexact-paise edit was accepted")
+	}
+	zero := 0.0
+	if _, err := s.EditTransaction(ctx, tid, &zero, nil, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("zero-amount edit was accepted")
+	}
+	toTransfer := "transfer"
+	if _, err := s.EditTransaction(ctx, tid, nil, &toTransfer, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("type change to transfer without sending_to was accepted")
+	}
+	dst := "Cash"
+	if _, err := s.EditTransaction(ctx, tid, nil, nil, nil, nil, &dst, nil, nil); err == nil {
+		t.Fatal("sending_to on a non-transfer was accepted")
+	}
+	bogus := "nope"
+	if _, err := s.EditTransaction(ctx, tid, nil, nil, &bogus, nil, nil, nil, nil); err == nil {
+		t.Fatal("unknown category edit was accepted")
+	}
+	if _, err := s.EditTransaction(ctx, "68fakeid0000000000000000", nil, nil, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("unknown id edit was accepted")
+	}
+	// Row untouched by the rejected edits.
+	if b := balances(t, s); b["Cash"] != -100 {
+		t.Fatalf("got %v", b)
+	}
+}
+
 func TestConcurrentInserts(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
