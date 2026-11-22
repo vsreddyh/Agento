@@ -122,9 +122,11 @@ func TestQueryTransactionsRejectsNegativeOffset(t *testing.T) {
 	}
 }
 
-// By-id mode: an id addresses one row, so it cannot be combined with
-// anything else — same rule as delete by id. Rejected before any store
-// touch (`store` is nil here).
+// By-id mode: an id addresses one row, so it cannot be combined with any
+// other filter (start/end/type/category/account) — same rule as delete by
+// id. Non-zero limit/offset are also rejected with id; the zero values are
+// the unset defaults and pass through. Rejected before any store touch
+// (`store` is nil here).
 func TestQueryByIdRejectsCombinedFilters(t *testing.T) {
 	for _, extra := range []map[string]any{
 		{"start": "2026-01-01", "end": "2026-01-31"},
