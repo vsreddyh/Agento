@@ -1,16 +1,15 @@
-// Package money: MongoDB storage with transactional balance maintenance.
+// Package money: MongoDB storage with derived balances.
 //
 // Collections: money_accounts (name unique), money_transactions — both
 // permanent. Rows never expire: the only way a row disappears is a
-// user-initiated delete (which inverts its balance legs). Every mutation
-// runs in a multi-document transaction writing doc(s) AND $inc balance
-// delta(s) atomically.
+// user-initiated delete. There is no stored running total: an account's
+// balance is its immutable opening seed plus the signed sum of its ledger
+// legs, computed on read — so a balance can never drift from its rows.
 package money
 
 import (
 	"agento/internal/mongostore"
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -105,8 +104,8 @@ func paiseOf(v any) int64 {
 }
 
 // signedPaise maps account-id hex -> balance delta in paise implied by a txn
-// doc. Integer math throughout: $inc stays int64 on int64 fields, so Mongo
-// never silently re-floats a balance.
+// doc. Integer math throughout: legs sum as int64 paise, so rendering never
+// re-floats a balance (0.1+0.2 stays 30 paise, not 0.30000000000000004).
 func signedPaise(doc bson.M) map[string]int64 {
 	amt := paiseOf(doc["amount"])
 	out := map[string]int64{}
@@ -124,22 +123,22 @@ func signedPaise(doc bson.M) map[string]int64 {
 	return out
 }
 
-// Store is the MongoDB backend; all balance writes go through transact.
+// Store is the MongoDB backend. Writes are single documents — balances are
+// derived from the ledger, never stored — so there is nothing to transact:
+// no multi-document write exists that could half-land.
 type Store struct {
-	client *mongoDrv.Client
-	db     *mongoDrv.Database
-	accts  *mongoDrv.Collection
-	txns   *mongoDrv.Collection
-	txOK   *bool // replica-set probe cache (only positive cached)
+	db    *mongoDrv.Database
+	accts *mongoDrv.Collection
+	txns  *mongoDrv.Collection
 }
 
 // New connects with an explicit URI/db (use FromEnv for single-root-.env).
 func New(uri, dbName string) (*Store, error) {
-	c, db, err := mongostore.Open(uri, dbName)
+	_, db, err := mongostore.Open(uri, dbName)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{client: c, db: db, accts: db.Collection(accounts), txns: db.Collection(transactions)}
+	s := &Store{db: db, accts: db.Collection(accounts), txns: db.Collection(transactions)}
 	if err := s.EnsureSchema(context.Background()); err != nil {
 		return nil, err
 	}
@@ -152,73 +151,17 @@ func FromEnv() (*Store, error) {
 	return New(uri, db)
 }
 
-// useTransactions probes for replica-set support; only positive cached.
-func (s *Store) useTransactions(ctx context.Context) bool {
-	if s.txOK != nil && *s.txOK {
-		return true
-	}
-	var hello bson.M
-	if err := s.client.Database("admin").RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello); err != nil {
-		return false
-	}
-	if name, _ := hello["setName"].(string); name != "" {
-		t := true
-		s.txOK = &t
-		return true
-	}
-	if msg, _ := hello["msg"].(string); msg == "isdbgrid" {
-		t := true
-		s.txOK = &t
-		return true
-	}
-	return false
-}
-
-// transact runs fn in a transaction with retry, or once without transaction
-// semantics when the deployment has no replica set (plain context, no session).
-func (s *Store) transact(ctx context.Context, fn func(ctx context.Context) error) error {
-	if !s.useTransactions(ctx) {
-		return fn(ctx)
-	}
-	for attempt := 1; ; attempt++ {
-		sess, err := s.client.StartSession()
-		if err != nil {
-			return err
-		}
-		err = func() error {
-			defer sess.EndSession(ctx)
-			_, txErr := sess.WithTransaction(ctx, func(sc mongoDrv.SessionContext) (any, error) {
-				return nil, fn(sc)
-			})
-			return txErr
-		}()
-		if err == nil {
-			return nil
-		}
-		var cmdErr mongoDrv.CommandError
-		if errors.As(err, &cmdErr) {
-			transient := false
-			for _, l := range cmdErr.Labels {
-				if l == "TransientTransactionError" {
-					transient = true
-				}
-				if l == "UnknownTransactionCommitResult" {
-					return err // commit ambiguous — never re-run body
-				}
-			}
-			if transient && attempt < 5 {
-				continue
-			}
-		}
-		return err
-	}
-}
-
 // CreateAccount with unique name (index-backed); archived defaults false.
 //
 // The name is trimmed and the type is lowercased+trimmed like transaction
 // types, so `create type="Bank"` stores `bank` instead of rejecting what
 // `log_transaction type="Bank"` accepts.
+//
+// The opening balance is stored once, as an immutable int64-paise seed
+// (`openingBalance`): it is added to the derived leg sums on every read and
+// never written again, so there is no running total to maintain. Exact paise
+// like every other write: an opening balance of 0.005 is rejected, not
+// silently stored as 1 paise.
 func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance float64) (bson.M, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -228,13 +171,11 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 	if !contains(accountTypes, typ) {
 		return nil, fail("account type must be one of %v", accountTypes)
 	}
-	// Exact paise like every other write: an opening balance of 0.005 is
-	// rejected, not silently stored as 1 paise.
-	balPaise, ok := ExactPaise(balance)
+	openingPaise, ok := ExactPaise(balance)
 	if !ok {
 		return nil, fail("balance %v is not an exact paise value — use at most 2 decimals", balance)
 	}
-	doc := bson.M{"name": name, "type": typ, "balance": balPaise,
+	doc := bson.M{"name": name, "type": typ, "openingBalance": openingPaise,
 		"archived": false, "createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	res, err := s.accts.InsertOne(ctx, doc)
 	if err != nil {
@@ -244,8 +185,30 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 		return nil, err
 	}
 	doc["_id"] = oidHex(res.InsertedID)
-	doc["balance"] = ToRupees(balPaise)
+	doc["openingBalance"] = ToRupees(openingPaise)
 	return doc, nil
+}
+
+// derivedLegs sums stored transaction legs per account-id hex, in int64
+// paise. Balances are derived from the ledger, never stored: with no expiry
+// the ledger is complete, so the sum is exact. One unbounded read; fine at
+// personal-ledger scale, and the only read path that scans everything.
+func (s *Store) derivedLegs(ctx context.Context) (map[string]int64, error) {
+	cur, err := s.txns.Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	var rows []bson.M
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	agg := map[string]int64{}
+	for _, r := range rows {
+		for aid, delta := range signedPaise(r) {
+			agg[aid] += delta
+		}
+	}
+	return agg, nil
 }
 
 // ListAccounts alphabetical; archived hidden unless requested.
@@ -253,6 +216,8 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 // `_id` is returned as a hex string. Transaction rows carry account ids, so
 // without this the mapping id -> name is unknowable from the tool surface and
 // a multi-account query result cannot be read.
+//
+// `balance` is opening seed + derived legs, rendered as rupees.
 func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.M, error) {
 	filt := bson.M{}
 	if !includeArchived {
@@ -269,18 +234,24 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 	if rows == nil {
 		rows = []bson.M{}
 	}
+	legs, err := s.derivedLegs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range rows {
+		id := idHex(r["_id"])
 		r["_id"] = oidHex(r["_id"])
-		// Stored paise, rendered rupees (see ToPaise).
-		r["balance"] = ToRupees(paiseOf(r["balance"]))
+		// Opening seed plus signed legs; a missing seed (pre-derivation row
+		// that skipped migration, which should not exist) reads as 0.
+		r["balance"] = ToRupees(paiseOf(r["openingBalance"]) + legs[id])
 	}
 	return rows, nil
 }
 
 // ArchiveAccount soft-deletes; history stays, writes blocked via resolve.
 // Only a NEW write is blocked: `log_transaction` rejects an archived account,
-// while `delete_transaction` and `edit_transaction` still move an archived
-// account's balance by design (history stays mutable to the owner). Editing a
+// while `delete_transaction` and `edit_transaction` still apply to rows on
+// an archived account by design (history stays mutable to the owner). Editing a
 // row that already sits on an archived leg is therefore fine too — including
 // resupplying that leg, since the gate is on moving a leg TO an archived
 // account, not on naming the one already there.
@@ -363,11 +334,12 @@ func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bs
 	return acct, nil
 }
 
-// Balances returns stored balances + total over active accounts. The `accounts`
+// Balances returns derived balances + total over active accounts. The `accounts`
 // list intentionally includes archived rows (unlike ListAccounts, which hides
 // them by default) while `total` skips them — so `total` is not the sum of the
 // listed balances once anything is archived. Documented on the tool + README.
-// Balances are int64 paise in BSON, rendered as rupee floats here.
+// Balances are opening seed + signed legs in int64 paise, rendered as rupee
+// floats here.
 func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
@@ -380,10 +352,15 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	if rows == nil {
 		rows = []bson.M{}
 	}
+	legs, err := s.derivedLegs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var totalPaise int64
 	for _, r := range rows {
+		id := idHex(r["_id"])
 		r["_id"] = oidHex(r["_id"])
-		balPaise := paiseOf(r["balance"])
+		balPaise := paiseOf(r["openingBalance"]) + legs[id]
 		r["balance"] = ToRupees(balPaise)
 		if arch, _ := r["archived"].(bool); !arch {
 			totalPaise += balPaise
@@ -392,8 +369,7 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	return bson.M{"accounts": rows, "total": ToRupees(totalPaise)}, nil
 }
 
-// Insert validates date/amount/type/category, then atomically writes doc + $inc
-// deltas. It returns (id, created, error): created is false when idempotencyKey
+// Insert validates date/amount/type/category, then writes the doc. It returns (id, created, error): created is false when idempotencyKey
 // matched an existing row — that row's id comes back and nothing is written, so
 // a retried call is a no-op instead of a second entry.
 //
@@ -461,82 +437,64 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 			return oidHex(existing["_id"]), false, nil
 		}
 	}
-	var tid string
-	err := s.transact(ctx, func(sc context.Context) error {
-		name := strings.TrimSpace(account)
-		if name == "" {
-			var existing []bson.M
-			cur, err := s.accts.Find(sc, bson.M{"archived": false},
-				options.Find().SetSort(bson.D{{Key: "name", Value: 1}}).SetProjection(bson.M{"name": 1}))
-			if err != nil {
-				return err
-			}
-			if err := cur.All(sc, &existing); err != nil {
-				return err
-			}
-			if len(existing) == 0 {
-				return fail("no accounts found — please configure an account first (use create_account)")
-			}
-			names := make([]string, 0, len(existing))
-			for _, a := range existing {
-				if n, _ := a["name"].(string); n != "" {
-					names = append(names, n)
-				}
-			}
-			return fail("%s", "account is required — available accounts: "+strings.Join(names, ", "))
-		}
-		src, err := s.resolve(sc, name, true)
+	name := strings.TrimSpace(account)
+	if name == "" {
+		var existing []bson.M
+		cur, err := s.accts.Find(ctx, bson.M{"archived": false},
+			options.Find().SetSort(bson.D{{Key: "name", Value: 1}}).SetProjection(bson.M{"name": 1}))
 		if err != nil {
-			return err
+			return "", false, err
 		}
-		// Capped at 300/64 bytes and cut on a UTF-8 boundary, never mid-rune:
-		// the caps are documented on the tool + README rather than rejected,
-		// so a long note reads back truncated — but never as corrupt bytes.
-		note = truncateBytes(note, 300)
-		if source == "" {
-			source = "mcp"
+		if err := cur.All(ctx, &existing); err != nil {
+			return "", false, err
 		}
-		source = truncateBytes(source, 64)
-		doc := bson.M{"date": date, "amount": paise, "type": typ,
-			"category": category, "note": note, "source": source,
-			"accountId": src["_id"],
-			"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
-		// Omitted when empty so the sparse unique index ignores the document.
-		if idempotencyKey != "" {
-			doc["idempotencyKey"] = idempotencyKey
+		if len(existing) == 0 {
+			return "", false, fail("no accounts found — please configure an account first (use create_account)")
 		}
-		if typ == "transfer" {
-			if strings.TrimSpace(sendingTo) == "" {
-				return fail("transfer requires sending_to")
+		names := make([]string, 0, len(existing))
+		for _, a := range existing {
+			if n, _ := a["name"].(string); n != "" {
+				names = append(names, n)
 			}
-			dst, err := s.resolve(sc, sendingTo, true)
-			if err != nil {
-				return err
-			}
-			if idHex(dst["_id"]) == idHex(src["_id"]) {
-				return fail("transfer source and destination must differ")
-			}
-			doc["sending_to"] = dst["_id"]
-		} else if strings.TrimSpace(sendingTo) != "" {
-			return fail("sending_to is only valid for transfers")
 		}
-		res, err := s.txns.InsertOne(sc, doc)
+		return "", false, fail("%s", "account is required — available accounts: "+strings.Join(names, ", "))
+	}
+	src, err := s.resolve(ctx, name, true)
+	if err != nil {
+		return "", false, err
+	}
+	// Capped at 300/64 bytes and cut on a UTF-8 boundary, never mid-rune:
+	// the caps are documented on the tool + README rather than rejected,
+	// so a long note reads back truncated — but never as corrupt bytes.
+	note = truncateBytes(note, 300)
+	if source == "" {
+		source = "mcp"
+	}
+	source = truncateBytes(source, 64)
+	doc := bson.M{"date": date, "amount": paise, "type": typ,
+		"category": category, "note": note, "source": source,
+		"accountId": src["_id"],
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
+	// Omitted when empty so the sparse unique index ignores the document.
+	if idempotencyKey != "" {
+		doc["idempotencyKey"] = idempotencyKey
+	}
+	if typ == "transfer" {
+		if strings.TrimSpace(sendingTo) == "" {
+			return "", false, fail("transfer requires sending_to")
+		}
+		dst, err := s.resolve(ctx, sendingTo, true)
 		if err != nil {
-			return err
+			return "", false, err
 		}
-		for aid, delta := range signedPaise(doc) {
-			oid, err := primitive.ObjectIDFromHex(aid)
-			if err != nil {
-				return err
-			}
-			if _, err := s.accts.UpdateOne(sc, bson.M{"_id": oid},
-				bson.M{"$inc": bson.M{"balance": delta}}); err != nil {
-				return err
-			}
+		if idHex(dst["_id"]) == idHex(src["_id"]) {
+			return "", false, fail("transfer source and destination must differ")
 		}
-		tid = oidHex(res.InsertedID)
-		return nil
-	})
+		doc["sending_to"] = dst["_id"]
+	} else if strings.TrimSpace(sendingTo) != "" {
+		return "", false, fail("sending_to is only valid for transfers")
+	}
+	res, err := s.txns.InsertOne(ctx, doc)
 	if err != nil {
 		// Lost a race on the unique key: the row the other writer inserted is
 		// the answer — but only when the payload matches. A different payload
@@ -551,7 +509,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 		}
 		return "", false, err
 	}
-	return tid, true, nil
+	return oidHex(res.InsertedID), true, nil
 }
 
 // byIdempotencyKey reports the transaction already carrying key, with the full
@@ -680,7 +638,9 @@ func (s *Store) accountNames(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-// Delete by app-level filter; inverts balance deltas atomically.
+// Delete by app-level filter; rows are removed outright. Balances need no
+// adjustment: they are derived from the surviving rows, so the total follows
+// automatically.
 func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 	if len(filt) == 0 {
 		return 0, fail("refusing to delete without a filter")
@@ -689,249 +649,203 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	deleted := 0
-	err = s.transact(ctx, func(sc context.Context) error {
-		cur, err := s.txns.Find(sc, mongoFilt)
-		if err != nil {
-			return err
-		}
-		var matched []bson.M
-		if err := cur.All(sc, &matched); err != nil {
-			return err
-		}
-		if len(matched) == 0 {
-			return nil
-		}
-		ids := make([]any, 0, len(matched))
-		agg := map[string]int64{}
-		for _, d := range matched {
-			ids = append(ids, d["_id"])
-			for aid, delta := range signedPaise(d) {
-				agg[aid] -= delta // inverse
-			}
-		}
-		if _, err := s.txns.DeleteMany(sc, bson.M{"_id": bson.M{"$in": ids}}); err != nil {
-			return err
-		}
-		for aid, delta := range agg {
-			oid, err := primitive.ObjectIDFromHex(aid)
-			if err != nil {
-				return err
-			}
-			if _, err := s.accts.UpdateOne(sc, bson.M{"_id": oid},
-				bson.M{"$inc": bson.M{"balance": delta}}); err != nil {
-				return err
-			}
-		}
-		deleted = len(matched)
-		return nil
-	})
-	return deleted, err
+	cur, err := s.txns.Find(ctx, mongoFilt)
+	if err != nil {
+		return 0, err
+	}
+	var matched []bson.M
+	if err := cur.All(ctx, &matched); err != nil {
+		return 0, err
+	}
+	if len(matched) == 0 {
+		return 0, nil
+	}
+	ids := make([]any, 0, len(matched))
+	for _, d := range matched {
+		ids = append(ids, d["_id"])
+	}
+	if _, err := s.txns.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": ids}}); err != nil {
+		return 0, err
+	}
+	return len(matched), nil
 }
 
-// EditTransaction updates one row by id, rebalancing atomically. Nil means
-// leave the field alone (the handler passes nil for absent or
+// EditTransaction updates one row by id; the row changes in place and
+// balances follow from the ledger, so no separate rebalance step exists.
+// Nil means leave the field alone (the handler passes nil for absent or
 // whitespace-only inputs, like delete filters) — except converting
 // a row INTO a transfer, which still requires sending_to; at least one field
 // must change. New values validate exactly like Insert: exact-paise amounts,
 // known type/category, resolved accounts, transfer rules, real calendar
-// dates. Old legs are reversed and new legs applied in the same transaction,
-// so a type/account/amount move can never half-land. A date change just moves
-// the row's date — rows never expire, so any past date stays put. Note is
-// truncated like a write. Moving a leg TO an archived
+// dates. A type/account/amount move changes the row; derived balances follow,
+// so a move can never half-land — there is no second write to fail. A date
+// change just moves the row's date — rows never expire, so any past date
+// stays put. Note is truncated like a write. Moving a leg TO an archived
 // account rejects, like a new log; resupplying the leg already on the row
 // does not (it is not a move, so the read-then-edit flow keeps working —
 // including converting AWAY from a transfer, where the resupplied destination
 // is ignored and the leg drops).
-// Old legs always reverse, so rows on archived accounts stay editable like
-// deletes do.
+// Archived legs stay editable in place like deletes do.
 func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64, typ, category, account, sendingTo, date, note *string) (bool, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
 		return false, fail("'%s' is not a transaction id", id)
 	}
 	changed := false
-	err = s.transact(ctx, func(sc context.Context) error {
-		var old bson.M
-		if err := s.txns.FindOne(sc, bson.M{"_id": oid}).Decode(&old); err != nil {
-			if err == mongoDrv.ErrNoDocuments {
-				return fail("unknown transaction id '%s'", strings.TrimSpace(id))
-			}
-			return err
+	var old bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"_id": oid}).Decode(&old); err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return false, fail("unknown transaction id '%s'", strings.TrimSpace(id))
 		}
-		newPaise := paiseOf(old["amount"])
-		newType := fmt.Sprint(old["type"])
-		newCat, _ := old["category"].(string)
-		newDate := fmt.Sprint(old["date"])
-		newNote, _ := old["note"].(string)
-		newAcctOID, _ := old["accountId"].(primitive.ObjectID)
-		newDstOID, hadDst := old["sending_to"].(primitive.ObjectID)
-		if amount != nil {
-			if *amount <= 0 {
-				return fail("amount must be positive")
-			}
-			p, ok := ExactPaise(*amount)
-			if !ok {
-				return fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", *amount)
-			}
-			if p != newPaise {
-				changed = true
-			}
-			newPaise = p
+		return false, err
+	}
+	newPaise := paiseOf(old["amount"])
+	newType := fmt.Sprint(old["type"])
+	newCat, _ := old["category"].(string)
+	newDate := fmt.Sprint(old["date"])
+	newNote, _ := old["note"].(string)
+	newAcctOID, _ := old["accountId"].(primitive.ObjectID)
+	newDstOID, hadDst := old["sending_to"].(primitive.ObjectID)
+	if amount != nil {
+		if *amount <= 0 {
+			return false, fail("amount must be positive")
 		}
-		if typ != nil {
-			t := strings.ToLower(strings.TrimSpace(*typ))
-			if !contains(txTypes, t) {
-				return fail("type must be one of %v", txTypes)
-			}
-			if t != newType {
-				changed = true
-			}
-			newType = t
+		p, ok := ExactPaise(*amount)
+		if !ok {
+			return false, fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", *amount)
 		}
-		if category != nil {
-			c := strings.ToLower(strings.TrimSpace(*category))
-			if !contains(Categories, c) {
-				return fail("category %q does not exist — use one of %v", *category, Categories)
-			}
-			if c != newCat {
-				changed = true
-			}
-			newCat = c
-		}
-		if account != nil {
-			// Resolved without the write gate first: resupplying the leg the
-			// row already sits on is not a move, so an archived account only
-			// rejects when the edit actually moves the leg elsewhere — the
-			// read-then-edit flow (copy `account` from `query_transactions`
-			// back into `edit_transaction`) must not fail on exactly the rows
-			// the docs say stay editable.
-			acct, err := s.resolve(sc, *account, false)
-			if err != nil {
-				return err
-			}
-			aoid, ok := acct["_id"].(primitive.ObjectID)
-			if !ok {
-				return fail("unknown account '%s'", strings.TrimSpace(*account))
-			}
-			if aoid != newAcctOID {
-				if arch, _ := acct["archived"].(bool); arch {
-					return fail("account '%v' is archived", acct["name"])
-				}
-				changed = true
-			}
-			newAcctOID = aoid
-		}
-		wantDst := sendingTo != nil
-		if newType == "transfer" {
-			if sendingTo != nil {
-				// Same rule as `account` above: naming the destination leg
-				// already on the row is not a move, so it never rejects —
-				// only moving TO an archived account does.
-				dst, err := s.resolve(sc, *sendingTo, false)
-				if err != nil {
-					return err
-				}
-				doid, ok := dst["_id"].(primitive.ObjectID)
-				if !ok {
-					return fail("unknown account '%s'", strings.TrimSpace(*sendingTo))
-				}
-				if !hadDst || doid != newDstOID {
-					if arch, _ := dst["archived"].(bool); arch {
-						return fail("account '%v' is archived", dst["name"])
-					}
-					changed = true
-				}
-				newDstOID, hadDst = doid, true
-			} else if !hadDst {
-				return fail("transfer requires sending_to")
-			}
-			if newDstOID == newAcctOID {
-				return fail("transfer source and destination must differ")
-			}
-		} else if wantDst {
-			// Converting away from a transfer while resupplying the leg
-			// already on the row is not a contradiction: it is the
-			// read-then-edit flow copying both legs back before fixing the
-			// type. Same OID means "the old leg", so it is ignored — the
-			// drop below still applies. A different destination, or any
-			// sending_to on a row that never had one, is still rejected.
-			if !hadDst {
-				return fail("sending_to is only valid for transfers")
-			}
-			dst, err := s.resolve(sc, *sendingTo, false)
-			if err != nil {
-				return err
-			}
-			if doid, ok := dst["_id"].(primitive.ObjectID); !ok || doid != newDstOID {
-				return fail("sending_to is only valid for transfers")
-			}
-		}
-		if newType != "transfer" && hadDst {
-			hadDst = false
+		if p != newPaise {
 			changed = true
 		}
-		if date != nil {
-			d := strings.TrimSpace(*date)
-			if !dateRE.MatchString(d) {
-				return fail("date must be YYYY-MM-DD")
+		newPaise = p
+	}
+	if typ != nil {
+		t := strings.ToLower(strings.TrimSpace(*typ))
+		if !contains(txTypes, t) {
+			return false, fail("type must be one of %v", txTypes)
+		}
+		if t != newType {
+			changed = true
+		}
+		newType = t
+	}
+	if category != nil {
+		c := strings.ToLower(strings.TrimSpace(*category))
+		if !contains(Categories, c) {
+			return false, fail("category %q does not exist — use one of %v", *category, Categories)
+		}
+		if c != newCat {
+			changed = true
+		}
+		newCat = c
+	}
+	if account != nil {
+		// Resolved without the write gate first: resupplying the leg the
+		// row already sits on is not a move, so an archived account only
+		// rejects when the edit actually moves the leg elsewhere — the
+		// read-then-edit flow (copy `account` from `query_transactions`
+		// back into `edit_transaction`) must not fail on exactly the rows
+		// the docs say stay editable.
+		acct, err := s.resolve(ctx, *account, false)
+		if err != nil {
+			return false, err
+		}
+		aoid, ok := acct["_id"].(primitive.ObjectID)
+		if !ok {
+			return false, fail("unknown account '%s'", strings.TrimSpace(*account))
+		}
+		if aoid != newAcctOID {
+			if arch, _ := acct["archived"].(bool); arch {
+				return false, fail("account '%v' is archived", acct["name"])
 			}
-			if _, err := time.Parse("2006-01-02", d); err != nil {
-				return fail("date %q is not a real calendar date — use YYYY-MM-DD", d)
-			}
-			if d != newDate {
-				changed = true
-			}
-			newDate = d
+			changed = true
 		}
-		if note != nil {
-			if n := truncateBytes(*note, 300); n != newNote {
-				changed = true
-			}
-			newNote = truncateBytes(*note, 300)
-		}
-		set := bson.M{"amount": newPaise, "type": newType, "category": newCat,
-			"date": newDate, "note": newNote, "accountId": newAcctOID}
-		unset := bson.M{}
-		if hadDst {
-			set["sending_to"] = newDstOID
-		} else {
-			unset["sending_to"] = ""
-		}
-		update := bson.M{"$set": set}
-		if len(unset) > 0 {
-			update["$unset"] = unset
-		}
-		if _, err := s.txns.UpdateOne(sc, bson.M{"_id": oid}, update); err != nil {
-			return err
-		}
-		newDoc := bson.M{"amount": newPaise, "type": newType, "accountId": newAcctOID}
-		if hadDst {
-			newDoc["sending_to"] = newDstOID
-		}
-		agg := map[string]int64{}
-		for aid, d := range signedPaise(old) {
-			agg[aid] -= d
-		}
-		for aid, d := range signedPaise(newDoc) {
-			agg[aid] += d
-		}
-		for aid, delta := range agg {
-			if delta == 0 {
-				continue
-			}
-			aoid, err := primitive.ObjectIDFromHex(aid)
+		newAcctOID = aoid
+	}
+	wantDst := sendingTo != nil
+	if newType == "transfer" {
+		if sendingTo != nil {
+			// Same rule as `account` above: naming the destination leg
+			// already on the row is not a move, so it never rejects —
+			// only moving TO an archived account does.
+			dst, err := s.resolve(ctx, *sendingTo, false)
 			if err != nil {
-				return err
+				return false, err
 			}
-			if _, err := s.accts.UpdateOne(sc, bson.M{"_id": aoid},
-				bson.M{"$inc": bson.M{"balance": delta}}); err != nil {
-				return err
+			doid, ok := dst["_id"].(primitive.ObjectID)
+			if !ok {
+				return false, fail("unknown account '%s'", strings.TrimSpace(*sendingTo))
 			}
+			if !hadDst || doid != newDstOID {
+				if arch, _ := dst["archived"].(bool); arch {
+					return false, fail("account '%v' is archived", dst["name"])
+				}
+				changed = true
+			}
+			newDstOID, hadDst = doid, true
+		} else if !hadDst {
+			return false, fail("transfer requires sending_to")
 		}
-		return nil
-	})
-	return changed, err
+		if newDstOID == newAcctOID {
+			return false, fail("transfer source and destination must differ")
+		}
+	} else if wantDst {
+		// Converting away from a transfer while resupplying the leg
+		// already on the row is not a contradiction: it is the
+		// read-then-edit flow copying both legs back before fixing the
+		// type. Same OID means "the old leg", so it is ignored — the
+		// drop below still applies. A different destination, or any
+		// sending_to on a row that never had one, is still rejected.
+		if !hadDst {
+			return false, fail("sending_to is only valid for transfers")
+		}
+		dst, err := s.resolve(ctx, *sendingTo, false)
+		if err != nil {
+			return false, err
+		}
+		if doid, ok := dst["_id"].(primitive.ObjectID); !ok || doid != newDstOID {
+			return false, fail("sending_to is only valid for transfers")
+		}
+	}
+	if newType != "transfer" && hadDst {
+		hadDst = false
+		changed = true
+	}
+	if date != nil {
+		d := strings.TrimSpace(*date)
+		if !dateRE.MatchString(d) {
+			return false, fail("date must be YYYY-MM-DD")
+		}
+		if _, err := time.Parse("2006-01-02", d); err != nil {
+			return false, fail("date %q is not a real calendar date — use YYYY-MM-DD", d)
+		}
+		if d != newDate {
+			changed = true
+		}
+		newDate = d
+	}
+	if note != nil {
+		if n := truncateBytes(*note, 300); n != newNote {
+			changed = true
+		}
+		newNote = truncateBytes(*note, 300)
+	}
+	set := bson.M{"amount": newPaise, "type": newType, "category": newCat,
+		"date": newDate, "note": newNote, "accountId": newAcctOID}
+	unset := bson.M{}
+	if hadDst {
+		set["sending_to"] = newDstOID
+	} else {
+		unset["sending_to"] = ""
+	}
+	update := bson.M{"$set": set}
+	if len(unset) > 0 {
+		update["$unset"] = unset
+	}
+	if _, err := s.txns.UpdateOne(ctx, bson.M{"_id": oid}, update); err != nil {
+		return false, err
+	}
+	return changed, nil
 }
 
 // queryFilter builds the normalized Mongo filter Query scans: date range plus optional type/category/account (either side of a
@@ -1179,39 +1093,63 @@ func oidHex(v any) string {
 // of preserving it. Sub-paise dust (0.001–0.004, allowed by the old
 // `amount <= 0` check) floors to the 1-paise minimum on transactions: a 0
 // amount would violate the new >0 invariant and be undeletable by amount
-// (the tool rejects 0 as "absent"). Balances keep a floored 0 — an empty
-// account legitimately holds nothing.
-// The whole migration runs inside one transaction (see transact): a
-// read-then-$set loop racing a concurrent balance $inc could otherwise
-// clobber the increment on first boot after deploy.
+// (the tool rejects 0 as "absent").
 func (s *Store) migrateFloatMoney(ctx context.Context) error {
-	return s.transact(ctx, func(sc context.Context) error {
-		for _, m := range []struct {
-			coll     *mongoDrv.Collection
-			field    string
-			floorOne bool // transactions: no 0-paise rows may exist
-		}{{s.accts, "balance", false}, {s.txns, "amount", true}} {
-			cur, err := m.coll.Find(sc, bson.M{m.field: bson.M{"$type": []string{"double", "decimal"}}})
-			if err != nil {
-				return err
-			}
-			var rows []bson.M
-			if err := cur.All(sc, &rows); err != nil {
-				return err
-			}
-			for _, r := range rows {
-				paise := paiseOf(r[m.field])
-				if m.floorOne && paise < 1 {
-					paise = 1
-				}
-				if _, err := m.coll.UpdateOne(sc, bson.M{"_id": r["_id"]},
-					bson.M{"$set": bson.M{m.field: paise}}); err != nil {
-					return err
-				}
-			}
+	// Transactions only now: account balances migrate via
+	// migrateStoredBalances below, which reads the legacy `balance` with the
+	// same paise conversion.
+	cur, err := s.txns.Find(ctx, bson.M{"amount": bson.M{"$type": []string{"double", "decimal"}}})
+	if err != nil {
+		return err
+	}
+	var rows []bson.M
+	if err := cur.All(ctx, &rows); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		paise := paiseOf(r["amount"])
+		if paise < 1 {
+			paise = 1
 		}
-		return nil
+		if _, err := s.txns.UpdateOne(ctx, bson.M{"_id": r["_id"]},
+			bson.M{"$set": bson.M{"amount": paise}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateStoredBalances converts legacy stored running totals to immutable
+// opening seeds, once: opening = stored balance − signed leg sum. New code
+// never writes `balance`, so each legacy account matches once (the filter
+// requires the legacy field and no seed); reruns and fresh databases find
+// nothing to do. Runs after the amount migration so legs sum from paise.
+func (s *Store) migrateStoredBalances(ctx context.Context) error {
+	legs, err := s.derivedLegs(ctx)
+	if err != nil {
+		return err
+	}
+	cur, err := s.accts.Find(ctx, bson.M{
+		"balance":        bson.M{"$exists": true},
+		"openingBalance": bson.M{"$exists": false},
 	})
+	if err != nil {
+		return err
+	}
+	var rows []bson.M
+	if err := cur.All(ctx, &rows); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		opening := paiseOf(r["balance"]) - legs[idHex(r["_id"])]
+		if _, err := s.accts.UpdateOne(ctx, bson.M{"_id": r["_id"]}, bson.M{
+			"$set":   bson.M{"openingBalance": opening},
+			"$unset": bson.M{"balance": ""},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // EnsureSchema creates collections + indexes (idempotent). The legacy
@@ -1248,7 +1186,10 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return s.migrateFloatMoney(ctx)
+	if err := s.migrateFloatMoney(ctx); err != nil {
+		return err
+	}
+	return s.migrateStoredBalances(ctx)
 }
 
 // dropLegacyExpiry removes the expiry machinery an older build installed:

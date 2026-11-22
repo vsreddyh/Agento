@@ -594,6 +594,42 @@ func TestEnsureSchemaDropsLegacyExpiry(t *testing.T) {
 	}
 }
 
+// A legacy account with surviving rows migrates to opening = stored − legs:
+// the stored total already absorbed every leg, so subtracting the survivors
+// recovers the seed. Balances() then re-adds them and lands back on the
+// stored total.
+func TestMigratedOpeningSubtractsSurvivingLegs(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	res, err := s.accts.InsertOne(ctx, bson.M{"name": "Legacy", "type": "cash",
+		"balance": 100.5, "archived": false,
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, _ := res.InsertedID.(primitive.ObjectID)
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-01", "amount": int64(1000),
+		"type": "income", "category": "salary", "note": "", "source": "mcp",
+		"accountId": legacyID,
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	var a bson.M
+	if err := s.accts.FindOne(ctx, bson.M{"name": "Legacy"}).Decode(&a); err != nil {
+		t.Fatal(err)
+	}
+	// Stored 100.50 absorbed a +10.00 income leg, so the seed was 90.50.
+	if ob, ok := a["openingBalance"].(int64); !ok || ob != 9050 {
+		t.Fatalf("openingBalance migrated to %v (%T), want int64 9050", a["openingBalance"], a["openingBalance"])
+	}
+	if b := balances(t, s); b["Legacy"] != 100.5 {
+		t.Fatalf("got %v — derived total must equal the pre-migration stored balance", b)
+	}
+}
+
 func TestUnknownCategoryIsRejected(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -1104,8 +1140,11 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	if err := s.accts.FindOne(ctx, bson.M{"name": "Legacy"}).Decode(&a); err != nil {
 		t.Fatal(err)
 	}
-	if bal, ok := a["balance"].(int64); !ok || bal != 10050 {
-		t.Fatalf("balance migrated to %v (%T), want int64 10050", a["balance"], a["balance"])
+	if ob, ok := a["openingBalance"].(int64); !ok || ob != 10050 {
+		t.Fatalf("openingBalance migrated to %v (%T), want int64 10050", a["openingBalance"], a["openingBalance"])
+	}
+	if _, ok := a["balance"]; ok {
+		t.Fatalf("legacy `balance` field survived the migration: %v", a["balance"])
 	}
 	var txn bson.M
 	if err := s.txns.FindOne(ctx, bson.M{"date": "2026-09-01"}).Decode(&txn); err != nil {

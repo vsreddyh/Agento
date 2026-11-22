@@ -1,5 +1,5 @@
-// Package money implements the miser-money domain: MongoDB storage with
-// transactional balance maintenance.
+// Package money implements the miser-money domain: IST day helpers,
+// categories, and shared validation-adjacent helpers.
 package money
 
 import (
