@@ -9,11 +9,10 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// Nothing in this file carried `omitempty`, so every field was advertised as required.
-// The required set below is drawn from store validation, from the tool descriptions, and —
-// for `query_transactions` — from the fact that absent date bounds produce a silently
-// empty result rather than an error, which is a stronger reason to require a field than a
-// rejection is.
+// Fields without `omitempty` are advertised as required. The required set below is drawn
+// from store validation, from the tool descriptions, and — for `query_transactions` —
+// from the fact that absent date bounds produce a silently empty result rather than an
+// error, which is a stronger reason to require a field than a rejection is.
 //
 // One tool deliberately requires nothing: `delete_transactions` takes
 // "at least one filter" arguments, which no field can express without
