@@ -743,14 +743,17 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 
 // EditTransaction updates one row by id, rebalancing atomically. Nil means
 // leave the field alone (the handler passes nil for absent or
-// whitespace-only inputs, like delete/summarize filters); at least one field
+// whitespace-only inputs, like delete/summarize filters) — except converting
+// a row INTO a transfer, which still requires sending_to; at least one field
 // must change. New values validate exactly like Insert: exact-paise amounts,
 // known type/category, resolved accounts, transfer rules, real calendar
 // dates. Old legs are reversed and new legs applied in the same transaction,
 // so a type/account/amount move can never half-land. A date change recomputes
 // expiresAt; note is truncated like a write. Moving a leg TO an archived
 // account rejects, like a new log; resupplying the leg already on the row
-// does not (it is not a move, so the read-then-edit flow keeps working).
+// does not (it is not a move, so the read-then-edit flow keeps working —
+// including converting AWAY from a transfer, where the resupplied destination
+// is ignored and the leg drops).
 // Old legs always reverse, so rows on archived accounts stay editable like
 // deletes do.
 func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64, typ, category, account, sendingTo, date, note *string) (bool, error) {
@@ -858,7 +861,22 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64,
 				return fail("transfer source and destination must differ")
 			}
 		} else if wantDst {
-			return fail("sending_to is only valid for transfers")
+			// Converting away from a transfer while resupplying the leg
+			// already on the row is not a contradiction: it is the
+			// read-then-edit flow copying both legs back before fixing the
+			// type. Same OID means "the old leg", so it is ignored — the
+			// drop below still applies. A different destination, or any
+			// sending_to on a row that never had one, is still rejected.
+			if !hadDst {
+				return fail("sending_to is only valid for transfers")
+			}
+			dst, err := s.resolve(sc, *sendingTo, false)
+			if err != nil {
+				return err
+			}
+			if doid, ok := dst["_id"].(primitive.ObjectID); !ok || doid != newDstOID {
+				return fail("sending_to is only valid for transfers")
+			}
 		}
 		if newType != "transfer" && hadDst {
 			hadDst = false

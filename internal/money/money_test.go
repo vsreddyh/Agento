@@ -476,6 +476,60 @@ func TestEditTransactionKeepsArchivedLegWhenUnmoved(t *testing.T) {
 	}
 }
 
+// Converting AWAY from a transfer drops the destination leg; resupplying
+// the same destination is the read-then-edit flow copying both legs back,
+// not a contradiction, so it is ignored rather than rejected. A different
+// destination on the way out, or converting INTO a transfer with none, is
+// still rejected.
+func TestEditTransactionConvertAwayFromTransfer(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAccount(ctx, "Savings", "bank", 0); err != nil {
+		t.Fatal(err)
+	}
+	tid, _, err := s.Insert(ctx, "2026-09-01", 200, "transfer", "other", "HDFC", "Savings", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	toExpense := "expense"
+	sameDst := "Savings"
+	changed, err := s.EditTransaction(ctx, tid, nil, &toExpense, nil, nil, &sameDst, nil, nil)
+	if err != nil {
+		t.Fatalf("converting away while resupplying the old destination rejected: %v", err)
+	}
+	if !changed {
+		t.Fatal("conversion reported no change")
+	}
+	if b := balances(t, s); b["HDFC"] != 800 || b["Savings"] != 0 {
+		t.Fatalf("got %v — the transfer legs did not collapse into the expense leg", b)
+	}
+	rows, err := s.Match(ctx, map[string]any{"id": tid})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("re-read: %v %v", rows, err)
+	}
+	if _, ok := rows[0]["sending_to"]; ok {
+		t.Fatalf("destination leg survived the conversion: %v", rows[0])
+	}
+
+	// A different destination on the way out is still a contradiction.
+	tid2, _, err := s.Insert(ctx, "2026-09-02", 50, "transfer", "other", "HDFC", "Savings", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDst := "Cash"
+	if _, err := s.EditTransaction(ctx, tid2, nil, &toExpense, nil, nil, &otherDst, nil, nil); err == nil {
+		t.Fatal("converting away with a different destination was accepted")
+	}
+	// Converting INTO a transfer with no destination is still rejected.
+	toTransfer := "transfer"
+	if _, err := s.EditTransaction(ctx, tid, nil, &toTransfer, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("converting into a transfer without sending_to was accepted")
+	}
+}
+
 func TestConcurrentInserts(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
