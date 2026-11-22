@@ -158,6 +158,26 @@ func TestQueryByIdRejectsMalformedId(t *testing.T) {
 	}
 }
 
+// Paging args are filters on a range, not on a row: a non-zero limit or
+// offset with id is rejected rather than silently dropped, before any
+// store touch (`store` is nil here). Zero values are the unset defaults
+// and pass through to the by-id lookup.
+func TestQueryByIdRejectsPagingArgs(t *testing.T) {
+	for _, args := range []map[string]any{
+		{"id": "68fakeid0000000000000001", "limit": 10},
+		{"id": "68fakeid0000000000000001", "offset": 5},
+		{"id": "68fakeid0000000000000001", "offset": -1},
+	} {
+		_, errMsg := callTool(t, "query_transactions", args)
+		if errMsg == "" {
+			t.Fatalf("query by id with paging %v was accepted; expected a rejection", args)
+		}
+		if !strings.Contains(errMsg, "cannot be combined") {
+			t.Errorf("error %q does not explain the exclusivity", errMsg)
+		}
+	}
+}
+
 // An edit with no fields is rejected like a reversed range, before any
 // store touch (`store` is nil here): setting nothing is a no-op the caller
 // almost certainly did not mean.
