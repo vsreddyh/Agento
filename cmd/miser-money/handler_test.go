@@ -134,7 +134,7 @@ func TestQueryByIdRejectsCombinedFilters(t *testing.T) {
 		{"category": "groceries"},
 		{"account": "Cash"},
 	} {
-		args := map[string]any{"id": "68fakeid0000000000000001"}
+		args := map[string]any{"id": "000000000000000000000001"}
 		for k, v := range extra {
 			args[k] = v
 		}
@@ -166,9 +166,9 @@ func TestQueryByIdRejectsMalformedId(t *testing.T) {
 // and pass through to the by-id lookup.
 func TestQueryByIdRejectsPagingArgs(t *testing.T) {
 	for _, args := range []map[string]any{
-		{"id": "68fakeid0000000000000001", "limit": 10},
-		{"id": "68fakeid0000000000000001", "offset": 5},
-		{"id": "68fakeid0000000000000001", "offset": -1},
+		{"id": "000000000000000000000001", "limit": 10},
+		{"id": "000000000000000000000001", "offset": 5},
+		{"id": "000000000000000000000001", "offset": -1},
 	} {
 		_, errMsg := callTool(t, "query_transactions", args)
 		if errMsg == "" {

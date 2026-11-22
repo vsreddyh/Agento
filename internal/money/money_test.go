@@ -787,10 +787,6 @@ func TestMatchIsADryRun(t *testing.T) {
 	}
 }
 
-// A rupee-float delete filter converts to paise: Match on 10.1 finds the row
-// stored as 1010. Inexact floats and strings fail instead of silently
-// matching nothing.
-
 // Match by id resolves one row: the by-id query path and the delete/edit
 // readbacks all funnel through here. A well-formed unknown id matches
 // nothing (the handler rejects it); a malformed one fails in the filter.
@@ -817,6 +813,9 @@ func TestMatchByIdResolvesOneRow(t *testing.T) {
 	}
 }
 
+// A rupee-float delete filter converts to paise: Match on 10.1 finds the row
+// stored as 1010. Inexact floats and strings fail instead of silently
+// matching nothing.
 func TestMatchFloatAmountConvertsToPaise(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
