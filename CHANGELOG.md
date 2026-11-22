@@ -8,6 +8,9 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.3.1]
+- Money has no retention window any more (rows are permanent unless deleted), so the `BehaviourSettings` inventory no longer lists one — comment-only, no behavior change.
+
 ## [9.3.0]
 - **Task widget settings rework (#536).** The settings screen is rebuilt
   around categories — Title, Row content, Row style, Row order, List — and

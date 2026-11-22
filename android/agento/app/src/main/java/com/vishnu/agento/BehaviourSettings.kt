@@ -21,8 +21,9 @@ import androidx.work.WorkManager
  * silently rewriting a value the user deliberately set.
  *
  * Deliberately NOT here (operator-set by design, see documentation.md):
- * money/health retention windows, gateway turn/inventory timeouts, and the
- * profile prompt. Health-sync failures stay in-app status text (there is no
+ * the health retention window, gateway turn/inventory timeouts, and the
+ * profile prompt (miser-money has no retention window — its rows are
+ * permanent). Health-sync failures stay in-app status text (there is no
  * system notification for them to gate).
  */
 object BehaviourSettings {
