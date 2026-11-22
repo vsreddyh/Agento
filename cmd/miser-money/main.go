@@ -42,8 +42,9 @@ func today() string { return money.TodayIST() }
 
 // Input types are named rather than inline so `schema_test.go` can infer the schema from
 // the same types `AddTool` publishes. Fields without `omitempty` are advertised as
-// required — including arguments the handler fills in itself (`log_transaction.date`,
-// `create_account.type`) and filters the tool descriptions explicitly call optional.
+// required. (Handler-defaulted arguments like `log_transaction.date` and described-optional
+// filters carry `omitempty`, so they stay out of the required set — that is what the tag
+// is for.)
 //
 // Two kinds of "required" appear below and the difference matters:
 //
