@@ -54,6 +54,20 @@ validators and no views — validation lives in the store.
 `store.Prune` re-defaults any `days <= 0` to the retention window, so a negative `prune_old.days`
 does not reach the delete with a nonsense cutoff.
 
+### Period totals (no `summarize` tool)
+
+There is no server-side total. `get_balances` is a lifetime stored running
+total — it survives the 90-day row expiry, so it is the wrong window for a
+period — and `query_transactions.total` counts rows, not money. To total a
+period, paginate the whole range and sum client-side:
+
+- repeat `query_transactions` with `offset = next_offset` until `truncated`
+  is false;
+- sum in paise (`round(amount * 100)` per row), not in rendered rupee
+  floats, so the total stays integer-exact;
+- exclude `transfer` rows from income/expense/net (count them separately);
+- rank per-category over expenses only.
+
 ### Key invariants
 
 - **Atomicity:** every mutation runs in a multi-document transaction that

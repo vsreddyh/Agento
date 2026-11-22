@@ -30,9 +30,9 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (11): `create_account`, `list_accounts`, `archive_account`,
+- **miser-money** (10): `create_account`, `list_accounts`, `archive_account`,
   `unarchive_account`, `get_balances`, `log_transaction`,
-  `query_transactions`, `summarize`, `edit_transaction`,
+  `query_transactions`, `edit_transaction`,
   `delete_transactions`, `prune_old`.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),
@@ -105,7 +105,7 @@ when the target is one entry. `unarchive_account` also prompts (it matches
 the `*archive_account*` pattern) even though it restores rather than
 destroys.
 
-Reads (`list_*`, `get_*`, `query_*`, `summarize`, `daily_summary`,
+Reads (`list_*`, `get_*`, `query_*`, `daily_summary`,
 `get_balances`, `scale_recipe`) need no confirmation. `fix_last_meal` updates
 the most recently *recorded* meal in place (insertion order, not date
 order — meals sort by `createdAt`, so after a backfill the fix hits the

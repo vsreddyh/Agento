@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-// The gap these tests close: both tools used to accept date bounds they could not honour,
-// and neither returned an error when it did.
+// The gap these tests close: the query path used to accept date bounds it could not
+// honour, and returned no error when it did.
 //
 //   - `query_transactions` with unusable bounds built `date >= "" && date <= ""` and
 //     matched nothing, so the caller saw zero transactions and no reason why.
-//   - `summarize` with a lone `start` fell through to the period branch and summarised a
-//     different window entirely.
+//   - a lone `start` with no `end` (or the reverse) must be rejected, not silently
+//     half-applied: the pair is either complete or absent.
 //
 // `required` in the input schema does not fix any of this. It is a client-side hint, and a
 // caller can send `"start": ""` explicitly and pass validation.

@@ -843,13 +843,13 @@ func TestLongNoteTruncatesOnUTF8Boundary(t *testing.T) {
 }
 
 // A non-calendar date must fail like the read path rejects it: storing
-// `2026-02-30` used to succeed while query/summarize rejected it, and the bad
+// `2026-02-30` used to succeed while the query bounds rejected it, and the bad
 // row's expiresAt fell back to year-1 (immediate TTL purge, balance surviving).
 func TestInsertRejectsNonCalendarDate(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	if _, _, err := s.Insert(ctx, "2026-02-30", 10, "expense", "other", "Cash", "", "", "", ""); err == nil {
-		t.Fatal("non-calendar date was stored; query/summarize reject it")
+		t.Fatal("non-calendar date was stored; the query bounds reject it")
 	} else if !containsStr(err.Error(), "real calendar date") {
 		t.Fatalf("error %q does not explain the calendar problem", err)
 	}
