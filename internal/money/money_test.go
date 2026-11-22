@@ -135,6 +135,9 @@ func TestAccountsCRUD(t *testing.T) {
 	rows, _ := s.ListAccounts(ctx, false)
 	for _, a := range rows {
 		names[a["name"].(string)] = true
+		if _, ok := a["openingBalance"]; ok {
+			t.Fatalf("list row leaks the storage field: %v", a["openingBalance"])
+		}
 	}
 	if !names["Cash"] || !names["HDFC"] {
 		t.Fatalf("got %v", names)

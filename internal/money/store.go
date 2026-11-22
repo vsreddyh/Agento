@@ -247,7 +247,9 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 		r["_id"] = oidHex(r["_id"])
 		// Opening seed plus signed legs; a missing seed (pre-derivation row
 		// that skipped migration, which should not exist) reads as 0.
+		// The storage field never leaves the store — see create, same rule.
 		r["balance"] = ToRupees(paiseOf(r["openingBalance"]) + legs[id])
+		delete(r, "openingBalance")
 	}
 	return rows, nil
 }
@@ -366,6 +368,7 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 		r["_id"] = oidHex(r["_id"])
 		balPaise := paiseOf(r["openingBalance"]) + legs[id]
 		r["balance"] = ToRupees(balPaise)
+		delete(r, "openingBalance")
 		if arch, _ := r["archived"].(bool); !arch {
 			totalPaise += balPaise
 		}
