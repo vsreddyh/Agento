@@ -743,7 +743,7 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 
 // EditTransaction updates one row by id, rebalancing atomically. Nil means
 // leave the field alone (the handler passes nil for absent or
-// whitespace-only inputs, like delete/summarize filters) — except converting
+// whitespace-only inputs, like delete filters) — except converting
 // a row INTO a transfer, which still requires sending_to; at least one field
 // must change. New values validate exactly like Insert: exact-paise amounts,
 // known type/category, resolved accounts, transfer rules, real calendar
@@ -946,8 +946,7 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64,
 	return changed, err
 }
 
-// queryFilter builds the normalized Mongo filter both Query and Summarize
-// share: date range plus optional type/category/account (either side of a
+// queryFilter builds the normalized Mongo filter Query scans: date range plus optional type/category/account (either side of a
 // transfer). Normalization and membership checks live here, once.
 func (s *Store) queryFilter(ctx context.Context, start, end string, typ, category, account *string) (bson.M, error) {
 	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
@@ -1053,72 +1052,13 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	return rows, total, nil
 }
 
-// Summarize income/expense/net + expense-only per-category ranking. Transfers
-// are counted in `count` but excluded from income/expense/net, and `by_category`
-// ranks expenses only — so income categories never appear. Documented on the
-// tool + README so `count` vs totals does not misread.
-// Sums read stored paise directly (shared queryFilter, raw Find) — never the
-// rendered rupee floats — so large totals stay integer-exact no matter how
-// rendering evolves.
-func (s *Store) Summarize(ctx context.Context, start, end string, account *string) (bson.M, error) {
-	filt, err := s.queryFilter(ctx, start, end, nil, nil, account)
-	if err != nil {
-		return nil, err
-	}
-	cur, err := s.txns.Find(ctx, filt)
-	if err != nil {
-		return nil, err
-	}
-	var rows []bson.M
-	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
-	}
-	if rows == nil {
-		rows = []bson.M{}
-	}
-	var incomePaise, expensePaise int64
-	byCat := map[string]int64{}
-	for _, r := range rows {
-		amt := paiseOf(r["amount"])
-		switch r["type"] {
-		case "income":
-			incomePaise += amt
-		case "expense":
-			expensePaise += amt
-			cat, _ := r["category"].(string)
-			byCat[cat] += amt
-		}
-	}
-	type kv struct {
-		K string
-		V int64
-	}
-	top := []kv{}
-	for k, v := range byCat {
-		top = append(top, kv{k, v})
-	}
-	for i := 0; i < len(top); i++ {
-		for j := i + 1; j < len(top); j++ {
-			if top[j].V > top[i].V {
-				top[i], top[j] = top[j], top[i]
-			}
-		}
-	}
-	rank := make([]map[string]any, 0, len(top))
-	for _, e := range top {
-		rank = append(rank, map[string]any{"category": e.K, "total": ToRupees(e.V)})
-	}
-	return bson.M{"income": ToRupees(incomePaise), "expense": ToRupees(expensePaise), "net": ToRupees(incomePaise - expensePaise),
-		"count": len(rows), "by_category": rank}, nil
-}
-
 // Prune deletes old docs WITHOUT inverting balances (TTL parity).
 // The cutoff uses the same UTC frame as the TTL index it mirrors (expiresAt
 // is a UTC instant): prune is a maintenance operation keyed to TTL's frame,
 // not a user-visible date. Boundary note: prune keeps `date == cutoff`
 // (`$lt`) while TTL expires that same row at 00:00 UTC today (plus monitor
 // lag), so dry-run counts can trail TTL by a day — same frame, not same
-// instant. User-visible dates (default log date, period phrases) are IST;
+// instant. User-visible dates (default log date) are IST;
 // instants and retention math are UTC.
 func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (int64, error) {
 	if days <= 0 {

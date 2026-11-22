@@ -62,41 +62,6 @@ func TestNormalizeDayRangeTrims(t *testing.T) {
 	}
 }
 
-// A half-supplied pair is the case a caller is most likely to send by accident, and the one
-// `summarize` silently got wrong: it fell through to the period branch and reported on a
-// window nobody asked for.
-func TestNormalizeDayRangePair(t *testing.T) {
-	cases := []struct {
-		name       string
-		start, end string
-		wantEmpty  bool // both bounds absent: use the period phrase
-		wantErr    bool
-	}{
-		{name: "both absent — use the period phrase", wantEmpty: true},
-		{name: "both present", start: "2026-01-01", end: "2026-01-31"},
-		{name: "lone start", start: "2026-01-01", wantErr: true},
-		{name: "lone end", end: "2026-01-31", wantErr: true},
-		{name: "both present but malformed", start: "2026-01-01", end: "nope", wantErr: true},
-		{name: "reversed pair", start: "2026-01-31", end: "2026-01-01", wantErr: true},
-		// Whitespace-only counts as ABSENT, not as half a pair: before trimming, "   "
-		// took the "present" path and produced a confusing validation error instead.
-		{name: "whitespace-only is absent", start: "   ", end: "\t", wantEmpty: true},
-		{name: "whitespace start with a real end", start: "  ", end: "2026-01-31", wantErr: true},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			start, end, err := normalizeDayRangePair("summarize", c.start, c.end)
-			if c.wantErr != (err != nil) {
-				t.Fatalf("normalizeDayRangePair(%q, %q) = %v, wantErr %v", c.start, c.end, err, c.wantErr)
-			}
-			if c.wantEmpty && (start != "" || end != "") {
-				t.Errorf("got (%q, %q), want both empty so the period phrase applies", start, end)
-			}
-		})
-	}
-}
-
 // The error has to name the tool and the field. An agent reading "bad date" has to guess
 // which of six date arguments it passed wrongly, and the tool name is what tells it which
 // call to redo.
@@ -106,16 +71,6 @@ func TestDayRangeErrorsAreActionable(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 	for _, want := range []string{"query_transactions", "start"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err.Error(), want)
-		}
-	}
-
-	_, _, err = normalizeDayRangePair("summarize", "2026-01-01", "")
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	for _, want := range []string{"summarize", "start", "end"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err.Error(), want)
 		}

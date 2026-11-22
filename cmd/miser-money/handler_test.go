@@ -242,20 +242,6 @@ func TestDeleteTransactionsTrimsWhitespaceFilters(t *testing.T) {
 	}
 }
 
-// A reversed explicit pair is rejected like query — stated on the tool, not
-// discovered. Validated before any store touch.
-func TestSummarizeRejectsReversedRange(t *testing.T) {
-	_, errMsg := callTool(t, "summarize", map[string]any{
-		"start": "2026-03-31", "end": "2026-01-01",
-	})
-	if errMsg == "" {
-		t.Fatal("reversed summarize range was accepted; expected a rejection, not a silently empty summary")
-	}
-	if !strings.Contains(errMsg, "after end") {
-		t.Errorf("error %q does not explain the reversal", errMsg)
-	}
-}
-
 // Paging math lives in pure helpers with unit tests (no handler wiring):
 // absent/negative limits map to the 100 default (clamped to 500), and the
 // window reports truncated/next_offset with an exact-multiple page reading
@@ -288,25 +274,5 @@ func TestPageWindow(t *testing.T) {
 	truncated, next = pageWindow(5, 0, 5)
 	if truncated || next != nil {
 		t.Fatalf("past-end page: truncated=%v next=%v, want false/nil", truncated, next)
-	}
-}
-
-func TestSummarizeRejectsAHalfSuppliedRange(t *testing.T) {
-	for _, c := range []struct{ name, start, end string }{
-		{"lone start", "2026-01-01", ""},
-		{"lone end", "", "2026-01-31"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			_, errMsg := callTool(t, "summarize", map[string]any{
-				"start": c.start, "end": c.end,
-			})
-			if errMsg == "" {
-				t.Fatalf("summarize(start=%q, end=%q) was accepted; it used to ignore the "+
-					"bound and summarise the default period instead", c.start, c.end)
-			}
-			if !strings.Contains(errMsg, "both start and end") {
-				t.Errorf("error %q does not explain the either/or constraint", errMsg)
-			}
-		})
 	}
 }

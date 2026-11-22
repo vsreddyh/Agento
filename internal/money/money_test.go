@@ -80,18 +80,6 @@ func balances(t *testing.T, s *Store) map[string]float64 {
 	return m
 }
 
-func TestPeriods(t *testing.T) {
-	today := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
-	s, e, _ := ResolvePeriod("this month", today)
-	if s != "2026-09-01" || e != "2026-09-30" {
-		t.Fatalf("got %s %s", s, e)
-	}
-	s, e, _ = ResolvePeriod("last month", today)
-	if s != "2026-08-01" || e != "2026-08-31" {
-		t.Fatalf("got %s %s", s, e)
-	}
-}
-
 // Operator "today" is IST, not server UTC: a log at 00:30 IST must land on
 // the user's date, not UTC's yesterday. IST has no DST, so the fixed zone is
 // exact with no tzdata dependency — and these midnight-boundary cases pin
@@ -124,39 +112,6 @@ func TestTodayISTMatchesUTCPlus530(t *testing.T) {
 	after := time.Now().UTC().Add(5*time.Hour + 30*time.Minute).Format("2006-01-02")
 	if got != before && got != after {
 		t.Fatalf("TodayIST() = %s, want %s (or %s across a midnight tick)", got, before, after)
-	}
-	if NowIST().Location().String() != "IST" {
-		t.Fatalf("NowIST zone = %s, want IST", NowIST().Location())
-	}
-}
-
-// Month names match on whole words: "maybe"/"mayhem" must not resolve to May,
-// "marching orders" must not resolve to March — they fall back to this month
-// like any other unrecognized phrase. Same for the other keywords: "todays"
-// is not today, "monthly"/"last monthly report"/"trimonthly" do not hit the
-// month branches — "next month" and "monthly" still land on this month, but via
-// the whole-word `month` branch or the fallback, never via substring.
-func TestPeriodMonthMatchesWholeWordsOnly(t *testing.T) {
-	today := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
-	for _, phrase := range []string{"maybe", "mayhem", "marching orders", "banana",
-		"todays", "monthly", "last monthly report", "trimonthly", "2025", "last year"} {
-		s, e, l := ResolvePeriod(phrase, today)
-		if s != "2026-09-01" || e != "2026-09-30" {
-			t.Fatalf("%q resolved to %s..%s (%s), want this month", phrase, s, e, l)
-		}
-	}
-	for _, tc := range []struct{ in, s, e string }{
-		{"may", "2026-05-01", "2026-05-31"},
-		{"today", "2026-09-05", "2026-09-05"},
-		{"yesterday", "2026-09-04", "2026-09-04"},
-		{"thisweek", "2026-08-31", "2026-09-05"},
-		{"lastmonth", "2026-08-01", "2026-08-31"},
-		{"june 2100", "2100-06-01", "2100-06-30"},
-	} {
-		s, e, _ := ResolvePeriod(tc.in, today)
-		if s != tc.s || e != tc.e {
-			t.Fatalf("%q got %s..%s, want %s..%s", tc.in, s, e, tc.s, tc.e)
-		}
 	}
 }
 
@@ -231,13 +186,6 @@ func TestTransferBalances(t *testing.T) {
 	b := balances(t, s)
 	if b["HDFC"] != 800 || b["Cash"] != 200 {
 		t.Fatalf("got %v", b)
-	}
-	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fnum(sum["income"]) != 0 || fnum(sum["expense"]) != 0 || inum(sum["count"]) != 1 {
-		t.Fatalf("got %v", sum)
 	}
 }
 
@@ -372,10 +320,6 @@ func TestEditTransactionAmountAdjustsBalance(t *testing.T) {
 	changed, err = s.EditTransaction(ctx, tid, &amt, nil, nil, nil, nil, nil, nil)
 	if err != nil || changed {
 		t.Fatalf("got changed=%v err=%v", changed, err)
-	}
-	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
-	if err != nil || fnum(sum["expense"]) != 350 {
-		t.Fatalf("got %v %v", sum, err)
 	}
 }
 
@@ -999,18 +943,6 @@ func TestPaiseArithmeticIsExact(t *testing.T) {
 			t.Fatalf("amount %v, want exactly 0.1", r["amount"])
 		}
 	}
-	// Summaries total stored paise, not re-rounded floats.
-	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fnum(sum["expense"]) != 0.3 {
-		t.Fatalf("summarized expense %v, want exactly 0.3", sum["expense"])
-	}
-	pairs, _ := sum["by_category"].([]map[string]any)
-	if len(pairs) != 1 || fnum(pairs[0]["total"]) != 0.3 {
-		t.Fatalf("by_category %v, want [{groceries 0.3}]", sum["by_category"])
-	}
 }
 
 func TestFractionalRupeesRoundTrip(t *testing.T) {
@@ -1167,8 +1099,7 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 // Pagination slices by date order with a stable _id tiebreak, and reports
 // the unpaged total so a short page is never mistaken for the end.
 // limit==0 means no cap (offset still applies); negative limits are rejected
-// like negative offsets. Summarize bypasses Query via queryFilter + raw Find
-// since it must total everything.
+// like negative offsets.
 func TestQueryPaginationSlicesAndTotals(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -1398,5 +1329,3 @@ func fnum(v any) float64 {
 	}
 	return 0
 }
-
-func inum(v any) int { return int(fnum(v)) }
