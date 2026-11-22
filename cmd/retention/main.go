@@ -123,7 +123,7 @@ func run() int {
 			prefix, auditN, logCutoff.Time().UTC().Format("2006-01-02"))
 	}
 
-	fmt.Println("[retention] story/resumes/cookbook/projects: no retention policy (git repos / permanent).")
+	fmt.Println("[retention] story/resumes/cookbook/projects/money: no retention policy (git repos / permanent).")
 	return 0
 }
 
