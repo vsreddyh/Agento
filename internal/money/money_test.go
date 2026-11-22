@@ -497,7 +497,11 @@ func TestConcurrentInserts(t *testing.T) {
 	}
 }
 
-func TestReconciliationAfterPrune(t *testing.T) {
+// TTL and the retention container delete old rows directly, without touching
+// balances: a balance is a stored running total, not a sum of the surviving
+// rows. `prune_old` used to exercise this from the server; it is gone, and the
+// property it pinned is not — so the delete happens here, the way expiry does.
+func TestBalancesSurviveRowExpiry(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
@@ -509,12 +513,13 @@ func TestReconciliationAfterPrune(t *testing.T) {
 	if b := balances(t, s); b["HDFC"] != 900 {
 		t.Fatalf("got %v", b)
 	}
-	n, err := s.Prune(ctx, 90, false)
-	if err != nil || n != 1 {
-		t.Fatalf("got %d %v", n, err)
+	// Exactly what the TTL index (and the retention job) does to an expired
+	// row: remove the document, leave the balance delta alone.
+	if _, err := s.txns.DeleteMany(ctx, bson.M{"date": "2020-01-01"}); err != nil {
+		t.Fatal(err)
 	}
 	if b := balances(t, s); b["HDFC"] != 900 {
-		t.Fatalf("got %v", b)
+		t.Fatalf("got %v — expiring the row moved the balance", b)
 	}
 	rows, _, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 0 {

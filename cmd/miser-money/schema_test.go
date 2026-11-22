@@ -43,8 +43,6 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		{"edit_transaction", editTransactionInput{}, []string{"id"}},
 		// "At least one filter required", so no single field can be.
 		{"delete_transactions", deleteTransactionsInput{}, nil},
-		// days=0 means 90 in the handler; dry_run=nil means dry run.
-		{"prune_old", pruneOldInput{}, nil},
 	}
 
 	for _, c := range cases {
@@ -86,7 +84,6 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
 		"query_transactions":  {"type", "category", "account", "limit", "offset"},
 		"delete_transactions": {"id", "amount", "type", "category", "date", "account", "dry_run"},
-		"prune_old":           {"days", "dry_run"},
 	}
 	inputs := map[string]any{
 		"create_account":      createAccountInput{},
@@ -94,7 +91,6 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"log_transaction":     logTransactionInput{},
 		"query_transactions":  queryTransactionsInput{},
 		"delete_transactions": deleteTransactionsInput{},
-		"prune_old":           pruneOldInput{},
 	}
 
 	for tool, names := range optional {

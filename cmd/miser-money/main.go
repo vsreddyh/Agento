@@ -43,8 +43,8 @@ func today() string { return money.TodayIST() }
 // Input types are named rather than inline so `schema_test.go` can infer the schema from
 // the same types `AddTool` publishes. Nothing in this file carried `omitempty`, so all
 // thirty fields across ten tools were advertised as required — including arguments the
-// handler fills in itself (`log_transaction.date`, `create_account.type`,
-// `prune_old.days`) and filters the tool descriptions explicitly call optional.
+// handler fills in itself (`log_transaction.date`, `create_account.type`) and filters the
+// tool descriptions explicitly call optional.
 //
 // Two kinds of "required" appear below and the difference matters:
 //
@@ -159,14 +159,6 @@ type editTransactionInput struct {
 type unarchiveAccountInput struct {
 	// A name or id hex like archive_account (the hex goes in `name`).
 	Name string `json:"name"`
-}
-
-type pruneOldInput struct {
-	// Any value <= 0 means the 90-day retention window in handler + store.
-	Days int `json:"days,omitempty"`
-	// A pointer because nil is meaningful: nil means dry run, which is the safe default
-	// for anything that deletes.
-	DryRun *bool `json:"dry_run,omitempty"`
 }
 
 // normalizeDayRange validates a start/end pair and returns it NORMALIZED, for two
@@ -543,27 +535,5 @@ func registerTools(s *mcp.Server) {
 				out["readback_error"] = fmt.Sprintf("re-read by id %s returned %d rows", in.ID, len(rows))
 			}
 			return result(out)
-		})
-
-	mcp.AddTool(s, &mcp.Tool{Name: "prune_old",
-		Description: "Immediate purge, defaulting to the 90-day retention window (TTL handles this natively in the background). Cutoff uses the same UTC frame as TTL (not IST like user-visible dates); boundary note: prune keeps `date == cutoff` while TTL expires it at 00:00 UTC today, so dry-run counts can trail TTL by a day. Does NOT touch balances — unlike delete_transactions, which inverts the legs, and edit_transaction, which reverses/applies them. days <= 0 means 90 — including negatives, never an error. dry_run=true (default) only reports."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in pruneOldInput) (*mcp.CallToolResult, map[string]any, error) {
-			days := in.Days
-			if days <= 0 {
-				days = 90
-			}
-			dry := true
-			if in.DryRun != nil {
-				dry = *in.DryRun
-			}
-			n, err := store.Prune(ctx, days, dry)
-			if err != nil {
-				return fail(err)
-			}
-			would, removed := n, int64(0)
-			if !dry {
-				would, removed = 0, n
-			}
-			return result(map[string]any{"ok": true, "dry_run": dry, "would_remove": would, "removed": removed})
 		})
 }

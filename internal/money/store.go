@@ -1052,30 +1052,6 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	return rows, total, nil
 }
 
-// Prune deletes old docs WITHOUT inverting balances (TTL parity).
-// The cutoff uses the same UTC frame as the TTL index it mirrors (expiresAt
-// is a UTC instant): prune is a maintenance operation keyed to TTL's frame,
-// not a user-visible date. Boundary note: prune keeps `date == cutoff`
-// (`$lt`) while TTL expires that same row at 00:00 UTC today (plus monitor
-// lag), so dry-run counts can trail TTL by a day — same frame, not same
-// instant. User-visible dates (default log date) are IST;
-// instants and retention math are UTC.
-func (s *Store) Prune(ctx context.Context, days int, dryRun bool) (int64, error) {
-	if days <= 0 {
-		days = RetentionDays
-	}
-	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
-	filt := bson.M{"date": bson.M{"$lt": cutoff}}
-	if dryRun {
-		return s.txns.CountDocuments(ctx, filt)
-	}
-	res, err := s.txns.DeleteMany(ctx, filt)
-	if err != nil {
-		return 0, err
-	}
-	return res.DeletedCount, nil
-}
-
 func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
 	v = strings.TrimSpace(v)
 	ors := []bson.M{{"name": v}}
