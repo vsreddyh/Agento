@@ -115,7 +115,7 @@ type queryTransactionsInput struct {
 	Account  string `json:"account,omitempty"`
 	// Page size; <=0 means the 100-row default, clamped to 500. The store
 	// speaks limit<=0 as unlimited, but the handler never forwards that —
-	// an unbounded MCP read is how 90-day dumps happen.
+	// an unbounded MCP read is how full-history dumps happen.
 	Limit int `json:"limit,omitempty"`
 	// Page start; negative is rejected like a reversed range.
 	Offset int `json:"offset,omitempty"`
@@ -506,8 +506,7 @@ func registerTools(s *mcp.Server) {
 			}
 			if in.Date != "" {
 				// Calendar-validated like delete's filter: a padded or
-				// non-calendar date fails instead of storing an expiry the
-				// TTL reads as year-1.
+				// non-calendar date fails instead of storing.
 				d, err := validate.CheckDay(in.Date)
 				if err != nil {
 					return fail(fmt.Errorf("edit_transaction date: %w", err))
