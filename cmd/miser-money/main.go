@@ -107,9 +107,11 @@ type logTransactionInput struct {
 type queryTransactionsInput struct {
 	// Fetch exactly one row by id, or list in a date range — one of the two
 	// is required, and the server decides which. No single field is required.
-	// An id addresses one row, so it cannot be combined with anything else —
-	// "the entry I just logged" must not turn into "every row like it"
-	// (same rule as delete by id).
+	// An id addresses one row, so it cannot be combined with any other
+	// filter (start/end/type/category/account) — "the entry I just logged"
+	// must not turn into "every row like it" (same rule as delete by id).
+	// Non-zero limit/offset are also rejected with id; the zero values are
+	// the unset defaults and pass through.
 	ID string `json:"id,omitempty"`
 	// Required in range mode for the reason in the note above: the store does
 	// not validate these, so absent bounds return nothing silently rather
@@ -122,8 +124,8 @@ type queryTransactionsInput struct {
 	Account  string `json:"account,omitempty"`
 	// Page size; <=0 means the 100-row default, clamped to 500. The store
 	// speaks limit<=0 as unlimited, but the handler never forwards that —
-	// an unbounded MCP read is how full-history dumps happen. Paging is
-	// ignored in by-id mode (a single row needs no page).
+	// an unbounded MCP read is how full-history dumps happen. Range-mode
+	// paging only: a non-zero limit/offset with id is rejected, not ignored.
 	Limit int `json:"limit,omitempty"`
 	// Page start; negative is rejected like a reversed range.
 	Offset int `json:"offset,omitempty"`
@@ -318,7 +320,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (a single write; the balance is derived from rows, so there is nothing to keep in sync). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today in IST (empty or whitespace-only also means today, unlike query's rejected empty bounds; must be a real calendar date — 2026-02-30 is rejected, like query — and padded dates are trimmed; rows never expire, so any real date stores with immediate balance effect and stays until deleted, even a far-future one (visible only to explicit start/end queries covering it, or to a by-id fetch)). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded or floated). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
+		Description: "Log an income, expense, or transfer (a single write; the balance is derived from rows, so there is nothing to keep in sync). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today in IST (empty or whitespace-only also means today, unlike query's rejected empty bounds in range mode; must be a real calendar date — 2026-02-30 is rejected, like query — and padded dates are trimmed; rows never expire, so any real date stores with immediate balance effect and stays until deleted, even a far-future one (visible only to explicit start/end queries covering it, or to a by-id fetch)). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded or floated). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if strings.TrimSpace(day) == "" {
