@@ -353,28 +353,6 @@ func TestDeleteInvertsBalances(t *testing.T) {
 	}
 }
 
-func TestFixLastAdjustsBalances(t *testing.T) {
-	s := testStore(t)
-	ctx := context.Background()
-	if _, _, err := s.Insert(ctx, "2026-09-01", 300, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	fid, fdate, done, err := s.FixLast(ctx, 350)
-	if err != nil || !done {
-		t.Fatalf("got %v %v", done, err)
-	}
-	if fid == "" || fdate != "2026-09-01" {
-		t.Fatalf("FixLast returned id=%q date=%q, want id + 2026-09-01", fid, fdate)
-	}
-	if b := balances(t, s); b["Cash"] != -350 {
-		t.Fatalf("got %v", b)
-	}
-	sum, err := s.Summarize(ctx, "2026-09-01", "2026-09-30", nil)
-	if err != nil || fnum(sum["expense"]) != 350 {
-		t.Fatalf("got %v %v", sum, err)
-	}
-}
-
 func TestConcurrentInserts(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -893,9 +871,6 @@ func TestSubPaiseAmountsAreRejected(t *testing.T) {
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 10.555, "expense", "other", "Cash", "", "", "", ""); err == nil {
 		t.Fatal("10.555 was rounded instead of rejected")
-	}
-	if _, _, _, err := s.FixLast(ctx, 0.004); err == nil {
-		t.Fatal("a sub-paise correction was accepted")
 	}
 	// Exact 2-decimal inputs pass, including floats no binary can represent
 	// exactly (10.55 stores 1055 paise and reads back equal).

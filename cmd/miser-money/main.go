@@ -131,11 +131,6 @@ type summarizeInput struct {
 	Account string `json:"account,omitempty"`
 }
 
-type fixLastTransactionInput struct {
-	// The corrected amount. 0 is not a correction — it would invert the balance.
-	Amount float64 `json:"amount"`
-}
-
 type deleteTransactionsInput struct {
 	// Targets exactly one row. Cannot be combined with the filters below —
 	// "the entry I just logged" must not turn into "every row like it".
@@ -296,7 +291,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "archive_account",
-		Description: "Soft-delete an account (history stays queryable; blocked from new log_transaction writes — delete/fix_last can still move its balance). `name` accepts a name or id hex (trimmed, so an _id from list_accounts round-trips); the stored name is echoed back, never the raw input. The name stays taken."},
+		Description: "Soft-delete an account (history stays queryable; blocked from new log_transaction writes — delete can still move its balance). `name` accepts a name or id hex (trimmed, so an _id from list_accounts round-trips); the stored name is echoed back, never the raw input. The name stays taken."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in archiveAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed up front so the unknown-account error quotes the same
 			// value the success path echoes and the store looked up.
@@ -387,7 +382,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (summarize and delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log or TTL expiry between page fetches can shift rows across page boundaries, unlike fix_last_transaction, which is explicitly insertion-order)."},
+		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Optional type/category/account filters (whitespace-only means absent, like delete/summarize); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (summarize and delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log or TTL expiry between page fetches can shift rows across page boundaries)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			var typ, cat, acct *string
 			if t := strings.TrimSpace(in.Type); t != "" {
@@ -456,19 +451,6 @@ func registerTools(s *mcp.Server) {
 			sum["start"] = start
 			sum["end"] = end
 			return result(sum)
-		})
-
-	mcp.AddTool(s, &mcp.Tool{Name: "fix_last_transaction",
-		Description: "Correct the most recent transaction's amount (must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded); balances adjusted atomically; most-recent by insertion order, not date — read the returned id back to verify). Returns the fixed row's id + date so the shared read-back-by-id rule holds."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in fixLastTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
-			fid, fdate, done, err := store.FixLast(ctx, in.Amount)
-			if err != nil {
-				return fail(err)
-			}
-			if !done {
-				return result(map[string]any{"ok": false, "error": "No transactions to fix."})
-			}
-			return result(map[string]any{"ok": true, "id": fid, "date": fdate, "amount": in.Amount})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",

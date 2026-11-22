@@ -288,7 +288,7 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 }
 
 // ArchiveAccount soft-deletes; history stays, writes blocked via resolve.
-// Only `log_transaction` is blocked: `delete`/`fix_last` still invert/adjust the
+// Only `log_transaction` is blocked: `delete` still inverts the
 // archived account's balance by design (history stays mutable to the owner).
 // The name is trimmed like every other account path (Create/resolve/findAccount/
 // Insert), so `archive " Cash "` finds what `create " Cash "` stored as `Cash`.
@@ -735,62 +735,6 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 		return nil
 	})
 	return deleted, err
-}
-
-// FixLast adjusts newest tx by delta; scales each leg so transfers stay balanced.
-// Returns the fixed row's id hex + date so the caller can read it back by id:
-// without this, the shared "read back by id" rule is impossible for this write,
-// and the fix hits insertion-order last (`_id` desc), not date-latest, so the
-// wrong row is easy to guess after a backfill.
-func (s *Store) FixLast(ctx context.Context, newAmount float64) (string, string, bool, error) {
-	if newAmount <= 0 {
-		return "", "", false, fail("amount must be positive")
-	}
-	newPaise, ok := ExactPaise(newAmount)
-	if !ok {
-		return "", "", false, fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", newAmount)
-	}
-	var fid, fdate string
-	fixed := false
-	err := s.transact(ctx, func(sc context.Context) error {
-		var last bson.M
-		if err := s.txns.FindOne(sc, bson.M{},
-			options.FindOne().SetSort(bson.D{{Key: "_id", Value: -1}})).Decode(&last); err != nil {
-			if err == mongoDrv.ErrNoDocuments {
-				return nil
-			}
-			return err
-		}
-		fid = oidHex(last["_id"])
-		if d, _ := last["date"].(string); d != "" {
-			fdate = d
-		} else {
-			fdate = fmt.Sprint(last["date"])
-		}
-		delta := newPaise - paiseOf(last["amount"])
-		if delta == 0 {
-			fixed = true
-			return nil
-		}
-		if _, err := s.txns.UpdateOne(sc, bson.M{"_id": last["_id"]},
-			bson.M{"$set": bson.M{"amount": newPaise}}); err != nil {
-			return err
-		}
-		last["amount"] = int64(1)
-		for aid, signed := range signedPaise(last) {
-			oid, err := primitive.ObjectIDFromHex(aid)
-			if err != nil {
-				return err
-			}
-			if _, err := s.accts.UpdateOne(sc, bson.M{"_id": oid},
-				bson.M{"$inc": bson.M{"balance": signed * delta}}); err != nil {
-				return err
-			}
-		}
-		fixed = true
-		return nil
-	})
-	return fid, fdate, fixed, err
 }
 
 // queryFilter builds the normalized Mongo filter both Query and Summarize
