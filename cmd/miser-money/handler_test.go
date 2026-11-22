@@ -155,9 +155,8 @@ func TestLogTransactionRejectsUnknownCategory(t *testing.T) {
 }
 
 // A non-calendar date must be rejected like the read path rejects it, before
-// any store touch (`store` is nil here): `2026-02-30` used to store, then the
-// row's expiresAt fell back to year-1 and TTL purged it immediately while the
-// balance delta survived.
+// any store touch (`store` is nil here): `2026-02-30` matches YYYY-MM-DD but
+// is not a real date, so the write is invalid.
 func TestLogTransactionRejectsNonCalendarDate(t *testing.T) {
 	_, errMsg := callTool(t, "log_transaction", map[string]any{
 		"type": "expense", "amount": 100, "account": "Cash", "date": "2026-02-30",

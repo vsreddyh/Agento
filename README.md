@@ -49,7 +49,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Domain | Storage | Retention policy |
 |---|---|---|
-| Money | `money_transactions` | >90d autowipe |
+| Money | `money_transactions` | **Permanent** — rows never expire; only `delete_transactions` removes them |
 | Cookbook | `cookbook_*` | **Permanent** |
 | Health tracking | `hc_meals`, `hc_days`, `hc_weight` + Health Connect sync via `health-api` | `hc_meals`/`hc_days` >30d; `hc_weight` **never pruned** |
 | Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |

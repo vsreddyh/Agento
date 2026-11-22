@@ -1,6 +1,6 @@
 // Command retention enforces the Agento domains' data lifecycle.
 //
-//	money         transactions autowiped when older than 90 days
+//	money         permanent — no-op (rows never expire; only delete removes)
 //	health-check  hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
 //	cookbook      permanent — no-op
 //	reports       read+unstarred pruned after 7 days; unread/starred NEVER touched
@@ -46,21 +46,6 @@ func run() int {
 	if *dry {
 		prefix = "[retention] DRY-RUN: "
 	}
-
-	moneyCutoff := today.AddDate(0, 0, -90).Format("2006-01-02")
-	moneyFilt := bson.M{"date": bson.M{"$lt": moneyCutoff}}
-	n, err := d.Collection("money_transactions").CountDocuments(ctx, moneyFilt)
-	if err != nil {
-		fmt.Printf("[retention] money count failed: %v\n", err)
-		return 1
-	}
-	if !*dry {
-		if _, err := d.Collection("money_transactions").DeleteMany(ctx, moneyFilt); err != nil {
-			fmt.Printf("[retention] money prune failed: %v\n", err)
-			return 1
-		}
-	}
-	fmt.Printf("%smoney: would remove %d transactions older than %s\n", prefix, n, moneyCutoff)
 
 	foodCutoff := today.AddDate(0, 0, -30).Format("2006-01-02")
 	for _, c := range []string{"hc_meals", "hc_days"} {

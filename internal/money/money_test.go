@@ -497,44 +497,49 @@ func TestConcurrentInserts(t *testing.T) {
 	}
 }
 
-// Expiry is what makes a row disappear, and it never moves a balance: a
-// balance is a stored running total, not a sum of the surviving rows.
-// `prune_old` used to exercise this from the server; it is gone and the
-// property it pinned is not, so the delete happens here.
-func TestBalancesSurviveRowExpiry(t *testing.T) {
+// Rows are permanent: there is no expiry surface at all — no `expiresAt`
+// field, no TTL index — so a 2020 row is still here, queryable, with its
+// balance leg intact. The migration in EnsureSchema also strips both from
+// databases created by older builds (drops ttl_expiresAt, unsets the field).
+func TestRowsNeverExpire(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Insert(ctx, "2020-01-01", 100, "expense", "other", "HDFC", "", "", "", ""); err != nil {
+	old, _, err := s.Insert(ctx, "2020-01-01", 100, "expense", "other", "HDFC", "", "", "", "")
+	if err != nil {
 		t.Fatal(err)
+	}
+	rows, err := s.Match(ctx, map[string]any{"id": old})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("re-read: %v %v", rows, err)
+	}
+	if _, ok := rows[0]["expiresAt"]; ok {
+		t.Fatalf("row carries expiresAt %v — nothing reads it, nothing should write it", rows[0]["expiresAt"])
+	}
+	got, _, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil, 0, 0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %d rows %v — the old row is gone with no delete", len(got), err)
 	}
 	if b := balances(t, s); b["HDFC"] != 900 {
 		t.Fatalf("got %v", b)
 	}
-	// One way expiry removes a row, not the only one: the TTL index fires on
-	// `expiresAt` and the retention container deletes on `date < cutoff`, but
-	// both end at the same document and leave the balance delta alone.
-	if _, err := s.txns.DeleteMany(ctx, bson.M{"date": "2020-01-01"}); err != nil {
+	cur, err := s.txns.Indexes().List(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if b := balances(t, s); b["HDFC"] != 900 {
-		t.Fatalf("got %v — expiring the row moved the balance", b)
+	for cur.Next(ctx) {
+		var spec bson.M
+		if err := cur.Decode(&spec); err != nil {
+			t.Fatal(err)
+		}
+		if name, _ := spec["name"].(string); name == "ttl_expiresAt" {
+			t.Fatal("ttl_expiresAt index still exists — it would keep deleting rows")
+		}
 	}
-	rows, _, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil, 0, 0)
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("got %v %v", rows, err)
-	}
-	// The other half of what the old prune covered, and the half this package
-	// still owns: WHEN that row expires. The window is added to UTC midnight
-	// of the row's date — 2020-01-01 + 90d = 2020-03-31T00:00Z, about 05:30
-	// IST, so an operator watching for the purge at IST midnight waits another
-	// five and a half hours. A broken offset here would delete the wrong rows
-	// while every balance assertion above still passed.
-	if got, want := expiry("2020-01-01", RetentionDays),
-		primitive.NewDateTimeFromTime(time.Date(2020, 3, 31, 0, 0, 0, 0, time.UTC)); got != want {
-		t.Fatalf("expiresAt = %v, want %v", got.Time(), want.Time())
+	if err := cur.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -858,9 +863,9 @@ func TestLongNoteTruncatesOnUTF8Boundary(t *testing.T) {
 	}
 }
 
-// A non-calendar date must fail like the read path rejects it: storing
-// `2026-02-30` used to succeed while the query bounds rejected it, and the bad
-// row's expiresAt fell back to year-1 (immediate TTL purge, balance surviving).
+// A non-calendar date must fail like the read path rejects it: `2026-02-30`
+// matches YYYY-MM-DD but is not a real date, so the write is invalid —
+// unlike a bad bound, which the query would silently match nothing on.
 func TestInsertRejectsNonCalendarDate(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -1018,8 +1023,7 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-01", "amount": 10.1,
 		"type": "expense", "category": "groceries", "note": "", "source": "mcp",
 		"accountId": primitive.NewObjectID(),
-		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
-		"expiresAt": expiry("2026-09-01", RetentionDays)}); err != nil {
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
 		t.Fatal(err)
 	}
 	// A stray Decimal128 converts exactly like a double, not left behind.
@@ -1030,8 +1034,7 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-02", "amount": dec,
 		"type": "expense", "category": "bills", "note": "", "source": "mcp",
 		"accountId": primitive.NewObjectID(),
-		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
-		"expiresAt": expiry("2026-09-02", RetentionDays)}); err != nil {
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
 		t.Fatal(err)
 	}
 	// Legacy sub-paise dust (allowed by the old amount<=0 check) floors to
@@ -1040,8 +1043,7 @@ func TestLegacyFloatDocsMigrateToPaise(t *testing.T) {
 	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2026-09-03", "amount": 0.004,
 		"type": "expense", "category": "groceries", "note": "", "source": "mcp",
 		"accountId": primitive.NewObjectID(),
-		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
-		"expiresAt": expiry("2026-09-03", RetentionDays)}); err != nil {
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.EnsureSchema(ctx); err != nil {

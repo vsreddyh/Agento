@@ -182,7 +182,7 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | Collection | Associated server | Schema / Keys |
 |---|---|---|
 | `money_accounts` | Miser-money | `name` (unique), `type`, `balance` (int64 paise, stored running balance — read back as rupees), `archived`, `createdAt` — **permanent**. An archived name stays taken; `unarchive_account` restores it |
-| `money_transactions` | Miser-money | `date` (YYYY-MM-DD, real calendar date — `2026-02-30` rejected), `amount` (int64 paise, >0 — the tool surface speaks rupees, storage is exact), `type` (income\|expense\|transfer), `category` (one of the fixed list; unknown names are rejected), `note` (capped at 300 bytes, UTF-8-safe cut), `source`, `accountId` (required), `sending_to` (transfers only), `idempotencyKey` (optional, UNIQUE+SPARSE, trimmed, max 200 bytes — a retried log returns the original row instead of writing a second, but the same key with a different date/amount/type/category/account/sending_to is **rejected**), `createdAt`, `expiresAt` (TTL, UTC midnight of `date` + 90d ≈05:30 IST — not IST midnight) |
+| `money_transactions` | Miser-money | `date` (YYYY-MM-DD, real calendar date — `2026-02-30` rejected), `amount` (int64 paise, >0 — the tool surface speaks rupees, storage is exact), `type` (income\|expense\|transfer), `category` (one of the fixed list; unknown names are rejected), `note` (capped at 300 bytes, UTF-8-safe cut), `source`, `accountId` (required), `sending_to` (transfers only), `idempotencyKey` (optional, UNIQUE+SPARSE, trimmed, max 200 bytes — a retried log returns the original row instead of writing a second, but the same key with a different date/amount/type/category/account/sending_to is **rejected**), `createdAt` — **permanent**. Rows never expire; only `delete_transactions` removes them |
 | `hc_meals` | Health-check | `date` (YYYY-MM-DD), `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, `totals` (computed), `createdAt` |
 | `hc_days` | Health-check / Health Sync | `date` (YYYY-MM-DD, unique), `steps` (int), `active_kcal` (float), `sleep_hours` (float), `workouts[{type, minutes, kcal}]`, `updatedAt` |
 | `hc_weight` | Health-check | `date` (YYYY-MM-DD, unique), `kg` (float) — **exempt from retention pruning** |
@@ -217,7 +217,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 
 | Target | Retention Window | Action |
 |---|---|---|
-| `money_transactions` | > 90 days | Autowiped when `date < (UTC today − 90d)` — UTC like the TTL index, though dates log in IST by default, so a boundary date can read a day off 00:00–05:30 IST; `date == cutoff` is kept (`<`, not `<=`) |
+| `money_transactions` | Permanent | **Never expires** — rows live until `delete_transactions` removes them (inverting their balance legs) |
 | `hc_meals` | > 30 days | Pruned when `date < today - 30d` |
 | `hc_days` | > 30 days | Pruned when `date < today - 30d` |
 | `hc_weight` | Permanent | **Never pruned** |

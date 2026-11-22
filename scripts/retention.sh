@@ -11,7 +11,7 @@ set -euo pipefail
 #
 #   story       git repo (workspace/portals)   — no-op
 #   resumes     git repo (workspace/portfolio-resume) — no-op
-#   money       transactions autowiped when the oldest entry is >90 days old
+#   money       permanent — no-op (rows never expire; only delete removes)
 #   health-check hc_meals + hc_days pruned after 30 days; hc_weight is NEVER touched
 #   cookbook    permanent — no-op
 #   reports     read+unstarred pruned when createdAt is >7 days old;

@@ -1,8 +1,10 @@
 // Package money: MongoDB storage with transactional balance maintenance.
 //
-// Collections: money_accounts (name unique, never expires), money_transactions
-// (90d TTL via expiresAt). Every mutation runs in a multi-document
-// transaction writing doc(s) AND $inc balance delta(s) atomically.
+// Collections: money_accounts (name unique), money_transactions — both
+// permanent. Rows never expire: the only way a row disappears is a
+// user-initiated delete (which inverts its balance legs). Every mutation
+// runs in a multi-document transaction writing doc(s) AND $inc balance
+// delta(s) atomically.
 package money
 
 import (
@@ -26,8 +28,6 @@ import (
 const (
 	accounts     = "money_accounts"
 	transactions = "money_transactions"
-	// RetentionDays drives the TTL target (tx date + window).
-	RetentionDays = 90
 	// IdempotencyKeyMax caps the client key, in BYTES (what BSON and the unique
 	// index measure), so it is a limit no caller can mistake for a character
 	// count. A UUID is 36.
@@ -47,16 +47,6 @@ func (e *StoreError) Error() string { return e.Msg }
 
 func fail(format string, args ...any) *StoreError {
 	return &StoreError{Msg: fmt.Sprintf(format, args...)}
-}
-
-// expiry maps a YYYY-MM-DD date to its TTL instant: UTC midnight of that
-// date, plus the retention window — i.e. about 05:30 IST on the target day,
-// not IST midnight. So a row dated Sep 1 expires at 00:00 UTC Nov 30
-// (≈05:30 IST), and an operator watching for it at IST midnight will wait
-// five and a half hours. Documented wherever expiry surfaces.
-func expiry(day string, days int) primitive.DateTime {
-	d, _ := time.Parse("2006-01-02", day)
-	return primitive.NewDateTimeFromTime(d.AddDate(0, 0, days))
 }
 
 // idHex extracts hex from ObjectID or string id values.
@@ -416,8 +406,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	// CheckDay): `date=" 2026-09-01 "` stores `2026-09-01` instead of failing
 	// while the same string queries fine. Validated as a real calendar date,
 	// not just the regex — `2026-02-30` matches YYYY-MM-DD but `time.Parse`
-	// fails it, and storing it would set expiresAt to year-1 (immediate TTL
-	// purge with the balance delta surviving, by design).
+	// fails it.
 	date = strings.TrimSpace(date)
 	if !dateRE.MatchString(date) {
 		return "", false, fail("date must be YYYY-MM-DD")
@@ -511,8 +500,7 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 		doc := bson.M{"date": date, "amount": paise, "type": typ,
 			"category": category, "note": note, "source": source,
 			"accountId": src["_id"],
-			"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
-			"expiresAt": expiry(date, RetentionDays)}
+			"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 		// Omitted when empty so the sparse unique index ignores the document.
 		if idempotencyKey != "" {
 			doc["idempotencyKey"] = idempotencyKey
@@ -748,8 +736,9 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 // must change. New values validate exactly like Insert: exact-paise amounts,
 // known type/category, resolved accounts, transfer rules, real calendar
 // dates. Old legs are reversed and new legs applied in the same transaction,
-// so a type/account/amount move can never half-land. A date change recomputes
-// expiresAt; note is truncated like a write. Moving a leg TO an archived
+// so a type/account/amount move can never half-land. A date change just moves
+// the row's date — rows never expire, so any past date stays put. Note is
+// truncated like a write. Moving a leg TO an archived
 // account rejects, like a new log; resupplying the leg already on the row
 // does not (it is not a move, so the read-then-edit flow keeps working —
 // including converting AWAY from a transfer, where the resupplied destination
@@ -902,8 +891,7 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64,
 			newNote = truncateBytes(*note, 300)
 		}
 		set := bson.M{"amount": newPaise, "type": newType, "category": newCat,
-			"date": newDate, "note": newNote, "accountId": newAcctOID,
-			"expiresAt": expiry(newDate, RetentionDays)}
+			"date": newDate, "note": newNote, "accountId": newAcctOID}
 		unset := bson.M{}
 		if hadDst {
 			set["sending_to"] = newDstOID
@@ -991,7 +979,7 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 // when limit==0, all rows from `offset` (no cap). `total`
 // reporting the unpaged match count so the caller can tell a short page from
 // the end. Sort key is date, then `_id` — deterministic order, but not a
-// snapshot: a concurrent log or TTL expiry between page fetches can shift
+// snapshot: a concurrent log between page fetches can shift
 // rows across page boundaries (dupes/skips on a live ledger). Negative
 // offsets fail the same way (typo, not page 0).
 
@@ -1227,19 +1215,26 @@ func (s *Store) migrateFloatMoney(ctx context.Context) error {
 }
 
 // EnsureSchema creates collections + indexes (idempotent). Indexes come
-// first: if the data migration below fails transiently, the TTL/unique
+// first: if the data migration below fails transiently, the unique
 // guarantees are already in place for the restart. Called by New so fresh
-// databases get the unique-name and TTL indexes immediately.
+// databases get the unique-name and query indexes immediately.
 // Also migrates legacy float rupees to int64 paise (see ToPaise) — new code
 // writes longs only, so the migration converges on first boot.
+//
+// Expiry is gone: rows are permanent unless deleted. A database created by
+// an older build still carries the ttl_expiresAt index (which would keep
+// deleting) and inert expiresAt fields, so both are removed here,
+// idempotently — after the first boot there is nothing left to remove.
 func (s *Store) EnsureSchema(ctx context.Context) error {
+	if err := s.dropLegacyExpiry(ctx); err != nil {
+		return err
+	}
 	for _, c := range []struct {
 		name string
 		keys bson.D
 		opts *options.IndexOptions
 	}{
 		{accounts, bson.D{{Key: "name", Value: 1}}, options.Index().SetUnique(true).SetName("uniq_name")},
-		{transactions, bson.D{{Key: "expiresAt", Value: 1}}, options.Index().SetName("ttl_expiresAt").SetExpireAfterSeconds(0)},
 		{transactions, bson.D{{Key: "idempotencyKey", Value: 1}},
 			options.Index().SetName("uniq_idempotency").SetUnique(true).SetSparse(true)},
 		{transactions, bson.D{{Key: "accountId", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("acct_date")},
@@ -1252,4 +1247,35 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		}
 	}
 	return s.migrateFloatMoney(ctx)
+}
+
+// dropLegacyExpiry removes the expiry machinery an older build installed:
+// the ttl_expiresAt index (which would otherwise keep deleting rows) and the
+// now-unread expiresAt fields. Plain ops, never in a transaction — index
+// drops are not allowed inside one. Both steps match nothing on a fresh or
+// already-migrated database, so reruns are cheap no-ops.
+func (s *Store) dropLegacyExpiry(ctx context.Context) error {
+	cur, err := s.txns.Indexes().List(ctx)
+	if err != nil {
+		return err
+	}
+	for cur.Next(ctx) {
+		var spec bson.M
+		if err := cur.Decode(&spec); err != nil {
+			return err
+		}
+		if name, _ := spec["name"].(string); name == "ttl_expiresAt" {
+			if _, err := s.txns.Indexes().DropOne(ctx, name); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	if err := cur.Err(); err != nil {
+		return err
+	}
+	_, err = s.txns.UpdateMany(ctx,
+		bson.M{"expiresAt": bson.M{"$exists": true}},
+		bson.M{"$unset": bson.M{"expiresAt": ""}})
+	return err
 }
