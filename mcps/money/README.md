@@ -66,7 +66,9 @@ does not reach the delete with a nonsense cutoff.
   writes the doc(s) *and* the `$inc` balance delta(s) together. Never write
   these collections directly — only via `store.go`.
 - **Balances survive expiry:** retention purges (TTL or `prune_old`) delete
-  docs *without* touching balances. Only user-initiated `delete` inverts.
+  docs *without* touching balances. Only a user-initiated rewrite of an
+  existing row moves a balance: `delete` inverts the legs, `edit_transaction`
+  reverses the old legs and applies the new ones.
   Balance = all activity ever absorbed (not just the
   surviving 90-day window).
 - **Transfers** are a single doc (`accountId` = from, `sending_to` = to);
