@@ -15,7 +15,7 @@ package agento_test
 //
 // Sensitivity record (what prompts): money writes, account lifecycle
 // (`create_account`/`archive_account`), every `delete_*`, destructive
-// rewrites (`fix_last_*`), prunes that delete. The harness cannot
+// rewrites (`edit_transaction`), prunes that delete. The harness cannot
 // see arguments, so even a counting prune with dry_run=true prompts.
 //
 // Servers registered under `cmd/*` are not the whole agent surface: the
@@ -42,6 +42,7 @@ var expectedAsk = []string{
 	"*batch_modify_gmail_message_labels*",
 	"*create_account*",
 	"*delete*",
+	"*edit_transaction*",
 	"*fix_last*",
 	"*log_transaction*",
 	"*modify_gmail_message_labels*",

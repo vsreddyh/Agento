@@ -40,6 +40,7 @@
     "*delete*": "ask",
     "*archive_account*": "ask",
     "*create_account*": "ask",
+    "*edit_transaction*": "ask",
     "*fix_last*": "ask",
     "*prune_old*": "ask",
     "*log_transaction*": "ask",
