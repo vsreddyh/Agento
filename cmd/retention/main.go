@@ -101,10 +101,9 @@ func run() int {
 	// data is wrong.
 	reconcileTasks(ctx)
 
-	// The task mutation log (#176). Pruned like money_transactions: it is an audit
-	// trail, so it has to outlive any single task, but it must not grow forever.
-	// 90 days matches the money window — long enough to answer "who changed this,
-	// and when did they stop?" after the fact.
+	// The task mutation log (#176). An audit trail: it has to outlive any
+	// single task, but it must not grow forever. 90 days is long enough to
+	// answer "who changed this, and when did they stop?" after the fact.
 	logCutoff := primitive.NewDateTimeFromTime(today.AddDate(0, 0, -90))
 	auditN, err := d.Collection("task_mutations").CountDocuments(ctx,
 		bson.M{"at": bson.M{"$lt": logCutoff}})
@@ -133,7 +132,7 @@ func run() int {
 // Two deliberate choices, both about not letting a *report* break a job:
 //
 //   - Its OWN timeout, not the caller's — genuinely own, see the WithoutCancel note
-//     below. Retention's 60s context is already eaten into by the money and health
+//     below. Retention's 60s context is already eaten into by the health
 //     deletes, and this pass walks up to ReconcileLimit candidates. Inheriting the
 //     remainder meant a slow night produced "context deadline exceeded", so a problem
 //     REPORT would have stopped tasks being pruned — and, since the reconciler was
@@ -166,7 +165,7 @@ func reconcileTasks(parent context.Context) {
 	// has left".
 	//
 	// It was WithTimeout(parent, 45s), which sounds like an own budget and is not:
-	// the parent is retention's 60s, already partly spent on the money and health
+	// the parent is retention's 60s, already partly spent on the health
 	// deletes. On a slow night the reconciler inherited whatever was left — possibly
 	// a second or nothing — and produced "context deadline exceeded", i.e. the exact
 	// silent night this job exists to prevent, after the comment above already

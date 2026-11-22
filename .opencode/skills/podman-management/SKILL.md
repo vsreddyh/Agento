@@ -32,7 +32,8 @@ podman-compose -f docker/docker-compose.yml logs --tail 50 health-api
 podman-compose -f docker/docker-compose.yml run --rm retention --dry-run  # safe; real run deletes data
 ```
 
-Retention prunes money > 90d, `hc_meals`/`hc_days` > 30d, never `hc_weight`.
+Retention prunes `hc_meals`/`hc_days` > 30d, never `hc_weight` (miser-money
+has no retention — its rows are permanent).
 `reports` (∃-Mail): read+unstarred pruned after 7d; unread/starred never touched.
 
 ## Rules

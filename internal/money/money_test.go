@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func testStore(t *testing.T) *Store {
@@ -524,6 +525,56 @@ func TestRowsNeverExpire(t *testing.T) {
 	}
 	if b := balances(t, s); b["HDFC"] != 900 {
 		t.Fatalf("got %v", b)
+	}
+	cur, err := s.txns.Indexes().List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for cur.Next(ctx) {
+		var spec bson.M
+		if err := cur.Decode(&spec); err != nil {
+			t.Fatal(err)
+		}
+		if name, _ := spec["name"].(string); name == "ttl_expiresAt" {
+			t.Fatal("ttl_expiresAt index still exists — it would keep deleting rows")
+		}
+	}
+	if err := cur.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Upgrade path: a database created by an older build still carries the
+// ttl_expiresAt index and expiresAt fields. The first EnsureSchema after
+// deploy must remove both — otherwise the retired index keeps deleting rows
+// with no code referencing it. Seeds that legacy state, re-runs EnsureSchema
+// (testStore already ran it once on a fresh DB), and asserts removal while
+// the row itself survives. The seeded expiry is future-dated so the test
+// never races a live TTL firing mid-run.
+func TestEnsureSchemaDropsLegacyExpiry(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.txns.InsertOne(ctx, bson.M{"date": "2020-01-01", "amount": int64(100),
+		"type": "expense", "category": "other", "note": "", "source": "mcp",
+		"accountId": primitive.NewObjectID(),
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC()),
+		"expiresAt": primitive.NewDateTimeFromTime(time.Now().UTC().AddDate(0, 0, 90))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.txns.Indexes().CreateOne(ctx, mongoDrv.IndexModel{
+		Keys:    bson.D{{Key: "expiresAt", Value: 1}},
+		Options: options.Index().SetName("ttl_expiresAt").SetExpireAfterSeconds(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	var doc bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"date": "2020-01-01"}).Decode(&doc); err != nil {
+		t.Fatalf("legacy row missing after migration: %v", err)
+	}
+	if _, ok := doc["expiresAt"]; ok {
+		t.Fatalf("expiresAt survived the migration: %v", doc["expiresAt"])
 	}
 	cur, err := s.txns.Indexes().List(ctx)
 	if err != nil {

@@ -181,7 +181,7 @@ go run ./cmd/mongo aggregate money_transactions '[{"$group":{"_id":"$category","
 ```
 
 Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`, `scripts/retention.sh run`):
-- `money_transactions`: Purges records where `date < today - 90d`.
+- `money_transactions`: **Permanent retention** (never expires; only `delete_transactions` removes rows).
 - `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
 - `hc_weight`: **Permanent retention** (never pruned).
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).
