@@ -185,7 +185,11 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 		return nil, err
 	}
 	doc["_id"] = oidHex(res.InsertedID)
-	doc["openingBalance"] = ToRupees(openingPaise)
+	// Echo the derived total under the same `balance` key list/get_balances
+	// use — not the storage field. A new account has no legs, so the total
+	// is exactly the seed, but callers should never see `openingBalance`.
+	delete(doc, "openingBalance")
+	doc["balance"] = ToRupees(openingPaise)
 	return doc, nil
 }
 

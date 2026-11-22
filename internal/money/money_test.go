@@ -119,8 +119,17 @@ func TestTodayISTMatchesUTCPlus530(t *testing.T) {
 func TestAccountsCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	if _, err := s.CreateAccount(ctx, "HDFC", "bank", 1000); err != nil {
+	created, err := s.CreateAccount(ctx, "HDFC", "bank", 1000)
+	if err != nil {
 		t.Fatalf("create: %v", err)
+	}
+	// The echo reports the derived total under `balance`, like list/get —
+	// the `openingBalance` storage field never surfaces.
+	if fnum(created["balance"]) != 1000 {
+		t.Fatalf("create echo balance %v, want 1000", created["balance"])
+	}
+	if _, ok := created["openingBalance"]; ok {
+		t.Fatalf("create echo leaks the storage field: %v", created["openingBalance"])
 	}
 	names := map[string]bool{}
 	rows, _ := s.ListAccounts(ctx, false)
