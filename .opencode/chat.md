@@ -30,9 +30,9 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (11): `create_account`, `list_accounts`, `archive_account`,
+- **miser-money** (10): `create_account`, `list_accounts`, `archive_account`,
   `unarchive_account`, `get_balances`, `log_transaction`,
-  `query_transactions`, `summarize`, `fix_last_transaction`,
+  `query_transactions`, `summarize`,
   `delete_transactions`, `prune_old`.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),
@@ -106,11 +106,11 @@ the `*archive_account*` pattern) even though it restores rather than
 destroys.
 
 Reads (`list_*`, `get_*`, `query_*`, `summarize`, `daily_summary`,
-`get_balances`, `scale_recipe`) need no confirmation. `fix_last_*` updates
-the most recently *recorded* row in place (insertion order, not date
-order — meals sort by `createdAt`, transactions by `_id` — so after a
-backfill the fix hits the backfilled row, not the date-latest one): do it
-when the user just asked for a correction, without re-asking.
+`get_balances`, `scale_recipe`) need no confirmation. `fix_last_meal` updates
+the most recently *recorded* meal in place (insertion order, not date
+order — meals sort by `createdAt`, so after a backfill the fix hits the
+backfilled meal, not the date-latest one): do it when the user just asked
+for a correction, without re-asking.
 
 ## Delegation and questions
 
