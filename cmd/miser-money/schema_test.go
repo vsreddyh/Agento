@@ -10,14 +10,16 @@ import (
 )
 
 // Fields without `omitempty` are advertised as required. The required set below is drawn
-// from store validation, from the tool descriptions, and — for `query_transactions` —
-// from the fact that absent date bounds produce a silently empty result rather than an
-// error, which is a stronger reason to require a field than a rejection is.
+// from store validation, from the tool descriptions, and — for `query_transactions`'
+// range mode — from the fact that absent date bounds produce a silently empty result
+// rather than an error, which is a stronger reason to require a field than a
+// rejection is.
 //
-// One tool deliberately requires nothing: `delete_transactions` takes
-// "at least one filter" arguments, which no field can express without
-// forbidding a legitimate combination. The constraint is enforced
-// server-side and documented in the type comment.
+// Two tools deliberately require nothing: `delete_transactions` takes
+// "at least one filter" arguments and `query_transactions` takes "an id OR a
+// start/end pair", which no field can express without forbidding a
+// legitimate combination. Both constraints are enforced server-side and
+// documented in the type comment.
 func TestToolInputSchemaRequired(t *testing.T) {
 	cases := []struct {
 		tool     string
@@ -37,8 +39,11 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		// is required by the store only for a transfer.
 		{"log_transaction", logTransactionInput{},
 			[]string{"type", "amount", "account"}},
-		// Required because absence is silently wrong, not because the store rejects it.
-		{"query_transactions", queryTransactionsInput{}, []string{"start", "end"}},
+		// Conditionally required: an id OR a start/end pair. Absent range
+		// bounds are silently wrong (empty result, not an error), so range
+		// mode needs both — but no single field can be marked required
+		// without forbidding by-id mode. Enforced server-side.
+		{"query_transactions", queryTransactionsInput{}, nil},
 		{"edit_transaction", editTransactionInput{}, []string{"id"}},
 		// "At least one filter required", so no single field can be.
 		{"delete_transactions", deleteTransactionsInput{}, nil},
@@ -81,7 +86,7 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"create_account":      {"type", "balance"},
 		"list_accounts":       {"include_archived"},
 		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
-		"query_transactions":  {"type", "category", "account", "limit", "offset"},
+		"query_transactions":  {"id", "type", "category", "account", "limit", "offset"},
 		"delete_transactions": {"id", "amount", "type", "category", "date", "account", "dry_run"},
 	}
 	inputs := map[string]any{

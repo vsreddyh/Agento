@@ -790,6 +790,32 @@ func TestMatchIsADryRun(t *testing.T) {
 // A rupee-float delete filter converts to paise: Match on 10.1 finds the row
 // stored as 1010. Inexact floats and strings fail instead of silently
 // matching nothing.
+// Match by id resolves one row: the by-id query path and the delete/edit
+// readbacks all funnel through here. A well-formed unknown id matches
+// nothing (the handler rejects it); a malformed one fails in the filter.
+func TestMatchByIdResolvesOneRow(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, _, err := s.Insert(ctx, "2026-09-01", 100, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Match(ctx, map[string]any{"id": tid})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("matched %d, %v", len(rows), err)
+	}
+	if fnum(rows[0]["amount"]) != 100 {
+		t.Fatalf("matched the wrong row: %v", rows[0])
+	}
+	rows, err = s.Match(ctx, map[string]any{"id": "000000000000000000000000"})
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("unknown id matched %d, %v", len(rows), err)
+	}
+	if _, err := s.Match(ctx, map[string]any{"id": "nope"}); err == nil {
+		t.Fatal("malformed id matched instead of failing")
+	}
+}
+
 func TestMatchFloatAmountConvertsToPaise(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

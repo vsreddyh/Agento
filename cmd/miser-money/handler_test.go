@@ -122,6 +122,42 @@ func TestQueryTransactionsRejectsNegativeOffset(t *testing.T) {
 	}
 }
 
+// By-id mode: an id addresses one row, so it cannot be combined with
+// anything else — same rule as delete by id. Rejected before any store
+// touch (`store` is nil here).
+func TestQueryByIdRejectsCombinedFilters(t *testing.T) {
+	for _, extra := range []map[string]any{
+		{"start": "2026-01-01", "end": "2026-01-31"},
+		{"type": "expense"},
+		{"category": "groceries"},
+		{"account": "Cash"},
+	} {
+		args := map[string]any{"id": "68fakeid0000000000000001"}
+		for k, v := range extra {
+			args[k] = v
+		}
+		_, errMsg := callTool(t, "query_transactions", args)
+		if errMsg == "" {
+			t.Fatalf("query by id combined with %v was accepted; expected a rejection", extra)
+		}
+		if !strings.Contains(errMsg, "cannot be combined") {
+			t.Errorf("error %q does not explain the exclusivity", errMsg)
+		}
+	}
+}
+
+// A malformed id fails in toMongoFilter before any store touch
+// (`store` is nil here) — never a silent empty page.
+func TestQueryByIdRejectsMalformedId(t *testing.T) {
+	_, errMsg := callTool(t, "query_transactions", map[string]any{"id": "nope"})
+	if errMsg == "" {
+		t.Fatal("a malformed id was accepted; expected a rejection")
+	}
+	if !strings.Contains(errMsg, "transaction id") {
+		t.Errorf("error %q does not name the id problem", errMsg)
+	}
+}
+
 // An edit with no fields is rejected like a reversed range, before any
 // store touch (`store` is nil here): setting nothing is a no-op the caller
 // almost certainly did not mean.

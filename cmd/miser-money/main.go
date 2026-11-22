@@ -105,17 +105,25 @@ type logTransactionInput struct {
 }
 
 type queryTransactionsInput struct {
-	// Required for the reason in the note above: the store does not validate these, so
-	// absent bounds return nothing silently rather than failing.
-	Start string `json:"start"`
-	End   string `json:"end"`
+	// Fetch exactly one row by id, or list in a date range — one of the two
+	// is required, and the server decides which. No single field is required.
+	// An id addresses one row, so it cannot be combined with anything else —
+	// "the entry I just logged" must not turn into "every row like it"
+	// (same rule as delete by id).
+	ID string `json:"id,omitempty"`
+	// Required in range mode for the reason in the note above: the store does
+	// not validate these, so absent bounds return nothing silently rather
+	// than failing.
+	Start string `json:"start,omitempty"`
+	End   string `json:"end,omitempty"`
 	// "Optional type/category/account filters."
 	Type     string `json:"type,omitempty"`
 	Category string `json:"category,omitempty"`
 	Account  string `json:"account,omitempty"`
 	// Page size; <=0 means the 100-row default, clamped to 500. The store
 	// speaks limit<=0 as unlimited, but the handler never forwards that —
-	// an unbounded MCP read is how full-history dumps happen.
+	// an unbounded MCP read is how full-history dumps happen. Paging is
+	// ignored in by-id mode (a single row needs no page).
 	Limit int `json:"limit,omitempty"`
 	// Page start; negative is rejected like a reversed range.
 	Offset int `json:"offset,omitempty"`
@@ -360,17 +368,43 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Optional type/category/account filters (whitespace-only means absent); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log between page fetches can shift rows across page boundaries)."},
+		Description: "Fetch one transaction by id, or list transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Give an id OR a start/end pair: an id addresses one row, so it cannot be combined with anything else (an unknown id is rejected, not a silent empty page) and paging is ignored; without an id both bounds are required. Optional type/category/account filters (whitespace-only means absent); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log between page fetches can shift rows across page boundaries)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
+			// Trimmed up front like delete's filters, so whitespace-only means
+			// absent instead of an error.
+			in.ID = strings.TrimSpace(in.ID)
+			in.Start = strings.TrimSpace(in.Start)
+			in.End = strings.TrimSpace(in.End)
+			in.Type = strings.TrimSpace(in.Type)
+			in.Category = strings.TrimSpace(in.Category)
+			in.Account = strings.TrimSpace(in.Account)
+			if in.ID != "" {
+				if in.Start != "" || in.End != "" || in.Type != "" || in.Category != "" || in.Account != "" {
+					return result(map[string]any{"ok": false, "error": "id cannot be combined with start, end, type, category or account."})
+				}
+				// A malformed id fails in toMongoFilter before any store touch;
+				// a well-formed unknown id matches nothing and is rejected
+				// like delete/edit by id, not a silent empty page.
+				rows, err := store.Match(ctx, map[string]any{"id": in.ID})
+				if err != nil {
+					return fail(err)
+				}
+				if len(rows) == 0 {
+					return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown transaction id '%s'", in.ID)})
+				}
+				return result(map[string]any{"ok": true, "count": 1, "total": int64(1),
+					"truncated": false, "next_offset": nil, "limit": 1,
+					"transactions": rows})
+			}
 			var typ, cat, acct *string
-			if t := strings.TrimSpace(in.Type); t != "" {
-				typ = &t
+			if in.Type != "" {
+				typ = &in.Type
 			}
-			if c := strings.TrimSpace(in.Category); c != "" {
-				cat = &c
+			if in.Category != "" {
+				cat = &in.Category
 			}
-			if a := strings.TrimSpace(in.Account); a != "" {
-				acct = &a
+			if in.Account != "" {
+				acct = &in.Account
 			}
 			start, end, err := normalizeDayRange("query_transactions", in.Start, in.End)
 			if err != nil {
