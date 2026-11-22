@@ -41,10 +41,10 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 func today() string { return money.TodayIST() }
 
 // Input types are named rather than inline so `schema_test.go` can infer the schema from
-// the same types `AddTool` publishes. Nothing in this file carried `omitempty`, so all
-// thirty fields across ten tools were advertised as required — including arguments the
-// handler fills in itself (`log_transaction.date`, `create_account.type`) and filters the
-// tool descriptions explicitly call optional.
+// the same types `AddTool` publishes. Nothing in this file carried `omitempty`, so every
+// field was advertised as required — including arguments the handler fills in itself
+// (`log_transaction.date`, `create_account.type`) and filters the tool descriptions
+// explicitly call optional.
 //
 // Two kinds of "required" appear below and the difference matters:
 //

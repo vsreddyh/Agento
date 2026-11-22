@@ -92,10 +92,11 @@ does not resolve, trust the server's tool list over this file.
 
 Destructive tools ask first through the harness permission prompt
 (`opencode.json`); state the scope when it asks: `delete_transactions`,
-`delete_meals`, `prune_old`, `archive_account`, `delete_recipe` (also
-removes its cook logs), `delete_ingredient`, `delete_task`,
-`delete_project`. There is no `delete_cook`; say so instead of reaching
-for it.
+`delete_meals`, `prune_old` (health-check only — miser-money has no purge
+tool, its retention is TTL plus the daily container), `archive_account`,
+`delete_recipe` (also removes its cook logs), `delete_ingredient`,
+`delete_task`, `delete_project`. There is no `delete_cook`; say so instead
+of reaching for it.
 
 `delete_transactions` dry-runs by default: it returns the rows it would
 remove and deletes nothing unless you pass `dry_run=false`. Show those

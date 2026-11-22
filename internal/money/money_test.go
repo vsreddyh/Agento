@@ -497,10 +497,10 @@ func TestConcurrentInserts(t *testing.T) {
 	}
 }
 
-// TTL and the retention container delete old rows directly, without touching
-// balances: a balance is a stored running total, not a sum of the surviving
-// rows. `prune_old` used to exercise this from the server; it is gone, and the
-// property it pinned is not — so the delete happens here, the way expiry does.
+// Expiry is what makes a row disappear, and it never moves a balance: a
+// balance is a stored running total, not a sum of the surviving rows.
+// `prune_old` used to exercise this from the server; it is gone and the
+// property it pinned is not, so the delete happens here.
 func TestBalancesSurviveRowExpiry(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -513,8 +513,9 @@ func TestBalancesSurviveRowExpiry(t *testing.T) {
 	if b := balances(t, s); b["HDFC"] != 900 {
 		t.Fatalf("got %v", b)
 	}
-	// Exactly what the TTL index (and the retention job) does to an expired
-	// row: remove the document, leave the balance delta alone.
+	// One way expiry removes a row, not the only one: the TTL index fires on
+	// `expiresAt` and the retention container deletes on `date < cutoff`, but
+	// both end at the same document and leave the balance delta alone.
 	if _, err := s.txns.DeleteMany(ctx, bson.M{"date": "2020-01-01"}); err != nil {
 		t.Fatal(err)
 	}
@@ -524,6 +525,16 @@ func TestBalancesSurviveRowExpiry(t *testing.T) {
 	rows, _, err := s.Query(ctx, "2020-01-01", "2020-12-31", nil, nil, nil, 0, 0)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("got %v %v", rows, err)
+	}
+	// The other half of what the old prune covered, and the half this package
+	// still owns: WHEN that row expires. The window is added to UTC midnight
+	// of the row's date — 2020-01-01 + 90d = 2020-03-31T00:00Z, about 05:30
+	// IST, so an operator watching for the purge at IST midnight waits another
+	// five and a half hours. A broken offset here would delete the wrong rows
+	// while every balance assertion above still passed.
+	if got, want := expiry("2020-01-01", RetentionDays),
+		primitive.NewDateTimeFromTime(time.Date(2020, 3, 31, 0, 0, 0, 0, time.UTC)); got != want {
+		t.Fatalf("expiresAt = %v, want %v", got.Time(), want.Time())
 	}
 }
 

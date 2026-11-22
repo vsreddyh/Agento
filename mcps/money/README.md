@@ -50,9 +50,12 @@ validators and no views — validation lives in the store.
 | `edit_transaction` with no edit fields | rejected — setting nothing is a no-op the caller almost certainly did not mean |
 | `edit_transaction` with `amount: 0` (or inexact) | rejected like writes — 0 is not a correction, inexact would match paise it never stored |
 
-There is no purge tool: retention is the TTL index plus the daily `retention`
-container, both of which delete expired rows directly and never touch a
-balance. Purging by hand is a MongoDB operation, not an MCP one.
+There is no purge tool: retention is the TTL index (`expiresAt`) plus the
+daily `retention` container, and both remove *expired* rows only — neither
+touches a balance. Nothing deletes a live row outside `delete_transactions`:
+a hand `DeleteMany` skips the `$inc` legs that tool applies, so the stored
+running total diverges with no error. A mistaken or recent row is corrected
+with `edit_transaction` or removed with `delete_transactions`, never by hand.
 
 ### Period totals (no `summarize` tool)
 
