@@ -69,7 +69,7 @@ func run() int {
 	// regardless of age (never delete what the user has not seen), starred
 	// stays regardless of age (the star is an explicit keep). createdAt is a
 	// BSON DateTime, so the cutoff is a DateTime like task_mutations, not a
-	// date string like money/health.
+	// date string like health.
 	reportsCutoff := primitive.NewDateTimeFromTime(today.AddDate(0, 0, -7))
 	reportsFilt := bson.M{
 		"createdAt": bson.M{"$lt": reportsCutoff},

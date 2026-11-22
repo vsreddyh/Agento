@@ -1214,10 +1214,12 @@ func (s *Store) migrateFloatMoney(ctx context.Context) error {
 	})
 }
 
-// EnsureSchema creates collections + indexes (idempotent). Indexes come
-// first: if the data migration below fails transiently, the unique
-// guarantees are already in place for the restart. Called by New so fresh
-// databases get the unique-name and query indexes immediately.
+// EnsureSchema creates collections + indexes (idempotent). The legacy
+// expiry drop runs first: if it fails transiently, nothing else has run yet,
+// so the restart retries the same first step. Then indexes: if the data
+// migration below fails transiently, the unique guarantees are already in
+// place for the restart. Called by New so fresh databases get the
+// unique-name and query indexes immediately.
 // Also migrates legacy float rupees to int64 paise (see ToPaise) — new code
 // writes longs only, so the migration converges on first boot.
 //
