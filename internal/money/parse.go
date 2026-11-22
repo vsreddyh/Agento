@@ -16,10 +16,11 @@ var Categories = []string{
 // exact with no tzdata dependency). Server clocks run UTC; the user-visible
 // "today" (default log date) is computed in IST so a log at 00:30 IST lands
 // on the user's date, not UTC's yesterday.
-// Instants (createdAt) stay UTC. Retention math (prune cutoff, TTL) also uses
-// the same UTC frame as the TTL index (never IST) — see Store.Prune for the
-// boundary note: prune keeps `date == cutoff` while TTL expires it at 00:00
-// UTC, so the frame matches but the instants do not.
+// Instants (createdAt) stay UTC. Retention math (the TTL `expiresAt` instant,
+// mirrored by the retention container's `date` cutoff) also uses the same UTC
+// frame as the TTL index (never IST) — boundary note: the container keeps
+// `date == cutoff` while TTL expires that same row at 00:00 UTC, so the frame
+// matches but the instants do not.
 var IST = time.FixedZone("IST", 5*3600+30*60)
 
 // TodayIST reports the current calendar day for the operator.
