@@ -15,7 +15,8 @@ package agento_test
 //
 // Sensitivity record (what prompts): money writes, account lifecycle
 // (`create_account`/`archive_account`), every `delete_*`, destructive
-// rewrites (`edit_transaction`), prunes that delete. The harness cannot
+// rewrites (`edit_transaction`, plus health-check's `fix_last_meal` via the
+// surviving `*fix_last*` pattern), prunes that delete. The harness cannot
 // see arguments, so even a counting prune with dry_run=true prompts.
 //
 // Servers registered under `cmd/*` are not the whole agent surface: the
