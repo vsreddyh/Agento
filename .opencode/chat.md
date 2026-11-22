@@ -30,9 +30,9 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (10): `create_account`, `list_accounts`, `archive_account`,
+- **miser-money** (11): `create_account`, `list_accounts`, `archive_account`,
   `unarchive_account`, `get_balances`, `log_transaction`,
-  `query_transactions`, `summarize`,
+  `query_transactions`, `summarize`, `edit_transaction`,
   `delete_transactions`, `prune_old`.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),
@@ -110,7 +110,9 @@ Reads (`list_*`, `get_*`, `query_*`, `summarize`, `daily_summary`,
 the most recently *recorded* meal in place (insertion order, not date
 order — meals sort by `createdAt`, so after a backfill the fix hits the
 backfilled meal, not the date-latest one): do it when the user just asked
-for a correction, without re-asking.
+for a correction, without re-asking. Money corrections are not that: they
+name the row through `edit_transaction` by id, since money has no
+`fix_last_*` any more.
 
 ## Delegation and questions
 
