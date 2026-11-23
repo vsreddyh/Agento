@@ -160,6 +160,25 @@ func TestQueryByIdRejectsMalformedId(t *testing.T) {
 	}
 }
 
+// A whitespace-only id counts as absent and falls through to range-mode
+// bounds validation — it does not produce an id error. Rejected before any
+// store touch (`store` is nil here).
+func TestQueryBlankIdFallsThroughToRange(t *testing.T) {
+	_, errMsg := callTool(t, "query_transactions", map[string]any{
+		"id": "   ", "start": "2026-03-31", "end": "2026-01-01",
+	})
+	if errMsg == "" {
+		t.Fatal("a blank id with a reversed range was accepted; expected the range rejection")
+	}
+	if !strings.Contains(errMsg, "after end") {
+		t.Errorf("error %q is the range error, proving the blank id fell through", errMsg)
+	}
+	_, errMsg = callTool(t, "query_transactions", map[string]any{"id": "   "})
+	if errMsg == "" {
+		t.Fatal("a lone blank id was accepted; expected the missing-bounds rejection")
+	}
+}
+
 // Paging args are filters on a range, not on a row: a non-zero limit or
 // offset with id is rejected rather than silently dropped, before any
 // store touch (`store` is nil here). Zero values are the unset defaults
