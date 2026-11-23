@@ -105,19 +105,35 @@ type logTransactionInput struct {
 }
 
 type queryTransactionsInput struct {
-	// Required for the reason in the note above: the store does not validate these, so
-	// absent bounds return nothing silently rather than failing.
-	Start string `json:"start"`
-	End   string `json:"end"`
+	// Fetch exactly one row by id, or list in a date range — one of the two
+	// is required, and the server decides which. No single field is required.
+	// An id addresses one row, so it cannot be combined with any other
+	// filter (start/end/type/category/account) — "the entry I just logged"
+	// must not turn into "every row like it" (same rule as delete by id).
+	// Non-zero limit/offset are also rejected with id; the zero values are
+	// the unset defaults and pass through. Every argument is trimmed
+	// upfront, so whitespace-only filters/bounds count as absent — and a
+	// whitespace-only id counts as absent too, falling through to
+	// range-mode bounds validation.
+	ID string `json:"id,omitempty"`
+	// Required in range mode for the reason in the note above: the store does
+	// not validate these, so absent bounds return nothing silently rather
+	// than failing.
+	Start string `json:"start,omitempty"`
+	End   string `json:"end,omitempty"`
 	// "Optional type/category/account filters."
 	Type     string `json:"type,omitempty"`
 	Category string `json:"category,omitempty"`
 	Account  string `json:"account,omitempty"`
-	// Page size; <=0 means the 100-row default, clamped to 500. The store
-	// speaks limit<=0 as unlimited, but the handler never forwards that —
-	// an unbounded MCP read is how full-history dumps happen.
+	// Page size in range mode; <=0 means the 100-row default, clamped to 500.
+	// The store speaks limit<=0 as unlimited, but the handler never forwards
+	// that — an unbounded MCP read is how full-history dumps happen.
+	// By-id mode ignores paging defaults (limit/offset 0) and rejects any
+	// non-zero paging args instead of silently dropping them.
 	Limit int `json:"limit,omitempty"`
-	// Page start; negative is rejected like a reversed range.
+	// Page start in range mode; negative is rejected like a reversed range.
+	// With id, any non-zero offset is rejected as a combination, not as a
+	// paging typo.
 	Offset int `json:"offset,omitempty"`
 }
 
@@ -310,7 +326,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (a single write; the balance is derived from rows, so there is nothing to keep in sync). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today in IST (empty or whitespace-only also means today, unlike query's rejected empty bounds; must be a real calendar date — 2026-02-30 is rejected, like query — and padded dates are trimmed; rows never expire, so any real date stores with immediate balance effect and stays until deleted, even a far-future one (visible only to explicit start/end queries covering it)). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded or floated). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
+		Description: "Log an income, expense, or transfer (a single write; the balance is derived from rows, so there is nothing to keep in sync). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today in IST (empty or whitespace-only also means today, unlike query's rejected empty bounds in range mode; must be a real calendar date — 2026-02-30 is rejected, like range-mode query — and padded dates are trimmed; rows never expire, so any real date stores with immediate balance effect and stays until deleted, even a far-future one (visible only to explicit start/end queries covering it, or to a by-id fetch)). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded or floated). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if strings.TrimSpace(day) == "" {
@@ -360,17 +376,51 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "List transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Optional type/category/account filters (whitespace-only means absent); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log between page fetches can shift rows across page boundaries)."},
+		Description: "Fetch one transaction by id, or list transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Give an id OR a start/end pair: an id addresses one row, so it cannot be combined with any other argument except the zero-valued paging defaults — whitespace-only filters/bounds count as absent, since every argument is trimmed upfront (an unknown id is rejected, not a silent empty page). The id itself is trimmed: a padded hex works, while a blank id counts as absent and falls through to range mode; without an id both bounds are required. A by-id fetch returns a fixed single-row envelope — count:1, total:1, limit:1, truncated:false, next_offset:null. All paging below is range-mode only. In range mode, optional type/category/account filters (whitespace-only means absent); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos, in range mode: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log between page fetches can shift rows across page boundaries)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
+			// Trimmed up front like delete's filters, so whitespace-only means
+			// absent instead of an error.
+			in.ID = strings.TrimSpace(in.ID)
+			in.Start = strings.TrimSpace(in.Start)
+			in.End = strings.TrimSpace(in.End)
+			in.Type = strings.TrimSpace(in.Type)
+			in.Category = strings.TrimSpace(in.Category)
+			in.Account = strings.TrimSpace(in.Account)
+			if in.ID != "" {
+				if in.Start != "" || in.End != "" || in.Type != "" || in.Category != "" || in.Account != "" {
+					return result(map[string]any{"ok": false, "error": "id cannot be combined with start, end, type, category or account."})
+				}
+				// Paging args are filters on a range, not on a row: a non-zero
+				// limit/offset with id is rejected rather than silently
+				// dropped, so `{id, limit: 10}` fails loudly instead of
+				// succeeding while ignoring what was asked for. Zero values
+				// are the unset defaults and pass through.
+				if in.Limit != 0 || in.Offset != 0 {
+					return result(map[string]any{"ok": false, "error": "id cannot be combined with limit or offset — a by-id fetch is a single row."})
+				}
+				// A malformed id fails in toMongoFilter before any store touch;
+				// a well-formed unknown id matches nothing and is rejected
+				// like delete/edit by id, not a silent empty page.
+				rows, err := store.Match(ctx, map[string]any{"id": in.ID})
+				if err != nil {
+					return fail(err)
+				}
+				if len(rows) == 0 {
+					return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown transaction id '%s'", in.ID)})
+				}
+				return result(map[string]any{"ok": true, "count": 1, "total": int64(1),
+					"truncated": false, "next_offset": nil, "limit": 1,
+					"transactions": rows})
+			}
 			var typ, cat, acct *string
-			if t := strings.TrimSpace(in.Type); t != "" {
-				typ = &t
+			if in.Type != "" {
+				typ = &in.Type
 			}
-			if c := strings.TrimSpace(in.Category); c != "" {
-				cat = &c
+			if in.Category != "" {
+				cat = &in.Category
 			}
-			if a := strings.TrimSpace(in.Account); a != "" {
-				acct = &a
+			if in.Account != "" {
+				acct = &in.Account
 			}
 			start, end, err := normalizeDayRange("query_transactions", in.Start, in.End)
 			if err != nil {

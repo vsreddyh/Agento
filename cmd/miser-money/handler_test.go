@@ -122,6 +122,83 @@ func TestQueryTransactionsRejectsNegativeOffset(t *testing.T) {
 	}
 }
 
+// By-id mode: an id addresses one row, so it cannot be combined with any
+// other filter (start/end/type/category/account) — same rule as delete by
+// id. Non-zero limit/offset are also rejected with id; the zero values are
+// the unset defaults and pass through. Rejected before any store touch
+// (`store` is nil here).
+func TestQueryByIdRejectsCombinedFilters(t *testing.T) {
+	for _, extra := range []map[string]any{
+		{"start": "2026-01-01", "end": "2026-01-31"},
+		{"type": "expense"},
+		{"category": "groceries"},
+		{"account": "Cash"},
+	} {
+		args := map[string]any{"id": "000000000000000000000001"}
+		for k, v := range extra {
+			args[k] = v
+		}
+		_, errMsg := callTool(t, "query_transactions", args)
+		if errMsg == "" {
+			t.Fatalf("query by id combined with %v was accepted; expected a rejection", extra)
+		}
+		if !strings.Contains(errMsg, "cannot be combined") {
+			t.Errorf("error %q does not explain the exclusivity", errMsg)
+		}
+	}
+}
+
+// A malformed id fails in toMongoFilter before any store touch
+// (`store` is nil here) — never a silent empty page.
+func TestQueryByIdRejectsMalformedId(t *testing.T) {
+	_, errMsg := callTool(t, "query_transactions", map[string]any{"id": "nope"})
+	if errMsg == "" {
+		t.Fatal("a malformed id was accepted; expected a rejection")
+	}
+	if !strings.Contains(errMsg, "transaction id") {
+		t.Errorf("error %q does not name the id problem", errMsg)
+	}
+}
+
+// A whitespace-only id counts as absent and falls through to range-mode
+// bounds validation — it does not produce an id error. Rejected before any
+// store touch (`store` is nil here).
+func TestQueryBlankIdFallsThroughToRange(t *testing.T) {
+	_, errMsg := callTool(t, "query_transactions", map[string]any{
+		"id": "   ", "start": "2026-03-31", "end": "2026-01-01",
+	})
+	if errMsg == "" {
+		t.Fatal("a blank id with a reversed range was accepted; expected the range rejection")
+	}
+	if !strings.Contains(errMsg, "after end") {
+		t.Errorf("error %q is the range error, proving the blank id fell through", errMsg)
+	}
+	_, errMsg = callTool(t, "query_transactions", map[string]any{"id": "   "})
+	if errMsg == "" {
+		t.Fatal("a lone blank id was accepted; expected the missing-bounds rejection")
+	}
+}
+
+// Paging args are filters on a range, not on a row: a non-zero limit or
+// offset with id is rejected rather than silently dropped, before any
+// store touch (`store` is nil here). Zero values are the unset defaults
+// and pass through to the by-id lookup.
+func TestQueryByIdRejectsPagingArgs(t *testing.T) {
+	for _, args := range []map[string]any{
+		{"id": "000000000000000000000001", "limit": 10},
+		{"id": "000000000000000000000001", "offset": 5},
+		{"id": "000000000000000000000001", "offset": -1},
+	} {
+		_, errMsg := callTool(t, "query_transactions", args)
+		if errMsg == "" {
+			t.Fatalf("query by id with paging %v was accepted; expected a rejection", args)
+		}
+		if !strings.Contains(errMsg, "cannot be combined") {
+			t.Errorf("error %q does not explain the exclusivity", errMsg)
+		}
+	}
+}
+
 // An edit with no fields is rejected like a reversed range, before any
 // store touch (`store` is nil here): setting nothing is a no-op the caller
 // almost certainly did not mean.
