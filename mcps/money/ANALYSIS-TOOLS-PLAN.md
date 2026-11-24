@@ -262,6 +262,9 @@ Feature: Period totals
       | account "cash" (stored "Cash") | unknown account 'cash' |
 ```
 
+The response is the scalar block plus flat echoes: `start`, `end`, `days`,
+`category`, `account` (null when absent).
+
 ### 2. `money_breakdown`
 
 Question: "where did it go / how did each account move?" Answer: one table,
@@ -362,8 +365,10 @@ Account row: `id`, `name`, `archived`, `opening_balance_paise`,
 `inflows_paise`, `outflows_paise`, `net_paise`, `closing_balance_paise`,
 `income_paise`, `expense_paise`, `transfer_in_paise`, `transfer_out_paise`,
 `rows_total`.
-Flat scalars: `start`, `end`, `days`, `by`, `side`, `categories_applied`,
-`accounts_applied`, `sort_by`, `order`, plus the mode's footer.
+Flat scalars (both modes): `start`, `end`, `days`, `by`,
+`categories_applied`, `accounts_applied`, `sort_by`, `order`, plus the
+mode's footer. Category mode additionally echoes `side`; account mode
+omits it (`side` is accepted and ignored there, never echoed).
 
 ### 3. `money_top_expenses`
 
@@ -422,8 +427,8 @@ Feature: Largest expenses
 ```
 
 Row: `id`, `date`, `amount`, `amount_paise`, `category`, `account`, `note`.
-Flat scalars: `start`, `end`, `days`, `limit_applied`, `total_matching`,
-`sort_by`, `order`.
+Flat scalars: `start`, `end`, `days`, `category`, `account`, `limit_applied`,
+`total_matching`, `sort_by`, `order`.
 
 ### 4. `money_series`
 
@@ -488,7 +493,8 @@ Row: `key`, `from`, `to`, `days`, `rows_total`, `rows_income`,
 `rows_expense`, `rows_transfer`, `income_paise`, `expense_paise`,
 `net_paise`, `avg_daily_expense_paise`, `transfer_count`,
 `transfer_volume_paise`.
-Flat scalars: `start`, `end`, `days`, `bucket`, `bucket_count`, `order`.
+Flat scalars: `start`, `end`, `days`, `bucket`, `bucket_count`, `order`,
+`category`, `account`.
 
 ### 5. `money_compare`
 
@@ -561,8 +567,10 @@ Totals row: `metric` (`income|expense|net`), `a_paise`, `b_paise`,
 `delta_paise`, `delta_pct`, `direction`. Categories row: `category`,
 `a_paise`, `b_paise`, `delta_paise`, `delta_pct`, `direction`, `a_share_pct`,
 `b_share_pct`, `a_count`, `b_count`.
-Flat scalars: `start_a`, `end_a`, `days_a`, `start_b`, `end_b`, `days_b`,
-`by`, `categories_applied`, `account`, `sort_by`, `order`.
+Flat scalars (both modes): `start_a`, `end_a`, `days_a`, `start_b`,
+`end_b`, `days_b`, `by`. Categories mode additionally echoes
+`categories_applied`, `account`, `sort_by`, `order`; totals mode omits
+them (fixed three-row order, no sort args, `categories[]` rejected).
 
 ### 6. `money_recurring`
 
@@ -725,11 +733,14 @@ Feature: Anomalies
 Bucket row: `key`, `from`, `to`, `days`, `expense_paise`, `median_paise`,
 `delta_paise`, `direction`. Row outlier:
 `id`, `date`, `amount`, `amount_paise`, `category`, `account`, `note`,
-`category_median_paise`, `ratio_pct`, `direction`. Flat scalars: `start`,
-`end`, `days`, `scope`, `bucket`, `sort_by`, `order`,
-`sensitivity_applied`, `ratio_applied`, `min_amount_paise`,
-`baseline_median_paise`, `buckets_considered`, `insufficient_baseline`,
-`reason`, `categories_evaluated`, `categories_skipped`.
+`category_median_paise`, `ratio_pct`, `direction`. Flat scalars (both
+scopes): `start`, `end`, `days`, `scope`, `category`, `account`, `sort_by`,
+`order`, `sensitivity_applied`, `ratio_applied`, `min_amount_paise`. Bucket scope
+additionally echoes `bucket`, `baseline_median_paise`,
+`buckets_considered`, `insufficient_baseline`, `reason`. Row scope
+additionally echoes `categories_evaluated`, `categories_skipped`, and
+never returns `bucket` or any `baseline_*` field (a passed `bucket` is
+rejected in row scope).
 
 ---
 
@@ -752,7 +763,8 @@ Index: `uniq_budget_category_month` on `(category, month)`, unique.
 
 Resolution: for month `m`, a category's limit is the `monthlyLimit` of the row
 with the greatest `month <= m`; no row means unbudgeted for `m` (not an
-error). A limit change is a new row, so history is preserved.
+error). A new month row preserves history, while a same-month correction via
+`update_budget` mutates that month's row in place.
 
 Proration: for each category and each month the window touches,
 `round_half_up(monthlyLimit(month) x days_covered / days_in_month)`, summed
@@ -994,7 +1006,8 @@ Feature: Delete one budget version
 Tests:
 
 - `cmd/miser-money/schema_test.go`: required sets for the 12 new input types
-  (`start`/`end` on every windowed tool; `by` on breakdown/compare; `bucket`
+  (`start`/`end` on every windowed tool — `start_a`/`end_a`/`start_b`/`end_b`
+  for `money_compare`, which has no `start`/`end`; `by` on breakdown/compare; `bucket`
   on series; `scope` on anomalies; `category`/`month`/`monthly_limit` on
   budgets; `get_balances` stays no-arg); optional-field documentation.
 - Handler tests without MongoDB: window validation; mode validation; the

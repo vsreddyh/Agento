@@ -84,6 +84,7 @@ func handleMoneyTotals(ctx context.Context, in moneyTotalsInput) (map[string]any
 	}
 	return map[string]any{"ok": true,
 		"start": start, "end": end, "days": t.Days,
+		"category": nilIfEmpty(cat), "account": nilIfEmpty(in.Account),
 		"rows_total": t.RowsTotal, "rows_income": t.RowsIncome,
 		"rows_expense": t.RowsExpense, "rows_transfer": t.RowsTransfer,
 		"income_paise": t.IncomePaise, "expense_paise": t.ExpensePaise,
@@ -261,6 +262,7 @@ func handleMoneyTopExpenses(ctx context.Context, in moneyTopExpensesInput) (map[
 	}
 	return map[string]any{"ok": true,
 		"start": start, "end": end, "days": resDays(start, end),
+		"category": nilIfEmpty(cat), "account": nilIfEmpty(in.Account),
 		"limit_applied": res.LimitApplied, "total_matching": res.TotalMatching,
 		"sort_by": res.SortBy, "order": res.Order,
 		"expenses": rows,
@@ -318,6 +320,7 @@ func handleMoneySeries(ctx context.Context, in moneySeriesInput) (map[string]any
 	return map[string]any{"ok": true,
 		"start": start, "end": end, "days": resDays(start, end),
 		"bucket": bucket, "bucket_count": len(buckets), "order": order,
+		"category": nilIfEmpty(cat), "account": nilIfEmpty(in.Account),
 		"buckets": rows,
 	}, nil
 }
@@ -500,6 +503,7 @@ func handleMoneyRecurring(ctx context.Context, in moneyRecurringInput) (map[stri
 	}
 	return map[string]any{"ok": true,
 		"start": start, "end": end, "days": resDays(start, end),
+		"category": nilIfEmpty(cat), "account": nilIfEmpty(in.Account),
 		"min_occurrences": minOcc, "amount_tolerance_pct": in.AmountTolerancePct,
 		"limit_applied": limit, "sort_by": sortBy, "order": order,
 		"total_candidates": total, "truncated": total > len(cands),
@@ -508,10 +512,10 @@ func handleMoneyRecurring(ctx context.Context, in moneyRecurringInput) (map[stri
 }
 
 func nilIfEmpty(s string) any {
-	if s == "" {
+	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	return s
+	return strings.TrimSpace(s)
 }
 
 type moneyAnomaliesInput struct {
@@ -565,6 +569,7 @@ func handleMoneyAnomalies(ctx context.Context, in moneyAnomaliesInput) (map[stri
 		"start": start, "end": end, "days": resDays(start, end),
 		"scope": scope, "sensitivity_applied": sens,
 		"ratio_applied": money.SensitivityRatio(sens), "min_amount_paise": minPaise,
+		"category": nilIfEmpty(cat), "account": nilIfEmpty(in.Account),
 	}
 	if scope == "bucket" {
 		bucket, err := money.NormalizeBucket("money_anomalies", in.Bucket)
