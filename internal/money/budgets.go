@@ -241,9 +241,9 @@ func (s *Store) UpdateBudget(ctx context.Context, id string, monthlyLimit float6
 	return &b, nil
 }
 
-// DeleteBudgetResult is one deleted (or would-be deleted) version plus the
-// fallback the category resolves to afterwards — null when the category is
-// left unbudgeted.
+// DeleteBudgetResult is one deleted (or would-be deleted) version plus what
+// would govern its own month afterwards — null/Unbudgeted when that month
+// would have no budget. Later surviving versions are unaffected.
 type DeleteBudgetResult struct {
 	Row              Budget
 	DryRun           bool
@@ -255,7 +255,7 @@ type DeleteBudgetResult struct {
 }
 
 // DeleteBudget removes one budget version. Dry run (the default) reports the
-// row and its fallback and deletes nothing.
+// row, what would govern its month, and deletes nothing.
 func (s *Store) DeleteBudget(ctx context.Context, id string, dryRun bool) (*DeleteBudgetResult, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, fail("delete_budget id is required")
@@ -270,7 +270,10 @@ func (s *Store) DeleteBudget(ctx context.Context, id string, dryRun bool) (*Dele
 	}
 	row := budgetDocToBudget(existing)
 	res := &DeleteBudgetResult{Row: row, DryRun: dryRun}
-	// Fallback: the greatest earlier month for the same category.
+	// Fallback: what would govern the deleted row's own month afterwards —
+	// the greatest earlier month for the same category. Unbudgeted therefore
+	// means "that month would have no budget", never "the whole category is
+	// budgetless": later surviving versions still govern their own months.
 	cur, err := s.budgets.Find(ctx,
 		bson.M{"category": row.Category, "month": bson.M{"$lt": row.Month}},
 		options.Find().SetSort(bson.D{{Key: "month", Value: -1}}).SetLimit(1))

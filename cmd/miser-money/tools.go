@@ -126,7 +126,7 @@ func registerBudgetTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_budget",
-		Description: "Delete one budget version; the previous version (or nothing) applies again. dry_run=true (default) reports the row and its fallback (falls_back_to_month/limit, or unbudgeted:true) and deletes nothing; pass dry_run=false to delete. Unknown ids are rejected in both modes."},
+		Description: "Delete one budget version. dry_run=true (default) reports the row and what would govern its month afterwards (falls_back_to_month/limit, or unbudgeted:true when the deleted month would have no budget — later surviving versions still govern their own months); nothing is deleted. Pass dry_run=false to delete. Unknown ids are rejected in both modes."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteBudgetInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleDeleteBudget(ctx, in)
 			if err != nil {

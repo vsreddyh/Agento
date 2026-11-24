@@ -277,7 +277,7 @@ category mode, row picker in account mode), `sort_by`, `order`.
 
 Sort enums: category mode `amount|name|count` (default `amount`);
 account mode `closing|name|net|inflows|outflows` (default `closing`);
-`order` `asc|desc` (default `desc`, except `name` defaults to `asc`).
+`order` `asc|desc` (default `desc` in both modes).
 
 ```gherkin
 Feature: Breakdown by one dimension
@@ -699,8 +699,9 @@ Feature: Anomalies
     And neither scope returns a baselines array
 
   Scenario: Thresholds are flat and applied
-    Then sensitivity_applied is "medium", ratio_applied is 1.50 or 1.25
-      according to scope, and min_amount_paise is echoed
+    Then sensitivity_applied is "medium", ratio_applied is 1.50
+      (sensitivity-driven: 2.00 low, 1.50 medium, 1.25 high — same in both
+      scopes), and min_amount_paise is echoed
     And an entry requires amount > ratio x median and delta >= min_amount_paise
 
   Scenario: Too little history is not an error
@@ -955,6 +956,13 @@ Feature: Delete one budget version
   Scenario: Confirmed delete removes only that version
     Then dry_run false deletes 1 row
     And 2026-03 resolves to 500000 again
+
+  Scenario: Deleting a non-latest version scopes the fallback to its month
+    Given groceries rows at 2026-01 (5000.00) and 2026-03 (6000.00)
+    When delete_budget dry-runs the 2026-01 id
+    Then falls_back_to_month is null, falls_back_to_limit_paise is 0 and
+      unbudgeted is true — for the deleted 2026-01 slot only
+    And 2026-04 still resolves to 600000 through the surviving 2026-03 row
 
   Scenario: Deleting the only version leaves the category unbudgeted
     Then falls_back_to_month is null, falls_back_to_limit_paise is 0 and

@@ -27,7 +27,7 @@ extended to **multiple accounts** with **derived balances** (no stored running t
 | `list_budgets` | Budget rows ordered by category then month desc, with `effective_now` flagging the row in force. Optional: month_from, month_to, category. No sort args — one canonical order |
 | `create_budget` | Dated monthly limit: category + month (YYYY-MM, future allowed) + monthly_limit (> 0, exact paise). salary cannot be budgeted. Duplicate category+month rejected (use `update_budget`) |
 | `update_budget` | Change one budget row's limit in place (category/month are identity). Required: id, monthly_limit. No-op rejected |
-| `delete_budget` | Delete one budget version (dry_run=true default reports the fallback; dry_run=false deletes). Unknown ids rejected |
+| `delete_budget` | Delete one budget version (dry_run=true default reports what would govern the deleted month — falls_back_to_month/limit, or unbudgeted:true when that month would have no budget; later versions still govern their own months. dry_run=false deletes). Unknown ids rejected |
 
 ## Schema (MongoDB `hermes` DB)
 

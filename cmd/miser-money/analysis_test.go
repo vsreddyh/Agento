@@ -268,6 +268,11 @@ func TestDeleteBudgetRejectsEmptyID(t *testing.T) {
 	if !strings.Contains(errMsg, "delete_budget") {
 		t.Errorf("error %q does not name the tool", errMsg)
 	}
+	// Malformed hex fails in id parsing before any store touch.
+	_, errMsg = callTool(t, "delete_budget", map[string]any{"id": "nope"})
+	if errMsg == "" {
+		t.Fatal("malformed id was accepted; expected a rejection, not a silent no-op")
+	}
 }
 
 func TestListBudgetsRejectsReversedRange(t *testing.T) {

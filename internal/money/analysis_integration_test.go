@@ -289,6 +289,20 @@ func TestBudgetCRUDAndStatus(t *testing.T) {
 	if upd.MonthlyLimitPaise != 550000 {
 		t.Errorf("updated limit = %d, want 550000", upd.MonthlyLimitPaise)
 	}
+	// Deleting the non-latest version scopes unbudgeted to its own month:
+	// 2026-01 would have no budget, but 2026-04 still resolves through the
+	// surviving 2026-03 row.
+	early, err := s.DeleteBudget(ctx, upd.ID, true)
+	if err != nil {
+		t.Fatalf("dry-run delete non-latest: %v", err)
+	}
+	if !early.Unbudgeted || early.HasFallback {
+		t.Errorf("non-latest dry run = %+v, want Unbudgeted with no fallback", early)
+	}
+	limApr, okApr, err := s.resolveLimit(ctx, "groceries", "2026-04")
+	if err != nil || !okApr || limApr != 600000 {
+		t.Errorf("Apr resolution after non-latest delete = %d/%v/%v, want 600000/true/nil", limApr, okApr, err)
+	}
 	del, err := s.DeleteBudget(ctx, upd.ID, true)
 	if err != nil {
 		t.Fatalf("dry-run delete: %v", err)
