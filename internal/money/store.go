@@ -1,7 +1,7 @@
 // Package money: MongoDB storage with derived balances.
 //
-// Collections: money_accounts (name unique), money_transactions — both
-// permanent. Rows never expire: the only way a row disappears is a
+// Collections: money_accounts (name unique), money_transactions and
+// money_budgets — all permanent. Rows never expire: the only way a row disappears is a
 // user-initiated delete. There is no stored running total: an account's
 // balance is its immutable opening seed plus the signed sum of its ledger
 // legs, computed on read — so a balance can never drift from its rows.
