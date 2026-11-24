@@ -16,6 +16,18 @@ extended to **multiple accounts** with **derived balances** (no stored running t
 | `query_transactions` | Fetch one transaction by id, or list in a date range. Give an id OR a start/end pair — an id addresses one row, so it cannot be combined with any other argument except the zero-valued paging defaults; whitespace-only filters/bounds count as absent, since every argument is trimmed upfront (an unknown id is rejected, not a silent empty page). The id itself is trimmed: a padded hex works, while a blank id counts as absent and falls through to range mode. Without an id both bounds are required; paging below is range-mode only: start, end — both must be real `YYYY-MM-DD` dates or the call is rejected (padded bounds trimmed, like log/delete). Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. In range mode, optional: type/category/account filter (type/category are lowercased+trimmed like writes, so `Groceries` finds `groceries`, but an unknown value is **rejected** like writes instead of matching nothing; account (case-sensitive exact name or id hex, unlike type/category; matches EITHER side of a transfer, so a transfer appears under both sender and receiver). Paged: `limit` defaults to 100, clamped to 500; `offset` defaults to 0. There is no unlimited `query_transactions` page on MCP (delete dry-runs stay unbounded by design): 0/negative `limit` also means 100, unlimited is store-internal only. The response carries `count` (rows in this page — unlike `total`, which counts all matches), the applied `limit`, `total`, `truncated` and `next_offset` so a short page is never mistaken for the end: to read everything, repeat with `offset = next_offset` until `truncated` is false (`next_offset` is null then). Rows come back date-ascending with an `_id` tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log between page fetches can shift rows across page boundaries). Returns each row with its hex `_id`, so a queried row can be deleted or edited by `id`. A by-id fetch returns a fixed single-row envelope — `count:1`, `total:1`, `limit:1`, `truncated:false`, `next_offset:null` |
 | `delete_transactions` | Delete by `id` (a non-existent id is **rejected**, not a silent 0), or by amount (exact paise: > 0, at most 2 decimals; an explicit 0 or >2-decimal value is rejected, not a wildcard)/type/category/date/account (removed rows stop contributing to balances; account takes a case-sensitive exact name or id hex like query (unlike type/category) and matches EITHER side of a transfer — check `dry_run` first, since a receiver-side transfer is included; whitespace-only means absent; unknown type/category **rejected** like writes, not a silent `would_delete: 0`). Date filter trimmed + calendar-validated like writes/reads; whitespace-only filters mean absent; dates are plain calendar-day strings with no timezone conversion — pass IST dates. `id` cannot be combined with the filters. `dry_run` defaults to **true** and only reports the matching rows (uncapped by design — a dry run must show everything it would delete); pass `dry_run=false` to delete |
 | `edit_transaction` | Edit one transaction by id (the row changes in place; balances derive from rows, so no separate rebalance step exists). Required: id (missing rejected, not a silent 0). Optional: amount (exact paise: > 0, at most 2 decimals), type/category (validated like writes, except blank means no change — pass explicit `other` to reset the category), account/sending_to (case-sensitive exact name or id hex like writes, unlike type/category; transfer requires sending_to when the result would otherwise have no destination (converting a non-transfer into one) — edits on an existing transfer keep its legs unless a new one is passed, and it must differ; forbidden on non-transfers except whitespace-only (counts as absent); moving a leg onto an archived account rejects, but resupplying the leg already on the row does not — copying `account` from a query back into the edit keeps working — even when converting away from a transfer, where the resupplied destination is ignored and the leg drops), date (real calendar date, IST day like writes when supplied — empty/whitespace means no change, unlike log where it means today; changes the row's date — rows never expire, so any past date stays put), note (capped at 300 bytes; blank means leave alone, cannot be cleared). Absent/whitespace-only means no change (except converting to transfer still requires `sending_to`); at least one field must change. Returns the edited row read back by id; if the re-read fails, `ok` stays true with `readback_error` (like log_transaction) |
+| `money_totals` | Period P&L for a window (flat scalars, no table). Required: start, end (validated like range-mode query). Optional: category, account (single). Reports income/expense/net paise, savings_rate_pct (null when no income), daily averages, transfer count/volume. Transfers are never income/expense |
+| `money_breakdown` | One table, mode-selected by required `by=category\|account`. Category mode ranks one side (`side` expense\|income required) with amount/count/share/avg; shares sum to 100.00 over the returned rows. Account mode reports per-account opening/inflows/outflows/net/closing + leg splits. Optional: `categories[]` (row picker, both modes — normalized, deduped; unknown rejected), `accounts[]` (scope in category mode, picker in account mode; case-sensitive exact), `sort_by` + `order` (per-mode enums, deterministic tie-breaks). Footers total the returned rows, not the window |
+| `money_top_expenses` | Largest expense rows, bounded (limit 1..20, default 5). Optional: category, account, sort_by amount\|date, order. Deterministic order (amount desc, date asc, id asc); rows carry ids for edit/delete |
+| `money_series` | Bucketed trend: day/week/month buckets, zero-filled, clipped to the window. Required: start, end, bucket. Optional: category, account, order. Day grids over 500 buckets are rejected. No period totals — that is `money_totals` |
+| `money_compare` | Compare two windows A/B. Required: start_a, end_a, start_b, end_b, by=totals\|categories. Totals mode: fixed income/expense/net rows with deltas and direction. Categories mode: per-category attribution with `categories[]` picker, sort_by delta\|name\|b_amount. Per-period validation errors name the period |
+| `money_recurring` | Detect repeating movements (subscriptions, salary). Groups income+expense by category+type, clusters near-equal amounts (tolerance 0..25% default 0 = exact). Only clusters with count >= min_occurrences (2..24 default 3) become candidates with cadence/jitter/confidence/next date. Bounded by limit (1..50 default 10). Transfers never detected |
+| `money_anomalies` | Flag the unusual. scope=bucket (bucket day\|week\|month required) flags outlier periods vs the median bucket; scope=row flags single expenses dwarfing their category median. Optional: category, account, sensitivity low\|medium\|high (ratios 2.00/1.50/1.25, default medium), min_amount_paise (default 10000), sort_by/order per scope. Too little history is an insufficient baseline, not an error |
+| `budget_status` | Spend vs prorated limit per category (partial months prorate per covered day), with remaining/used_pct/over_budget and a current-month projection when the window overlaps it. Optional: `categories[]` picker, sort_by remaining\|used\|spend\|limit\|name, order. Unbudgeted categories share the table with budgeted:false |
+| `list_budgets` | Budget rows ordered by category then month desc, with `effective_now` flagging the row in force. Optional: month_from, month_to, category. No sort args — one canonical order |
+| `create_budget` | Dated monthly limit: category + month (YYYY-MM, future allowed) + monthly_limit (> 0, exact paise). salary cannot be budgeted. Duplicate category+month rejected (use `update_budget`) |
+| `update_budget` | Change one budget row's limit in place (category/month are identity). Required: id, monthly_limit. No-op rejected |
+| `delete_budget` | Delete one budget version (dry_run=true default reports the fallback; dry_run=false deletes). Unknown ids rejected |
 
 ## Schema (MongoDB `hermes` DB)
 
@@ -29,8 +41,18 @@ extended to **multiple accounts** with **derived balances** (no stored running t
 removes it.
 
 Indexes: `uniq_name` (accounts), `uniq_idempotency`,
-`acct_date`, `sendingto_date`, `date_type`, `cat_date`. No `$jsonSchema`
+`acct_date`, `sendingto_date`, `date_type`, `cat_date`,
+`uniq_budget_category_month` (budgets). No `$jsonSchema`
 validators and no views — validation lives in the store.
+
+**`money_budgets`** — `category` (fixed list except `salary` — income is not
+budgeted), `month` (`YYYY-MM`, effective **from** this month), `monthlyLimit`
+(int64 paise, > 0), `createdAt`, `updatedAt`. Unique on
+`(category, month)`. Permanent like everything else money: no TTL, retention
+is a no-op, only `delete_budget` removes a row. A limit is resolved per month
+as the row with the greatest `month <= m`; a change is a new row, so history
+is preserved. Partial months prorate per covered day
+(`round_half_up(limit × days/days_in_month)` summed over touched months).
 
 ## Rejected input
 
@@ -57,19 +79,25 @@ that tool applies, so the stored running total diverges with no error. A
 mistaken row is corrected with `edit_transaction` or removed with
 `delete_transactions`, never by hand.
 
-### Period totals (no `summarize` tool)
+### Analyses (derived reads, no stored aggregates)
 
-There is no server-side total. `get_balances` is a lifetime stored running
-total — it is the wrong window for a period — and `query_transactions.total`
-counts rows, not money. To total a period, paginate the whole range and sum
-client-side:
+`money_totals`, `money_breakdown`, `money_top_expenses`, `money_series`,
+`money_compare`, `money_recurring`, `money_anomalies` and `budget_status`
+recompute from the ledger on every call — edits and deletes are visible on
+the next call with no invalidation step. Conventions shared by all of them:
 
-- repeat `query_transactions` with `offset = next_offset` until `truncated`
-  is false;
-- sum in paise (`round(amount * 100)` per row), not in rendered rupee
-  floats, so the total stays integer-exact;
-- exclude `transfer` rows from income/expense/net (count them separately);
-- rank per-category over expenses only.
+- every window needs explicit `start`/`end` (empty or reversed bounds are
+  rejected, never silently empty);
+- every response carries at most one table; applied values echo flat
+  (`sort_by`, `order`, `categories_applied`, ...);
+- plural `categories[]`/`accounts[]` pick rows and the footer totals the
+  returned rows (a subset question is answered by the filtered footer — no
+  second call, no client-side sum);
+- transfers are never income or expense (they appear as count/volume or as
+  account legs);
+- unknown categories/accounts are rejected, not zero-filled;
+- money aggregates are integer `*_paise`; percentages round half-up to 2
+  decimals.
 
 ### Key invariants
 
@@ -109,7 +137,12 @@ go run ./cmd/miser-money          # stdio transport (or go build -o miser-money 
 
 ## Files (Go, `internal/money/` + `cmd/miser-money/`)
 
-- `cmd/miser-money/main.go` — MCP server + tool definitions
+- `cmd/miser-money/main.go` — MCP server + core tool definitions
+- `cmd/miser-money/tools.go` — analysis + budget tool registrations
+- `cmd/miser-money/analysis.go` — read-only analysis handlers
+- `cmd/miser-money/budgets.go` — budget handlers
 - `internal/money/store.go` — accounts, atomic transactions, stored balances
+- `internal/money/analysis.go` — window scans + pure aggregation helpers
+- `internal/money/budgets.go` — budget resolution, proration, status
 - `internal/money/parse.go` — IST day helper + categories
 - `internal/money/money_test.go` — tests (`go test ./internal/money/`, needs `MONGODB_URI`)

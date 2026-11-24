@@ -585,4 +585,7 @@ func registerTools(s *mcp.Server) {
 			}
 			return result(out)
 		})
+
+	registerAnalysisTools(s)
+	registerBudgetTools(s)
 }

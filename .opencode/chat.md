@@ -30,9 +30,17 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (9): `create_account`, `list_accounts`, `archive_account`,
+- **miser-money** (21): `create_account`, `list_accounts`, `archive_account`,
   `unarchive_account`, `get_balances`, `log_transaction`,
-  `query_transactions`, `edit_transaction`, `delete_transactions`.
+  `query_transactions`, `edit_transaction`, `delete_transactions`,
+  `money_totals`, `money_breakdown` (by=category|account),
+  `money_top_expenses`, `money_series`, `money_compare` (by=totals|categories),
+  `money_recurring`, `money_anomalies` (scope=bucket|row), `budget_status`,
+  `list_budgets`, `create_budget`, `update_budget`, `delete_budget`.
+  Analyses are derived reads (no stored aggregates — edits/deletes show up on
+  the next call); every analysis window needs explicit start/end, and every
+  response carries at most one table. Budgets live in `money_budgets` keyed by
+  (category, month) as dated versions.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),
   `update_recipe`, `scale_recipe` (pure arithmetic),
@@ -93,10 +101,12 @@ does not resolve, trust the server's tool list over this file.
 Destructive tools ask first through the harness permission prompt
 (`opencode.json`); state the scope when it asks: `delete_transactions`,
 `delete_meals`, `prune_old` (health-check only — miser-money has no retention;
-rows are permanent unless deleted), `archive_account`,
+rows are permanent unless deleted), `archive_account`, `delete_budget`
+(dry-runs by default like `delete_transactions`),
 `delete_recipe` (also removes its cook logs), `delete_ingredient`,
 `delete_task`, `delete_project`. There is no `delete_cook`; say so instead
-of reaching for it.
+of reaching for it. Money writes also prompt: `create_budget` and
+`update_budget` (like `log_transaction` and `edit_transaction` already do).
 
 `delete_transactions` dry-runs by default: it returns the rows it would
 remove and deletes nothing unless you pass `dry_run=false`. Show those
@@ -106,7 +116,7 @@ the `*archive_account*` pattern) even though it restores rather than
 destroys.
 
 Reads (`list_*`, `get_*`, `query_*`, `daily_summary`,
-`get_balances`, `scale_recipe`) need no confirmation. `fix_last_meal` updates
+`get_balances`, `scale_recipe`, `money_*`, `budget_status`) need no confirmation. `fix_last_meal` updates
 the most recently *recorded* meal in place (insertion order, not date
 order — meals sort by `createdAt`, so after a backfill the fix hits the
 backfilled meal, not the date-latest one): do it when the user just asked
