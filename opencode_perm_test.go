@@ -7,8 +7,9 @@ package agento_test
 //  1. TestAskSetPinned pins the exact `ask` set: adding, removing or
 //     respelling a pattern fails here until the expected set below is
 //     updated in the same change.
-//  2. TestEveryToolClassified enumerates every tool registered in
-//     cmd/*/main.go and requires each to be either `ask`-covered or in
+//  2. TestEveryToolClassified enumerates every tool registered in every
+//     non-test Go file under cmd/* and requires each to be either
+//     `ask`-covered or in
 //     the explicit freeTools list. A new tool that matches neither fails
 //     CI instead of running default-allow unprompted — the author must
 //     consciously classify it (add an `ask` pattern or a free entry).
@@ -221,7 +222,7 @@ func registeredTools(t *testing.T) [][2]string {
 		}
 	}
 	if len(out) == 0 {
-		t.Fatal("no registered tools found under cmd/*/main.go")
+		t.Fatal("no registered tools found under cmd/*/ non-test Go files")
 	}
 	return out
 }

@@ -55,7 +55,7 @@ Decisions taken (from the design Q&A):
 | Ordering | caller-chosen `sort_by` + `order` per table, small per-tool enum, deterministic default and deterministic tie-breaks |
 | Subset scalars | no separate scalar tool: the filtered table footer IS the subset compute (over returned rows, not the window) |
 | Aggregation | MongoDB `$group`/`$median` where available; Go for bucketing, clustering, proration, rounding |
-| Windows | `start`/`end` required everywhere — no presets, no hidden "this month" |
+| Windows | `start`/`end` required on every windowed tool (`start_a`/`end_a`/`start_b`/`end_b` for `money_compare`); `list_budgets` is unwindowed — no presets, no hidden "this month" |
 | Budgets | `money_budgets` keyed `(category, month)`, versioned limits, CRUD |
 | Units | ledger keeps rupees floats; analysis aggregates are integer paise |
 

@@ -88,8 +88,9 @@ mistaken row is corrected with `edit_transaction` or removed with
 recompute from the ledger on every call — edits and deletes are visible on
 the next call with no invalidation step. Conventions shared by all of them:
 
-- every window needs explicit `start`/`end` (empty or reversed bounds are
-  rejected, never silently empty);
+- windowed tools need explicit bounds (`start`/`end`, or `start_a`/`end_a`/
+  `start_b`/`end_b` for `money_compare`; empty or reversed bounds are
+  rejected, never silently empty); `list_budgets` is unwindowed;
 - every response carries at most one table; applied values echo flat
   (`sort_by`, `order`, `categories_applied`, ...);
 - plural `categories[]`/`accounts[]` pick rows and the footer totals the

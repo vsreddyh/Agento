@@ -9,10 +9,13 @@ import (
 )
 
 // This file holds the input types and handlers for the seven read-only
-// money analysis tools. Input types are named (not inline) so schema_test.go
-// can infer the published schema from the same types AddTool publishes.
-// The AddTool calls live in main.go's registerTools, which the permission
-// test enumerates — a tool registered anywhere else would run unclassified.
+// money analysis tools. The AddTool calls live in tools.go
+// (registerAnalysisTools, called from main.go's registerTools) — handlers
+// here, registration there. Input types are named (not inline) so
+// schema_test.go can infer the published schema from the same types AddTool
+// publishes. The permission test enumerates registrations across every
+// non-test Go file in each cmd dir, so a tool registered in a new file is
+// still classified.
 
 // normalizeAccountList trims, drops blanks and dedupes an account filter.
 // Accounts are case-sensitive exact names (unlike categories), so values are
