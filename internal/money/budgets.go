@@ -142,7 +142,7 @@ func (s *Store) CreateBudget(ctx context.Context, category, month string, monthl
 	return &b, nil
 }
 
-// ListBudgetsResult is one budget table. Exactly one row per category carries
+// ListBudgetsResult is one budget table. At most one row per category carries
 // effective_now for the current IST month (the greatest month <= today);
 // a category whose only row is in the future has none.
 type ListedBudget struct {

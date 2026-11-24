@@ -4,7 +4,7 @@ Status: implemented on branch `feat/miser-money-analysis-tools` (this file is
 the as-built spec; scenarios marked below are covered by handler tests,
 pure-function unit tests, and DB integration tests).
 Scope: twelve new tools — nine read-only (seven analysis plus
-`budget_status` and `list_budgets`; three of the seven mode-dispatched) and
+`budget_status` and `list_budgets`; four of the seven mode-dispatched) and
 three budget writes on one new collection. The existing nine tools are
 unchanged.
 
@@ -841,8 +841,9 @@ Flat scalars: `start`, `end`, `days`, `categories_applied`, `sort_by`,
 Feature: List budget rows
   Scenario: One table, ordered, effective row flagged
     Then rows are ordered by category ascending, then month descending
-    And exactly one row per category has effective_now true for the current
-      IST month
+    And at most one row per category has effective_now true for the current
+      IST month (the greatest month <= today's month; zero when the category
+      has only future rows)
     And a category whose only row is in the future has no effective_now row
     And there is intentionally no sort_by/order on this tool: it is a config
       listing with one canonical order, not a ranked answer

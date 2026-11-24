@@ -50,8 +50,10 @@ budgeted), `month` (`YYYY-MM`, effective **from** this month), `monthlyLimit`
 (int64 paise, > 0), `createdAt`, `updatedAt`. Unique on
 `(category, month)`. Permanent like everything else money: no TTL, retention
 is a no-op, only `delete_budget` removes a row. A limit is resolved per month
-as the row with the greatest `month <= m`; a change is a new row, so history
-is preserved. Partial months prorate per covered day
+as the row with the greatest `month <= m`; a new month row preserves history,
+while a same-month correction via `update_budget` mutates that month's row in
+place (the old limit is not queryable afterwards). Partial months prorate per
+covered day
 (`round_half_up(limit × days/days_in_month)` summed over touched months).
 
 ## Rejected input

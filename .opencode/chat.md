@@ -38,9 +38,11 @@ instead of round-tripping one at a time.
   `money_recurring`, `money_anomalies` (scope=bucket|row), `budget_status`,
   `list_budgets`, `create_budget`, `update_budget`, `delete_budget`.
   Analyses are derived reads (no stored aggregates — edits/deletes show up on
-  the next call); every analysis window needs explicit start/end, and every
-  response carries at most one table. Budgets live in `money_budgets` keyed by
-  (category, month) as dated versions.
+  the next call); windowed tools need explicit bounds (`start`/`end`, or
+  `start_a`/`end_a`/`start_b`/`end_b` for `money_compare`), and every
+  response carries at most one table. `list_budgets` is unwindowed
+  (optional `month_from`/`month_to` only). Budgets live in `money_budgets`
+  keyed by (category, month) as dated versions.
 - **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
   (`cooking_note` = what differed, `aftertaste_note` = what to improve),
   `update_recipe`, `scale_recipe` (pure arithmetic),
