@@ -29,7 +29,7 @@ Additional invariants, carried over from the earlier review:
   scalar. No nested `window{}`, `totals{}`, `rows{}`, `method{}`,
   `baseline{}`; no `months[]` or `occurrences[]` inside a row.
 - Applied values are echoed flat (`side`, `by`, `bucket`,
-  `sensitivity_applied`, `bucket_ratio_applied`, `sort_by`, `order`,
+  `sensitivity_applied`, `ratio_applied`, `sort_by`, `order`,
   `categories_applied`, `accounts_applied`, ...), never as a bundle.
 - The discriminator is validated: an unknown `by`/`scope` is rejected, and a
   mode-specific argument missing in the mode that needs it is rejected by
@@ -987,8 +987,10 @@ Feature: Delete one budget version
   dispatcher: validate the mode, run only that mode's aggregation, assemble
   one flat response.
 - Files: `cmd/miser-money/analysis.go` and `cmd/miser-money/budgets.go` hold
-  the input types and `register*Tools`; `registerTools` calls both. Named
-  input types keep `schema_test.go` able to infer the published contract.
+  the input types and `handle*` handlers; `cmd/miser-money/tools.go` holds
+  `registerAnalysisTools`/`registerBudgetTools`, called from `registerTools`
+  in `main.go`. Named input types keep `schema_test.go` able to infer the
+  published contract.
 - MongoDB: `$match` on date (+ type/category/account) then `$group` by the
   selected dimension only. `money_breakdown(by=account)` uses three groups
   (pre-start legs by accountId, pre-start by sending_to, in-window by both)
