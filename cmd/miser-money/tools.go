@@ -96,7 +96,7 @@ func registerBudgetTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_budgets",
-		Description: "List budget rows ordered by category ascending then month descending, with effective_now flagging the row in force for the current IST month. Optional filters: month_from, month_to (YYYY-MM, open-ended), category (salary rejected — income is not budgeted). No budgets is an empty success."},
+		Description: "List budget rows ordered by category ascending then month descending, with effective_now flagging at most one row per category as the row in force for the current IST month (zero flagged when the category has only future rows). Optional filters: month_from, month_to (YYYY-MM, open-ended), category (salary rejected — income is not budgeted). No budgets is an empty success."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listBudgetsInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleListBudgets(ctx, in)
 			if err != nil {
