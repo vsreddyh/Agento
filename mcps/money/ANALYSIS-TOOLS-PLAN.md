@@ -541,10 +541,11 @@ Feature: Compare two windows
 
   Scenario: Identical windows are flat, not null
     Then every delta_paise is 0, every direction is "flat"
-    And every delta_pct is 0.00 because A is non-zero
+    And every delta_pct is 0.00 (both sides zero is a 0 delta, not null)
 
-  Scenario: A zero baseline yields null percent
-    Then delta_pct is null whenever a_paise is 0
+  Scenario: A zero baseline yields null percent — unless nothing moved
+    Then delta_pct is null when a_paise is 0 and the delta is non-zero
+    And delta_pct is 0.00 when both sides are 0
 
   Scenario: One mode, one table
     Then totals mode returns no categories array
@@ -707,6 +708,7 @@ Feature: Anomalies
   Scenario: Too little history is not an error
     Then bucket scope with fewer than 3 buckets sets insufficient_baseline
       true and returns []
+    And buckets_considered is the actual bucket count (e.g. 2), not 0
     And row scope with a category under 3 rows skips it and reports
       categories_evaluated and categories_skipped
 

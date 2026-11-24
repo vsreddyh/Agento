@@ -1510,10 +1510,10 @@ type RowOutlier struct {
 // BucketAnomalies flags buckets whose expense is unusual against the median
 // bucket. Below-median drops are reported too. Fewer than 3 buckets is not
 // an error — it yields an insufficient baseline and no outliers.
-func (s *Store) BucketAnomalies(ctx context.Context, start, end, bucket string, category, account *string, sensitivity string, minAmountPaise int64, sortBy, order string) ([]BucketOutlier, Bucket, bool, error) {
+func (s *Store) BucketAnomalies(ctx context.Context, start, end, bucket string, category, account *string, sensitivity string, minAmountPaise int64, sortBy, order string) ([]BucketOutlier, Bucket, int, bool, error) {
 	buckets, err := s.Series(ctx, start, end, bucket, category, account, "asc")
 	if err != nil {
-		return nil, Bucket{}, false, err
+		return nil, Bucket{}, 0, false, err
 	}
 	if len(buckets) < 3 {
 		base := Bucket{}
@@ -1524,7 +1524,7 @@ func (s *Store) BucketAnomalies(ctx context.Context, start, end, bucket string, 
 			}
 			base.ExpensePaise = medianPaise(exps)
 		}
-		return []BucketOutlier{}, base, true, nil
+		return []BucketOutlier{}, base, len(buckets), true, nil
 	}
 	exps := make([]int64, len(buckets))
 	for i, b := range buckets {
@@ -1585,7 +1585,7 @@ func (s *Store) BucketAnomalies(ctx context.Context, start, end, bucket string, 
 		}
 		return out[i].Key < out[j].Key
 	})
-	return out, Bucket{ExpensePaise: median}, false, nil
+	return out, Bucket{ExpensePaise: median}, len(buckets), false, nil
 }
 
 func maxPaise(a, b int64) int64 {

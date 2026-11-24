@@ -584,7 +584,7 @@ func handleMoneyAnomalies(ctx context.Context, in moneyAnomaliesInput) (map[stri
 		if err != nil {
 			return nil, err
 		}
-		outliers, baseline, insufficient, err := store.BucketAnomalies(ctx, start, end, bucket, catP, acctP, sens, minPaise, sortBy, order)
+		outliers, baseline, considered, insufficient, err := store.BucketAnomalies(ctx, start, end, bucket, catP, acctP, sens, minPaise, sortBy, order)
 		if err != nil {
 			return nil, err
 		}
@@ -601,12 +601,11 @@ func handleMoneyAnomalies(ctx context.Context, in moneyAnomaliesInput) (map[stri
 		base["order"] = order
 		base["baseline_median_paise"] = baseline.ExpensePaise
 		base["insufficient_baseline"] = insufficient
+		base["buckets_considered"] = considered
 		if insufficient {
 			base["reason"] = "fewer than 3 buckets in the window — no baseline to compare against"
-			base["buckets_considered"] = len(rows)
 		} else {
 			base["reason"] = nil
-			base["buckets_considered"] = nil
 		}
 		base["outliers"] = rows
 		return base, nil
