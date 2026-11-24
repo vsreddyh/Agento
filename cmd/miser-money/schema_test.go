@@ -47,6 +47,25 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		{"edit_transaction", editTransactionInput{}, []string{"id"}},
 		// "At least one filter required", so no single field can be.
 		{"delete_transactions", deleteTransactionsInput{}, nil},
+		// Analysis tools: windows are required because absent bounds are
+		// silently wrong (empty result, not an error). Mode discriminators
+		// (by/bucket/scope) are required because the tool cannot know which
+		// table to compute without them. Conditionally-required fields
+		// (side with by=category, bucket with scope=bucket) stay optional
+		// in the schema and are enforced server-side with a named error.
+		{"money_totals", moneyTotalsInput{}, []string{"start", "end"}},
+		{"money_breakdown", moneyBreakdownInput{}, []string{"start", "end", "by"}},
+		{"money_top_expenses", moneyTopExpensesInput{}, []string{"start", "end"}},
+		{"money_series", moneySeriesInput{}, []string{"start", "end", "bucket"}},
+		{"money_compare", moneyCompareInput{},
+			[]string{"start_a", "end_a", "start_b", "end_b", "by"}},
+		{"money_recurring", moneyRecurringInput{}, []string{"start", "end"}},
+		{"money_anomalies", moneyAnomaliesInput{}, []string{"start", "end", "scope"}},
+		{"budget_status", budgetStatusInput{}, []string{"start", "end"}},
+		{"list_budgets", listBudgetsInput{}, nil},
+		{"create_budget", createBudgetInput{}, []string{"category", "month", "monthly_limit"}},
+		{"update_budget", updateBudgetInput{}, []string{"id", "monthly_limit"}},
+		{"delete_budget", deleteBudgetInput{}, []string{"id"}},
 	}
 
 	for _, c := range cases {
@@ -88,6 +107,16 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
 		"query_transactions":  {"id", "type", "category", "account", "limit", "offset"},
 		"delete_transactions": {"id", "amount", "type", "category", "date", "account", "dry_run"},
+		"money_totals":        {"category", "account"},
+		"money_breakdown":     {"side", "categories", "accounts", "sort_by", "order"},
+		"money_top_expenses":  {"category", "account", "limit", "sort_by", "order"},
+		"money_series":        {"category", "account", "order"},
+		"money_compare":       {"category", "categories", "account", "sort_by", "order"},
+		"money_recurring":     {"category", "account", "min_occurrences", "amount_tolerance_pct", "limit", "sort_by", "order"},
+		"money_anomalies":     {"category", "account", "sensitivity", "min_amount_paise", "bucket", "sort_by", "order"},
+		"budget_status":       {"categories", "sort_by", "order"},
+		"list_budgets":        {"month_from", "month_to", "category"},
+		"delete_budget":       {"dry_run"},
 	}
 	inputs := map[string]any{
 		"create_account":      createAccountInput{},
@@ -95,6 +124,16 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"log_transaction":     logTransactionInput{},
 		"query_transactions":  queryTransactionsInput{},
 		"delete_transactions": deleteTransactionsInput{},
+		"money_totals":        moneyTotalsInput{},
+		"money_breakdown":     moneyBreakdownInput{},
+		"money_top_expenses":  moneyTopExpensesInput{},
+		"money_series":        moneySeriesInput{},
+		"money_compare":       moneyCompareInput{},
+		"money_recurring":     moneyRecurringInput{},
+		"money_anomalies":     moneyAnomaliesInput{},
+		"budget_status":       budgetStatusInput{},
+		"list_budgets":        listBudgetsInput{},
+		"delete_budget":       deleteBudgetInput{},
 	}
 
 	for tool, names := range optional {

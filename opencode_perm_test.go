@@ -7,8 +7,9 @@ package agento_test
 //  1. TestAskSetPinned pins the exact `ask` set: adding, removing or
 //     respelling a pattern fails here until the expected set below is
 //     updated in the same change.
-//  2. TestEveryToolClassified enumerates every tool registered in
-//     cmd/*/main.go and requires each to be either `ask`-covered or in
+//  2. TestEveryToolClassified enumerates every tool registered in every
+//     non-test Go file under cmd/* and requires each to be either
+//     `ask`-covered or in
 //     the explicit freeTools list. A new tool that matches neither fails
 //     CI instead of running default-allow unprompted — the author must
 //     consciously classify it (add an `ask` pattern or a free entry).
@@ -42,12 +43,14 @@ var expectedAsk = []string{
 	"*archive_account*",
 	"*batch_modify_gmail_message_labels*",
 	"*create_account*",
+	"*create_budget*",
 	"*delete*",
 	"*edit_transaction*",
 	"*fix_last*",
 	"*log_transaction*",
 	"*modify_gmail_message_labels*",
 	"*prune_old*",
+	"*update_budget*",
 }
 
 // workspaceMCPWriteTools is the external Gmail server's write surface: the two
@@ -65,7 +68,10 @@ var workspaceMCPWriteTools = []string{
 // record calls free); a tool in neither list fails the coverage test.
 // Update this in the same change as any tool add/rename.
 var freeTools = map[string][]string{
-	"miser-money": {"list_accounts", "get_balances", "query_transactions"},
+	"miser-money": {"list_accounts", "get_balances", "query_transactions",
+		"money_totals", "money_breakdown", "money_top_expenses", "money_series",
+		"money_compare", "money_recurring", "money_anomalies", "budget_status",
+		"list_budgets"},
 	"cookbook": {"add_ingredient", "list_ingredients", "add_recipe", "get_recipe",
 		"list_recipes", "update_recipe", "scale_recipe", "log_cook", "list_cooks"},
 	"health-check": {"log_meal", "query_meals", "log_weight", "log_sleep",
@@ -155,9 +161,9 @@ func candidates(server, tool string) []string {
 	}
 }
 
-// registeredTools enumerates (server, tool) pairs from the cmd mains by
-// reading what the servers actually register — not a hand-written list,
-// so a tool added without classification cannot hide from the test.
+// registeredTools enumerates (server, tool) pairs from every Go file in each
+// cmd dir by reading what the servers actually register — not a hand-written
+// list, so a tool added without classification cannot hide from the test.
 func registeredTools(t *testing.T) [][2]string {
 	t.Helper()
 	var out [][2]string
@@ -171,26 +177,52 @@ func registeredTools(t *testing.T) [][2]string {
 		if !e.IsDir() {
 			continue
 		}
-		raw, err := os.ReadFile("cmd/" + e.Name() + "/main.go")
+		files, err := os.ReadDir("cmd/" + e.Name())
 		if err != nil {
 			continue
 		}
-		sm := serverRe.FindSubmatch(raw)
-		if sm == nil {
+		var raws [][]byte
+		for _, f := range files {
+			if f.IsDir() || len(f.Name()) < 4 || f.Name()[len(f.Name())-3:] != ".go" {
+				continue
+			}
+			// Test files build throwaway servers (see handler_test.go's
+			// "miser-money-test"); only real registration counts.
+			if len(f.Name()) > 8 && f.Name()[len(f.Name())-8:] == "_test.go" {
+				continue
+			}
+			raw, err := os.ReadFile("cmd/" + e.Name() + "/" + f.Name())
+			if err != nil {
+				continue
+			}
+			raws = append(raws, raw)
+		}
+		// Server name first: an AddTool call in one file must not be
+		// attributed to an empty server just because its file sorts before
+		// the file with the NewServer call.
+		var server string
+		for _, raw := range raws {
+			if sm := serverRe.FindSubmatch(raw); sm != nil {
+				server = string(sm[1])
+				break
+			}
+		}
+		if server == "" {
 			continue
 		}
-		server := string(sm[1])
 		seen := map[string]bool{}
-		for _, m := range toolRe.FindAllSubmatch(raw, -1) {
-			tool := string(m[1])
-			if !seen[tool] {
-				seen[tool] = true
-				out = append(out, [2]string{server, tool})
+		for _, raw := range raws {
+			for _, m := range toolRe.FindAllSubmatch(raw, -1) {
+				tool := string(m[1])
+				if !seen[tool] {
+					seen[tool] = true
+					out = append(out, [2]string{server, tool})
+				}
 			}
 		}
 	}
 	if len(out) == 0 {
-		t.Fatal("no registered tools found under cmd/*/main.go")
+		t.Fatal("no registered tools found under cmd/*/ non-test Go files")
 	}
 	return out
 }

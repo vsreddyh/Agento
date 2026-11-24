@@ -1,0 +1,137 @@
+package main
+
+import (
+	"context"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// registerAnalysisTools attaches the seven read-only analysis tools. It lives
+// in this file (not main.go) for size, but every registration below uses a
+// literal tool name so the permission test's enumeration keeps seeing them.
+func registerAnalysisTools(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{Name: "money_totals",
+		Description: "Period profit-and-loss for a date window (flat scalars, no table). Required: start, end (YYYY-MM-DD inclusive, like query_transactions — empty or reversed bounds are rejected, not silently empty). Optional: category, account (single; validated like query filters). Reports income/expense/net in paise, savings_rate_pct (null when no income), daily averages, and transfer count/volume. Transfers are never income or expense. An empty window returns zeros, not an error."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyTotalsInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleMoneyTotals(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "money_breakdown",
+		Description: "One breakdown table, selected by required by=category|account. by=category ranks one side (side expense|income required) with amount/count/share/avg per category; shares sum to 100.00 over the returned rows. by=account reports per-account opening/inflows/outflows/net/closing plus leg splits (side is accepted and ignored). Optional: categories[] (row picker, both modes — normalized, deduped; unknown names rejected), accounts[] (scope in category mode, row picker in account mode; case-sensitive exact), sort_by (category mode: amount|name|count default amount; account mode: closing|name|net|inflows|outflows default closing), order asc|desc default desc. Footers total the returned rows, not the window — a filtered call's total IS the subset's sum. Transfers never appear in category mode; in account mode they are transfer_in/out legs. Archived accounts with activity appear flagged."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyBreakdownInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleMoneyBreakdown(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "money_top_expenses",
+		Description: "Largest expense rows in a window (one bounded list, never a dump). Required: start, end. Optional: category, account (single), limit 1..20 default 5, sort_by amount|date default amount, order asc|desc default desc. Default ordering is amount desc, then date asc, then id asc (deterministic, including ties at the limit); sort_by/order change the primary key while ties still break by date then id. Each row carries id/date/amount/amount_paise/category/account/note so it can go straight into edit_transaction/delete_transactions. total_matching counts every expense; expenses holds at most limit."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyTopExpensesInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleMoneyTopExpenses(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "money_series",
+		Description: "Bucketed trend for a window: one row per day, week (Monday-start, keyed by Monday date) or month. Required: start, end, bucket day|week|month. Optional: category, account (single; narrow values, not the grid — empty buckets stay), order asc|desc default asc. Zero-filled: buckets with no rows appear as zeros. From/to clip to the window; days counts clipped days. Day grids over 500 buckets are rejected (use week/month). Carries no period totals — that is money_totals' answer."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in moneySeriesInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleMoneySeries(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "money_compare",
+		Description: "Compare two windows A and B (overlap and unequal lengths allowed). Required: start_a, end_a, start_b, end_b, by=totals|categories. by=totals returns a fixed three-row table (income, expense, net) with A/B paise, delta (B minus A), delta_pct (null when A is zero and the delta moved; 0.00 when both sides are zero) and direction. by=categories attributes the change per expense category with shares and counts, ordered by absolute delta desc by default. Categories mode takes optional categories[] (row picker) and singular account scope; totals mode takes singular category/account and no sort args. Per-period validation errors name the period."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyCompareInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleMoneyCompare(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "money_recurring",
+		Description: "Detect repeating money movements (subscriptions, salary) in a window. Groups income+expense rows by category+type and clusters near-equal amounts (amount_tolerance_pct 0..25 default 0 = exact; tolerance is ±percent around the cluster median). Only clusters with count >= min_occurrences (2..24 default 3) become candidates. Each candidate carries cadence (weekly/fortnightly/monthly/quarterly from median interval, else irregular), jitter, confidence (jitter-based), next_expected_date (null when irregular), and account summary — never occurrence rows (fetch those via query_transactions by id). Bounded by limit (1..50 default 10) with total_candidates/truncated. Transfers are never detected."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyRecurringInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleMoneyRecurring(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "money_anomalies",
+		Description: "Flag the unusual: scope=bucket finds outlier days/weeks/months (bucket day|week|month required in this scope) against the median bucket; scope=row finds single expense rows that dwarf their category median (with row ids for edit/delete). Required: start, end, scope bucket|row. Optional: category, account (single), sensitivity low|medium|high default medium (ratios 2.00/1.50/1.25), min_amount_paise default 10000 (floor on the delta), sort_by/order (bucket scope: delta|expense default delta desc; row scope: amount|ratio default amount desc). Income and transfers never appear as row outliers. Too little history is an insufficient baseline, not an error."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyAnomaliesInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleMoneyAnomalies(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+}
+
+// registerBudgetTools attaches budget_status, list_budgets and the three
+// budget writes. Writes prompt (create/update via their own ask patterns,
+// delete via *delete*); reads run free.
+func registerBudgetTools(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{Name: "budget_status",
+		Description: "Spend vs budget for a window: one row per category with prorated limit, spend, remaining, used_pct, over_budget, plus current-month projection when the window overlaps it. Required: start, end. Optional: categories[] (row picker — the footer totals the returned rows), sort_by remaining|used|spend|limit|name default remaining, order asc|desc default asc. Partial months prorate per covered day. Unbudgeted categories share the table with budgeted:false. Income and transfers never consume a budget. Projection uses the whole calendar month's spend (projection_basis calendar_month)."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in budgetStatusInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleBudgetStatus(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "list_budgets",
+		Description: "List budget rows ordered by category ascending then month descending, with effective_now flagging at most one row per category as the row in force for the current IST month (zero flagged when the category has only future rows). Optional filters: month_from, month_to (YYYY-MM, open-ended), category (salary rejected — income is not budgeted). No budgets is an empty success."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in listBudgetsInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleListBudgets(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "create_budget",
+		Description: "Create a monthly category budget (dated limit: applies from its month until a newer row supersedes it). Required: category (not salary), month YYYY-MM (future months allowed), monthly_limit > 0 exact paise. A duplicate category+month is rejected naming the existing id — change limits with update_budget."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in createBudgetInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleCreateBudget(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "update_budget",
+		Description: "Change one budget row's limit in place (category and month are identity — fix a typo there with delete + create). Required: id, monthly_limit. A no-op update is rejected; updatedAt moves past createdAt."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in updateBudgetInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleUpdateBudget(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "delete_budget",
+		Description: "Delete one budget version. dry_run=true (default) reports the row and what would govern its month afterwards (falls_back_to_month/limit, or unbudgeted:true when the deleted month would have no budget — later surviving versions still govern their own months); nothing is deleted. Pass dry_run=false to delete. Unknown ids are rejected in both modes."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteBudgetInput) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := handleDeleteBudget(ctx, in)
+			if err != nil {
+				return fail(err)
+			}
+			return result(out)
+		})
+}

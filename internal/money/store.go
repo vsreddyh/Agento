@@ -1,7 +1,7 @@
 // Package money: MongoDB storage with derived balances.
 //
-// Collections: money_accounts (name unique), money_transactions — both
-// permanent. Rows never expire: the only way a row disappears is a
+// Collections: money_accounts (name unique), money_transactions and
+// money_budgets — all permanent. Rows never expire: the only way a row disappears is a
 // user-initiated delete. There is no stored running total: an account's
 // balance is its immutable opening seed plus the signed sum of its ledger
 // legs, computed on read — so a balance can never drift from its rows.
@@ -127,9 +127,10 @@ func signedPaise(doc bson.M) map[string]int64 {
 // derived from the ledger, never stored — so there is nothing to transact:
 // no multi-document write exists that could half-land.
 type Store struct {
-	db    *mongoDrv.Database
-	accts *mongoDrv.Collection
-	txns  *mongoDrv.Collection
+	db      *mongoDrv.Database
+	accts   *mongoDrv.Collection
+	txns    *mongoDrv.Collection
+	budgets *mongoDrv.Collection
 }
 
 // New connects with an explicit URI/db (use FromEnv for single-root-.env).
@@ -138,7 +139,7 @@ func New(uri, dbName string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, accts: db.Collection(accounts), txns: db.Collection(transactions)}
+	s := &Store{db: db, accts: db.Collection(accounts), txns: db.Collection(transactions), budgets: db.Collection(budgets)}
 	if err := s.EnsureSchema(context.Background()); err != nil {
 		return nil, err
 	}
@@ -1188,6 +1189,8 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		{transactions, bson.D{{Key: "sending_to", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("sendingto_date").SetSparse(true)},
 		{transactions, bson.D{{Key: "date", Value: 1}, {Key: "type", Value: 1}}, options.Index().SetName("date_type")},
 		{transactions, bson.D{{Key: "category", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("cat_date")},
+		{budgets, bson.D{{Key: "category", Value: 1}, {Key: "month", Value: 1}},
+			options.Index().SetName("uniq_budget_category_month").SetUnique(true)},
 	} {
 		if _, err := s.db.Collection(c.name).Indexes().CreateOne(ctx, mongoDrv.IndexModel{Keys: c.keys, Options: c.opts}); err != nil {
 			return err
