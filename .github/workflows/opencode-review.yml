@@ -49,6 +49,6 @@ jobs:
           prompt: |
             Review this pull request for behaviour-level problems, including
             docs that would make an operator run the wrong command or believe
-            a false claim, and post them as PR comments. Do not modify code,
+            a false claim, and post them as a PR comment. Do not modify code,
             push commits, or create branches or PRs. If there are none, say so
             once and stop.
