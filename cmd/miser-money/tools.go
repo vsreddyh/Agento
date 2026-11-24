@@ -31,7 +31,7 @@ func registerAnalysisTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "money_top_expenses",
-		Description: "Largest expense rows in a window (one bounded list, never a dump). Required: start, end. Optional: category, account (single), limit 1..20 default 5, sort_by amount|date default amount, order asc|desc default desc. Ordering is amount desc, then date asc, then id asc (deterministic, including ties at the limit). Each row carries id/date/amount/amount_paise/category/account/note so it can go straight into edit_transaction/delete_transactions. total_matching counts every expense; expenses holds at most limit."},
+		Description: "Largest expense rows in a window (one bounded list, never a dump). Required: start, end. Optional: category, account (single), limit 1..20 default 5, sort_by amount|date default amount, order asc|desc default desc. Default ordering is amount desc, then date asc, then id asc (deterministic, including ties at the limit); sort_by/order change the primary key while ties still break by date then id. Each row carries id/date/amount/amount_paise/category/account/note so it can go straight into edit_transaction/delete_transactions. total_matching counts every expense; expenses holds at most limit."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyTopExpensesInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleMoneyTopExpenses(ctx, in)
 			if err != nil {
@@ -51,7 +51,7 @@ func registerAnalysisTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "money_compare",
-		Description: "Compare two windows A and B (overlap and unequal lengths allowed). Required: start_a, end_a, start_b, end_b, by=totals|categories. by=totals returns a fixed three-row table (income, expense, net) with A/B paise, delta (B minus A), delta_pct (null when A is zero) and direction. by=categories attributes the change per expense category with shares and counts, ordered by absolute delta desc by default. Categories mode takes optional categories[] (row picker) and singular account scope; totals mode takes singular category/account and no sort args. Per-period validation errors name the period."},
+		Description: "Compare two windows A and B (overlap and unequal lengths allowed). Required: start_a, end_a, start_b, end_b, by=totals|categories. by=totals returns a fixed three-row table (income, expense, net) with A/B paise, delta (B minus A), delta_pct (null when A is zero and the delta moved; 0.00 when both sides are zero) and direction. by=categories attributes the change per expense category with shares and counts, ordered by absolute delta desc by default. Categories mode takes optional categories[] (row picker) and singular account scope; totals mode takes singular category/account and no sort args. Per-period validation errors name the period."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyCompareInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleMoneyCompare(ctx, in)
 			if err != nil {

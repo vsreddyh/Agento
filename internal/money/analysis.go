@@ -1055,7 +1055,9 @@ func bucketGrid(start, end, bucket string) ([]Bucket, error) {
 // --- Compare ---
 
 // MetricDelta is one income|expense|net comparison row. DeltaPct is nil
-// (JSON null) when the A side is zero — a percent over zero is undefined.
+// (JSON null) when the A side is zero and the delta moved — a percent over
+// zero is undefined. When both sides are zero the delta is 0 and the percent
+// is 0.00, not null.
 type MetricDelta struct {
 	Metric    string
 	APaise    int64

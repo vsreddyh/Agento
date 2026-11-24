@@ -405,8 +405,11 @@ Feature: Largest expenses
     Then every entry has id, date, amount, amount_paise, category, account, note
 
   Scenario: Ordering is deterministic
+    Given the default sort (sort_by amount, order desc)
     Then rows are ordered by amount_paise descending, then date ascending,
       then id ascending
+    And a non-default sort_by/order changes only the primary key — ties
+      still break by date ascending, then id ascending
 
   Scenario: Ties at the limit cut deterministically
     Given three rows tie for the fifth slot
