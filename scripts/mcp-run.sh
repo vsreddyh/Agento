@@ -49,21 +49,61 @@ if [[ ! -x "$bin" ]]; then
     exit 1
 fi
 
-# Refuse a binary older than the sources instead of exec-ing it (#557). `bin/`
+# Refuse a binary older than its sources instead of exec-ing it (#557). `bin/`
 # is git-ignored and only scripts/build-mcps.sh writes it, so a pull/merge plus
 # a T3 restart re-runs the OLD file: that is how the live money server kept a
 # removed 90-day TTL and an 11-tool surface days after main moved to 21 tools.
-# The check is deliberately global (any Go source under cmd/ or internal/, and
-# go.mod/go.sum) rather than per-server: build-mcps.sh rebuilds all six, and a
-# false positive costs one build, while a missed one serves stale tools.
+# The check is per-server: cmd/<server> plus the internal packages that server
+# builds on (its own store package plus the shared mongo/mongostore/validate),
+# plus go.mod/go.sum. A change to cmd/health-api or another server's store
+# package must not take down the five unrelated MCP servers, so those dirs are
+# deliberately NOT scanned. All non-test files count, not just *.go: embedded
+# assets (e.g. internal/reports/katex.min.js via //go:embed) compile into the
+# binary too. *_test.go files are excluded — they never reach the binary.
+# A deletion-only commit leaves no newer file behind, so a git HEAD check backs
+# the mtime scan: if the newest commit touching the watched paths is newer than
+# the binary, the binary predates it regardless of mtimes.
 newest=""
 for f in "$REPO/go.mod" "$REPO/go.sum"; do
     if [[ -f "$f" && "$f" -nt "$bin" ]]; then
         newest="$f"
     fi
 done
-if [[ -z "$newest" ]]; then
-    newest="$(find "$REPO/cmd" "$REPO/internal" -type f -name '*.go' -newer "$bin" -print -quit 2>/dev/null || true)"
+case "$name" in
+    task-manager) own="tasks" ;;
+    project-manager) own="projects" ;;
+    miser-money) own="money" ;;
+    cookbook) own="cookbook" ;;
+    health-check) own="healthcheck" ;;
+    reports) own="reports" ;;
+    *) own="" ;;
+esac
+watch=()
+[[ -d "$REPO/cmd/$name" ]] && watch+=("$REPO/cmd/$name")
+if [[ -n "$own" && -d "$REPO/internal/$own" ]]; then
+    watch+=("$REPO/internal/$own")
+elif [[ -z "$own" && -d "$REPO/internal" ]]; then
+    # Unknown server (a future SERVERS entry with no mapping yet): scan wide
+    # rather than risk serving stale tools.
+    watch+=("$REPO/internal")
+fi
+for shared in mongo mongostore validate; do
+    [[ -d "$REPO/internal/$shared" ]] && watch+=("$REPO/internal/$shared")
+done
+if [[ -z "$newest" && ${#watch[@]} -gt 0 ]]; then
+    newest="$(find "${watch[@]}" -type f ! -name '*_test.go' -newer "$bin" -print -quit 2>/dev/null || true)"
+fi
+if [[ -z "$newest" && -d "$REPO/.git" ]] && command -v git >/dev/null 2>&1; then
+    gitpaths=()
+    for w in "${watch[@]}"; do gitpaths+=("${w#"$REPO"/}"); done
+    gitpaths+=("go.mod" "go.sum")
+    last="$(git -C "$REPO" log -1 --format=%ct -- "${gitpaths[@]}" 2>/dev/null || true)"
+    if [[ "$last" =~ ^[0-9]+$ ]]; then
+        bin_epoch="$(stat -c %Y "$bin" 2>/dev/null || stat -f %m "$bin" 2>/dev/null || echo 0)"
+        if (( last > bin_epoch )); then
+            newest="git HEAD ($(git -C "$REPO" log -1 --format=%h -- "${gitpaths[@]}" 2>/dev/null || echo unknown))"
+        fi
+    fi
 fi
 if [[ -n "$newest" ]]; then
     echo "mcp-run.sh: bin/$name is stale — $newest is newer than $bin" >&2

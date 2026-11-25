@@ -197,9 +197,12 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   value wins).
 - Rebuilding is not part of a pull or a restart: `bin/` is git-ignored and only
   `./scripts/build-mcps.sh` writes it, while T3 re-execs whatever is already
-  there. `scripts/mcp-run.sh` now refuses a binary older than any Go source (or
-  `go.mod`/`go.sum`) instead of serving the old tool list (#557); rebuild after
-  every merge touching `cmd/`/`internal/`, then restart T3 — restarting the
+  there. `scripts/mcp-run.sh` now refuses a `bin/<server>` binary older than the
+  sources that server builds on — non-test files under `cmd/<server>`, its own
+  `internal/<store>` package, the shared `internal/mongo|mongostore|validate`,
+  and `go.mod`/`go.sum` (plus a git HEAD check, so deletion-only commits trip it
+  too) — instead of serving the old tool list (#557); rebuild after every merge
+  touching those paths, then restart T3 — restarting the
   compose stack cannot help, there is no MCP container.
 - The Google Workspace entry is deliberately narrow: `gmail:organize` scopes
   (readonly + labels + modify) and only the two label-modification tools as
