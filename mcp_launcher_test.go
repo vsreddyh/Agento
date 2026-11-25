@@ -246,6 +246,87 @@ func TestMCPRunRefusesStaleBinary(t *testing.T) {
 	})
 }
 
+// TestMCPRunRefusesMergeBroughtDeletion pins the merge edge the plain
+// `git log -- <paths>` HEAD check missed: a merge that only brings a
+// watched-path deletion is TREESAME to its feature-branch parent for those
+// paths, so default history simplification prunes the merge and log -1
+// returns the older feature commit. A binary built between the feature commit
+// and the merge then looks fresh and gets exec'd. The launcher passes
+// -m --full-history so the merge commit itself is compared.
+func TestMCPRunRefusesMergeBroughtDeletion(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	c := newFakeCheckout(t, "miser-money")
+	base := time.Now().Add(-3 * time.Hour)
+	c.seed(base, "money", []string{"mongo", "mongostore", "validate"})
+	c.write("internal/money/doomed.go", "package fake\n")
+	c.git(t, base, "init", "-q")
+	c.git(t, base, "add", "-A")
+	c.git(t, base, "commit", "-qm", "seed")
+	c.git(t, base, "checkout", "-qb", "feature")
+	if err := os.Remove(filepath.Join(c.root, "internal/money/doomed.go")); err != nil {
+		t.Fatal(err)
+	}
+	featAt := base.Add(80 * time.Minute)
+	c.git(t, featAt, "add", "-A")
+	c.git(t, featAt, "commit", "-qm", "delete doomed")
+	c.git(t, featAt, "checkout", "-q", "-")
+	// Master advances outside the watched paths, so the merge stays TREESAME
+	// to the feature parent for those paths — the shape that pruned it.
+	c.write("README.md", "docs\n")
+	c.git(t, base.Add(100*time.Minute), "add", "-A")
+	c.git(t, base.Add(100*time.Minute), "commit", "-qm", "docs advance")
+	// Binary "built" after the feature commit but before the merge: it still
+	// contains doomed.go.
+	c.chtimes("bin/miser-money", base.Add(90*time.Minute))
+	mergeAt := base.Add(160 * time.Minute)
+	c.git(t, mergeAt, "merge", "-q", "--no-ff", "feature", "-m", "merge feature")
+	// Only the HEAD check can fire: normalize surviving mtimes older than the
+	// binary, the way the deletion test isolates it.
+	for _, rel := range []string{
+		"cmd/miser-money/main.go", "internal/money/store.go",
+		"internal/mongo/lib.go", "internal/mongostore/lib.go",
+		"internal/validate/lib.go", "go.mod", "go.sum", "README.md",
+	} {
+		c.chtimes(rel, base)
+	}
+	c.expectRefuse(t, "git HEAD")
+}
+
+// TestMCPRunGitIgnoresTestOnlyMerge is the control for the merge edge: a
+// merge bringing only a *_test.go change must NOT refuse, matching the mtime
+// scan's exclusion.
+func TestMCPRunGitIgnoresTestOnlyMerge(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	c := newFakeCheckout(t, "miser-money")
+	base := time.Now().Add(-3 * time.Hour)
+	c.seed(base, "money", []string{"mongo", "mongostore", "validate"})
+	c.git(t, base, "init", "-q")
+	c.git(t, base, "add", "-A")
+	c.git(t, base, "commit", "-qm", "seed")
+	c.git(t, base, "checkout", "-qb", "feature")
+	c.write("internal/money/store_test.go", "package fake\n// changed\n")
+	c.git(t, base.Add(80*time.Minute), "add", "-A")
+	c.git(t, base.Add(80*time.Minute), "commit", "-qm", "test only")
+	c.git(t, base.Add(80*time.Minute), "checkout", "-q", "-")
+	c.write("README.md", "docs\n")
+	c.git(t, base.Add(100*time.Minute), "add", "-A")
+	c.git(t, base.Add(100*time.Minute), "commit", "-qm", "docs advance")
+	c.chtimes("bin/miser-money", base.Add(90*time.Minute))
+	c.git(t, base.Add(160*time.Minute), "merge", "-q", "--no-ff", "feature", "-m", "merge tests")
+	for _, rel := range []string{
+		"cmd/miser-money/main.go", "internal/money/store.go",
+		"internal/mongo/lib.go", "internal/mongostore/lib.go",
+		"internal/validate/lib.go", "go.mod", "go.sum", "README.md",
+	} {
+		c.chtimes(rel, base)
+	}
+	c.expectLaunch(t)
+}
+
 // TestMCPRunRefusesDeletedSource pins the deletion edge: a commit that only
 // deletes a watched file leaves no newer file behind, so the mtime scan
 // passes — but the git HEAD check must still refuse.

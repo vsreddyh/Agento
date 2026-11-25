@@ -203,7 +203,9 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   imports (exact per-server mapping in the launcher, pinned by
   `TestMCPWatchSetsMatchGoDeps` so a new import without a mapping update fails
   CI instead of serving stale tools), plus `go.mod`/`go.sum` and a git HEAD
-  check with the same test exclusion, so deletion-only commits trip it too —
+  check with the same test exclusion, so deletion-only commits trip it too
+  (merge-brought deletions included via `-m --full-history`, since default
+  simplification prunes merges TREESAME to one parent) —
   instead of serving the old tool list (#557); rebuild after every merge
   touching those paths, then restart T3 — restarting the
   compose stack cannot help, there is no MCP container.

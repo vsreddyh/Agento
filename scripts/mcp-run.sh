@@ -65,7 +65,13 @@ fi
 # A deletion-only commit leaves no newer file behind, so a git HEAD check backs
 # the mtime scan: if the newest commit touching the watched paths is newer than
 # the binary, the binary predates it regardless of mtimes. The HEAD check uses
-# the same test exclusion, so a test-only commit does not trip it.
+# the same test exclusion, so a test-only commit does not trip it. It passes
+# -m --full-history: without them a merge that only brings a watched-path
+# deletion is TREESAME to its feature-branch parent for those paths, so
+# default history simplification prunes the merge and log -1 returns the older
+# feature commit — missing a binary built between the feature commit and the
+# merge. -m splits merges per parent and --full-history disables the pruning,
+# so the merge commit itself (with its own date) is what gets compared.
 newest=""
 for f in "$REPO/go.mod" "$REPO/go.sum"; do
     if [[ -f "$f" && "$f" -nt "$bin" ]]; then
@@ -104,11 +110,11 @@ if [[ -z "$newest" && -d "$REPO/.git" ]] && command -v git >/dev/null 2>&1; then
     gitpaths+=("go.mod" "go.sum")
     # Same test exclusion as the mtime scan: a test-only commit must not trip
     # the guard.
-    last="$(git -C "$REPO" log -1 --format=%ct -- "${gitpaths[@]}" ':(exclude)*_test.go' 2>/dev/null || true)"
+    last="$(git -C "$REPO" log -1 -m --full-history --format=%ct -- "${gitpaths[@]}" ':(exclude)*_test.go' 2>/dev/null || true)"
     if [[ "$last" =~ ^[0-9]+$ ]]; then
         bin_epoch="$(stat -c %Y "$bin" 2>/dev/null || stat -f %m "$bin" 2>/dev/null || echo 0)"
         if (( last > bin_epoch )); then
-            newest="git HEAD ($(git -C "$REPO" log -1 --format=%h -- "${gitpaths[@]}" ':(exclude)*_test.go' 2>/dev/null || echo unknown))"
+            newest="git HEAD ($(git -C "$REPO" log -1 -m --full-history --format=%h -- "${gitpaths[@]}" ':(exclude)*_test.go' 2>/dev/null || echo unknown))"
         fi
     fi
 fi
