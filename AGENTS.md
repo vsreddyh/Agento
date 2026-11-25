@@ -195,6 +195,20 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   are set in `.env` or exported in the environment (the launcher reads the file
   itself, like `mcp-run.sh` does for the two Mongo variables, and an exported
   value wins).
+- Rebuilding is not part of a pull or a restart: `bin/` is git-ignored and only
+  `./scripts/build-mcps.sh` writes it, while T3 re-execs whatever is already
+  there. `scripts/mcp-run.sh` now refuses a `bin/<server>` binary older than the
+  sources that server builds on — non-test files under `cmd/<server>`, its own
+  `internal/<store>` package, and the shared `internal/*` libs it actually
+  imports (exact per-server mapping in the launcher, pinned by
+  `TestMCPWatchSetsMatchGoDeps` so a new import without a mapping update fails
+  CI instead of serving stale tools), plus `go.mod`/`go.sum` and a git HEAD
+  check with the same test exclusion, so deletion-only commits trip it too
+  (merge-brought deletions included via `-m --full-history`, since default
+  simplification prunes merges TREESAME to one parent) —
+  instead of serving the old tool list (#557); rebuild after every merge
+  touching those paths, then restart T3 — restarting the
+  compose stack cannot help, there is no MCP container.
 - The Google Workspace entry is deliberately narrow: `gmail:organize` scopes
   (readonly + labels + modify) and only the two label-modification tools as
   writes — no send, draft, filter-management, label-management or
