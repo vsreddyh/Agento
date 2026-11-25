@@ -122,8 +122,8 @@ of reaching for it. Money writes also prompt: `create_account`,
 
 `delete_transactions` dry-runs by default: it returns the rows it would
 remove and deletes nothing unless you pass `dry_run=false`. A live delete
-flags rows with `deletedAt` instead of removing them (soft delete — reads
-exclude them immediately, the TTL removes them after 10 days, and
+flags rows with `deletedAt` instead of removing them (soft delete — ledger
+reads exclude them immediately, the TTL removes them after 10 days, and
 `restore_transactions` brings one back by id inside that window). Show those
 rows, then delete only once the user confirms. Prefer `id` over a filter
 when the target is one entry. `unarchive_account` also prompts (it matches

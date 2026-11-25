@@ -825,7 +825,7 @@ func (s *Store) RestoreTransaction(ctx context.Context, id string) (bson.M, erro
 // type/category, resolved accounts, transfer rules, real calendar
 // dates. A type/account/amount move changes the row; derived balances follow,
 // so a move can never half-land — there is no second write to fail. A date
-// change just moves the row's date — rows never expire, so any past date
+// change just moves the row's date — unflagged rows never expire, so any past date
 // stays put. Note is truncated like a write. Moving a leg TO an archived
 // account rejects, like a new log; resupplying the leg already on the row
 // does not (it is not a move, so the read-then-edit flow keeps working —
