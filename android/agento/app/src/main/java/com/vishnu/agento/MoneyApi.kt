@@ -62,12 +62,17 @@ internal fun parseMoneyTransaction(o: JSONObject): MoneyTransaction? {
 }
 
 /** Parses the balances envelope: the canonical `accounts` list plus
- * `total_paise`. A missing envelope is a shape error, never a clean zero. */
+ * `total_paise`. Both are required — a server that omits the total is stale,
+ * and reading it as ₹0 would look like a broke account rather than a stale
+ * server, so that shape throws instead of zero-filling. */
 internal fun parseMoneyBalances(body: String): Pair<List<MoneyAccount>, Long> {
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
     val arr = root.optJSONArray("accounts")
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
+    if (!root.has("total_paise") || root.isNull("total_paise")) {
+        throw RuntimeException(MONEY_SHAPE_ERROR)
+    }
     val out = mutableListOf<MoneyAccount>()
     for (i in 0 until arr.length()) {
         val o = arr.optJSONObject(i) ?: continue
@@ -85,19 +90,25 @@ data class MoneyPage(
 )
 
 /** Parses the transactions envelope: the canonical `transactions` list plus
- * `total`/`truncated` for the showing-N-of-M indicator. A missing envelope
- * is a shape error, never a clean empty that reads as no rows. */
+ * `total`/`truncated` for the showing-N-of-total indicator. Missing footers
+ * throw like a missing envelope — defaulting `total` to the page size would
+ * read as complete when older rows exist. */
 internal fun parseMoneyTransactions(body: String): MoneyPage {
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
     val arr = root.optJSONArray("transactions")
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
+    if (!root.has("total") || root.isNull("total") ||
+        !root.has("truncated") || root.isNull("truncated")
+    ) {
+        throw RuntimeException(MONEY_SHAPE_ERROR)
+    }
     val out = mutableListOf<MoneyTransaction>()
     for (i in 0 until arr.length()) {
         val o = arr.optJSONObject(i) ?: continue
         parseMoneyTransaction(o)?.let { out.add(it) }
     }
-    return MoneyPage(out, root.optLong("total", out.size.toLong()), root.optBoolean("truncated", false))
+    return MoneyPage(out, root.optLong("total", 0L), root.optBoolean("truncated", false))
 }
 
 /** One message for a server that does not speak the money shape: names the

@@ -63,7 +63,7 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`podman-compose --env-file .env -f docker/docker-compose.yml run --rm retention` from the repo root → `cmd/retention` Go binary); cron daily 03:00
    installed by `init`, also runs on every `start`. money is soft-deleted (flagged
-   rows vanish from reads at once; the `ttl_deleted_at` index removes them 10
+   rows vanish from ledger reads at once; the `ttl_deleted_at` index removes them 10
    days after flagging; unflagged rows are permanent);
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
    permanent; reports (∃-Mail) prunes read+unstarred >7d (never unread/starred);

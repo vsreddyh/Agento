@@ -32,6 +32,13 @@ import kotlinx.coroutines.launch
 private fun todayIst(): String =
     java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).toString()
 
+/** Drill-in window end: a year past today. Balances derive from all live
+ * rows with no date cap (log_transaction allows far-future dates), so ending
+ * the window today would hide future rows the total includes — with no row
+ * to explain the gap. */
+private fun windowEndIst(): String =
+    java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).plusYears(1).toString()
+
 @Composable
 internal fun MoneyScreen(
     onMenu: () -> Unit = {},
@@ -193,10 +200,12 @@ private fun MoneyTransactionsView(
         scope.launch {
             // Rows never expire: a wide window with paging. Newest first
             // (server order=desc), capped at the first page of 100 — the
-            // subtitle counts whether older rows remain.
+            // subtitle counts whether older rows remain. The window runs a
+            // year past today so far-future rows (which the total includes)
+            // appear instead of vanishing.
             MoneyApi(context).transactions(
                 start = "2020-01-01",
-                end = todayIst(),
+                end = windowEndIst(),
                 account = account.name,
             ).fold(
                 onSuccess = { page ->

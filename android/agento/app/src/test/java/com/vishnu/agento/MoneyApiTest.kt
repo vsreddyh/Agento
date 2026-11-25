@@ -96,4 +96,26 @@ class MoneyApiTest {
         assertEquals(250L, page.total)
         assertEquals(true, page.truncated)
     }
+
+    @Test
+    fun `parseMoneyTransactions rejects missing footers`() {
+        try {
+            parseMoneyTransactions(
+                """{"ok":true,"count":1,"transactions":[{"id":"r1"}]}""",
+            )
+            assertTrue("missing total/truncated was accepted", false)
+        } catch (e: RuntimeException) {
+            assertTrue(e.message!!.contains("money data"))
+        }
+    }
+
+    @Test
+    fun `parseMoneyBalances rejects missing total`() {
+        try {
+            parseMoneyBalances("""{"ok":true,"accounts":[{"id":"a"}]}""")
+            assertTrue("missing total_paise was accepted", false)
+        } catch (e: RuntimeException) {
+            assertTrue(e.message!!.contains("money data"))
+        }
+    }
 }

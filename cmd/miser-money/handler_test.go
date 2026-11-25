@@ -573,3 +573,28 @@ func TestDeleteFlagsDeletedIdAsAlreadyDeleted(t *testing.T) {
 		t.Fatalf("live re-delete: %q, want the already-deleted error", errMsg)
 	}
 }
+
+// A soft-deleted id reads as already-deleted on by-id query too — not as
+// unknown (Match is live-only and would report 0 rows either way).
+func TestQueryByIdFlagsDeletedIdAsAlreadyDeleted(t *testing.T) {
+	withTestStore(t)
+	text, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount_paise": 10000, "account": "Cash",
+	})
+	if errMsg != "" {
+		t.Fatalf("log: %s", errMsg)
+	}
+	var logged struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(text), &logged); err != nil || logged.ID == "" {
+		t.Fatalf("log result has no id: %v (%s)", err, text)
+	}
+	if _, err := store.Delete(context.Background(), map[string]any{"id": logged.ID}); err != nil {
+		t.Fatalf("flag: %v", err)
+	}
+	_, errMsg = callTool(t, "query_transactions", map[string]any{"id": logged.ID})
+	if errMsg == "" || !strings.Contains(errMsg, "already deleted") {
+		t.Fatalf("query by flagged id: %q, want the already-deleted error", errMsg)
+	}
+}

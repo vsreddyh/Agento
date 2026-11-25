@@ -11,7 +11,7 @@ set -euo pipefail
 #
 #   story       git repo (workspace/portals)   — no-op
 #   resumes     git repo (workspace/portfolio-resume) — no-op
-#   money       soft-deleted — no-op (flagged rows vanish from reads at once;
+#   money       soft-deleted — no-op (flagged rows vanish from ledger reads at once;
 #               the ttl_deleted_at index removes them 10 days after flagging)
 #   health-check hc_meals + hc_days pruned after 30 days; hc_weight is NEVER touched
 #   cookbook    permanent — no-op

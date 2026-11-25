@@ -739,8 +739,8 @@ func (s *Store) accountNames(ctx context.Context) (map[string]string, error) {
 }
 
 // Delete flags matching rows with deletedAt instead of removing them: the
-// rows vanish from every read path the moment they flag (all reads build on
-// liveFilter) and the 10-day TTL index removes them for good. A second delete
+// rows vanish from every ledger read the moment they flag (all ledger reads
+// build on liveFilter) and the 10-day TTL index removes them for good. A second delete
 // of an already-flagged row matches nothing — like an unknown id, it reports
 // 0 rather than deleting twice. Balances need no adjustment: they are derived
 // from the surviving rows, so the total follows automatically.
