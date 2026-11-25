@@ -3,8 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"agento/internal/money"
+	"agento/internal/mongo"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -25,7 +30,81 @@ import (
 //     nothing: the caller saw zero transactions and no reason why.
 //   - a lone `start` with no `end` (or the reverse) is rejected instead of being
 //     silently ignored: the pair is either complete or absent, never half-applied.
+//
+// withTestStore swaps the package-global store for a seeded throwaway
+// database (miser_cmd_test — never the internal package's miser_test, since
+// `go test ./...` runs packages in parallel and sharing it would drop
+// another suite's rows mid-run). Category existence is data-dependent now,
+// so the unknown-category rejections run here instead of against nil.
+func withTestStore(t *testing.T) {
+	t.Helper()
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c, err := mongo.ConnectURI(uri)
+	if err != nil {
+		t.Skipf("mongo unreachable: %v", err)
+	}
+	db := c.Database("miser_cmd_test")
+	_ = db.Drop(ctx)
+	s, err := money.New(uri, "miser_cmd_test")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	store = s
+	// Every handler test assumes a Cash account exists, like the internal
+	// package's testStore seed.
+	if _, err := s.CreateAccount(ctx, "Cash", "cash", 0); err != nil {
+		t.Fatalf("seed Cash: %v", err)
+	}
+	t.Cleanup(func() {
+		store = nil
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = db.Drop(ctx)
+	})
+}
+
 func callTool(t *testing.T, name string, args map[string]any) (string, string) {
+	t.Helper()
+	text, errMsg, _ := callToolFull(t, name, args)
+	return text, errMsg
+}
+
+// callToolFull is callTool plus the protocol-level IsError flag, for the
+// failure-contract test: a rejection must set IsError, a success must not.
+func callToolFull(t *testing.T, name string, args map[string]any) (string, string, bool) {
+	t.Helper()
+	res, err := doCall(t, name, args)
+	if err != nil {
+		t.Fatalf("calling %s: %v", name, err)
+	}
+
+	// `structured` is this package's structured payload: a map with "ok" and "error".
+	raw, mErr := json.Marshal(res.StructuredContent)
+	if mErr != nil {
+		t.Fatalf("marshalling result: %v", mErr)
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshalling result: %v (raw %s)", err, raw)
+	}
+	text := ""
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			text += tc.Text
+		}
+	}
+	return text, out.Error, res.IsError
+}
+
+func doCall(t *testing.T, name string, args map[string]any) (*mcp.CallToolResult, error) {
 	t.Helper()
 
 	// No Mongo here by design (see above): handlers validate before
@@ -50,30 +129,7 @@ func callTool(t *testing.T, name string, args map[string]any) (string, string) {
 	}
 	defer session.Close()
 
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
-	if err != nil {
-		t.Fatalf("calling %s: %v", name, err)
-	}
-
-	// `structured` is this package's structured payload: a map with "ok" and "error".
-	raw, mErr := json.Marshal(res.StructuredContent)
-	if mErr != nil {
-		t.Fatalf("marshalling result: %v", mErr)
-	}
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshalling result: %v (raw %s)", err, raw)
-	}
-	text := ""
-	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
-			text += tc.Text
-		}
-	}
-	return text, out.Error
+	return session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 }
 
 func TestQueryTransactionsRejectsUnusableBounds(t *testing.T) {
@@ -217,11 +273,13 @@ func TestEditTransactionRejectsEmptyEdit(t *testing.T) {
 // An unknown category used to be refiled under "other" and reported as if it had
 // been stored: the caller asked for "utilities", got "other", and only found out
 // by reading the row back. The store now rejects it before any write, so the
-// handler surfaces a real error. `store` is nil here — the rejection happens
-// before the receiver is dereferenced.
+// handler surfaces a real error. Categories are user-managed, so existence is
+// data-dependent: this runs against a seeded test store (whose defaults lack
+// "utilities"), unlike the nil-store validations above.
 func TestLogTransactionRejectsUnknownCategory(t *testing.T) {
+	withTestStore(t)
 	_, errMsg := callTool(t, "log_transaction", map[string]any{
-		"type": "expense", "amount": 100, "account": "Cash", "category": "utilities",
+		"type": "expense", "amount_paise": 10000, "account": "Cash", "category": "utilities",
 	})
 	if errMsg == "" {
 		t.Fatal("an unknown category was accepted; it used to be silently stored as 'other'")
@@ -236,7 +294,7 @@ func TestLogTransactionRejectsUnknownCategory(t *testing.T) {
 // is not a real date, so the write is invalid.
 func TestLogTransactionRejectsNonCalendarDate(t *testing.T) {
 	_, errMsg := callTool(t, "log_transaction", map[string]any{
-		"type": "expense", "amount": 100, "account": "Cash", "date": "2026-02-30",
+		"type": "expense", "amount_paise": 10000, "account": "Cash", "date": "2026-02-30",
 	})
 	if errMsg == "" {
 		t.Fatal("a non-calendar date was accepted; the query bounds reject it")
@@ -281,27 +339,26 @@ func TestDeleteTransactionsRejectsIdWithType(t *testing.T) {
 // would otherwise silently widen to every row matching the other filters.
 func TestDeleteTransactionsRejectsZeroAmount(t *testing.T) {
 	_, errMsg := callTool(t, "delete_transactions", map[string]any{
-		"amount": 0.0, "category": "groceries", "dry_run": true,
+		"amount_paise": 0, "category": "groceries", "dry_run": true,
 	})
 	if errMsg == "" {
-		t.Fatal("amount=0 was accepted; 0 means absent and cannot narrow a delete")
+		t.Fatal("amount_paise=0 was accepted; 0 means absent and cannot narrow a delete")
 	}
 	if !strings.Contains(errMsg, "> 0") {
 		t.Errorf("error %q does not state the positive-amount rule", errMsg)
 	}
 }
 
-// A >2-decimal filter is rejected, not rounded onto paise it never stored
-// (`store` is nil here — ExactPaise is pure, so this fails before any touch).
-func TestDeleteTransactionsRejectsInexactPaise(t *testing.T) {
-	_, errMsg := callTool(t, "delete_transactions", map[string]any{
-		"amount": 10.555, "dry_run": true,
+// amount_paise is an integer: a fractional value cannot even be expressed.
+// The SDK's own schema validation rejects it before the handler runs (the
+// message names the wanted type), so a stale rupee-float caller can never
+// silently log truncated paise.
+func TestDeleteTransactionsRejectsFractionalPaise(t *testing.T) {
+	text, _ := callTool(t, "delete_transactions", map[string]any{
+		"amount_paise": 10.555, "dry_run": true,
 	})
-	if errMsg == "" {
-		t.Fatal("amount=10.555 was accepted; it would match paise it never stored")
-	}
-	if !strings.Contains(errMsg, "exact paise") {
-		t.Errorf("error %q does not demand exact paise", errMsg)
+	if !strings.Contains(text, "integer") {
+		t.Fatalf("amount_paise=10.555 was not rejected as non-integer: %q", text)
 	}
 }
 
@@ -351,5 +408,101 @@ func TestPageWindow(t *testing.T) {
 	truncated, next = pageWindow(5, 0, 5)
 	if truncated || next != nil {
 		t.Fatalf("past-end page: truncated=%v next=%v, want false/nil", truncated, next)
+	}
+}
+
+// A failed tool call is a protocol-level failure: IsError must be set, so a
+// client keying off the protocol sees the rejection instead of a success with
+// prose to parse. A valid call must not set it.
+func TestFailuresSetMCPIsError(t *testing.T) {
+	_, _, isErr := callToolFull(t, "query_transactions", map[string]any{
+		"start": "", "end": "2026-03-31",
+	})
+	if !isErr {
+		t.Fatal("a rejected call did not set IsError")
+	}
+	withTestStore(t)
+	_, _, isErr = callToolFull(t, "get_balances", map[string]any{})
+	if isErr {
+		t.Fatal("a successful call set IsError")
+	}
+}
+
+// edit_account validates before any store touch: blank name and an empty edit
+// are rejected with nil store.
+func TestEditAccountRejectsEmptyEdits(t *testing.T) {
+	_, errMsg := callTool(t, "edit_account", map[string]any{"name": "   "})
+	if errMsg == "" {
+		t.Fatal("a blank name was accepted; expected the name requirement")
+	}
+	_, errMsg = callTool(t, "edit_account", map[string]any{"name": "Cash"})
+	if errMsg == "" {
+		t.Fatal("an empty edit was accepted; expected the one-field rule")
+	}
+	if !strings.Contains(errMsg, "at least one") {
+		t.Errorf("error %q does not state the one-field rule", errMsg)
+	}
+}
+
+// Category writes validate names before any store touch: blank names are
+// rejected with nil store.
+func TestCategoryToolsRejectBlankNames(t *testing.T) {
+	_, errMsg := callTool(t, "create_category", map[string]any{"name": "   "})
+	if errMsg == "" {
+		t.Fatal("a blank category name was accepted")
+	}
+	_, errMsg = callTool(t, "update_category", map[string]any{"name": "groceries", "new_name": "  "})
+	if errMsg == "" {
+		t.Fatal("a blank new_name was accepted")
+	}
+	_, errMsg = callTool(t, "delete_category", map[string]any{"name": "  "})
+	if errMsg == "" {
+		t.Fatal("a blank delete name was accepted")
+	}
+}
+
+// Null means no change; "" clears the note. End to end through a test store:
+// log with a note, clear it, read the row back.
+func TestEditTransactionNoteNullVsEmpty(t *testing.T) {
+	withTestStore(t)
+	text, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount_paise": 10000, "account": "Cash", "note": "lunch",
+	})
+	if errMsg != "" {
+		t.Fatalf("log: %s", errMsg)
+	}
+	var logged struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(text), &logged); err != nil || logged.ID == "" {
+		t.Fatalf("log result has no id: %v (%s)", err, text)
+	}
+	// Omitted note leaves the stored note alone.
+	_, errMsg = callTool(t, "edit_transaction", map[string]any{
+		"id": logged.ID, "category": "groceries",
+	})
+	if errMsg != "" {
+		t.Fatalf("edit: %s", errMsg)
+	}
+	rows, err := store.Match(context.Background(), map[string]any{"id": logged.ID})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("re-read: %v %v", len(rows), err)
+	}
+	if rows[0]["note"] != "lunch" {
+		t.Fatalf("omitted note changed the stored note: %v", rows[0]["note"])
+	}
+	// Explicit "" clears it.
+	_, errMsg = callTool(t, "edit_transaction", map[string]any{
+		"id": logged.ID, "note": "",
+	})
+	if errMsg != "" {
+		t.Fatalf("clear: %s", errMsg)
+	}
+	rows, err = store.Match(context.Background(), map[string]any{"id": logged.ID})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("re-read: %v %v", len(rows), err)
+	}
+	if n, _ := rows[0]["note"].(string); n != "" {
+		t.Fatalf("empty note did not clear the stored note: %q", n)
 	}
 }

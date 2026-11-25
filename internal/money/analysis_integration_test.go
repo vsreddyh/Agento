@@ -11,7 +11,7 @@ import (
 
 // seedAnalysisFixture builds the shared fixture: four accounts, nine March
 // rows, two February rows (archived-account history), then archives Old
-// Wallet. Amounts are rupees; storage is paise.
+// Wallet. Amounts are integer paise, matching the tool surface.
 func seedAnalysisFixture(t *testing.T, s *Store) {
 	t.Helper()
 	ctx := context.Background()
@@ -21,32 +21,36 @@ func seedAnalysisFixture(t *testing.T, s *Store) {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	_, err := s.CreateAccount(ctx, "Cash", "cash", 1000)
-	must(err)
-	_, err = s.CreateAccount(ctx, "HDFC Checking", "bank", 50000)
+	// testStore already seeds Cash at 0: correct the seed instead of
+	// re-creating it (also exercises EditAccount on the shared fixture).
+	cashSeed := int64(100000)
+	if _, err := s.EditAccount(ctx, "Cash", nil, nil, &cashSeed); err != nil {
+		t.Fatalf("seed Cash opening: %v", err)
+	}
+	_, err := s.CreateAccount(ctx, "HDFC Checking", "bank", 5000000)
 	must(err)
 	_, err = s.CreateAccount(ctx, "Equity Card", "card", 0)
 	must(err)
-	_, err = s.CreateAccount(ctx, "Old Wallet", "cash", 250)
+	_, err = s.CreateAccount(ctx, "Old Wallet", "cash", 25000)
 	must(err)
-	log := func(date string, amount float64, typ, cat, acct, dst string) {
+	log := func(date string, amount int64, typ, cat, acct, dst string) {
 		t.Helper()
 		_, _, err := s.Insert(ctx, date, amount, typ, cat, acct, dst, "", "mcp", "")
 		must(err)
 	}
-	// February: archived-account history. The 250 transfer leaves HDFC, so
-	// HDFC's March opening is 49750.00, not its 50000 seed.
-	log("2026-02-05", 300, "expense", "health", "Old Wallet", "")
-	log("2026-02-10", 250, "transfer", "other", "HDFC Checking", "Old Wallet")
-	log("2026-03-01", 80000, "income", "salary", "HDFC Checking", "")
-	log("2026-03-02", 2500.50, "expense", "groceries", "HDFC Checking", "")
-	log("2026-03-03", 450, "expense", "eating out", "Equity Card", "")
-	log("2026-03-05", 5000, "transfer", "other", "HDFC Checking", "Cash")
-	log("2026-03-08", 120.75, "expense", "transport", "Cash", "")
-	log("2026-03-12", 1800, "expense", "groceries", "Equity Card", "")
-	log("2026-03-20", 999, "expense", "fun", "HDFC Checking", "")
-	log("2026-03-28", 2400, "expense", "bills", "HDFC Checking", "")
-	log("2026-03-31", 1500, "income", "other", "Cash", "")
+	// February: archived-account history. The 25000 transfer leaves HDFC, so
+	// HDFC's March opening is 4975000, not its 5000000 seed.
+	log("2026-02-05", 30000, "expense", "health", "Old Wallet", "")
+	log("2026-02-10", 25000, "transfer", "other", "HDFC Checking", "Old Wallet")
+	log("2026-03-01", 8000000, "income", "salary", "HDFC Checking", "")
+	log("2026-03-02", 250050, "expense", "groceries", "HDFC Checking", "")
+	log("2026-03-03", 45000, "expense", "eating out", "Equity Card", "")
+	log("2026-03-05", 500000, "transfer", "other", "HDFC Checking", "Cash")
+	log("2026-03-08", 12075, "expense", "transport", "Cash", "")
+	log("2026-03-12", 180000, "expense", "groceries", "Equity Card", "")
+	log("2026-03-20", 99900, "expense", "fun", "HDFC Checking", "")
+	log("2026-03-28", 240000, "expense", "bills", "HDFC Checking", "")
+	log("2026-03-31", 150000, "income", "other", "Cash", "")
 	if _, _, err := s.ArchiveAccount(ctx, "Old Wallet"); err != nil {
 		t.Fatalf("archive Old Wallet: %v", err)
 	}
@@ -157,9 +161,9 @@ func TestAnalysisAccountFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Balances: %v", err)
 	}
-	balTotal, _ := bal["total"].(float64)
-	if want := ToRupees(res.TotalActiveClosingPaise); balTotal != want {
-		t.Errorf("balances total = %v, want active closing %v", balTotal, want)
+	balTotal, _ := bal["total_paise"].(int64)
+	if balTotal != res.TotalActiveClosingPaise {
+		t.Errorf("balances total = %v, want active closing %v", balTotal, res.TotalActiveClosingPaise)
 	}
 }
 
@@ -232,17 +236,17 @@ func TestBudgetCRUDAndStatus(t *testing.T) {
 	s := testStore(t)
 	seedAnalysisFixture(t, s)
 	ctx := context.Background()
-	b, err := s.CreateBudget(ctx, "groceries", "2026-01", 5000.00)
+	b, err := s.CreateBudget(ctx, "groceries", "2026-01", 500000)
 	if err != nil {
 		t.Fatalf("CreateBudget: %v", err)
 	}
 	if b.MonthlyLimitPaise != 500000 {
 		t.Errorf("limit = %d, want 500000", b.MonthlyLimitPaise)
 	}
-	if _, err := s.CreateBudget(ctx, "groceries", "2026-01", 6000.00); err == nil {
+	if _, err := s.CreateBudget(ctx, "groceries", "2026-01", 600000); err == nil {
 		t.Fatal("duplicate category+month was accepted")
 	}
-	if _, err := s.CreateBudget(ctx, "Groceries", "2026-03", 6000.00); err != nil {
+	if _, err := s.CreateBudget(ctx, "Groceries", "2026-03", 600000); err != nil {
 		t.Fatalf("second version: %v", err)
 	}
 	// 2026-02 resolves to the January row.
@@ -282,7 +286,7 @@ func TestBudgetCRUDAndStatus(t *testing.T) {
 		t.Errorf("partial spend = %d, want 430050", part.Rows[0].SpendPaise)
 	}
 	// Update then delete with fallback.
-	upd, err := s.UpdateBudget(ctx, b.ID, 5500.00)
+	upd, err := s.UpdateBudget(ctx, b.ID, 550000)
 	if err != nil {
 		t.Fatalf("UpdateBudget: %v", err)
 	}

@@ -15,12 +15,12 @@ import (
 const budgets = "money_budgets"
 
 // Budget is one dated limit row: category + month is the identity, and the
-// limit applies from that month until a newer row supersedes it.
+// limit applies from that month until a newer row supersedes it. Limits are
+// int64 paise — the tool surface speaks paise, matching storage exactly.
 type Budget struct {
 	ID                string
 	Category          string
 	Month             string
-	MonthlyLimit      float64
 	MonthlyLimitPaise int64
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -46,32 +46,12 @@ func CheckBudgetMonth(tool, v string) (string, error) {
 	return m, nil
 }
 
-// CheckBudgetCategory normalizes a budget category: trimmed, lowercased,
-// must exist — and salary is income, so it cannot be budgeted.
-func CheckBudgetCategory(tool, v string) (string, error) {
-	c := strings.ToLower(strings.TrimSpace(v))
-	if c == "" {
-		return "", fail("%s category is required", tool)
+// CheckBudgetLimit validates a monthly limit in paise: an integer > 0.
+func CheckBudgetLimit(tool string, paise int64) (int64, error) {
+	if paise <= 0 {
+		return 0, fail("%s monthly_limit_paise must be > 0 — got %d", tool, paise)
 	}
-	if !contains(Categories, c) {
-		return "", fail("%s category %q does not exist — use one of %v", tool, v, Categories)
-	}
-	if c == "salary" {
-		return "", fail("%s salary is income and cannot be budgeted", tool)
-	}
-	return c, nil
-}
-
-// CheckBudgetLimit validates a monthly limit in rupees: > 0 and exact paise.
-func CheckBudgetLimit(tool string, v float64) (int64, error) {
-	if v <= 0 {
-		return 0, fail("%s monthly_limit must be > 0 — got %v", tool, v)
-	}
-	p, ok := ExactPaise(v)
-	if !ok {
-		return 0, fail("%s monthly_limit %v is not an exact paise value — use at most 2 decimals", tool, v)
-	}
-	return p, nil
+	return paise, nil
 }
 
 func budgetDocToBudget(r bson.M) Budget {
@@ -88,7 +68,6 @@ func budgetDocToBudget(r bson.M) Budget {
 		b.Month = m
 	}
 	b.MonthlyLimitPaise = paiseOf(r["monthlyLimit"])
-	b.MonthlyLimit = ToRupees(b.MonthlyLimitPaise)
 	if t, ok := r["createdAt"].(primitive.DateTime); ok {
 		b.CreatedAt = t.Time()
 	}
@@ -108,8 +87,8 @@ func budgetIDHex(v string) (primitive.ObjectID, error) {
 
 // CreateBudget stores a dated limit. A duplicate category+month is rejected
 // naming the existing row — limits move with update_budget, never overwrite.
-func (s *Store) CreateBudget(ctx context.Context, category, month string, monthlyLimit float64) (*Budget, error) {
-	cat, err := CheckBudgetCategory("create_budget", category)
+func (s *Store) CreateBudget(ctx context.Context, category, month string, monthlyLimitPaise int64) (*Budget, error) {
+	cat, err := s.CheckBudgetCategory(ctx, "create_budget", category)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +96,7 @@ func (s *Store) CreateBudget(ctx context.Context, category, month string, monthl
 	if err != nil {
 		return nil, err
 	}
-	paise, err := CheckBudgetLimit("create_budget", monthlyLimit)
+	paise, err := CheckBudgetLimit("create_budget", monthlyLimitPaise)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +134,7 @@ type ListedBudget struct {
 func (s *Store) ListBudgets(ctx context.Context, monthFrom, monthTo, category string) ([]ListedBudget, error) {
 	filt := bson.M{}
 	if category != "" {
-		cat, err := CheckBudgetCategory("list_budgets", category)
+		cat, err := s.CheckBudgetCategory(ctx, "list_budgets", category)
 		if err != nil {
 			return nil, err
 		}
@@ -189,13 +168,45 @@ func (s *Store) ListBudgets(ctx context.Context, monthFrom, monthTo, category st
 	if err := cur.All(ctx, &docs); err != nil {
 		return nil, err
 	}
+	// effective_now is the row in force for the current IST month, computed
+	// over ALL rows for the returned categories — not over the filtered
+	// slice. Flagging from the filtered rows marks a superseded row when the
+	// filter cuts off the months after it (e.g. month_to before today).
 	todayMonth := TodayIST()[:7]
 	best := map[string]string{}
-	for _, d := range docs {
-		c, _ := d["category"].(string)
-		m, _ := d["month"].(string)
-		if m <= todayMonth && m > best[c] {
-			best[c] = m
+	if len(docs) > 0 {
+		cats := map[string]bool{}
+		for _, d := range docs {
+			if c, _ := d["category"].(string); c != "" {
+				cats[c] = true
+			}
+		}
+		catFilt := bson.M{}
+		if len(cats) == 1 {
+			for c := range cats {
+				catFilt["category"] = c
+			}
+		} else if len(cats) > 1 {
+			names := make([]string, 0, len(cats))
+			for c := range cats {
+				names = append(names, c)
+			}
+			catFilt["category"] = bson.M{"$in": names}
+		}
+		allCur, err := s.budgets.Find(ctx, catFilt)
+		if err != nil {
+			return nil, err
+		}
+		var allDocs []bson.M
+		if err := allCur.All(ctx, &allDocs); err != nil {
+			return nil, err
+		}
+		for _, d := range allDocs {
+			c, _ := d["category"].(string)
+			m, _ := d["month"].(string)
+			if m <= todayMonth && m > best[c] {
+				best[c] = m
+			}
 		}
 	}
 	out := make([]ListedBudget, 0, len(docs))
@@ -208,7 +219,7 @@ func (s *Store) ListBudgets(ctx context.Context, monthFrom, monthTo, category st
 
 // UpdateBudget changes one row's limit in place. Category and month are
 // identity — a typo there is fixed by delete + create, not by update.
-func (s *Store) UpdateBudget(ctx context.Context, id string, monthlyLimit float64) (*Budget, error) {
+func (s *Store) UpdateBudget(ctx context.Context, id string, monthlyLimitPaise int64) (*Budget, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, fail("update_budget id is required")
 	}
@@ -216,7 +227,7 @@ func (s *Store) UpdateBudget(ctx context.Context, id string, monthlyLimit float6
 	if err != nil {
 		return nil, fail("update_budget %v", err)
 	}
-	paise, err := CheckBudgetLimit("update_budget", monthlyLimit)
+	paise, err := CheckBudgetLimit("update_budget", monthlyLimitPaise)
 	if err != nil {
 		return nil, err
 	}
@@ -356,18 +367,18 @@ type BudgetStatusRow struct {
 // BudgetStatusResult is one budget table plus its flat footer. Totals count
 // budgeted categories only; unbudgeted spend is reported separately.
 type BudgetStatusResult struct {
-	Rows                     []BudgetStatusRow
-	TotalLimitPaise          int64
-	TotalSpendPaise          int64
-	TotalRemainingPaise      int64
-	TotalUsedPct             *float64
-	TotalOverBudget          bool
-	BudgetedCategories       int
+	Rows                      []BudgetStatusRow
+	TotalLimitPaise           int64
+	TotalSpendPaise           int64
+	TotalRemainingPaise       int64
+	TotalUsedPct              *float64
+	TotalOverBudget           bool
+	BudgetedCategories        int
 	TotalUnbudgetedSpendPaise int64
-	ProjectionBasis          string
-	CategoriesApplied        []string
-	SortBy                   string
-	Order                    string
+	ProjectionBasis           string
+	CategoriesApplied         []string
+	SortBy                    string
+	Order                     string
 }
 
 var budgetStatusSorts = []string{"remaining", "used", "spend", "limit", "name"}
@@ -397,9 +408,19 @@ func monthsTouched(start, end string) ([]string, error) {
 // limit prorated per covered day. Unbudgeted categories share the table with
 // budgeted:false. Categories[] picks rows; the footer follows the selection.
 func (s *Store) BudgetStatus(ctx context.Context, start, end string, categories []string, sortBy, order string) (*BudgetStatusResult, error) {
-	for _, c := range categories {
-		if !contains(Categories, c) {
-			return nil, fail("category %q does not exist — use one of %v", c, Categories)
+	if len(categories) > 0 {
+		live, err := s.categoryList(ctx)
+		if err != nil {
+			return nil, err
+		}
+		have := map[string]bool{}
+		for _, c := range live {
+			have[c] = true
+		}
+		for _, c := range categories {
+			if !have[c] {
+				return nil, fail("category %q does not exist — use one of %v", c, live)
+			}
 		}
 	}
 	months, err := monthsTouched(start, end)

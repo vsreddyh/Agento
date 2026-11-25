@@ -28,6 +28,11 @@ func TestToolInputSchemaRequired(t *testing.T) {
 	}{
 		// store.CreateAccount rejects an empty name; the handler defaults type to cash.
 		{"create_account", createAccountInput{}, []string{"name"}},
+		{"edit_account", editAccountInput{}, []string{"name"}},
+		{"create_category", createCategoryInput{}, []string{"name"}},
+		{"list_categories", listCategoriesInput{}, nil},
+		{"update_category", updateCategoryInput{}, []string{"name", "new_name"}},
+		{"delete_category", deleteCategoryInput{}, []string{"name"}},
 		{"list_accounts", listAccountsInput{}, nil},
 		{"archive_account", archiveAccountInput{}, []string{"name"}},
 		{"unarchive_account", unarchiveAccountInput{}, []string{"name"}},
@@ -38,7 +43,7 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		// list of valid names. date is filled in by the handler, and sending_to
 		// is required by the store only for a transfer.
 		{"log_transaction", logTransactionInput{},
-			[]string{"type", "amount", "account"}},
+			[]string{"type", "amount_paise", "account"}},
 		// Conditionally required: an id OR a start/end pair. Absent range
 		// bounds are silently wrong (empty result, not an error), so range
 		// mode needs both — but no single field can be marked required
@@ -63,8 +68,8 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		{"money_anomalies", moneyAnomaliesInput{}, []string{"start", "end", "scope"}},
 		{"budget_status", budgetStatusInput{}, []string{"start", "end"}},
 		{"list_budgets", listBudgetsInput{}, nil},
-		{"create_budget", createBudgetInput{}, []string{"category", "month", "monthly_limit"}},
-		{"update_budget", updateBudgetInput{}, []string{"id", "monthly_limit"}},
+		{"create_budget", createBudgetInput{}, []string{"category", "month", "monthly_limit_paise"}},
+		{"update_budget", updateBudgetInput{}, []string{"id", "monthly_limit_paise"}},
 		{"delete_budget", deleteBudgetInput{}, []string{"id"}},
 	}
 
@@ -102,11 +107,15 @@ func TestToolInputSchemaRequired(t *testing.T) {
 // has no way to narrow a delete.
 func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 	optional := map[string][]string{
-		"create_account":      {"type", "balance"},
+		"create_account":      {"type", "balance_paise"},
+		"edit_account":        {"new_name", "type", "opening_balance_paise"},
+		"create_category":     {},
+		"list_categories":     {},
 		"list_accounts":       {"include_archived"},
 		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
 		"query_transactions":  {"id", "type", "category", "account", "limit", "offset"},
-		"delete_transactions": {"id", "amount", "type", "category", "date", "account", "dry_run"},
+		"delete_transactions": {"id", "amount_paise", "type", "category", "date", "account", "dry_run"},
+		"delete_category":     {"reassign_to", "dry_run"},
 		"money_totals":        {"category", "account"},
 		"money_breakdown":     {"side", "categories", "accounts", "sort_by", "order"},
 		"money_top_expenses":  {"category", "account", "limit", "sort_by", "order"},
@@ -134,6 +143,11 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"budget_status":       budgetStatusInput{},
 		"list_budgets":        listBudgetsInput{},
 		"delete_budget":       deleteBudgetInput{},
+		"edit_account":        editAccountInput{},
+		"create_category":     createCategoryInput{},
+		"list_categories":     listCategoriesInput{},
+		"update_category":     updateCategoryInput{},
+		"delete_category":     deleteCategoryInput{},
 	}
 
 	for tool, names := range optional {

@@ -31,7 +31,7 @@ func registerAnalysisTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "money_top_expenses",
-		Description: "Largest expense rows in a window (one bounded list, never a dump). Required: start, end. Optional: category, account (single), limit 1..20 default 5, sort_by amount|date default amount, order asc|desc default desc. Default ordering is amount desc, then date asc, then id asc (deterministic, including ties at the limit); sort_by/order change the primary key while ties still break by date then id. Each row carries id/date/amount/amount_paise/category/account/note so it can go straight into edit_transaction/delete_transactions. total_matching counts every expense; expenses holds at most limit."},
+		Description: "Largest expense rows in a window (one bounded list, never a dump). Required: start, end. Optional: category, account (single), limit 1..20 default 5, sort_by amount|date default amount, order asc|desc default desc. Default ordering is amount desc, then date asc, then id asc (deterministic, including ties at the limit); sort_by/order change the primary key while ties still break by date then id. Each row carries id/date/amount_paise/category/account/note so it can go straight into edit_transaction/delete_transactions. total_matching counts every expense; expenses holds at most limit."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyTopExpensesInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleMoneyTopExpenses(ctx, in)
 			if err != nil {
@@ -71,7 +71,7 @@ func registerAnalysisTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "money_anomalies",
-		Description: "Flag the unusual: scope=bucket finds outlier days/weeks/months (bucket day|week|month required in this scope) against the median bucket; scope=row finds single expense rows that dwarf their category median (with row ids for edit/delete). Required: start, end, scope bucket|row. Optional: category, account (single), sensitivity low|medium|high default medium (ratios 2.00/1.50/1.25), min_amount_paise default 10000 (floor on the delta), sort_by/order (bucket scope: delta|expense default delta desc; row scope: amount|ratio default amount desc). Income and transfers never appear as row outliers. Too little history is an insufficient baseline, not an error."},
+		Description: "Flag the unusual: scope=bucket finds outlier days/weeks/months (bucket day|week|month required in this scope) against the median bucket (zero-spend buckets are never below-outliers — a quiet day is normal, not anomalous); scope=row finds single expense rows that dwarf their category median (with row ids for edit/delete). Required: start, end, scope bucket|row. Optional: category, account (single), sensitivity low|medium|high default medium (ratios 2.00/1.50/1.25), min_amount_paise default 10000 (floor on the delta), sort_by/order (bucket scope: delta|expense default delta desc; row scope: amount|ratio default amount desc). Income and transfers never appear as row outliers. Too little history is an insufficient baseline, not an error."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in moneyAnomaliesInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleMoneyAnomalies(ctx, in)
 			if err != nil {
@@ -106,7 +106,7 @@ func registerBudgetTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "create_budget",
-		Description: "Create a monthly category budget (dated limit: applies from its month until a newer row supersedes it). Required: category (not salary), month YYYY-MM (future months allowed), monthly_limit > 0 exact paise. A duplicate category+month is rejected naming the existing id — change limits with update_budget."},
+		Description: "Create a monthly category budget (dated limit: applies from its month until a newer row supersedes it). Required: category (not salary), month YYYY-MM (future months allowed), monthly_limit_paise integer > 0. A duplicate category+month is rejected naming the existing id — change limits with update_budget."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createBudgetInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleCreateBudget(ctx, in)
 			if err != nil {
@@ -116,7 +116,7 @@ func registerBudgetTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_budget",
-		Description: "Change one budget row's limit in place (category and month are identity — fix a typo there with delete + create). Required: id, monthly_limit. A no-op update is rejected; updatedAt moves past createdAt."},
+		Description: "Change one budget row's limit in place (category and month are identity — fix a typo there with delete + create). Required: id, monthly_limit_paise. A no-op update is rejected; updatedAt moves past createdAt."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateBudgetInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleUpdateBudget(ctx, in)
 			if err != nil {

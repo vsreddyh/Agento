@@ -41,11 +41,14 @@
     "*archive_account*": "ask",
     "*create_account*": "ask",
     "*create_budget*": "ask",
+    "*create_category*": "ask",
+    "*edit_account*": "ask",
     "*edit_transaction*": "ask",
     "*fix_last*": "ask",
     "*prune_old*": "ask",
     "*log_transaction*": "ask",
     "*update_budget*": "ask",
+    "*update_category*": "ask",
     "*modify_gmail_message_labels*": "ask",
     "*batch_modify_gmail_message_labels*": "ask"
   }

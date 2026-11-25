@@ -30,13 +30,18 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (21): `create_account`, `list_accounts`, `archive_account`,
-  `unarchive_account`, `get_balances`, `log_transaction`,
+- **miser-money** (26): `create_account`, `list_accounts`, `archive_account`,
+  `unarchive_account`, `edit_account`, `get_balances`, `log_transaction`,
   `query_transactions`, `edit_transaction`, `delete_transactions`,
+  `create_category`, `list_categories`, `update_category`, `delete_category`,
   `money_totals`, `money_breakdown` (by=category|account),
   `money_top_expenses`, `money_series`, `money_compare` (by=totals|categories),
   `money_recurring`, `money_anomalies` (scope=bucket|row), `budget_status`,
   `list_budgets`, `create_budget`, `update_budget`, `delete_budget`.
+  Every monetary value on the surface is int64 paise — no rupee float crosses
+  it. Categories are user-managed (`money_categories`, seeded with the ten
+  defaults; `other` is the reserved blank fallback). A failed call sets MCP
+  `isError`, not just `ok:false`.
   Analyses are derived reads (no stored aggregates — edits/deletes show up on
   the next call); windowed tools need explicit bounds (`start`/`end`, or
   `start_a`/`end_a`/`start_b`/`end_b` for `money_compare`), and every

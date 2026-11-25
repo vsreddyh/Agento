@@ -22,6 +22,7 @@ func TestMoneyTotalsRejectsBadWindow(t *testing.T) {
 }
 
 func TestMoneyTotalsRejectsUnknownCategory(t *testing.T) {
+	withTestStore(t)
 	_, errMsg := callTool(t, "money_totals", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "category": "grocerys",
 	})
@@ -61,6 +62,7 @@ func TestMoneyBreakdownRequiresSideInCategoryMode(t *testing.T) {
 }
 
 func TestMoneyBreakdownRejectsUnknownPluralCategory(t *testing.T) {
+	withTestStore(t)
 	_, errMsg := callTool(t, "money_breakdown", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "by": "category",
 		"side": "expense", "categories": []string{"groceries", "grocerys"},
@@ -132,7 +134,7 @@ func TestMoneyCompareRejectsModeMixups(t *testing.T) {
 	_, errMsg := callTool(t, "money_compare", map[string]any{
 		"start_a": "2026-02-01", "end_a": "2026-02-28",
 		"start_b": "2026-03-01", "end_b": "2026-03-31",
-		"by":      "totals", "sort_by": "delta",
+		"by": "totals", "sort_by": "delta",
 	})
 	if errMsg == "" {
 		t.Fatal("sort_by in totals mode was accepted; the order is fixed")
@@ -212,7 +214,11 @@ func TestBudgetStatusRejectsBadInputs(t *testing.T) {
 	if errMsg == "" {
 		t.Fatal("unknown sort_by was accepted; expected the enum error")
 	}
-	_, errMsg = callTool(t, "budget_status", map[string]any{
+}
+
+func TestBudgetStatusRejectsUnknownCategory(t *testing.T) {
+	withTestStore(t)
+	_, errMsg := callTool(t, "budget_status", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "categories": []string{"grocerys"},
 	})
 	if errMsg == "" {
@@ -221,15 +227,16 @@ func TestBudgetStatusRejectsBadInputs(t *testing.T) {
 }
 
 func TestCreateBudgetRejectsBadInputs(t *testing.T) {
+	withTestStore(t)
 	cases := []struct {
 		name string
 		args map[string]any
 		want string
 	}{
-		{"salary", map[string]any{"category": "salary", "month": "2026-01", "monthly_limit": 5000.0}, "salary"},
-		{"month", map[string]any{"category": "groceries", "month": "2026-13", "monthly_limit": 5000.0}, "month"},
-		{"limit", map[string]any{"category": "groceries", "month": "2026-01", "monthly_limit": 0.0}, "monthly_limit"},
-		{"paise", map[string]any{"category": "groceries", "month": "2026-01", "monthly_limit": 10.001}, "exact paise"},
+		{"salary", map[string]any{"category": "salary", "month": "2026-01", "monthly_limit_paise": 500000}, "salary"},
+		{"month", map[string]any{"category": "groceries", "month": "2026-13", "monthly_limit_paise": 500000}, "month"},
+		{"limit", map[string]any{"category": "groceries", "month": "2026-01", "monthly_limit_paise": 0}, "monthly_limit_paise"},
+		{"negative", map[string]any{"category": "groceries", "month": "2026-01", "monthly_limit_paise": -5}, "monthly_limit_paise"},
 	}
 	for _, c := range cases {
 		_, errMsg := callTool(t, "create_budget", c.args)
@@ -244,19 +251,19 @@ func TestCreateBudgetRejectsBadInputs(t *testing.T) {
 
 func TestUpdateBudgetRejectsBadInputs(t *testing.T) {
 	_, errMsg := callTool(t, "update_budget", map[string]any{
-		"id": "", "monthly_limit": 100.0,
+		"id": "", "monthly_limit_paise": 10000,
 	})
 	if errMsg == "" {
 		t.Fatal("empty id was accepted; expected the id requirement")
 	}
 	_, errMsg = callTool(t, "update_budget", map[string]any{
-		"id": "000000000000000000000001", "monthly_limit": 9.999,
+		"id": "000000000000000000000001", "monthly_limit_paise": -5,
 	})
 	if errMsg == "" {
-		t.Fatal("inexact limit was accepted; expected the paise error")
+		t.Fatal("negative limit was accepted; expected the paise error")
 	}
-	if !strings.Contains(errMsg, "exact paise") {
-		t.Errorf("error %q does not demand exact paise", errMsg)
+	if !strings.Contains(errMsg, "monthly_limit_paise") {
+		t.Errorf("error %q does not name monthly_limit_paise", errMsg)
 	}
 }
 
@@ -282,7 +289,11 @@ func TestListBudgetsRejectsReversedRange(t *testing.T) {
 	if errMsg == "" {
 		t.Fatal("month_from after month_to was accepted; expected a rejection")
 	}
-	_, errMsg = callTool(t, "list_budgets", map[string]any{"category": "salary"})
+}
+
+func TestListBudgetsRejectsSalary(t *testing.T) {
+	withTestStore(t)
+	_, errMsg := callTool(t, "list_budgets", map[string]any{"category": "salary"})
 	if errMsg == "" {
 		t.Fatal("salary was accepted; income cannot be budgeted")
 	}

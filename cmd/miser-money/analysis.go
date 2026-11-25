@@ -67,7 +67,7 @@ func handleMoneyTotals(ctx context.Context, in moneyTotalsInput) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	cat, err := money.NormalizeCategory("money_totals", in.Category)
+	cat, err := store.NormalizeCategory(ctx, "money_totals", in.Category)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func handleMoneyBreakdown(ctx context.Context, in moneyBreakdownInput) (map[stri
 	if by != "category" && by != "account" {
 		return nil, fmt.Errorf("money_breakdown by must be category or account — got %q (trends live in money_series)", in.By)
 	}
-	cats, err := money.NormalizeCategories("money_breakdown", in.Categories)
+	cats, err := store.NormalizeCategories(ctx, "money_breakdown", in.Categories)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func handleMoneyBreakdown(ctx context.Context, in moneyBreakdownInput) (map[stri
 			"by": "category", "side": side,
 			"categories_applied": res.CategoriesApplied, "accounts_applied": res.AccountsApplied,
 			"sort_by": res.SortBy, "order": res.Order,
-			"categories": rows,
+			"categories":         rows,
 			"total_amount_paise": res.TotalAmountPaise, "total_count": res.TotalCount,
 		}, nil
 	}
@@ -175,7 +175,7 @@ func handleMoneyBreakdown(ctx context.Context, in moneyBreakdownInput) (map[stri
 		rows = append(rows, map[string]any{
 			"id": a.ID, "name": a.Name, "archived": a.Archived,
 			"opening_balance_paise": a.OpeningPaise,
-			"inflows_paise": a.InflowsPaise, "outflows_paise": a.OutflowsPaise,
+			"inflows_paise":         a.InflowsPaise, "outflows_paise": a.OutflowsPaise,
 			"net_paise": a.NetPaise, "closing_balance_paise": a.ClosingPaise,
 			"income_paise": a.IncomePaise, "expense_paise": a.ExpensePaise,
 			"transfer_in_paise": a.TransferInPaise, "transfer_out_paise": a.TransferOutPaise,
@@ -184,18 +184,18 @@ func handleMoneyBreakdown(ctx context.Context, in moneyBreakdownInput) (map[stri
 	}
 	return map[string]any{"ok": true,
 		"start": start, "end": end, "days": resDays(start, end),
-		"by": "account",
+		"by":                 "account",
 		"categories_applied": res.CategoriesApplied, "accounts_applied": res.AccountsApplied,
 		"sort_by": res.SortBy, "order": res.Order,
-		"accounts": rows,
-		"total_opening_paise": res.TotalOpeningPaise,
-		"total_inflows_paise": res.TotalInflowsPaise,
-		"total_outflows_paise": res.TotalOutflowsPaise,
-		"total_net_paise": res.TotalNetPaise,
-		"total_closing_paise": res.TotalClosingPaise,
-		"total_active_closing_paise": res.TotalActiveClosingPaise,
-		"total_income_paise": res.TotalIncomePaise,
-		"total_expense_paise": res.TotalExpensePaise,
+		"accounts":                    rows,
+		"total_opening_paise":         res.TotalOpeningPaise,
+		"total_inflows_paise":         res.TotalInflowsPaise,
+		"total_outflows_paise":        res.TotalOutflowsPaise,
+		"total_net_paise":             res.TotalNetPaise,
+		"total_closing_paise":         res.TotalClosingPaise,
+		"total_active_closing_paise":  res.TotalActiveClosingPaise,
+		"total_income_paise":          res.TotalIncomePaise,
+		"total_expense_paise":         res.TotalExpensePaise,
 		"total_transfer_volume_paise": res.TotalTransferVolumePaise,
 	}, nil
 }
@@ -223,7 +223,7 @@ func handleMoneyTopExpenses(ctx context.Context, in moneyTopExpensesInput) (map[
 	if err != nil {
 		return nil, err
 	}
-	cat, err := money.NormalizeCategory("money_top_expenses", in.Category)
+	cat, err := store.NormalizeCategory(ctx, "money_top_expenses", in.Category)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +256,7 @@ func handleMoneyTopExpenses(ctx context.Context, in moneyTopExpensesInput) (map[
 	rows := make([]any, 0, len(res.Rows))
 	for _, r := range res.Rows {
 		rows = append(rows, map[string]any{
-			"id": r.ID, "date": r.Date, "amount": r.Amount, "amount_paise": r.AmountPaise,
+			"id": r.ID, "date": r.Date, "amount_paise": r.AmountPaise,
 			"category": r.Category, "account": r.Account, "note": r.Note,
 		})
 	}
@@ -287,7 +287,7 @@ func handleMoneySeries(ctx context.Context, in moneySeriesInput) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	cat, err := money.NormalizeCategory("money_series", in.Category)
+	cat, err := store.NormalizeCategory(ctx, "money_series", in.Category)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +370,7 @@ func handleMoneyCompare(ctx context.Context, in moneyCompareInput) (map[string]a
 		if strings.TrimSpace(in.SortBy) != "" || strings.TrimSpace(in.Order) != "" {
 			return nil, fmt.Errorf("money_compare totals mode has a fixed row order (income, expense, net) — no sort arguments")
 		}
-		cat, err := money.NormalizeCategory("money_compare", in.Category)
+		cat, err := store.NormalizeCategory(ctx, "money_compare", in.Category)
 		if err != nil {
 			return nil, err
 		}
@@ -396,7 +396,7 @@ func handleMoneyCompare(ctx context.Context, in moneyCompareInput) (map[string]a
 	if strings.TrimSpace(in.Category) != "" {
 		return nil, fmt.Errorf("money_compare category is only valid when by=totals — use categories[] in categories mode")
 	}
-	cats, err := money.NormalizeCategories("money_compare", in.Categories)
+	cats, err := store.NormalizeCategories(ctx, "money_compare", in.Categories)
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +450,7 @@ func handleMoneyRecurring(ctx context.Context, in moneyRecurringInput) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	cat, err := money.NormalizeCategory("money_recurring", in.Category)
+	cat, err := store.NormalizeCategory(ctx, "money_recurring", in.Category)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +497,7 @@ func handleMoneyRecurring(ctx context.Context, in moneyRecurringInput) (map[stri
 			"count": c.Count, "first_date": c.FirstDate, "last_date": c.LastDate,
 			"median_interval_days": c.MedianIntervalDays,
 			"interval_jitter_days": c.IntervalJitterDays,
-			"cadence": c.Cadence, "next_expected_date": nilIfEmpty(c.NextExpectedDate),
+			"cadence":              c.Cadence, "next_expected_date": nilIfEmpty(c.NextExpectedDate),
 			"confidence": c.Confidence, "account": c.Account, "account_count": c.AccountCount,
 		})
 	}
@@ -519,16 +519,16 @@ func nilIfEmpty(s string) any {
 }
 
 type moneyAnomaliesInput struct {
-	Start           string  `json:"start"`
-	End             string  `json:"end"`
-	Scope           string  `json:"scope"`
-	Category        string  `json:"category,omitempty"`
-	Account         string  `json:"account,omitempty"`
-	Sensitivity     string  `json:"sensitivity,omitempty"`
-	MinAmountPaise  *int64  `json:"min_amount_paise,omitempty"`
-	Bucket          string  `json:"bucket,omitempty"`
-	SortBy          string  `json:"sort_by,omitempty"`
-	Order           string  `json:"order,omitempty"`
+	Start          string `json:"start"`
+	End            string `json:"end"`
+	Scope          string `json:"scope"`
+	Category       string `json:"category,omitempty"`
+	Account        string `json:"account,omitempty"`
+	Sensitivity    string `json:"sensitivity,omitempty"`
+	MinAmountPaise *int64 `json:"min_amount_paise,omitempty"`
+	Bucket         string `json:"bucket,omitempty"`
+	SortBy         string `json:"sort_by,omitempty"`
+	Order          string `json:"order,omitempty"`
 }
 
 func handleMoneyAnomalies(ctx context.Context, in moneyAnomaliesInput) (map[string]any, error) {
@@ -543,7 +543,7 @@ func handleMoneyAnomalies(ctx context.Context, in moneyAnomaliesInput) (map[stri
 	if scope != "bucket" && scope != "row" {
 		return nil, fmt.Errorf("money_anomalies scope must be bucket or row — got %q", in.Scope)
 	}
-	cat, err := money.NormalizeCategory("money_anomalies", in.Category)
+	cat, err := store.NormalizeCategory(ctx, "money_anomalies", in.Category)
 	if err != nil {
 		return nil, err
 	}
@@ -628,10 +628,10 @@ func handleMoneyAnomalies(ctx context.Context, in moneyAnomaliesInput) (map[stri
 	rows := make([]any, 0, len(outliers))
 	for _, o := range outliers {
 		rows = append(rows, map[string]any{
-			"id": o.ID, "date": o.Date, "amount": o.Amount, "amount_paise": o.AmountPaise,
+			"id": o.ID, "date": o.Date, "amount_paise": o.AmountPaise,
 			"category": o.Category, "account": o.Account, "note": o.Note,
 			"category_median_paise": o.CategoryMedianPaise,
-			"ratio_pct": o.RatioPct, "direction": o.Direction,
+			"ratio_pct":             o.RatioPct, "direction": o.Direction,
 		})
 	}
 	base["sort_by"] = sortBy

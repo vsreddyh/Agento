@@ -34,7 +34,6 @@ type TxRow struct {
 	Category         string
 	Note             string
 	AmountPaise      int64
-	Amount           float64
 	AccountID        string
 	Account          string
 	SendingToID      string
@@ -75,9 +74,17 @@ func (s *Store) scanWindow(ctx context.Context, start, end string, types, catego
 		filt["type"] = bson.M{"$in": types}
 	}
 	if len(categories) > 0 {
+		live, err := s.categoryList(ctx)
+		if err != nil {
+			return nil, err
+		}
+		have := map[string]bool{}
+		for _, c := range live {
+			have[c] = true
+		}
 		for _, c := range categories {
-			if !contains(Categories, c) {
-				return nil, fail("category %q does not exist — use one of %v", c, Categories)
+			if !have[c] {
+				return nil, fail("category %q does not exist — use one of %v", c, live)
 			}
 		}
 		filt["category"] = bson.M{"$in": categories}
@@ -104,7 +111,6 @@ func (s *Store) scanWindow(ctx context.Context, start, end string, types, catego
 			AmountPaise: paiseOf(r["amount"]),
 			AccountID:   idHex(r["accountId"]),
 		}
-		row.Amount = ToRupees(row.AmountPaise)
 		if d, _ := r["date"].(string); d != "" {
 			row.Date = d
 		}
@@ -128,40 +134,6 @@ func (s *Store) scanWindow(ctx context.Context, start, end string, types, catego
 }
 
 // --- Input normalizers (handlers call these before any store touch) ---
-
-// NormalizeCategory trims and lowercases one optional category. Blank means
-// absent (""). An unknown name is rejected, like writes — never zero-filled.
-func NormalizeCategory(tool, v string) (string, error) {
-	c := strings.ToLower(strings.TrimSpace(v))
-	if c == "" {
-		return "", nil
-	}
-	if !contains(Categories, c) {
-		return "", fail("%s category %q does not exist — use one of %v", tool, v, Categories)
-	}
-	return c, nil
-}
-
-// NormalizeCategories trims, lowercases, drops blanks and dedupes a plural
-// filter, preserving first-seen order. Unknown names reject the whole call.
-func NormalizeCategories(tool string, in []string) ([]string, error) {
-	out := []string{}
-	seen := map[string]bool{}
-	for _, v := range in {
-		c := strings.ToLower(strings.TrimSpace(v))
-		if c == "" {
-			continue
-		}
-		if !contains(Categories, c) {
-			return nil, fail("%s category %q does not exist — use one of %v", tool, v, Categories)
-		}
-		if !seen[c] {
-			seen[c] = true
-			out = append(out, c)
-		}
-	}
-	return out, nil
-}
 
 // NormalizeSide validates the expense|income discriminator.
 func NormalizeSide(tool, v string) (string, error) {
@@ -372,19 +344,19 @@ func prorate(limitPaise int64, days, dim int) int64 {
 // (JSON null) when the window has no income — a rate over zero is undefined,
 // not zero.
 type WindowTotals struct {
-	Days                   int
-	RowsTotal              int
-	RowsIncome             int
-	RowsExpense            int
-	RowsTransfer           int
-	IncomePaise            int64
-	ExpensePaise           int64
-	NetPaise               int64
-	SavingsRatePct         *float64
-	AvgDailyExpensePaise   int64
-	AvgDailyIncomePaise    int64
-	TransferCount          int
-	TransferVolumePaise    int64
+	Days                 int
+	RowsTotal            int
+	RowsIncome           int
+	RowsExpense          int
+	RowsTransfer         int
+	IncomePaise          int64
+	ExpensePaise         int64
+	NetPaise             int64
+	SavingsRatePct       *float64
+	AvgDailyExpensePaise int64
+	AvgDailyIncomePaise  int64
+	TransferCount        int
+	TransferVolumePaise  int64
 }
 
 // PeriodTotals aggregates one window. Transfers never enter income/expense:
@@ -401,7 +373,7 @@ func (s *Store) PeriodTotals(ctx context.Context, start, end string, category, a
 	t := &WindowTotals{Days: days}
 	for _, r := range rows {
 		t.RowsTotal++
-		paise := paiseOf(r["amount"])
+		paise := paiseOf(r["amount_paise"])
 		switch r["type"] {
 		case "income":
 			t.RowsIncome++
@@ -441,13 +413,13 @@ type CategorySlice struct {
 // subset's sum, never the window's. Shares are recomputed over the returned
 // rows and sum to 100.00.
 type BreakdownResult struct {
-	Rows               []CategorySlice
-	TotalAmountPaise   int64
-	TotalCount         int
-	CategoriesApplied  []string
-	AccountsApplied    []string
-	SortBy             string
-	Order              string
+	Rows              []CategorySlice
+	TotalAmountPaise  int64
+	TotalCount        int
+	CategoriesApplied []string
+	AccountsApplied   []string
+	SortBy            string
+	Order             string
 }
 
 var breakdownCategorySorts = []string{"amount", "name", "count"}
@@ -552,51 +524,64 @@ func sortCategorySlices(rows []CategorySlice, sortBy, order string) {
 
 // AccountFlowRow is one account's movement and closing balance.
 type AccountFlowRow struct {
-	ID                string
-	Name              string
-	Archived          bool
-	OpeningPaise      int64
-	InflowsPaise      int64
-	OutflowsPaise     int64
-	NetPaise          int64
-	ClosingPaise      int64
-	IncomePaise       int64
-	ExpensePaise      int64
-	TransferInPaise   int64
-	TransferOutPaise  int64
-	RowsTotal         int
+	ID               string
+	Name             string
+	Archived         bool
+	OpeningPaise     int64
+	InflowsPaise     int64
+	OutflowsPaise    int64
+	NetPaise         int64
+	ClosingPaise     int64
+	IncomePaise      int64
+	ExpensePaise     int64
+	TransferInPaise  int64
+	TransferOutPaise int64
+	RowsTotal        int
 }
 
 // AccountFlowResult is one account table plus its flat footer. The footer
 // sums the returned rows; TotalActiveClosingPaise excludes archived rows.
 type AccountFlowResult struct {
-	Rows                    []AccountFlowRow
-	TotalOpeningPaise       int64
-	TotalInflowsPaise       int64
-	TotalOutflowsPaise      int64
-	TotalNetPaise           int64
-	TotalClosingPaise       int64
-	TotalActiveClosingPaise int64
-	TotalIncomePaise        int64
-	TotalExpensePaise       int64
+	Rows                     []AccountFlowRow
+	TotalOpeningPaise        int64
+	TotalInflowsPaise        int64
+	TotalOutflowsPaise       int64
+	TotalNetPaise            int64
+	TotalClosingPaise        int64
+	TotalActiveClosingPaise  int64
+	TotalIncomePaise         int64
+	TotalExpensePaise        int64
 	TotalTransferVolumePaise int64
-	AccountsApplied         []string
-	CategoriesApplied       []string
-	SortBy                  string
-	Order                   string
+	AccountsApplied          []string
+	CategoriesApplied        []string
+	SortBy                   string
+	Order                    string
 }
 
 var accountFlowSorts = []string{"closing", "name", "net", "inflows", "outflows"}
 
 // AccountFlow reports per-account opening/in/out/net/closing for the window.
-// Opening is the seed plus signed legs strictly before start; closing is
-// opening plus the window's net. Categories select rows (transfers carry
-// their logged category, default other); accounts picks rows. An archived
-// account with a zero seed and no rows ever is omitted.
+// Opening is always the account's real balance before the window (seed plus
+// ALL signed legs strictly before start), and closing is always the real
+// balance at the window end — the categories[] filter only narrows which
+// window rows contribute to the flow columns (inflows/outflows, income,
+// expense, transfer legs, rows), never the balances. Transfers carry their
+// logged category, default other. accounts[] picks rows. An archived account
+// with a zero seed and no rows ever is omitted.
 func (s *Store) AccountFlow(ctx context.Context, start, end string, categories []string, accountNames []string, sortBy, order string) (*AccountFlowResult, error) {
-	for _, c := range categories {
-		if !contains(Categories, c) {
-			return nil, fail("category %q does not exist — use one of %v", c, Categories)
+	if len(categories) > 0 {
+		live, err := s.categoryList(ctx)
+		if err != nil {
+			return nil, err
+		}
+		have := map[string]bool{}
+		for _, c := range live {
+			have[c] = true
+		}
+		for _, c := range categories {
+			if !have[c] {
+				return nil, fail("category %q does not exist — use one of %v", c, live)
+			}
 		}
 	}
 	var filterIDs []primitive.ObjectID
@@ -630,12 +615,9 @@ func (s *Store) AccountFlow(ctx context.Context, start, end string, categories [
 		byID[id] = len(accts)
 		accts = append(accts, acct{id: id, name: name, archived: arch, seed: paiseOf(a["openingBalance"])})
 	}
-	// Pre-start legs: every row dated before start, signed by account.
-	preFilt := bson.M{"date": bson.M{"$lt": start}}
-	if len(categories) > 0 {
-		preFilt["category"] = bson.M{"$in": categories}
-	}
-	preCur, err := s.txns.Find(ctx, preFilt)
+	// Pre-start legs: EVERY row dated before start, signed by account — never
+	// category-scoped, so opening is the real balance, not a slice of it.
+	preCur, err := s.txns.Find(ctx, bson.M{"date": bson.M{"$lt": start}})
 	if err != nil {
 		return nil, err
 	}
@@ -651,10 +633,32 @@ func (s *Store) AccountFlow(ctx context.Context, start, end string, categories [
 			preSeen[aid] = true
 		}
 	}
-	// In-window legs, honoring the same category filter.
+	// In-window legs, honoring the category filter for the flow columns.
 	winRows, err := s.scanWindow(ctx, start, end, nil, categories, nil)
 	if err != nil {
 		return nil, err
+	}
+	// Real closing needs the UNSCOPED window net when a category filter is
+	// set: closing = opening + all legs in the window, not just the matching
+	// rows'. Only scanned when filtered — unfiltered, the scoped scan above
+	// already sees every row.
+	fullNet := map[string]int64{}
+	if len(categories) > 0 {
+		fullRows, err := s.scanWindow(ctx, start, end, nil, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range fullRows {
+			switch r.Type {
+			case "income":
+				fullNet[r.AccountID] += r.AmountPaise
+			case "expense":
+				fullNet[r.AccountID] -= r.AmountPaise
+			case "transfer":
+				fullNet[r.AccountID] -= r.AmountPaise
+				fullNet[r.SendingToID] += r.AmountPaise
+			}
+		}
 	}
 	winSeen := map[string]bool{}
 	legs := map[string]struct {
@@ -675,6 +679,18 @@ func (s *Store) AccountFlow(ctx context.Context, start, end string, categories [
 		v.rows += e.rows
 		legs[aid] = v
 		winSeen[aid] = true
+	}
+	// Transfer volume counts each transfer ONCE when it touches a returned
+	// account — not the leg sum halved. Halving is only correct when both
+	// legs are returned; an accounts[] filter covering one side used to
+	// report half the money moved.
+	tvolSeen := map[string]int64{}
+	wanted := map[string]bool{}
+	for _, id := range filterIDs {
+		wanted[id.Hex()] = true
+	}
+	touchesReturned := func(aid, sid string) bool {
+		return len(wanted) == 0 || wanted[aid] || wanted[sid]
 	}
 	for _, r := range winRows {
 		switch r.Type {
@@ -697,22 +713,19 @@ func (s *Store) AccountFlow(ctx context.Context, start, end string, categories [
 				in, out, income, expense, tin, tout int64
 				rows                                int
 			}{in: r.AmountPaise, tin: r.AmountPaise, rows: 1})
+			if touchesReturned(r.AccountID, r.SendingToID) {
+				tvolSeen[r.ID] = r.AmountPaise
+			}
 		}
 	}
-	// A transfer touches two rows-entries (one per leg) but is one row; fix
-	// the per-row counts below by counting distinct expense/income rows plus
-	// distinct transfers per account instead. Recompute rows from the scan:
-	// rows_total counts each transfer once per account it touches.
+	// A transfer touches two rows-entries (one per leg) but is one row; rows
+	// counts each transfer once per account it touches.
 	out := &AccountFlowResult{
 		Rows:              []AccountFlowRow{},
 		AccountsApplied:   append([]string{}, accountNames...),
 		CategoriesApplied: append([]string{}, categories...),
 		SortBy:            sortBy,
 		Order:             order,
-	}
-	wanted := map[string]bool{}
-	for _, id := range filterIDs {
-		wanted[id.Hex()] = true
 	}
 	for _, a := range accts {
 		if len(wanted) > 0 && !wanted[a.id] {
@@ -724,12 +737,16 @@ func (s *Store) AccountFlow(ctx context.Context, start, end string, categories [
 			continue
 		}
 		net := l.in - l.out
+		closing := opening + net
+		if len(categories) > 0 {
+			closing = opening + fullNet[a.id]
+		}
 		row := AccountFlowRow{
 			ID: a.id, Name: a.name, Archived: a.archived,
 			OpeningPaise: opening,
 			InflowsPaise: l.in, OutflowsPaise: l.out, NetPaise: net,
-			ClosingPaise: opening + net,
-			IncomePaise: l.income, ExpensePaise: l.expense,
+			ClosingPaise: closing,
+			IncomePaise:  l.income, ExpensePaise: l.expense,
 			TransferInPaise: l.tin, TransferOutPaise: l.tout,
 			RowsTotal: l.rows,
 		}
@@ -739,15 +756,14 @@ func (s *Store) AccountFlow(ctx context.Context, start, end string, categories [
 		out.TotalOutflowsPaise += l.out
 		out.TotalIncomePaise += l.income
 		out.TotalExpensePaise += l.expense
-		out.TotalTransferVolumePaise += l.tin + l.tout
-		out.TotalClosingPaise += opening + net
+		out.TotalClosingPaise += closing
 		if !a.archived {
-			out.TotalActiveClosingPaise += opening + net
+			out.TotalActiveClosingPaise += closing
 		}
 	}
-	// Transfer volume double-counts (in-leg + out-leg of the same row): halve
-	// it so volume is the moved money, not the leg sum.
-	out.TotalTransferVolumePaise /= 2
+	for _, v := range tvolSeen {
+		out.TotalTransferVolumePaise += v
+	}
 	out.TotalNetPaise = out.TotalInflowsPaise - out.TotalOutflowsPaise
 	sortAccountFlowRows(out.Rows, sortBy, order)
 	return out, nil
@@ -806,11 +822,11 @@ func sortAccountFlowRows(rows []AccountFlowRow, sortBy, order string) {
 // TopExpensesResult is one bounded expense list. TotalMatching counts every
 // expense in the window; the rows carry at most limit of them.
 type TopExpensesResult struct {
-	Rows           []TxRow
-	TotalMatching  int
-	LimitApplied   int
-	SortBy         string
-	Order          string
+	Rows          []TxRow
+	TotalMatching int
+	LimitApplied  int
+	SortBy        string
+	Order         string
 }
 
 var topExpensesSorts = []string{"amount", "date"}
@@ -888,20 +904,20 @@ func ptrString(s string) *string { return &s }
 // Bucket is one time bucket's aggregates. From/To clip to the window; Days
 // counts the clipped calendar days inside the window.
 type Bucket struct {
-	Key                   string
-	From                  string
-	To                    string
-	Days                  int
-	RowsTotal             int
-	RowsIncome            int
-	RowsExpense           int
-	RowsTransfer          int
-	IncomePaise           int64
-	ExpensePaise          int64
-	NetPaise              int64
-	AvgDailyExpensePaise  int64
-	TransferCount         int
-	TransferVolumePaise   int64
+	Key                  string
+	From                 string
+	To                   string
+	Days                 int
+	RowsTotal            int
+	RowsIncome           int
+	RowsExpense          int
+	RowsTransfer         int
+	IncomePaise          int64
+	ExpensePaise         int64
+	NetPaise             int64
+	AvgDailyExpensePaise int64
+	TransferCount        int
+	TransferVolumePaise  int64
 }
 
 // Series buckets the window into day|week|month rows, zero-filled: every
@@ -925,7 +941,7 @@ func (s *Store) Series(ctx context.Context, start, end, bucket string, category,
 		if ty, ok := r["type"].(string); ok {
 			t.Type = ty
 		}
-		t.AmountPaise = paiseOf(r["amount"])
+		t.AmountPaise = paiseOf(r["amount_paise"])
 		scan = append(scan, t)
 	}
 	grid, err := bucketGrid(start, end, bucket)
@@ -1014,7 +1030,7 @@ func bucketGrid(start, end, bucket string) ([]Bucket, error) {
 		}
 	case "week":
 		wd := int(ts.Weekday())
-		cur := ts.AddDate(0, 0, -((wd+6)%7))
+		cur := ts.AddDate(0, 0, -((wd + 6) % 7))
 		for !cur.After(te) {
 			weekEnd := cur.AddDate(0, 0, 6)
 			from := cur
@@ -1059,26 +1075,26 @@ func bucketGrid(start, end, bucket string) ([]Bucket, error) {
 // zero is undefined. When both sides are zero the delta is 0 and the percent
 // is 0.00, not null.
 type MetricDelta struct {
-	Metric    string
-	APaise    int64
-	BPaise    int64
+	Metric     string
+	APaise     int64
+	BPaise     int64
 	DeltaPaise int64
-	DeltaPct  *float64
-	Direction string
+	DeltaPct   *float64
+	Direction  string
 }
 
 // CategoryDelta is one category's A-vs-B row.
 type CategoryDelta struct {
-	Category  string
-	APaise    int64
-	BPaise    int64
+	Category   string
+	APaise     int64
+	BPaise     int64
 	DeltaPaise int64
-	DeltaPct  *float64
-	Direction string
-	ASharePct float64
-	BSharePct float64
-	ACount    int
-	BCount    int
+	DeltaPct   *float64
+	Direction  string
+	ASharePct  float64
+	BSharePct  float64
+	ACount     int
+	BCount     int
 }
 
 func directionOf(delta int64) string {
@@ -1143,7 +1159,7 @@ func (s *Store) CompareCategories(ctx context.Context, aStart, aEnd, bStart, bEn
 		return nil, err
 	}
 	type acc struct {
-		aSum, bSum int64
+		aSum, bSum     int64
 		aCount, bCount int
 	}
 	byCat := map[string]*acc{}
@@ -1171,6 +1187,8 @@ func (s *Store) CompareCategories(ctx context.Context, aStart, aEnd, bStart, bEn
 		bTotal += g.bSum
 	}
 	out := []CategoryDelta{}
+	aAmounts := make([]int64, 0, len(byCat))
+	bAmounts := make([]int64, 0, len(byCat))
 	for cat, g := range byCat {
 		d := CategoryDelta{
 			Category: cat, APaise: g.aSum, BPaise: g.bSum,
@@ -1184,13 +1202,17 @@ func (s *Store) CompareCategories(ctx context.Context, aStart, aEnd, bStart, bEn
 			z := 0.0
 			d.DeltaPct = &z
 		}
-		if aTotal > 0 {
-			d.ASharePct = roundPct2(g.aSum, aTotal)
-		}
-		if bTotal > 0 {
-			d.BSharePct = roundPct2(g.bSum, bTotal)
-		}
 		out = append(out, d)
+		aAmounts = append(aAmounts, g.aSum)
+		bAmounts = append(bAmounts, g.bSum)
+	}
+	// Shares use largest remainder so each window sums to exactly 100.00 —
+	// independent rounding drifts to 99.99/100.01 on even splits.
+	for i, sh := range shares100(aAmounts) {
+		out[i].ASharePct = sh
+	}
+	for i, sh := range shares100(bAmounts) {
+		out[i].BSharePct = sh
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
@@ -1497,16 +1519,15 @@ type BucketOutlier struct {
 // RowOutlier is one unusual transaction, carrying its row id so the caller
 // can edit or delete it directly.
 type RowOutlier struct {
-	ID                 string
-	Date               string
-	Amount             float64
-	AmountPaise        int64
-	Category           string
-	Account            string
-	Note               string
+	ID                  string
+	Date                string
+	AmountPaise         int64
+	Category            string
+	Account             string
+	Note                string
 	CategoryMedianPaise int64
-	RatioPct           float64
-	Direction          string
+	RatioPct            float64
+	Direction           string
 }
 
 // BucketAnomalies flags buckets whose expense is unusual against the median
@@ -1541,8 +1562,12 @@ func (s *Store) BucketAnomalies(ctx context.Context, start, end, bucket string, 
 			var dir string
 			if float64(b.ExpensePaise) > ratio*float64(median) {
 				flag, dir = true, "above"
-			} else if float64(median) > ratio*float64(maxPaise(b.ExpensePaise, 0)) && b.ExpensePaise < median {
-				// Below: median is more than ratio× the bucket.
+			} else if b.ExpensePaise > 0 && b.ExpensePaise < median && float64(median) > ratio*float64(b.ExpensePaise) {
+				// Below: median is more than ratio× the bucket. Zero-spend
+				// buckets are never below-outliers — against any positive
+				// median the ratio test on 0 is always true, so every quiet
+				// day would report. A zero bucket is normal, not anomalous;
+				// it still appears as a zero row in money_series.
 				flag, dir = true, "below"
 			}
 			if !flag {
@@ -1588,13 +1613,6 @@ func (s *Store) BucketAnomalies(ctx context.Context, start, end, bucket string, 
 		return out[i].Key < out[j].Key
 	})
 	return out, Bucket{ExpensePaise: median}, len(buckets), false, nil
-}
-
-func maxPaise(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // RowAnomalies flags single expense rows that dwarf their category median.
@@ -1653,11 +1671,11 @@ func (s *Store) RowAnomalies(ctx context.Context, start, end string, category, a
 				continue
 			}
 			out = append(out, RowOutlier{
-				ID: r.ID, Date: r.Date, Amount: r.Amount, AmountPaise: r.AmountPaise,
+				ID: r.ID, Date: r.Date, AmountPaise: r.AmountPaise,
 				Category: r.Category, Account: r.Account, Note: r.Note,
 				CategoryMedianPaise: median,
-				RatioPct: roundPct2(r.AmountPaise, median),
-				Direction: "above",
+				RatioPct:            roundPct2(r.AmountPaise, median),
+				Direction:           "above",
 			})
 		}
 	}
