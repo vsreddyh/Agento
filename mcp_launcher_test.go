@@ -14,22 +14,24 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 )
 
 // fakeCheckout copies the real launcher into a throwaway repo root with a
-// fake miser-money binary that touches $MARKER when exec'd. Callers create
+// fake <server> binary that touches $MARKER when exec'd. Callers create
 // source files under root, set their mtimes, and run the launcher.
 type fakeCheckout struct {
 	t      *testing.T
 	root   string
+	server string
 	bin    string
 	marker string
 }
 
-func newFakeCheckout(t *testing.T) *fakeCheckout {
+func newFakeCheckout(t *testing.T, server string) *fakeCheckout {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("launcher is bash")
@@ -53,14 +55,14 @@ func newFakeCheckout(t *testing.T) *fakeCheckout {
 		t.Fatal(err)
 	}
 	marker := filepath.Join(root, "ran")
-	bin := filepath.Join(root, "bin", "miser-money")
+	bin := filepath.Join(root, "bin", server)
 	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n: > \"$MARKER\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &fakeCheckout{t: t, root: root, bin: bin, marker: marker}
+	return &fakeCheckout{t: t, root: root, server: server, bin: bin, marker: marker}
 }
 
 func (c *fakeCheckout) write(rel, content string) string {
@@ -84,7 +86,7 @@ func (c *fakeCheckout) chtimes(rel string, t time.Time) {
 
 func (c *fakeCheckout) run() ([]byte, error) {
 	c.t.Helper()
-	cmd := exec.Command("bash", filepath.Join(c.root, "scripts", "mcp-run.sh"), "miser-money")
+	cmd := exec.Command("bash", filepath.Join(c.root, "scripts", "mcp-run.sh"), c.server)
 	cmd.Dir = c.root
 	cmd.Env = append(os.Environ(), "MARKER="+c.marker)
 	return cmd.CombinedOutput()
@@ -118,24 +120,34 @@ func (c *fakeCheckout) expectLaunch(t *testing.T) {
 	}
 }
 
-// seedMiser writes the files the miser-money guard watches (own cmd dir, own
-// store package, shared libs, go.mod/go.sum) at `at`, and returns nothing —
-// callers move individual files newer afterwards.
-func (c *fakeCheckout) seedMiser(at time.Time) {
+// seed writes the files a server's guard watches (own cmd dir, own store
+// package, its shared libs, go.mod/go.sum) at `at` — callers move individual
+// files newer afterwards.
+func (c *fakeCheckout) seed(at time.Time, own string, shared []string) {
 	c.t.Helper()
-	for _, rel := range []string{
-		"cmd/miser-money/main.go",
-		"internal/money/store.go",
-		"internal/mongo/mongo.go",
-		"internal/mongostore/mongostore.go",
-		"internal/validate/validate.go",
-		"go.mod",
-		"go.sum",
-	} {
+	rels := []string{"cmd/" + c.server + "/main.go", "internal/" + own + "/store.go", "go.mod", "go.sum"}
+	for _, s := range shared {
+		rels = append(rels, "internal/"+s+"/lib.go")
+	}
+	for _, rel := range rels {
 		c.write(rel, "package fake\n")
 		c.chtimes(rel, at)
 	}
-	c.chtimes("bin/miser-money", at)
+	c.chtimes("bin/"+c.server, at)
+}
+
+func (c *fakeCheckout) git(t *testing.T, date time.Time, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = c.root
+	stamp := date.Format("2006-01-02T15:04:05Z07:00")
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		"GIT_AUTHOR_DATE="+stamp, "GIT_COMMITTER_DATE="+stamp)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v (%s)", args, err, out)
+	}
 }
 
 // TestMCPRunRefusesStaleBinary pins the guard in both directions with mtimes
@@ -146,23 +158,23 @@ func TestMCPRunRefusesStaleBinary(t *testing.T) {
 	newer := time.Now().Add(-time.Hour)
 
 	t.Run("own store source refuses", func(t *testing.T) {
-		c := newFakeCheckout(t)
-		c.seedMiser(old)
+		c := newFakeCheckout(t, "miser-money")
+		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
 		c.write("internal/money/store.go", "package fake\n// changed\n")
 		c.chtimes("internal/money/store.go", newer)
 		c.expectRefuse(t, "store.go")
 	})
 
 	t.Run("own cmd source refuses", func(t *testing.T) {
-		c := newFakeCheckout(t)
-		c.seedMiser(old)
+		c := newFakeCheckout(t, "miser-money")
+		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
 		c.chtimes("cmd/miser-money/main.go", newer)
 		c.expectRefuse(t, "main.go")
 	})
 
 	t.Run("non-Go embedded asset refuses", func(t *testing.T) {
-		c := newFakeCheckout(t)
-		c.seedMiser(old)
+		c := newFakeCheckout(t, "miser-money")
+		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
 		// e.g. internal/reports/katex.min.js rides into its binary via
 		// //go:embed; a *.go-only scan would miss it entirely.
 		c.write("internal/money/seed.json", "{}\n")
@@ -170,40 +182,65 @@ func TestMCPRunRefusesStaleBinary(t *testing.T) {
 		c.expectRefuse(t, "seed.json")
 	})
 
-	t.Run("shared lib refuses", func(t *testing.T) {
-		c := newFakeCheckout(t)
-		c.seedMiser(old)
-		c.chtimes("internal/mongo/mongo.go", newer)
-		c.expectRefuse(t, "mongo.go")
+	t.Run("imported shared lib refuses", func(t *testing.T) {
+		c := newFakeCheckout(t, "miser-money")
+		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
+		c.chtimes("internal/mongo/lib.go", newer)
+		c.expectRefuse(t, "lib.go")
+	})
+
+	t.Run("unimported shared lib does not block", func(t *testing.T) {
+		// cookbook imports mongo+validate, not mongostore.
+		c := newFakeCheckout(t, "cookbook")
+		c.seed(old, "cookbook", []string{"mongo", "validate"})
+		c.write("internal/mongostore/mongostore.go", "package fake\n")
+		c.chtimes("internal/mongostore/mongostore.go", newer)
+		c.expectLaunch(t)
+	})
+
+	t.Run("reports ignores validate", func(t *testing.T) {
+		// reports imports only mongo besides its own package.
+		c := newFakeCheckout(t, "reports")
+		c.seed(old, "reports", []string{"mongo"})
+		c.write("internal/validate/validate.go", "package fake\n")
+		c.chtimes("internal/validate/validate.go", newer)
+		c.expectLaunch(t)
+	})
+
+	t.Run("reports watches mongo", func(t *testing.T) {
+		c := newFakeCheckout(t, "reports")
+		c.seed(old, "reports", []string{"mongo"})
+		c.chtimes("internal/mongo/lib.go", newer)
+		c.expectRefuse(t, "lib.go")
 	})
 
 	t.Run("unrelated cmd dir does not block", func(t *testing.T) {
-		c := newFakeCheckout(t)
-		c.seedMiser(old)
+		c := newFakeCheckout(t, "miser-money")
+		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
 		c.write("cmd/health-api/main.go", "package fake\n")
 		c.chtimes("cmd/health-api/main.go", newer)
 		c.expectLaunch(t)
 	})
 
 	t.Run("other server store does not block", func(t *testing.T) {
-		c := newFakeCheckout(t)
-		c.seedMiser(old)
+		c := newFakeCheckout(t, "miser-money")
+		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
 		c.write("internal/cookbook/store.go", "package fake\n")
 		c.chtimes("internal/cookbook/store.go", newer)
 		c.expectLaunch(t)
 	})
 
 	t.Run("test-only change does not block", func(t *testing.T) {
-		c := newFakeCheckout(t)
-		c.seedMiser(old)
+		c := newFakeCheckout(t, "miser-money")
+		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
 		c.write("internal/money/store_test.go", "package fake\n")
 		c.chtimes("internal/money/store_test.go", newer)
 		c.expectLaunch(t)
 	})
 
 	t.Run("fresh binary launches", func(t *testing.T) {
-		c := newFakeCheckout(t)
-		c.seedMiser(old)
+		c := newFakeCheckout(t, "miser-money")
+		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
 		c.chtimes("bin/miser-money", time.Now())
 		c.expectLaunch(t)
 	})
@@ -213,37 +250,91 @@ func TestMCPRunRefusesStaleBinary(t *testing.T) {
 // deletes a watched file leaves no newer file behind, so the mtime scan
 // passes — but the git HEAD check must still refuse.
 func TestMCPRunRefusesDeletedSource(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("launcher is bash")
-	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	c := newFakeCheckout(t)
-	now := time.Now()
-	c.seedMiser(now.Add(-3 * time.Hour))
+	c := newFakeCheckout(t, "miser-money")
+	base := time.Now().Add(-3 * time.Hour)
+	c.seed(base, "money", []string{"mongo", "mongostore", "validate"})
 	c.write("internal/money/doomed.go", "package fake\n")
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = c.root
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v (%s)", args, err, out)
-		}
-	}
-	run("init", "-q")
-	run("add", "-A")
-	run("commit", "-qm", "seed")
+	c.git(t, base, "init", "-q")
+	c.git(t, base, "add", "-A")
+	c.git(t, base, "commit", "-qm", "seed")
 	// Binary "rebuilt" after the seed commit.
-	c.chtimes("bin/miser-money", time.Now().Add(-time.Hour))
+	c.chtimes("bin/miser-money", base.Add(2*time.Hour))
 	if err := os.Remove(filepath.Join(c.root, "internal/money/doomed.go")); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "-A")
-	run("commit", "-qm", "drop doomed")
+	c.git(t, base.Add(150*time.Minute), "add", "-A")
+	c.git(t, base.Add(150*time.Minute), "commit", "-qm", "drop doomed")
 	// No file is newer than the binary now — only HEAD knows.
 	c.expectRefuse(t, "git HEAD")
+}
+
+// TestMCPRunGitIgnoresTestOnlyCommit pins the other side of the HEAD check: a
+// commit touching only *_test.go under a watched dir must NOT refuse, matching
+// the mtime scan's exclusion.
+func TestMCPRunGitIgnoresTestOnlyCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	c := newFakeCheckout(t, "miser-money")
+	base := time.Now().Add(-3 * time.Hour)
+	c.seed(base, "money", []string{"mongo", "mongostore", "validate"})
+	c.git(t, base, "init", "-q")
+	c.git(t, base, "add", "-A")
+	c.git(t, base, "commit", "-qm", "seed")
+	// Binary "rebuilt" after the seed commit.
+	c.chtimes("bin/miser-money", base.Add(2*time.Hour))
+	c.write("internal/money/store_test.go", "package fake\n// changed\n")
+	c.git(t, base.Add(150*time.Minute), "add", "-A")
+	c.git(t, base.Add(150*time.Minute), "commit", "-qm", "test only")
+	c.expectLaunch(t)
+}
+
+// wantWatch is the exact internal closure each MCP server builds on: its own
+// store package plus the shared libs it imports. It must match both `go list
+// -deps` below and the case mapping in scripts/mcp-run.sh — a new import
+// without a mapping update fails this test instead of serving stale tools.
+var wantWatch = map[string][]string{
+	"task-manager":    {"mongo", "mongostore", "tasks", "validate"},
+	"project-manager": {"mongo", "mongostore", "projects"},
+	"miser-money":     {"money", "mongo", "mongostore", "validate"},
+	"cookbook":        {"cookbook", "mongo", "validate"},
+	"health-check":    {"healthcheck", "mongo", "validate"},
+	"reports":         {"mongo", "reports"},
+}
+
+// TestMCPWatchSetsMatchGoDeps pins the launcher's per-server watch sets to
+// the actual transitive imports. If a server gains or drops an internal
+// import, update the case mapping in scripts/mcp-run.sh in the same PR.
+func TestMCPWatchSetsMatchGoDeps(t *testing.T) {
+	launcher, err := os.ReadFile("scripts/mcp-run.sh")
+	if err != nil {
+		t.Fatalf("read launcher: %v", err)
+	}
+	for server, want := range wantWatch {
+		out, err := exec.Command("go", "list", "-f", "{{ join .Deps \"\\n\" }}", "./cmd/"+server).Output()
+		if err != nil {
+			t.Fatalf("go list ./cmd/%s: %v", server, err)
+		}
+		var got []string
+		for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if rest, ok := strings.CutPrefix(dep, "agento/internal/"); ok {
+				got = append(got, rest)
+			}
+		}
+		sort.Strings(got)
+		sorted := append([]string(nil), want...)
+		sort.Strings(sorted)
+		if strings.Join(got, ",") != strings.Join(sorted, ",") {
+			t.Errorf("cmd/%s internal deps = %v, want %v — update wantWatch and scripts/mcp-run.sh together", server, got, sorted)
+		}
+		// The launcher's case arm must name this server's set.
+		for _, pkg := range want {
+			if !strings.Contains(string(launcher), pkg) {
+				t.Errorf("launcher does not mention internal/%s (needed by %s)", pkg, server)
+			}
+		}
+	}
 }

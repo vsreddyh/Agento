@@ -199,9 +199,12 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   `./scripts/build-mcps.sh` writes it, while T3 re-execs whatever is already
   there. `scripts/mcp-run.sh` now refuses a `bin/<server>` binary older than the
   sources that server builds on — non-test files under `cmd/<server>`, its own
-  `internal/<store>` package, the shared `internal/mongo|mongostore|validate`,
-  and `go.mod`/`go.sum` (plus a git HEAD check, so deletion-only commits trip it
-  too) — instead of serving the old tool list (#557); rebuild after every merge
+  `internal/<store>` package, and the shared `internal/*` libs it actually
+  imports (exact per-server mapping in the launcher, pinned by
+  `TestMCPWatchSetsMatchGoDeps` so a new import without a mapping update fails
+  CI instead of serving stale tools), plus `go.mod`/`go.sum` and a git HEAD
+  check with the same test exclusion, so deletion-only commits trip it too —
+  instead of serving the old tool list (#557); rebuild after every merge
   touching those paths, then restart T3 — restarting the
   compose stack cannot help, there is no MCP container.
 - The Google Workspace entry is deliberately narrow: `gmail:organize` scopes

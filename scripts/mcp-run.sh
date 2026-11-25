@@ -53,16 +53,19 @@ fi
 # is git-ignored and only scripts/build-mcps.sh writes it, so a pull/merge plus
 # a T3 restart re-runs the OLD file: that is how the live money server kept a
 # removed 90-day TTL and an 11-tool surface days after main moved to 21 tools.
-# The check is per-server: cmd/<server> plus the internal packages that server
-# builds on (its own store package plus the shared mongo/mongostore/validate),
-# plus go.mod/go.sum. A change to cmd/health-api or another server's store
-# package must not take down the five unrelated MCP servers, so those dirs are
+# The check is per-server: cmd/<server> plus exactly the internal packages that
+# server builds on (its own store package plus the shared libs it imports —
+# see the mapping below, pinned by TestMCPWatchSetsMatchGoDeps so a new import
+# without a mapping update fails CI instead of serving stale tools). A change
+# to cmd/health-api, another server's store package, or a shared lib the
+# server does not import must not take down that MCP server, so those dirs are
 # deliberately NOT scanned. All non-test files count, not just *.go: embedded
 # assets (e.g. internal/reports/katex.min.js via //go:embed) compile into the
 # binary too. *_test.go files are excluded — they never reach the binary.
 # A deletion-only commit leaves no newer file behind, so a git HEAD check backs
 # the mtime scan: if the newest commit touching the watched paths is newer than
-# the binary, the binary predates it regardless of mtimes.
+# the binary, the binary predates it regardless of mtimes. The HEAD check uses
+# the same test exclusion, so a test-only commit does not trip it.
 newest=""
 for f in "$REPO/go.mod" "$REPO/go.sum"; do
     if [[ -f "$f" && "$f" -nt "$bin" ]]; then
@@ -70,13 +73,13 @@ for f in "$REPO/go.mod" "$REPO/go.sum"; do
     fi
 done
 case "$name" in
-    task-manager) own="tasks" ;;
-    project-manager) own="projects" ;;
-    miser-money) own="money" ;;
-    cookbook) own="cookbook" ;;
-    health-check) own="healthcheck" ;;
-    reports) own="reports" ;;
-    *) own="" ;;
+    task-manager) own="tasks"; shared="mongo mongostore validate" ;;
+    project-manager) own="projects"; shared="mongo mongostore" ;;
+    miser-money) own="money"; shared="mongo mongostore validate" ;;
+    cookbook) own="cookbook"; shared="mongo validate" ;;
+    health-check) own="healthcheck"; shared="mongo validate" ;;
+    reports) own="reports"; shared="mongo" ;;
+    *) own=""; shared="" ;;
 esac
 watch=()
 [[ -d "$REPO/cmd/$name" ]] && watch+=("$REPO/cmd/$name")
@@ -87,9 +90,11 @@ elif [[ -z "$own" && -d "$REPO/internal" ]]; then
     # rather than risk serving stale tools.
     watch+=("$REPO/internal")
 fi
-for shared in mongo mongostore validate; do
-    [[ -d "$REPO/internal/$shared" ]] && watch+=("$REPO/internal/$shared")
-done
+if [[ -n "$own" ]]; then
+    for s in $shared; do
+        [[ -d "$REPO/internal/$s" ]] && watch+=("$REPO/internal/$s")
+    done
+fi
 if [[ -z "$newest" && ${#watch[@]} -gt 0 ]]; then
     newest="$(find "${watch[@]}" -type f ! -name '*_test.go' -newer "$bin" -print -quit 2>/dev/null || true)"
 fi
@@ -97,11 +102,13 @@ if [[ -z "$newest" && -d "$REPO/.git" ]] && command -v git >/dev/null 2>&1; then
     gitpaths=()
     for w in "${watch[@]}"; do gitpaths+=("${w#"$REPO"/}"); done
     gitpaths+=("go.mod" "go.sum")
-    last="$(git -C "$REPO" log -1 --format=%ct -- "${gitpaths[@]}" 2>/dev/null || true)"
+    # Same test exclusion as the mtime scan: a test-only commit must not trip
+    # the guard.
+    last="$(git -C "$REPO" log -1 --format=%ct -- "${gitpaths[@]}" ':(exclude)*_test.go' 2>/dev/null || true)"
     if [[ "$last" =~ ^[0-9]+$ ]]; then
         bin_epoch="$(stat -c %Y "$bin" 2>/dev/null || stat -f %m "$bin" 2>/dev/null || echo 0)"
         if (( last > bin_epoch )); then
-            newest="git HEAD ($(git -C "$REPO" log -1 --format=%h -- "${gitpaths[@]}" 2>/dev/null || echo unknown))"
+            newest="git HEAD ($(git -C "$REPO" log -1 --format=%h -- "${gitpaths[@]}" ':(exclude)*_test.go' 2>/dev/null || echo unknown))"
         fi
     fi
 fi
