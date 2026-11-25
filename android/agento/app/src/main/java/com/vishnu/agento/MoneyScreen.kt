@@ -205,8 +205,8 @@ private fun MoneyTransactionsView(
             appendError = ""
         }
         scope.launch {
-            // Rows never expire: a wide window with paging. Newest first
-            // (server order=desc), 100 per page — the subtitle counts
+            // Unflagged rows never expire: a wide window with paging. Newest
+            // first (server order=desc), 100 per page — the subtitle counts
             // whether older rows remain, and an explicit control fetches
             // them via offset=next_offset (no silent dead end at 100).
             // Filtered by stable account id, so a rename never breaks the
@@ -252,7 +252,11 @@ private fun MoneyTransactionsView(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { load() }, enabled = !busy) {
+                    // Disabled while appending too: a refresh racing an
+                    // in-flight append would discard the appended page
+                    // when it lands second (whichever finishes last
+                    // wins `rows`).
+                    IconButton(onClick = { load() }, enabled = !busy && !appending) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
                 },
