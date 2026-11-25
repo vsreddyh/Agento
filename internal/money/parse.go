@@ -6,8 +6,11 @@ import (
 	"time"
 )
 
-// Categories; 'other' is the fallback when nothing matches.
-var Categories = []string{
+// DefaultCategories seeds the user-managed money_categories collection on
+// first boot. 'other' is the fallback when nothing matches, and it is
+// reserved: it cannot be renamed, deleted, or renamed-to. The live set lives
+// in MongoDB (see categories.go) — this slice is only the seed.
+var DefaultCategories = []string{
 	"groceries", "eating out", "transport", "bills", "rent",
 	"shopping", "health", "fun", "salary", "other",
 }

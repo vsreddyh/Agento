@@ -1,7 +1,7 @@
 // Command miser-money is the multi-account money-management MCP server.
 //
-// Storage: MongoDB (money_accounts + money_transactions + money_budgets, all
-// permanent). Balances are derived from the ledger on every read — there is
+// Storage: MongoDB (money_accounts + money_transactions + money_budgets +
+// money_categories, all permanent). Balances are derived from the ledger on every read — there is
 // no stored running total and no multi-document writes. Runs over stdio for
 // MCP clients.
 package main
@@ -22,8 +22,24 @@ import (
 
 var store *money.Store
 
+// fail reports a rejection as a protocol-level failure: IsError is set, so a
+// client keying off the protocol sees the rejection instead of a successful
+// call with prose to parse. The structured payload still carries ok:false
+// plus the message for the agent.
 func fail(err error) (*mcp.CallToolResult, map[string]any, error) {
-	return nil, map[string]any{"ok": false, "error": err.Error()}, nil
+	out := map[string]any{"ok": false, "error": err.Error()}
+	b, _ := json.Marshal(out)
+	return &mcp.CallToolResult{
+		IsError:           true,
+		Content:           []mcp.Content{&mcp.TextContent{Text: string(b)}},
+		StructuredContent: out,
+	}, out, nil
+}
+
+// failMsg is fail for a formatted message — the single constructor for every
+// explicit ok:false path, so no rejection can leak back as a success.
+func failMsg(format string, args ...any) (*mcp.CallToolResult, map[string]any, error) {
+	return fail(fmt.Errorf(format, args...))
 }
 
 func ok(payload map[string]any) (*mcp.CallToolResult, map[string]any, error) {
@@ -64,8 +80,8 @@ type createAccountInput struct {
 	Name string `json:"name"`
 	// The handler defaults "" to cash.
 	Type string `json:"type,omitempty"`
-	// Opening balance; 0 is a real starting balance.
-	Balance float64 `json:"balance,omitempty"`
+	// Opening balance in paise (int64); 0 is a real starting balance.
+	BalancePaise int64 `json:"balance_paise,omitempty"`
 }
 
 type listAccountsInput struct {
@@ -84,9 +100,10 @@ type archiveAccountInput struct {
 type getBalancesInput struct{}
 
 type logTransactionInput struct {
-	// store.Insert rejects a non-positive amount and an unknown type.
-	Type   string  `json:"type"`
-	Amount float64 `json:"amount"`
+	Type string `json:"type"`
+	// Integer paise (> 0). No floats cross the surface — the storage is
+	// int64 paise, so the input is too.
+	AmountPaise int64 `json:"amount_paise"`
 	// NOT required: the store lowercases an empty category to "other", so an
 	// absent category is never rejected. An *unknown* name is rejected — the
 	// caller must learn that it does not exist — but marking the field required
@@ -145,12 +162,12 @@ type deleteTransactionsInput struct {
 	// At least one filter (or id) is required, and the server rejects none — so no field
 	// can be marked required without forbidding a legitimate combination.
 	// Amount is a pointer so an explicit 0 is distinguishable from absent:
-	// 0 would otherwise silently widen the filter (no zero rows exist).
-	Amount   *float64 `json:"amount,omitempty"`
-	Type     string   `json:"type,omitempty"`
-	Category string   `json:"category,omitempty"`
-	Date     string   `json:"date,omitempty"`
-	Account  string   `json:"account,omitempty"`
+	// 0 would otherwise silently widen the filter (no zero-amount rows exist).
+	AmountPaise *int64 `json:"amount_paise,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Category    string `json:"category,omitempty"`
+	Date        string `json:"date,omitempty"`
+	Account     string `json:"account,omitempty"`
 	// A pointer because nil is meaningful: nil means dry run, which is the safe
 	// default for anything that deletes.
 	DryRun *bool `json:"dry_run,omitempty"`
@@ -160,17 +177,18 @@ type editTransactionInput struct {
 	// A transaction id hex; the row must exist (a missing id is rejected,
 	// not a silent 0, like delete by id).
 	ID string `json:"id"`
-	// Every edit field is optional: absent or whitespace-only means leave it
-	// alone (a note cannot be cleared this way — blank means no change).
-	// Amount is a pointer so an explicit 0 is rejected, not mistaken for
-	// absent; at least one field must change or the call is rejected.
-	Amount    *float64 `json:"amount,omitempty"`
-	Type      string   `json:"type,omitempty"`
-	Category  string   `json:"category,omitempty"`
-	Account   string   `json:"account,omitempty"`
-	SendingTo string   `json:"sending_to,omitempty"`
-	Date      string   `json:"date,omitempty"`
-	Note      string   `json:"note,omitempty"`
+	// Every edit field is optional: absent means leave it alone (except note:
+	// null means no change, "" clears it). Amount is a pointer so an explicit
+	// 0 is rejected, not mistaken for absent; at least one field must be
+	// supplied or the call is rejected (a same-value supply succeeds with
+	// changed:false).
+	AmountPaise *int64  `json:"amount_paise,omitempty"`
+	Type        string  `json:"type,omitempty"`
+	Category    string  `json:"category,omitempty"`
+	Account     string  `json:"account,omitempty"`
+	SendingTo   string  `json:"sending_to,omitempty"`
+	Date        string  `json:"date,omitempty"`
+	Note        *string `json:"note,omitempty"`
 }
 
 type unarchiveAccountInput struct {
@@ -263,12 +281,12 @@ func main() {
 // signal that the guard was removed.
 func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
-		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty or whitespace-only defaults to cash). Optional opening balance seed in the same call (defaults to 0, must be an exact paise value like every amount, so no separate funding entry is needed; stored once, never updated — later movement comes only from logged rows)."},
+		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty or whitespace-only defaults to cash). Optional opening balance seed in int64 paise in the same call (defaults to 0, so no separate funding entry is needed; stored once as the seed and changeable only via edit_account — later movement otherwise comes only from logged rows)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			if strings.TrimSpace(in.Type) == "" {
 				in.Type = "cash"
 			}
-			acct, err := store.CreateAccount(ctx, in.Name, in.Type, in.Balance)
+			acct, err := store.CreateAccount(ctx, in.Name, in.Type, in.BalancePaise)
 			if err != nil {
 				return fail(err)
 			}
@@ -296,7 +314,7 @@ func registerTools(s *mcp.Server) {
 				return fail(err)
 			}
 			if !done {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown account '%s'", in.Name)})
+				return failMsg("unknown account '%s'", in.Name)
 			}
 			return result(map[string]any{"ok": true, "archived": resolved})
 		})
@@ -310,7 +328,7 @@ func registerTools(s *mcp.Server) {
 				return fail(err)
 			}
 			if !done {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown account '%s'", in.Name)})
+				return failMsg("unknown account '%s'", in.Name)
 			}
 			return result(map[string]any{"ok": true, "unarchived": resolved})
 		})
@@ -327,7 +345,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_transaction",
-		Description: "Log an income, expense, or transfer (a single write; the balance is derived from rows, so there is nothing to keep in sync). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today in IST (empty or whitespace-only also means today, unlike query's rejected empty bounds in range mode; must be a real calendar date — 2026-02-30 is rejected, like range-mode query — and padded dates are trimmed; rows never expire, so any real date stores with immediate balance effect and stays until deleted, even a far-future one (visible only to explicit start/end queries covering it, or to a by-id fetch)). category must be one of groceries|eating out|transport|bills|rent|shopping|health|fun|salary|other (blank or whitespace-only = other; anything else is rejected). amount must be an exact paise value (> 0, at most 2 decimals — stored as int64 paise, never rounded or floated). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
+		Description: "Log an income, expense, or transfer (a single write; the balance is derived from rows, so there is nothing to keep in sync). account required (case-sensitive exact name or id hex); sending_to required for transfers (name or id hex, like account, and must differ from the source — same-account transfers are rejected; forbidden on non-transfers except whitespace-only, which counts as absent); date YYYY-MM-DD defaults to today in IST (empty or whitespace-only also means today, unlike query's rejected empty bounds in range mode; must be a real calendar date — 2026-02-30 is rejected, like range-mode query — and padded dates are trimmed; rows never expire, so any real date stores with immediate balance effect and stays until deleted, even a far-future one (visible only to explicit start/end queries covering it, or to a by-id fetch)). category must exist (list_categories shows the live set; blank or whitespace-only = other; anything else is rejected). amount_paise is integer paise (> 0 — stored as int64 paise, and no floats cross the surface). note capped at 300 bytes (cut on a UTF-8 boundary, never rejected). idempotency_key (trimmed, max 200 bytes — a UUID is 36; longer is rejected; blank/whitespace-only means no key, each call logs anew) makes a retry a no-op; the same key with a different date/amount_paise/type/category/account/sending_to is rejected — use a new key for a new request; note differences are ignored on replay (first write wins, correction needs a new key). Returns the stored category/account/note (normalized, not the raw input) plus sending_to/sending_to_account for transfers; if the post-write re-read itself fails, ok stays true (the write succeeded — retrying without a key would double-log) and readback_error names the failure instead of silently omitting fields."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			day := in.Date
 			if strings.TrimSpace(day) == "" {
@@ -344,7 +362,10 @@ func registerTools(s *mcp.Server) {
 			// stored row: without the trim, `type=" Expense "` stored `expense`
 			// but returned `" expense "`.
 			typ := strings.ToLower(strings.TrimSpace(in.Type))
-			tid, created, err := store.Insert(ctx, day, in.Amount, typ, in.Category, in.Account, in.SendingTo, in.Note, "log_transaction", in.IdempotencyKey)
+			if in.AmountPaise <= 0 {
+				return fail(fmt.Errorf("log_transaction amount_paise must be > 0 \u2014 got %d", in.AmountPaise))
+			}
+			tid, created, err := store.Insert(ctx, day, in.AmountPaise, typ, in.Category, in.Account, in.SendingTo, in.Note, "log_transaction", in.IdempotencyKey)
 			if err != nil {
 				return fail(err)
 			}
@@ -355,7 +376,7 @@ func registerTools(s *mcp.Server) {
 			// and retrying without a key would double-log — with readback_error
 			// naming the failure instead of silently omitting fields.
 			out := map[string]any{"ok": true, "id": tid, "date": day, "type": typ,
-				"amount": in.Amount, "created": created}
+				"amount_paise": in.AmountPaise, "created": created}
 			if rows, merr := store.Match(ctx, map[string]any{"id": tid}); merr != nil {
 				out["readback_error"] = merr.Error()
 			} else if len(rows) == 1 {
@@ -389,7 +410,7 @@ func registerTools(s *mcp.Server) {
 			in.Account = strings.TrimSpace(in.Account)
 			if in.ID != "" {
 				if in.Start != "" || in.End != "" || in.Type != "" || in.Category != "" || in.Account != "" {
-					return result(map[string]any{"ok": false, "error": "id cannot be combined with start, end, type, category or account."})
+					return failMsg("id cannot be combined with start, end, type, category or account.")
 				}
 				// Paging args are filters on a range, not on a row: a non-zero
 				// limit/offset with id is rejected rather than silently
@@ -397,7 +418,7 @@ func registerTools(s *mcp.Server) {
 				// succeeding while ignoring what was asked for. Zero values
 				// are the unset defaults and pass through.
 				if in.Limit != 0 || in.Offset != 0 {
-					return result(map[string]any{"ok": false, "error": "id cannot be combined with limit or offset — a by-id fetch is a single row."})
+					return failMsg("id cannot be combined with limit or offset — a by-id fetch is a single row.")
 				}
 				// A malformed id fails in toMongoFilter before any store touch;
 				// a well-formed unknown id matches nothing and is rejected
@@ -407,7 +428,7 @@ func registerTools(s *mcp.Server) {
 					return fail(err)
 				}
 				if len(rows) == 0 {
-					return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown transaction id '%s'", in.ID)})
+					return failMsg("unknown transaction id '%s'", in.ID)
 				}
 				return result(map[string]any{"ok": true, "count": 1, "total": int64(1),
 					"truncated": false, "next_offset": nil, "limit": 1,
@@ -442,7 +463,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (removed rows stop contributing to balances, which are derived from what remains). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount (exact paise: > 0, at most 2 decimals; an explicit 0 or >2-decimal value is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
+		Description: "Delete transactions (removed rows stop contributing to balances, which are derived from what remains). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount_paise (integer paise > 0; an explicit 0 is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like the query bounds, so
 			// whitespace-only means absent (not an "unknown account" error):
@@ -454,25 +475,19 @@ func registerTools(s *mcp.Server) {
 			in.Account = strings.TrimSpace(in.Account)
 			filt := map[string]any{}
 			if in.ID != "" {
-				if in.Amount != nil || in.Type != "" || in.Category != "" || in.Date != "" || in.Account != "" {
-					return result(map[string]any{"ok": false, "error": "id cannot be combined with amount, type, category, date or account."})
+				if in.AmountPaise != nil || in.Type != "" || in.Category != "" || in.Date != "" || in.Account != "" {
+					return failMsg("id cannot be combined with amount_paise, type, category, date or account.")
 				}
 				filt["id"] = in.ID
 			} else {
-				if in.Amount != nil {
+				if in.AmountPaise != nil {
 					// Rejected like writes: 0 is not a narrower filter (no
 					// zero-amount rows exist), it would silently widen to
-					// every row matching the remaining filters. Converted to
-					// paise with exactness enforced: a >2-decimal filter
-					// would match paise it never stored.
-					if *in.Amount <= 0 {
-						return fail(fmt.Errorf("delete_transactions amount must be > 0 — 0 means absent and cannot narrow a delete"))
+					// every row matching the remaining filters.
+					if *in.AmountPaise <= 0 {
+						return fail(fmt.Errorf("delete_transactions amount_paise must be > 0 — 0 means absent and cannot narrow a delete"))
 					}
-					paise, ok := money.ExactPaise(*in.Amount)
-					if !ok {
-						return fail(fmt.Errorf("delete_transactions amount %v is not an exact paise value — use at most 2 decimals", *in.Amount))
-					}
-					filt["amount"] = paise
+					filt["amount"] = *in.AmountPaise
 				}
 				if in.Type != "" {
 					filt["type"] = in.Type
@@ -495,7 +510,7 @@ func registerTools(s *mcp.Server) {
 					filt["account"] = in.Account
 				}
 				if len(filt) == 0 {
-					return result(map[string]any{"ok": false, "error": "Provide id, or at least one of amount, type, category, date, account."})
+					return failMsg("Provide id, or at least one of amount_paise, type, category, date, account.")
 				}
 			}
 			dry := true
@@ -513,7 +528,7 @@ func registerTools(s *mcp.Server) {
 					return fail(err)
 				}
 				if byID && len(rows) == 0 {
-					return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown transaction id '%s'", in.ID)})
+					return failMsg("unknown transaction id '%s'", in.ID)
 				}
 				return result(map[string]any{"ok": true, "dry_run": true,
 					"would_delete": len(rows), "transactions": rows})
@@ -523,19 +538,19 @@ func registerTools(s *mcp.Server) {
 				return fail(err)
 			}
 			if byID && n == 0 {
-				return result(map[string]any{"ok": false, "error": fmt.Sprintf("unknown transaction id '%s'", in.ID)})
+				return failMsg("unknown transaction id '%s'", in.ID)
 			}
 			return result(map[string]any{"ok": true, "dry_run": false, "deleted": n})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "edit_transaction",
-		Description: "Edit one transaction by id (the row changes in place; balances derive from rows, so no separate rebalance step exists and a move can never half-land). Required: id (a missing id is rejected, not a silent 0). Optional: amount (exact paise: > 0, at most 2 decimals; explicit 0 rejected), type/category (normalized + validated like writes, except blank means no change — pass explicit `other` to reset the category; unknown rejected), account/sending_to (case-sensitive exact name or id hex like writes, unlike type/category; transfer requires sending_to when the result would otherwise have no destination (converting a non-transfer into one) — edits on an existing transfer keep its legs unless a new destination is passed, and it must differ; forbidden on non-transfers except whitespace-only (counts as absent); moving a leg onto an archived account rejects, but resupplying the leg already on the row does not — it is not a move, so copying `account` from a query back into the edit keeps working — even when converting away from a transfer, where the resupplied destination is ignored and the leg drops), date (real YYYY-MM-DD calendar date, IST day like writes when supplied — empty/whitespace means no change, unlike log where it means today; changes the row's date — rows never expire, so any past date stays put), note (capped at 300 bytes like writes; blank means leave alone, it cannot be cleared). Absent or whitespace-only means no change — except converting to transfer still requires `sending_to`; at least one field must change. Returns the edited row read back by id; if the re-read fails, `ok` stays true with `readback_error` (like log_transaction)."},
+		Description: "Edit one transaction by id (the row changes in place; balances derive from rows, so no separate rebalance step exists and a move can never half-land). Required: id (a missing id is rejected, not a silent 0). Optional: amount_paise (integer paise > 0; explicit 0 rejected), type/category (normalized + validated like writes, except blank means no change — pass explicit `other` to reset the category; unknown rejected), account/sending_to (case-sensitive exact name or id hex like writes, unlike type/category; transfer requires sending_to when the result would otherwise have no destination (converting a non-transfer into one) — edits on an existing transfer keep its legs unless a new destination is passed, and it must differ; forbidden on non-transfers except whitespace-only (counts as absent); moving a leg onto an archived account rejects, but resupplying the leg already on the row does not — it is not a move, so copying `account` from a query back into the edit keeps working — even when converting away from a transfer, where the resupplied destination is ignored and the leg drops), date (real YYYY-MM-DD calendar date, IST day like writes when supplied — empty/whitespace means no change, unlike log where it means today; changes the row's date — rows never expire, so any past date stays put), note (capped at 300 bytes like writes; null means no change, \"\" clears it). Absent means no change — except converting to transfer still requires `sending_to`; at least one field must be supplied (a same-value supply succeeds with changed:false). Returns the edited row read back by id; if the re-read fails, `ok` stays true with `readback_error` (like log_transaction)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in editTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like delete's filters, so
 			// whitespace-only means absent (no change) instead of an error.
 			in.ID = strings.TrimSpace(in.ID)
 			if in.ID == "" {
-				return result(map[string]any{"ok": false, "error": "transaction id is required."})
+				return failMsg("transaction id is required.")
 			}
 			in.Type = strings.TrimSpace(in.Type)
 			in.Category = strings.TrimSpace(in.Category)
@@ -564,13 +579,16 @@ func registerTools(s *mcp.Server) {
 				}
 				date = &d
 			}
-			if strings.TrimSpace(in.Note) != "" {
-				note = &in.Note
+			// Null means no change; "" (or whitespace-only, trimmed like
+			// everywhere else) clears the note.
+			if in.Note != nil {
+				t := strings.TrimSpace(*in.Note)
+				note = &t
 			}
-			if in.Amount == nil && typ == nil && cat == nil && acct == nil && dst == nil && date == nil && note == nil {
-				return result(map[string]any{"ok": false, "error": "provide at least one of amount, type, category, account, sending_to, date, note."})
+			if in.AmountPaise == nil && typ == nil && cat == nil && acct == nil && dst == nil && date == nil && note == nil {
+				return failMsg("provide at least one of amount_paise, type, category, account, sending_to, date, note.")
 			}
-			changed, err := store.EditTransaction(ctx, in.ID, in.Amount, typ, cat, acct, dst, date, note)
+			changed, err := store.EditTransaction(ctx, in.ID, in.AmountPaise, typ, cat, acct, dst, date, note)
 			if err != nil {
 				return fail(err)
 			}
@@ -589,4 +607,6 @@ func registerTools(s *mcp.Server) {
 
 	registerAnalysisTools(s)
 	registerBudgetTools(s)
+	registerAccountLifecycleTools(s)
+	registerCategoryTools(s)
 }

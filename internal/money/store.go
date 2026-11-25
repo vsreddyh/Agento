@@ -1,10 +1,11 @@
 // Package money: MongoDB storage with derived balances.
 //
-// Collections: money_accounts (name unique), money_transactions and
-// money_budgets — all permanent. Rows never expire: the only way a row disappears is a
+// Collections: money_accounts + money_transactions + money_budgets +
+// money_categories — all permanent. Rows never expire: the only way a row disappears is a
 // user-initiated delete. There is no stored running total: an account's
-// balance is its immutable opening seed plus the signed sum of its ledger
-// legs, computed on read — so a balance can never drift from its rows.
+// balance is its opening seed (changeable only via edit_account) plus the
+// signed sum of its ledger legs, computed on read — so a balance can never
+// drift from its rows.
 package money
 
 import (
@@ -57,11 +58,12 @@ func idHex(v any) string {
 }
 
 // Paise keeps money exact: 1 rupee = 100 paise. The tool surface speaks
-// rupees (float, unchanged contract); BSON stores int64 paise, so accumulated
-// balances can never drift (0.1+0.2 stays 30 paise, not 0.30000000000000004).
-// ToPaise rounds rupees to the nearest paise. It never validates: use
-// ExactPaise at every entry point so a >2-decimal input is rejected rather
-// than silently rounded.
+// paise (int64), matching BSON storage exactly, so accumulated balances can
+// never drift (0.1+0.2 stays 30 paise, not 0.30000000000000004) and no float
+// crosses the MCP boundary. ToPaise rounds rupees to the nearest paise for
+// the paths that still accept them (delete filters from direct store
+// callers); it never validates — ExactPaise is the gate that rejects
+// sub-paise input instead of silently rounding it.
 func ToPaise(amount float64) int64 { return int64(math.Round(amount * 100)) }
 
 // ExactPaise converts rupees to paise only when the value is exact to the
@@ -76,8 +78,10 @@ func ExactPaise(amount float64) (int64, bool) {
 	return p, true
 }
 
-// ToRupees renders stored paise for the tool surface. Whole rupees round-trip
+// ToRupees renders stored paise as rupees. Whole rupees round-trip
 // exactly; fractions use the shortest float repr (10.55, not dust).
+// Only legacy-migration and tolerance paths still need it — the tool
+// surface reports paise integers.
 func ToRupees(paise int64) float64 { return float64(paise) / 100 }
 
 // paiseOf reads a stored amount/balance in paise, tolerating legacy doubles:
@@ -131,6 +135,7 @@ type Store struct {
 	accts   *mongoDrv.Collection
 	txns    *mongoDrv.Collection
 	budgets *mongoDrv.Collection
+	cats    *mongoDrv.Collection
 }
 
 // New connects with an explicit URI/db (use FromEnv for single-root-.env).
@@ -139,7 +144,7 @@ func New(uri, dbName string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, accts: db.Collection(accounts), txns: db.Collection(transactions), budgets: db.Collection(budgets)}
+	s := &Store{db: db, accts: db.Collection(accounts), txns: db.Collection(transactions), budgets: db.Collection(budgets), cats: db.Collection(categories)}
 	if err := s.EnsureSchema(context.Background()); err != nil {
 		return nil, err
 	}
@@ -158,12 +163,12 @@ func FromEnv() (*Store, error) {
 // types, so `create type="Bank"` stores `bank` instead of rejecting what
 // `log_transaction type="Bank"` accepts.
 //
-// The opening balance is stored once, as an immutable int64-paise seed
-// (`openingBalance`): it is added to the derived leg sums on every read and
-// never written again, so there is no running total to maintain. Exact paise
-// like every other write: an opening balance of 0.005 is rejected, not
-// silently stored as 1 paise.
-func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance float64) (bson.M, error) {
+// The opening balance is stored once, as an immutable-by-writes int64-paise
+// seed (`openingBalance`): it is added to the derived leg sums on every read,
+// and logged rows never touch it — only edit_account changes it, by delta,
+// with no transaction row. The tool surface speaks paise (int64), matching
+// storage exactly — no float crosses the MCP boundary.
+func (s *Store) CreateAccount(ctx context.Context, name, typ string, balancePaise int64) (bson.M, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fail("account name is required")
@@ -172,10 +177,7 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 	if !contains(accountTypes, typ) {
 		return nil, fail("account type must be one of %v", accountTypes)
 	}
-	openingPaise, ok := ExactPaise(balance)
-	if !ok {
-		return nil, fail("balance %v is not an exact paise value — use at most 2 decimals", balance)
-	}
+	openingPaise := balancePaise
 	doc := bson.M{"name": name, "type": typ, "openingBalance": openingPaise,
 		"archived": false, "createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	res, err := s.accts.InsertOne(ctx, doc)
@@ -186,11 +188,12 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balance flo
 		return nil, err
 	}
 	doc["_id"] = oidHex(res.InsertedID)
-	// Echo the derived total under the same `balance` key list/get_balances
-	// use — not the storage field. A new account has no legs, so the total
-	// is exactly the seed, but callers should never see `openingBalance`.
+	// Echo the derived total under the same `balance_paise` key
+	// get_balances uses — not the storage field. A new account has no legs,
+	// so the total is exactly the seed, but callers should never see
+	// `openingBalance`.
 	delete(doc, "openingBalance")
-	doc["balance"] = ToRupees(openingPaise)
+	doc["balance_paise"] = openingPaise
 	return doc, nil
 }
 
@@ -222,7 +225,7 @@ func (s *Store) derivedLegs(ctx context.Context) (map[string]int64, error) {
 // without this the mapping id -> name is unknowable from the tool surface and
 // a multi-account query result cannot be read.
 //
-// `balance` is opening seed + derived legs, rendered as rupees.
+// `balance_paise` is opening seed + derived legs, as int64 paise.
 func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.M, error) {
 	filt := bson.M{}
 	if !includeArchived {
@@ -249,7 +252,7 @@ func (s *Store) ListAccounts(ctx context.Context, includeArchived bool) ([]bson.
 		// Opening seed plus signed legs; a missing seed (pre-derivation row
 		// that skipped migration, which should not exist) reads as 0.
 		// The storage field never leaves the store — see create, same rule.
-		r["balance"] = ToRupees(paiseOf(r["openingBalance"]) + legs[id])
+		r["balance_paise"] = paiseOf(r["openingBalance"]) + legs[id]
 		delete(r, "openingBalance")
 	}
 	return rows, nil
@@ -315,6 +318,78 @@ func (s *Store) UnarchiveAccount(ctx context.Context, name string) (string, bool
 	return strings.TrimSpace(name), true, nil
 }
 
+// EditAccount renames an account, changes its type, and/or corrects its
+// opening-balance seed — the three things archiving cannot fix.
+// Name, type and seed are the only mutable account fields; at least one must
+// be set. A rename keeps every transaction row (rows reference the account
+// id, never the name); a colliding name is rejected. A seed correction moves
+// the derived balance by exactly the delta and writes no transaction row —
+// unlike a fudged adjustment entry, it leaves income/expense untouched. The
+// type is normalized like CreateAccount. Works on archived accounts too:
+// fixing a typo'd archived account must not require unarchiving it first.
+func (s *Store) EditAccount(ctx context.Context, idOrName string, newName *string, newType *string, openingPaise *int64) (bson.M, error) {
+	acct, err := s.findAccount(ctx, idOrName)
+	if err != nil {
+		return nil, err
+	}
+	oid, ok := acct["_id"].(primitive.ObjectID)
+	if !ok {
+		return nil, fail("account '%s' has no id", strings.TrimSpace(idOrName))
+	}
+	set := bson.M{}
+	if newName != nil {
+		n := strings.TrimSpace(*newName)
+		if n == "" {
+			return nil, fail("edit_account name must not be blank")
+		}
+		if n != fmt.Sprint(acct["name"]) {
+			var clash bson.M
+			if cerr := s.accts.FindOne(ctx, bson.M{"name": n}).Decode(&clash); cerr == nil {
+				return nil, fail("account '%s' already exists", n)
+			} else if cerr != mongoDrv.ErrNoDocuments {
+				return nil, cerr
+			}
+			set["name"] = n
+		}
+	}
+	if newType != nil {
+		t := strings.ToLower(strings.TrimSpace(*newType))
+		if !contains(accountTypes, t) {
+			return nil, fail("account type must be one of %v", accountTypes)
+		}
+		if t != fmt.Sprint(acct["type"]) {
+			set["type"] = t
+		}
+	}
+	if openingPaise != nil {
+		if *openingPaise != paiseOf(acct["openingBalance"]) {
+			set["openingBalance"] = *openingPaise
+		}
+	}
+	if len(set) == 0 {
+		return nil, fail("edit_account changes nothing — provide a different name, type or opening balance")
+	}
+	if _, err := s.accts.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": set}); err != nil {
+		if mongoDrv.IsDuplicateKeyError(err) {
+			return nil, fail("account '%s' already exists", strings.TrimSpace(*newName))
+		}
+		return nil, err
+	}
+	var stored bson.M
+	if err := s.accts.FindOne(ctx, bson.M{"_id": oid}).Decode(&stored); err != nil {
+		return nil, err
+	}
+	legs, err := s.derivedLegs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := idHex(stored["_id"])
+	stored["_id"] = oidHex(stored["_id"])
+	stored["balance_paise"] = paiseOf(stored["openingBalance"]) + legs[id]
+	delete(stored, "openingBalance")
+	return stored, nil
+}
+
 func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bson.M, error) {
 	// Trimmed before hex-parse like findAccount: without this, a padded
 	// id-hex misses `_id` (hex-parse fails on spaces) and falls back to a
@@ -345,8 +420,8 @@ func (s *Store) resolve(ctx context.Context, nameOrID string, forWrite bool) (bs
 // list intentionally includes archived rows (unlike ListAccounts, which hides
 // them by default) while `total` skips them — so `total` is not the sum of the
 // listed balances once anything is archived. Documented on the tool + README.
-// Balances are opening seed + signed legs in int64 paise, rendered as rupee
-// floats here.
+// Balances are opening seed + signed legs in int64 paise, reported as
+// balance_paise integers.
 func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
@@ -368,13 +443,13 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 		id := idHex(r["_id"])
 		r["_id"] = oidHex(r["_id"])
 		balPaise := paiseOf(r["openingBalance"]) + legs[id]
-		r["balance"] = ToRupees(balPaise)
+		r["balance_paise"] = balPaise
 		delete(r, "openingBalance")
 		if arch, _ := r["archived"].(bool); !arch {
 			totalPaise += balPaise
 		}
 	}
-	return bson.M{"accounts": rows, "total": ToRupees(totalPaise)}, nil
+	return bson.M{"accounts": rows, "total_paise": totalPaise}, nil
 }
 
 // Insert validates date/amount/type/category, then writes the doc. It returns (id, created, error): created is false when idempotencyKey
@@ -385,7 +460,7 @@ func (s *Store) Balances(ctx context.Context) (bson.M, error) {
 // exists, the incoming date/amount/type/category/account/sending_to are compared
 // against the stored row and a mismatch is rejected rather than returning the
 // old row as a false "replay".
-func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, category, account, sendingTo, note, source, idempotencyKey string) (string, bool, error) {
+func (s *Store) Insert(ctx context.Context, date string, amountPaise int64, typ, category, account, sendingTo, note, source, idempotencyKey string) (string, bool, error) {
 	// Trimmed so writes agree with reads (`query_transactions` trims via
 	// CheckDay): `date=" 2026-09-01 "` stores `2026-09-01` instead of failing
 	// while the same string queries fine. Validated as a real calendar date,
@@ -398,15 +473,10 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	if _, err := time.Parse("2006-01-02", date); err != nil {
 		return "", false, fail("date %q is not a real calendar date — use YYYY-MM-DD", date)
 	}
-	if amount <= 0 {
-		return "", false, fail("amount must be positive")
+	if amountPaise <= 0 {
+		return "", false, fail("amount_paise must be positive")
 	}
-	// Exact paise only: a >2-decimal input is rejected, never silently
-	// rounded (0.005 must not become a 1-paise row).
-	paise, ok := ExactPaise(amount)
-	if !ok {
-		return "", false, fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", amount)
-	}
+	paise := amountPaise
 	// Normalized the same way read-path filters are: a write of "Groceries"
 	// and a read of "groceries" refer to the same category, and likewise for
 	// type. Without this, `query_transactions type=Expense` silently matches
@@ -421,8 +491,10 @@ func (s *Store) Insert(ctx context.Context, date string, amount float64, typ, ca
 	}
 	// An unknown category is rejected rather than silently refiled under
 	// "other": the caller must learn that the name it used does not exist.
-	if !contains(Categories, category) {
-		return "", false, fail("category %q does not exist — use one of %v", category, Categories)
+	// The live set is user-managed (money_categories), not a fixed list.
+	var err error
+	if category, err = s.requireCategory(ctx, "log_transaction", category); err != nil {
+		return "", false, err
 	}
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	// Rejected, never truncated: a truncated key makes a 250-byte key
@@ -618,7 +690,8 @@ func (s *Store) Match(ctx context.Context, filt map[string]any) ([]bson.M, error
 	}
 	for _, r := range rows {
 		r["_id"] = oidHex(r["_id"])
-		r["amount"] = ToRupees(paiseOf(r["amount"]))
+		r["amount_paise"] = paiseOf(r["amount"])
+		delete(r, "amount")
 		r["accountId"] = idHex(r["accountId"])
 		r["account"] = names[idHex(r["accountId"])]
 		if st, ok := r["sending_to"]; ok {
@@ -683,8 +756,9 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 // Nil means leave the field alone (the handler passes nil for absent or
 // whitespace-only inputs, like delete filters) — except converting
 // a row INTO a transfer, which still requires sending_to; at least one field
-// must change. New values validate exactly like Insert: exact-paise amounts,
-// known type/category, resolved accounts, transfer rules, real calendar
+// must be supplied (a same-value supply succeeds with changed:false). New
+// values validate exactly like Insert: positive int64-paise amounts, known
+// type/category, resolved accounts, transfer rules, real calendar
 // dates. A type/account/amount move changes the row; derived balances follow,
 // so a move can never half-land — there is no second write to fail. A date
 // change just moves the row's date — rows never expire, so any past date
@@ -694,7 +768,7 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 // including converting AWAY from a transfer, where the resupplied destination
 // is ignored and the leg drops).
 // Archived legs stay editable in place like deletes do.
-func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64, typ, category, account, sendingTo, date, note *string) (bool, error) {
+func (s *Store) EditTransaction(ctx context.Context, id string, amountPaise *int64, typ, category, account, sendingTo, date, note *string) (bool, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
 		return false, fail("'%s' is not a transaction id", id)
@@ -714,14 +788,11 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64,
 	newNote, _ := old["note"].(string)
 	newAcctOID, _ := old["accountId"].(primitive.ObjectID)
 	newDstOID, hadDst := old["sending_to"].(primitive.ObjectID)
-	if amount != nil {
-		if *amount <= 0 {
-			return false, fail("amount must be positive")
+	if amountPaise != nil {
+		if *amountPaise <= 0 {
+			return false, fail("amount_paise must be positive")
 		}
-		p, ok := ExactPaise(*amount)
-		if !ok {
-			return false, fail("amount %v is not an exact paise value — use at most 2 decimals (min ₹0.01)", *amount)
-		}
+		p := *amountPaise
 		if p != newPaise {
 			changed = true
 		}
@@ -738,9 +809,9 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amount *float64,
 		newType = t
 	}
 	if category != nil {
-		c := strings.ToLower(strings.TrimSpace(*category))
-		if !contains(Categories, c) {
-			return false, fail("category %q does not exist — use one of %v", *category, Categories)
+		c, err := s.requireCategory(ctx, "edit_transaction", *category)
+		if err != nil {
+			return false, err
 		}
 		if c != newCat {
 			changed = true
@@ -868,9 +939,9 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 		filt["type"] = t
 	}
 	if category != nil {
-		c := strings.ToLower(strings.TrimSpace(*category))
-		if !contains(Categories, c) {
-			return nil, fail("category %q does not exist — use one of %v", *category, Categories)
+		c, err := s.requireCategory(ctx, "query_transactions", *category)
+		if err != nil {
+			return nil, err
 		}
 		filt["category"] = c
 	}
@@ -951,7 +1022,8 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	}
 	for _, r := range rows {
 		r["_id"] = oidHex(r["_id"])
-		r["amount"] = ToRupees(paiseOf(r["amount"]))
+		r["amount_paise"] = paiseOf(r["amount"])
+		delete(r, "amount")
 		r["accountId"] = idHex(r["accountId"])
 		r["account"] = names[idHex(r["accountId"])]
 		if st, ok := r["sending_to"]; ok {
@@ -977,12 +1049,13 @@ func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
 
 func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M, error) {
 	// Amounts are int64 paise here: ints pass through AS PAISE (10 means 10
-	// paise, not ₹10 — the store's contract is paise-native since the int64
-	// migration, and the MCP handler converts rupees before calling).
-	// Rupee floats must be exact paise (round-trip check) or fail — a float
-	// used to silently miss post-migration (stored 1010 vs filter 10.1),
-	// the silent-zero-match class of bug. Non-numerics fail instead of
-	// matching nothing.
+	// paise, not ₹10 — the store and the MCP surface are both paise-native,
+	// so the handler forwards amount_paise straight through with no
+	// conversion. Rupee floats are still accepted from direct store callers
+	// but must be exact paise (round-trip check) or fail — a float used to
+	// silently miss post-migration (stored 1010 vs filter 10.1), the
+	// silent-zero-match class of bug. Non-numerics fail instead of matching
+	// nothing.
 	out := bson.M{}
 	for k, v := range filt {
 		switch k {
@@ -1030,16 +1103,20 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 			// exist — and unknown values are rejected like writes (and like
 			// unknown accounts), instead of silently matching nothing for a
 			// typo. Non-strings pass through for the driver to reject.
+			// Categories are user-managed (money_categories): the live set is
+			// checked, never a fixed list.
 			if vs, ok := v.(string); ok {
-				norm := strings.ToLower(strings.TrimSpace(vs))
 				if k == "type" {
+					norm := strings.ToLower(strings.TrimSpace(vs))
 					if !contains(txTypes, norm) {
 						return nil, fail("type %q does not exist — use one of %v", vs, txTypes)
 					}
-				} else if !contains(Categories, norm) {
-					return nil, fail("category %q does not exist — use one of %v", vs, Categories)
+					out[k] = norm
+				} else if c, err := s.requireCategory(ctx, "delete_transactions", vs); err != nil {
+					return nil, err
+				} else {
+					out[k] = c
 				}
-				out[k] = norm
 			} else {
 				out[k] = v
 			}
@@ -1127,8 +1204,9 @@ func (s *Store) migrateFloatMoney(ctx context.Context) error {
 	return nil
 }
 
-// migrateStoredBalances converts legacy stored running totals to immutable
-// opening seeds, once: opening = stored balance − signed leg sum. New code
+// migrateStoredBalances converts legacy stored running totals to opening
+// seeds (immutable by ledger writes — only edit_account changes them later),
+// once: opening = stored balance − signed leg sum. New code
 // never writes `balance`, so each legacy account matches once (the filter
 // requires the legacy field and no seed); reruns and fresh databases find
 // nothing to do. Runs after the amount migration so legs sum from paise.
@@ -1199,7 +1277,10 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	if err := s.migrateFloatMoney(ctx); err != nil {
 		return err
 	}
-	return s.migrateStoredBalances(ctx)
+	if err := s.migrateStoredBalances(ctx); err != nil {
+		return err
+	}
+	return s.ensureCategories(ctx)
 }
 
 // dropLegacyExpiry removes the expiry machinery an older build installed:

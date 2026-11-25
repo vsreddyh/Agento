@@ -1,6 +1,7 @@
 package money
 
 import (
+	"context"
 	"testing"
 )
 
@@ -239,17 +240,26 @@ func TestDescribeClusterBills(t *testing.T) {
 }
 
 func TestNormalizeCategories(t *testing.T) {
-	got, err := NormalizeCategories("money_totals", []string{" Groceries ", "bills", "groceries", "  "})
+	s := testStore(t)
+	ctx := context.Background()
+	got, err := s.NormalizeCategories(ctx, "money_totals", []string{" Groceries ", "bills", "groceries", "  "})
 	if err != nil {
 		t.Fatalf("NormalizeCategories: %v", err)
 	}
 	if len(got) != 2 || got[0] != "groceries" || got[1] != "bills" {
 		t.Errorf("got %v, want [groceries bills]", got)
 	}
-	if _, err := NormalizeCategories("money_totals", []string{"grocerys"}); err == nil {
+	if _, err := s.NormalizeCategories(ctx, "money_totals", []string{"grocerys"}); err == nil {
 		t.Fatal("unknown category was accepted")
 	} else if !containsSub(err.Error(), "grocerys") {
 		t.Errorf("error %q does not name the value", err)
+	}
+	// A user-added category validates too: the set is live, not fixed.
+	if _, err := s.CreateCategory(ctx, "subscriptions"); err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+	if _, err := s.NormalizeCategories(ctx, "money_totals", []string{"subscriptions"}); err != nil {
+		t.Errorf("fresh category rejected: %v", err)
 	}
 }
 
@@ -281,10 +291,12 @@ func TestNormalizeSortAndOrder(t *testing.T) {
 }
 
 func TestCheckBudgetValidators(t *testing.T) {
-	if _, err := CheckBudgetCategory("t", "salary"); err == nil {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CheckBudgetCategory(ctx, "t", "salary"); err == nil {
 		t.Fatal("salary was accepted as a budget category")
 	}
-	if _, err := CheckBudgetCategory("t", "grocerys"); err == nil {
+	if _, err := s.CheckBudgetCategory(ctx, "t", "grocerys"); err == nil {
 		t.Fatal("unknown category was accepted")
 	}
 	if m, err := CheckBudgetMonth("t", "2026-03"); err != nil || m != "2026-03" {
@@ -298,10 +310,10 @@ func TestCheckBudgetValidators(t *testing.T) {
 	if _, err := CheckBudgetLimit("t", 0); err == nil {
 		t.Fatal("zero limit was accepted")
 	}
-	if _, err := CheckBudgetLimit("t", 10.001); err == nil {
-		t.Fatal("inexact limit was accepted")
+	if _, err := CheckBudgetLimit("t", -5); err == nil {
+		t.Fatal("negative limit was accepted")
 	}
-	if p, err := CheckBudgetLimit("t", 5000.00); err != nil || p != 500000 {
+	if p, err := CheckBudgetLimit("t", 500000); err != nil || p != 500000 {
 		t.Errorf("valid limit: %d %v", p, err)
 	}
 }

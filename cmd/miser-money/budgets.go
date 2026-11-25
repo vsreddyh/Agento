@@ -11,13 +11,13 @@ import (
 // patterns, delete via `*delete*`); reads run free.
 
 type createBudgetInput struct {
-	Category      string  `json:"category"`
-	Month         string  `json:"month"`
-	MonthlyLimit  float64 `json:"monthly_limit"`
+	Category          string `json:"category"`
+	Month             string `json:"month"`
+	MonthlyLimitPaise int64  `json:"monthly_limit_paise"`
 }
 
 func handleCreateBudget(ctx context.Context, in createBudgetInput) (map[string]any, error) {
-	cat, err := money.CheckBudgetCategory("create_budget", in.Category)
+	cat, err := store.CheckBudgetCategory(ctx, "create_budget", in.Category)
 	if err != nil {
 		return nil, err
 	}
@@ -25,16 +25,16 @@ func handleCreateBudget(ctx context.Context, in createBudgetInput) (map[string]a
 	if err != nil {
 		return nil, err
 	}
-	if _, err := money.CheckBudgetLimit("create_budget", in.MonthlyLimit); err != nil {
+	if _, err := money.CheckBudgetLimit("create_budget", in.MonthlyLimitPaise); err != nil {
 		return nil, err
 	}
-	b, err := store.CreateBudget(ctx, cat, mo, in.MonthlyLimit)
+	b, err := store.CreateBudget(ctx, cat, mo, in.MonthlyLimitPaise)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"ok": true,
 		"id": b.ID, "category": b.Category, "month": b.Month,
-		"monthly_limit": b.MonthlyLimit, "monthly_limit_paise": b.MonthlyLimitPaise,
+		"monthly_limit_paise": b.MonthlyLimitPaise,
 	}, nil
 }
 
@@ -65,31 +65,31 @@ func handleListBudgets(ctx context.Context, in listBudgetsInput) (map[string]any
 	for _, b := range rows {
 		out = append(out, map[string]any{
 			"id": b.ID, "category": b.Category, "month": b.Month,
-			"monthly_limit": b.MonthlyLimit, "monthly_limit_paise": b.MonthlyLimitPaise,
-			"effective_now": b.EffectiveNow,
-			"createdAt": b.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-			"updatedAt": b.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			"monthly_limit_paise": b.MonthlyLimitPaise,
+			"effective_now":       b.EffectiveNow,
+			"createdAt":           b.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			"updatedAt":           b.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		})
 	}
 	return map[string]any{"ok": true, "rows": out}, nil
 }
 
 type updateBudgetInput struct {
-	ID           string  `json:"id"`
-	MonthlyLimit float64 `json:"monthly_limit"`
+	ID                string `json:"id"`
+	MonthlyLimitPaise int64  `json:"monthly_limit_paise"`
 }
 
 func handleUpdateBudget(ctx context.Context, in updateBudgetInput) (map[string]any, error) {
-	if _, err := money.CheckBudgetLimit("update_budget", in.MonthlyLimit); err != nil {
+	if _, err := money.CheckBudgetLimit("update_budget", in.MonthlyLimitPaise); err != nil {
 		return nil, err
 	}
-	b, err := store.UpdateBudget(ctx, in.ID, in.MonthlyLimit)
+	b, err := store.UpdateBudget(ctx, in.ID, in.MonthlyLimitPaise)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"ok": true,
 		"id": b.ID, "category": b.Category, "month": b.Month,
-		"monthly_limit": b.MonthlyLimit, "monthly_limit_paise": b.MonthlyLimitPaise,
+		"monthly_limit_paise": b.MonthlyLimitPaise,
 	}, nil
 }
 
@@ -111,7 +111,7 @@ func handleDeleteBudget(ctx context.Context, in deleteBudgetInput) (map[string]a
 	base := map[string]any{
 		"ok": true, "dry_run": res.DryRun,
 		"id": r.ID, "category": r.Category, "month": r.Month,
-		"monthly_limit": r.MonthlyLimit, "monthly_limit_paise": r.MonthlyLimitPaise,
+		"monthly_limit_paise": r.MonthlyLimitPaise,
 	}
 	if res.Unbudgeted {
 		base["falls_back_to_month"] = nil
@@ -141,7 +141,7 @@ func handleBudgetStatus(ctx context.Context, in budgetStatusInput) (map[string]a
 	if err != nil {
 		return nil, err
 	}
-	cats, err := money.NormalizeCategories("budget_status", in.Categories)
+	cats, err := store.NormalizeCategories(ctx, "budget_status", in.Categories)
 	if err != nil {
 		return nil, err
 	}
@@ -162,9 +162,9 @@ func handleBudgetStatus(ctx context.Context, in budgetStatusInput) (map[string]a
 		rows = append(rows, map[string]any{
 			"category": r.Category, "budgeted": r.Budgeted,
 			"limit_paise": r.LimitPaise, "spend_paise": r.SpendPaise,
-			"remaining_paise": nilIfNilI64(r.RemainingPaise),
-			"used_pct":        nilIfNilF64(r.UsedPct),
-			"over_budget":     r.OverBudget,
+			"remaining_paise":       nilIfNilI64(r.RemainingPaise),
+			"used_pct":              nilIfNilF64(r.UsedPct),
+			"over_budget":           r.OverBudget,
 			"projected_month_paise": nilIfNilI64(r.ProjectedMonthPaise),
 			"projected_over_budget": nilIfNilBool(r.ProjectedOverBudget),
 		})
@@ -172,15 +172,15 @@ func handleBudgetStatus(ctx context.Context, in budgetStatusInput) (map[string]a
 	return map[string]any{"ok": true,
 		"start": start, "end": end, "days": resDays(start, end),
 		"categories_applied": res.CategoriesApplied,
-		"sort_by": res.SortBy, "order": res.Order,
-		"categories": rows,
-		"total_limit_paise": res.TotalLimitPaise,
-		"total_spend_paise": res.TotalSpendPaise,
-		"total_remaining_paise": res.TotalRemainingPaise,
-		"total_used_pct": nilIfNilF64(res.TotalUsedPct),
-		"total_over_budget": res.TotalOverBudget,
-		"budgeted_categories": res.BudgetedCategories,
+		"sort_by":            res.SortBy, "order": res.Order,
+		"categories":                   rows,
+		"total_limit_paise":            res.TotalLimitPaise,
+		"total_spend_paise":            res.TotalSpendPaise,
+		"total_remaining_paise":        res.TotalRemainingPaise,
+		"total_used_pct":               nilIfNilF64(res.TotalUsedPct),
+		"total_over_budget":            res.TotalOverBudget,
+		"budgeted_categories":          res.BudgetedCategories,
 		"total_unbudgeted_spend_paise": res.TotalUnbudgetedSpendPaise,
-		"projection_basis": res.ProjectionBasis,
+		"projection_basis":             res.ProjectionBasis,
 	}, nil
 }

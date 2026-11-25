@@ -30,13 +30,18 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (21): `create_account`, `list_accounts`, `archive_account`,
-  `unarchive_account`, `get_balances`, `log_transaction`,
+- **miser-money** (26): `create_account`, `list_accounts`, `archive_account`,
+  `unarchive_account`, `edit_account`, `get_balances`, `log_transaction`,
   `query_transactions`, `edit_transaction`, `delete_transactions`,
+  `create_category`, `list_categories`, `update_category`, `delete_category`,
   `money_totals`, `money_breakdown` (by=category|account),
   `money_top_expenses`, `money_series`, `money_compare` (by=totals|categories),
   `money_recurring`, `money_anomalies` (scope=bucket|row), `budget_status`,
   `list_budgets`, `create_budget`, `update_budget`, `delete_budget`.
+  Every monetary value on the surface is int64 paise — no rupee float crosses
+  it. Categories are user-managed (`money_categories`, seeded with the ten
+  defaults; `other` is the reserved blank fallback). A failed call sets MCP
+  `isError`, not just `ok:false`.
   Analyses are derived reads (no stored aggregates — edits/deletes show up on
   the next call); windowed tools need explicit bounds (`start`/`end`, or
   `start_a`/`end_a`/`start_b`/`end_b` for `money_compare`), and every
@@ -104,11 +109,14 @@ Destructive tools ask first through the harness permission prompt
 (`opencode.json`); state the scope when it asks: `delete_transactions`,
 `delete_meals`, `prune_old` (health-check only — miser-money has no retention;
 rows are permanent unless deleted), `archive_account`, `delete_budget`
-(dry-runs by default like `delete_transactions`),
+(dry-runs by default like `delete_transactions`), `delete_category`
+(dry-runs by default too; with references it needs `reassign_to`),
 `delete_recipe` (also removes its cook logs), `delete_ingredient`,
 `delete_task`, `delete_project`. There is no `delete_cook`; say so instead
-of reaching for it. Money writes also prompt: `create_budget` and
-`update_budget` (like `log_transaction` and `edit_transaction` already do).
+of reaching for it. Money writes also prompt: `create_account`,
+`create_budget` and `update_budget` (like `log_transaction` and
+`edit_transaction` already do), plus `edit_account`, `create_category`
+and `update_category`.
 
 `delete_transactions` dry-runs by default: it returns the rows it would
 remove and deletes nothing unless you pass `dry_run=false`. Show those

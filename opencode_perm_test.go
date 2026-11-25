@@ -44,13 +44,16 @@ var expectedAsk = []string{
 	"*batch_modify_gmail_message_labels*",
 	"*create_account*",
 	"*create_budget*",
+	"*create_category*",
 	"*delete*",
+	"*edit_account*",
 	"*edit_transaction*",
 	"*fix_last*",
 	"*log_transaction*",
 	"*modify_gmail_message_labels*",
 	"*prune_old*",
 	"*update_budget*",
+	"*update_category*",
 }
 
 // workspaceMCPWriteTools is the external Gmail server's write surface: the two
@@ -71,7 +74,7 @@ var freeTools = map[string][]string{
 	"miser-money": {"list_accounts", "get_balances", "query_transactions",
 		"money_totals", "money_breakdown", "money_top_expenses", "money_series",
 		"money_compare", "money_recurring", "money_anomalies", "budget_status",
-		"list_budgets"},
+		"list_budgets", "list_categories"},
 	"cookbook": {"add_ingredient", "list_ingredients", "add_recipe", "get_recipe",
 		"list_recipes", "update_recipe", "scale_recipe", "log_cook", "list_cooks"},
 	"health-check": {"log_meal", "query_meals", "log_weight", "log_sleep",
