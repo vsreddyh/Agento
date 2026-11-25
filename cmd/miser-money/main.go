@@ -1,7 +1,8 @@
 // Command miser-money is the multi-account money-management MCP server.
 //
 // Storage: MongoDB (money_accounts + money_transactions + money_budgets +
-// money_categories, all permanent). Balances are derived from the ledger on every read — there is
+// money_categories; unflagged rows permanent, flagged rows TTL-removed 10
+// days after flagging). Balances are derived from the ledger on every read — there is
 // no stored running total and no multi-document writes. Runs over stdio for
 // MCP clients.
 package main

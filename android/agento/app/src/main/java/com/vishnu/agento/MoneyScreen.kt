@@ -187,13 +187,23 @@ private fun MoneyTransactionsView(
     var error by remember { mutableStateOf("") }
     var appendError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var appending by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
 
     fun load(silent: Boolean = false, offset: Int = 0, append: Boolean = false) {
-        // Paged failures stay visible with their own retry: a failed append
-        // must not hide the Show-more button (dead end at N of M), and a
-        // failed refresh must not read as fresh data.
-        if (!silent) { busy = true; error = ""; appendError = "" }
+        // Appends track their own in-flight flag: the button stays enabled
+        // while busy is untouched on the silent path, so a second tap would
+        // fire a duplicate page (same offset appended twice, ids doubled in
+        // a keyed list). The shared busy flag is only for full loads, so a
+        // finished append never hides an in-flight refresh either.
+        if (append) {
+            if (appending) return
+            appending = true
+        } else if (!silent) {
+            busy = true
+            error = ""
+            appendError = ""
+        }
         scope.launch {
             // Rows never expire: a wide window with paging. Newest first
             // (server order=desc), 100 per page — the subtitle counts
@@ -225,7 +235,7 @@ private fun MoneyTransactionsView(
                     loaded = true
                 },
             )
-            busy = false
+            if (append) appending = false else busy = false
         }
     }
 
@@ -340,17 +350,23 @@ private fun MoneyTransactionsView(
                 // Older rows are one tap away, not a dead end: the server
                 // pages newest-first, so offset=next_offset continues where
                 // this page stopped and appends below. A failed append keeps
-                // its own retry inline instead of hiding the button.
+                // its own retry inline instead of hiding the button; an
+                // in-flight append disables it (plus inline progress) so a
+                // double-tap cannot append the same page twice.
                 val more = nextOffset
                 if (loaded && truncated && error.isEmpty() && more != null) {
                     item {
                         if (appendError.isEmpty()) {
-                            OutlinedButton(
-                                onClick = { load(silent = true, offset = more, append = true) },
-                                enabled = !busy,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text("Show older transactions")
+                            if (appending) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            } else {
+                                OutlinedButton(
+                                    onClick = { load(silent = true, offset = more, append = true) },
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Show older transactions")
+                                }
                             }
                         } else {
                             Row(

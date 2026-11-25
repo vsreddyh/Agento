@@ -14,6 +14,11 @@ see GitHub Releases for older notes.
   Amounts render from int64 paise; the app only reads (`GET
   /api/money/balances`, `GET /api/money/transactions` on `health-api`) —
   logging, edits and deletes stay on the agent side.
+- **Money deletes are soft now.** `delete_transactions` flags rows instead
+  of removing them; flagged rows vanish from every read at once and a
+  `restore_transactions` call brings one back inside 10 days, after which
+  the `ttl_deleted_at` index removes it for good. Unflagged rows stay
+  permanent.
 
 ## [9.3.1]
 - Money has no retention window any more (rows are permanent unless deleted), so the `BehaviourSettings` inventory no longer lists one — comment-only, no behavior change.

@@ -1,11 +1,12 @@
 // Package money: MongoDB storage with derived balances.
 //
 // Collections: money_accounts + money_transactions + money_budgets +
-// money_categories — all permanent. Rows never expire: the only way a row disappears is a
-// user-initiated delete. There is no stored running total: an account's
-// balance is its opening seed (changeable only via edit_account) plus the
-// signed sum of its ledger legs, computed on read — so a balance can never
-// drift from its rows.
+// money_categories. Unflagged rows are permanent; deletion is a soft flag
+// (deletedAt), and the ttl_deleted_at index removes flagged rows 10 days
+// after flagging — restore works only inside that window. There is no
+// stored running total: an account's balance is its opening seed (changeable
+// only via edit_account) plus the signed sum of its ledger legs, computed on
+// read — so a balance can never drift from its rows.
 package money
 
 import (
@@ -1327,10 +1328,12 @@ func (s *Store) migrateStoredBalances(ctx context.Context) error {
 // Also migrates legacy float rupees to int64 paise (see ToPaise) — new code
 // writes longs only, so the migration converges on first boot.
 //
-// Expiry is gone: rows are permanent unless deleted. A database created by
-// an older build still carries the ttl_expiresAt index (which would keep
-// deleting) and inert expiresAt fields, so both are removed here,
-// idempotently — after the first boot there is nothing left to remove.
+// The legacy 90-day expiry is gone: unflagged rows are permanent. A database
+// created by an older build still carries the ttl_expiresAt index (which
+// would keep deleting) and inert expiresAt fields, so both are removed here,
+// idempotently — after the first boot there is nothing left to remove. (The
+// ttl_deleted_at index created just below is the current expiry: flagged
+// rows only, 10 days after flagging — not legacy, do not drop it.)
 func (s *Store) EnsureSchema(ctx context.Context) error {
 	if err := s.dropLegacyExpiry(ctx); err != nil {
 		return err
