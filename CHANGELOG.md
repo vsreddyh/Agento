@@ -8,6 +8,13 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.4.0]
+- **Money section (read-only).** New Money destination: per-account balances
+  plus the active total, with tap-through to recent transactions per account.
+  Amounts render from int64 paise; the app only reads (`GET
+  /api/money/balances`, `GET /api/money/transactions` on `health-api`) —
+  logging, edits and deletes stay on the agent side.
+
 ## [9.3.1]
 - Money has no retention window any more (rows are permanent unless deleted), so the `BehaviourSettings` inventory no longer lists one — comment-only, no behavior change.
 

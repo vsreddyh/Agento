@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
@@ -26,14 +27,15 @@ import androidx.core.content.edit
 import java.util.Locale
 import kotlinx.coroutines.launch
 
-/** Sidebar destinations for the thin phone client (#493): Tasks/Projects,
- * Task Manager, Files, ∃-Mail and Settings. Chat and the agent-management
+/** Sidebar destinations for the thin phone client (#493, #571): Tasks/Projects,
+ * Task Manager, Files, ∃-Mail, Money and Settings. Chat and the agent-management
  * screens are gone. */
 private enum class Destination(val title: String) {
     Tasks("Projects"),
     TaskManager("Task Manager"),
     Storage("Files"),
     Reports("∃-Mail"),
+    Money("Money"),
     Settings("Settings"),
 }
 
@@ -42,6 +44,7 @@ private fun Destination.icon() = when (this) {
     Destination.TaskManager -> Icons.Filled.Assignment
     Destination.Storage -> Icons.Filled.Folder
     Destination.Reports -> Icons.Filled.Mail
+    Destination.Money -> Icons.Filled.AccountBalanceWallet
     Destination.Settings -> Icons.Filled.Settings
 }
 
@@ -194,6 +197,9 @@ class MainActivity : ComponentActivity() {
                                 Destination.Reports -> ReportsScreen(
                                     onMenu = { scope.launch { drawerState.open() } },
                                     onUnreadChanged = { reportsUnread = it },
+                                )
+                                Destination.Money -> MoneyScreen(
+                                    onMenu = { scope.launch { drawerState.open() } },
                                 )
                                 Destination.Settings -> SettingsScreen(
                                     healthModel,

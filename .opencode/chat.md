@@ -30,9 +30,10 @@ instead of round-tripping one at a time.
 
 ## Backends
 
-- **miser-money** (26): `create_account`, `list_accounts`, `archive_account`,
+- **miser-money** (27): `create_account`, `list_accounts`, `archive_account`,
   `unarchive_account`, `edit_account`, `get_balances`, `log_transaction`,
   `query_transactions`, `edit_transaction`, `delete_transactions`,
+  `restore_transactions`,
   `create_category`, `list_categories`, `update_category`, `delete_category`,
   `money_totals`, `money_breakdown` (by=category|account),
   `money_top_expenses`, `money_series`, `money_compare` (by=totals|categories),
@@ -115,11 +116,14 @@ rows are permanent unless deleted), `archive_account`, `delete_budget`
 `delete_task`, `delete_project`. There is no `delete_cook`; say so instead
 of reaching for it. Money writes also prompt: `create_account`,
 `create_budget` and `update_budget` (like `log_transaction` and
-`edit_transaction` already do), plus `edit_account`, `create_category`
-and `update_category`.
+`edit_transaction` already do), plus `edit_account`, `create_category`,
+`update_category` and `restore_transactions`.
 
 `delete_transactions` dry-runs by default: it returns the rows it would
-remove and deletes nothing unless you pass `dry_run=false`. Show those
+remove and deletes nothing unless you pass `dry_run=false`. A live delete
+flags rows with `deletedAt` instead of removing them (soft delete — reads
+exclude them immediately, the TTL removes them after 10 days, and
+`restore_transactions` brings one back by id inside that window). Show those
 rows, then delete only once the user confirms. Prefer `id` over a filter
 when the target is one entry. `unarchive_account` also prompts (it matches
 the `*archive_account*` pattern) even though it restores rather than

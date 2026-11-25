@@ -1461,3 +1461,148 @@ func containsStr(s, sub string) bool {
 }
 
 func validString(s string) bool { return utf8.ValidString(s) }
+
+// Soft-delete (#570): one lifecycle test to keep the Atlas-backed suite
+// under CI's default 10-minute package timeout — each testStore setup costs
+// several seconds, so flag/exclude/restore/TTL/idempotency share one store.
+func TestSoftDeleteLifecycle(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	// Flag instead of removing: the row vanishes from every read path at
+	// once, but still exists underneath with deletedAt set.
+	id1, _, err := s.Insert(ctx, "2026-09-01", 30000, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 10000, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.Delete(ctx, map[string]any{"id": id1}); err != nil || n != 1 {
+		t.Fatalf("delete flagged %d, %v", n, err)
+	}
+	// A second delete matches nothing — like an unknown id, not a double delete.
+	if n, err := s.Delete(ctx, map[string]any{"id": id1}); err != nil || n != 0 {
+		t.Fatalf("re-delete matched %d, %v", n, err)
+	}
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("query sees %d rows, want 1 live (%v)", len(rows), err)
+	}
+	matched, err := s.Match(ctx, map[string]any{"category": "groceries"})
+	if err != nil || len(matched) != 1 {
+		t.Fatalf("dry-run sees %d rows, want 1 live (%v)", len(matched), err)
+	}
+	if b := balances(t, s); b["Cash"] != -10000 {
+		t.Fatalf("balance %v, want -10000 (flagged leg excluded)", b)
+	}
+	var raw bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"_id": mustOID(t, id1)}).Decode(&raw); err != nil {
+		t.Fatalf("flagged row missing: %v", err)
+	}
+	if _, ok := raw["deletedAt"]; !ok {
+		t.Fatal("flagged row carries no deletedAt")
+	}
+
+	// The TTL index removes flagged rows 10 days after flagging — spec-pinned
+	// here (actually waiting it out is not a test strategy).
+	cur, err := s.txns.Indexes().List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for cur.Next(ctx) {
+		var spec bson.M
+		if err := cur.Decode(&spec); err != nil {
+			t.Fatal(err)
+		}
+		if name, _ := spec["name"].(string); name != "ttl_deleted_at" {
+			continue
+		}
+		found = true
+		keys, _ := spec["key"].(bson.M)
+		if len(keys) != 1 {
+			t.Fatalf("ttl index keys = %v, want only deletedAt", keys)
+		}
+		if exp, _ := spec["expireAfterSeconds"].(int32); exp != 864000 {
+			t.Fatalf("expireAfterSeconds = %d, want 864000 (10 days)", exp)
+		}
+	}
+	if err := cur.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("ttl_deleted_at index missing — flagged rows would never be removed")
+	}
+
+	// Restore returns the row with no other write; restoring a live row or
+	// an unknown/malformed id fails instead of no-op succeeding.
+	row, err := s.RestoreTransaction(ctx, id1)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if fmt.Sprint(row["_id"]) != id1 {
+		t.Fatalf("restored wrong row: %v", row["_id"])
+	}
+	rows, _, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("restored DB reads back %d rows, %v", len(rows), err)
+	}
+	if b := balances(t, s); b["Cash"] != -40000 {
+		t.Fatalf("balance after restore %v, want -40000", b)
+	}
+	if _, err := s.RestoreTransaction(ctx, id1); err == nil {
+		t.Fatal("restoring a live row was accepted")
+	}
+	if _, err := s.RestoreTransaction(ctx, "000000000000000000000000"); err == nil {
+		t.Fatal("restoring an unknown id was accepted")
+	}
+	if _, err := s.RestoreTransaction(ctx, "nope"); err == nil {
+		t.Fatal("restoring a malformed id was accepted")
+	}
+
+	// A soft-deleted reference stops counting: it must not block a category
+	// delete guard that only cares about live rows.
+	if _, err := s.CreateCategory(ctx, "gifts"); err != nil {
+		t.Fatal(err)
+	}
+	id2, _, err := s.Insert(ctx, "2026-09-01", 10000, "expense", "gifts", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Delete(ctx, map[string]any{"id": id2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ntxn, nbud, err := s.DeleteCategory(ctx, "gifts", "", true); err != nil || ntxn+nbud != 0 {
+		t.Fatalf("dry run after soft delete = %d/%d/%v, want 0/0", ntxn, nbud, err)
+	}
+	if _, _, _, err := s.DeleteCategory(ctx, "gifts", "", false); err != nil {
+		t.Fatalf("category blocked by a soft-deleted row: %v", err)
+	}
+
+	// Idempotency survives the flag: replaying the same key+payload returns
+	// the original id as a no-op; a different payload is still rejected.
+	id3, _, err := s.Insert(ctx, "2026-09-01", 30000, "expense", "groceries", "Cash", "", "", "", "retry-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Delete(ctx, map[string]any{"id": id3}); err != nil {
+		t.Fatal(err)
+	}
+	id4, created, err := s.Insert(ctx, "2026-09-01", 30000, "expense", "groceries", "Cash", "", "", "", "retry-x")
+	if err != nil || created || id4 != id3 {
+		t.Fatalf("replay of soft-deleted row = %s/%v/%v, want original id as no-op", id4, created, err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-01", 99900, "expense", "groceries", "Cash", "", "", "", "retry-x"); err == nil {
+		t.Fatal("different payload under a soft-deleted key was accepted")
+	}
+}
+
+func mustOID(t *testing.T, hex string) primitive.ObjectID {
+	t.Helper()
+	oid, err := primitive.ObjectIDFromHex(hex)
+	if err != nil {
+		t.Fatalf("bad id %q: %v", hex, err)
+	}
+	return oid
+}

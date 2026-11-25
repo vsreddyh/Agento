@@ -64,7 +64,7 @@ func (s *Store) resolveAccountIDs(ctx context.Context, names []string) ([]primit
 // already be normalized (lowercase, trimmed); unknown values are rejected
 // rather than matching nothing.
 func (s *Store) scanWindow(ctx context.Context, start, end string, types, categories []string, accountIDs []primitive.ObjectID) ([]TxRow, error) {
-	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
+	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}, "deletedAt": bson.M{"$exists": false}}
 	if len(types) > 0 {
 		for _, t := range types {
 			if !contains(txTypes, t) {
@@ -618,7 +618,7 @@ func (s *Store) AccountFlow(ctx context.Context, start, end string, categories [
 	}
 	// Pre-start legs: EVERY row dated before start, signed by account — never
 	// category-scoped, so opening is the real balance, not a slice of it.
-	preCur, err := s.txns.Find(ctx, bson.M{"date": bson.M{"$lt": start}})
+	preCur, err := s.txns.Find(ctx, bson.M{"date": bson.M{"$lt": start}, "deletedAt": bson.M{"$exists": false}})
 	if err != nil {
 		return nil, err
 	}

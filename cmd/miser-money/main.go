@@ -173,6 +173,12 @@ type deleteTransactionsInput struct {
 	DryRun *bool `json:"dry_run,omitempty"`
 }
 
+type restoreTransactionInput struct {
+	// A soft-deleted transaction id hex. Unknown ids and live (never
+	// deleted) rows are rejected, not silent no-ops.
+	ID string `json:"id"`
+}
+
 type editTransactionInput struct {
 	// A transaction id hex; the row must exist (a missing id is rejected,
 	// not a silent 0, like delete by id).
@@ -463,7 +469,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (removed rows stop contributing to balances, which are derived from what remains). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount_paise (integer paise > 0; an explicit 0 is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
+		Description: "Delete transactions (soft delete: flagged rows stop contributing to balances, which are derived from what remains, and vanish from every read immediately; the ttl_deleted_at index removes them for good 10 days after flagging — restore with restore_transactions inside that window). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount_paise (integer paise > 0; an explicit 0 is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like the query bounds, so
 			// whitespace-only means absent (not an "unknown account" error):
@@ -603,6 +609,20 @@ func registerTools(s *mcp.Server) {
 				out["readback_error"] = fmt.Sprintf("re-read by id %s returned %d rows", in.ID, len(rows))
 			}
 			return result(out)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "restore_transactions",
+		Description: "Restore one soft-deleted transaction by id (clears its deletedAt flag so it reads everywhere again; balances move back with no other write). Unknown ids and live rows are rejected. Flagged rows are removed for good 10 days after flagging by the ttl_deleted_at index — restore only works inside that window."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in restoreTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
+			in.ID = strings.TrimSpace(in.ID)
+			if in.ID == "" {
+				return failMsg("restore_transactions id is required.")
+			}
+			row, err := store.RestoreTransaction(ctx, in.ID)
+			if err != nil {
+				return fail(err)
+			}
+			return result(map[string]any{"ok": true, "id": in.ID, "transaction": row})
 		})
 
 	registerAnalysisTools(s)

@@ -198,11 +198,11 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balancePais
 }
 
 // derivedLegs sums stored transaction legs per account-id hex, in int64
-// paise. Balances are derived from the ledger, never stored: with no expiry
-// the ledger is complete, so the sum is exact. One unbounded read; fine at
-// personal-ledger scale, and the only read path that scans everything.
+// paise. Balances are derived from the ledger, never stored — and only from
+// live rows: soft-deleted rows (deletedAt set, awaiting the 10-day TTL) are
+// excluded, so a delete moves the totals the moment it flags.
 func (s *Store) derivedLegs(ctx context.Context) (map[string]int64, error) {
-	cur, err := s.txns.Find(ctx, bson.M{})
+	cur, err := s.txns.Find(ctx, liveFilter())
 	if err != nil {
 		return nil, err
 	}
@@ -702,6 +702,14 @@ func (s *Store) Match(ctx context.Context, filt map[string]any) ([]bson.M, error
 	return rows, nil
 }
 
+// liveFilter excludes soft-deleted rows: every read path (Match, Query,
+// scans, derived legs) builds on it, so a flagged row vanishes from all
+// reads the moment it is flagged and returns only via restore — until the
+// 10-day TTL removes it for good.
+func liveFilter() bson.M {
+	return bson.M{"deletedAt": bson.M{"$exists": false}}
+}
+
 // accountNames maps account-id hex -> name, for annotating transaction rows.
 func (s *Store) accountNames(ctx context.Context) (map[string]string, error) {
 	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"name": 1}))
@@ -719,9 +727,12 @@ func (s *Store) accountNames(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-// Delete by app-level filter; rows are removed outright. Balances need no
-// adjustment: they are derived from the surviving rows, so the total follows
-// automatically.
+// Delete flags matching rows with deletedAt instead of removing them: the
+// rows vanish from every read path the moment they flag (all reads build on
+// liveFilter) and the 10-day TTL index removes them for good. A second delete
+// of an already-flagged row matches nothing — like an unknown id, it reports
+// 0 rather than deleting twice. Balances need no adjustment: they are derived
+// from the surviving rows, so the total follows automatically.
 func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 	if len(filt) == 0 {
 		return 0, fail("refusing to delete without a filter")
@@ -730,25 +741,44 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	cur, err := s.txns.Find(ctx, mongoFilt)
+	res, err := s.txns.UpdateMany(ctx, mongoFilt,
+		bson.M{"$set": bson.M{"deletedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}})
 	if err != nil {
 		return 0, err
 	}
-	var matched []bson.M
-	if err := cur.All(ctx, &matched); err != nil {
-		return 0, err
+	return int(res.ModifiedCount), nil
+}
+
+// RestoreTransaction clears deletedAt on one flagged row, returning it to
+// every read path with no other write. An unknown id fails like delete and
+// edit by id; a live (never-flagged) row fails as not deleted rather than
+// reporting a no-op success.
+func (s *Store) RestoreTransaction(ctx context.Context, id string) (bson.M, error) {
+	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
+	if err != nil {
+		return nil, fail("'%s' is not a transaction id", id)
 	}
-	if len(matched) == 0 {
-		return 0, nil
+	var existing bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"_id": oid}).Decode(&existing); err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return nil, fail("unknown transaction id '%s'", strings.TrimSpace(id))
+		}
+		return nil, err
 	}
-	ids := make([]any, 0, len(matched))
-	for _, d := range matched {
-		ids = append(ids, d["_id"])
+	if _, flagged := existing["deletedAt"]; !flagged {
+		return nil, fail("transaction id '%s' is not deleted", strings.TrimSpace(id))
 	}
-	if _, err := s.txns.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": ids}}); err != nil {
-		return 0, err
+	if _, err := s.txns.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$unset": bson.M{"deletedAt": ""}}); err != nil {
+		return nil, err
 	}
-	return len(matched), nil
+	rows, err := s.Match(ctx, map[string]any{"id": strings.TrimSpace(id)})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 {
+		return nil, fail("restored row %s reads back %d rows", strings.TrimSpace(id), len(rows))
+	}
+	return rows[0], nil
 }
 
 // EditTransaction updates one row by id; the row changes in place and
@@ -930,7 +960,7 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amountPaise *int
 // queryFilter builds the normalized Mongo filter Query scans: date range plus optional type/category/account (either side of a
 // transfer). Normalization and membership checks live here, once.
 func (s *Store) queryFilter(ctx context.Context, start, end string, typ, category, account *string) (bson.M, error) {
-	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
+	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}, "deletedAt": bson.M{"$exists": false}}
 	if typ != nil {
 		t := strings.ToLower(strings.TrimSpace(*typ))
 		if !contains(txTypes, t) {
@@ -1056,7 +1086,7 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 	// silently miss post-migration (stored 1010 vs filter 10.1), the
 	// silent-zero-match class of bug. Non-numerics fail instead of matching
 	// nothing.
-	out := bson.M{}
+	out := bson.M{"deletedAt": bson.M{"$exists": false}}
 	for k, v := range filt {
 		switch k {
 		case "amount":
@@ -1267,6 +1297,11 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		{transactions, bson.D{{Key: "sending_to", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("sendingto_date").SetSparse(true)},
 		{transactions, bson.D{{Key: "date", Value: 1}, {Key: "type", Value: 1}}, options.Index().SetName("date_type")},
 		{transactions, bson.D{{Key: "category", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("cat_date")},
+		// Soft-delete TTL (#570): flagged rows are removed 10 days after
+		// flagging. The TTL clock runs on deletedAt (flag time), never on
+		// the transaction date — money is still permanent until deleted.
+		{transactions, bson.D{{Key: "deletedAt", Value: 1}},
+			options.Index().SetName("ttl_deleted_at").SetExpireAfterSeconds(864000)},
 		{budgets, bson.D{{Key: "category", Value: 1}, {Key: "month", Value: 1}},
 			options.Index().SetName("uniq_budget_category_month").SetUnique(true)},
 	} {

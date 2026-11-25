@@ -1,6 +1,7 @@
 // Command retention enforces the Agento domains' data lifecycle.
 //
-//	money         permanent — no-op (rows never expire; only delete removes)
+//	money         soft-deleted — no-op (flagged rows vanish from reads at once;
+//	              the ttl_deleted_at index removes them 10 days after flagging)
 //	health-check  hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
 //	cookbook      permanent — no-op
 //	reports       read+unstarred pruned after 7 days; unread/starred NEVER touched
