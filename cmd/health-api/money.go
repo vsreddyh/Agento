@@ -126,6 +126,16 @@ func moneyTransactions(w http.ResponseWriter, r *http.Request) {
 		}
 		offset = n
 	}
+	// Newest-first is a first-class order (the app's drill-in shows recent
+	// rows): the store scans date-ascending, so desc pages from the end.
+	order := strings.ToLower(strings.TrimSpace(q.Get("order")))
+	if order == "" {
+		order = "asc"
+	}
+	if order != "asc" && order != "desc" {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "order must be asc or desc"})
+		return
+	}
 	var acct *string
 	if a := strings.TrimSpace(q.Get("account")); a != "" {
 		acct = &a
@@ -146,7 +156,32 @@ func moneyTransactions(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	rows, total, err := store.Query(ctx, start, end, nil, nil, acct, limit, offset)
+	var rows []bson.M
+	var total int64
+	var err error
+	if order == "desc" {
+		// Page from the newest end: the store scans ascending, so fetch the
+		// window and slice from the tail. Window-bounded, and the response
+		// is still capped at limit rows.
+		var all []bson.M
+		all, total, err = store.Query(ctx, start, end, nil, nil, acct, 0, 0)
+		if err == nil {
+			if offset < len(all) {
+				all = all[offset:]
+			} else {
+				all = nil
+			}
+			for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
+				all[i], all[j] = all[j], all[i]
+			}
+			if len(all) > limit {
+				all = all[:limit]
+			}
+			rows = all
+		}
+	} else {
+		rows, total, err = store.Query(ctx, start, end, nil, nil, acct, limit, offset)
+	}
 	if err != nil {
 		writeMoneyErr(w, err)
 		return
@@ -168,7 +203,7 @@ func moneyTransactions(w http.ResponseWriter, r *http.Request) {
 		next = offset + len(rows)
 	}
 	writeJSON(w, http.StatusOK, bson.M{
-		"ok": true, "start": start, "end": end, "limit": limit,
+		"ok": true, "start": start, "end": end, "limit": limit, "order": order,
 		"count": len(rows), "total": total,
 		"truncated": truncated, "next_offset": next,
 		"transactions": rows,

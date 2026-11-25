@@ -469,7 +469,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (soft delete: flagged rows stop contributing to balances, which are derived from what remains, and vanish from every read immediately; the ttl_deleted_at index removes them for good 10 days after flagging — restore with restore_transactions inside that window). Target one row by id — a non-existent id is rejected, not a silent 0 — or filter by amount_paise (integer paise > 0; an explicit 0 is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
+		Description: "Delete transactions (soft delete: flagged rows stop contributing to balances, which are derived from what remains, and vanish from every read immediately; the ttl_deleted_at index removes them for good 10 days after flagging — restore with restore_transactions inside that window). Target one row by id — a non-existent id is rejected, not a silent 0 (and an already-deleted id names restore_transactions instead of reading as unknown) — or filter by amount_paise (integer paise > 0; an explicit 0 is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like the query bounds, so
 			// whitespace-only means absent (not an "unknown account" error):
@@ -483,6 +483,12 @@ func registerTools(s *mcp.Server) {
 			if in.ID != "" {
 				if in.AmountPaise != nil || in.Type != "" || in.Category != "" || in.Date != "" || in.Account != "" {
 					return failMsg("id cannot be combined with amount_paise, type, category, date or account.")
+				}
+				// Distinguishes unknown from already-deleted before Match/Delete
+				// (both are live-only and would report 0 either way): a flagged
+				// id names restore_transactions instead of reading as a typo.
+				if _, err := store.CheckID(ctx, in.ID); err != nil {
+					return fail(err)
 				}
 				filt["id"] = in.ID
 			} else {

@@ -58,6 +58,7 @@ func TestMoneyTransactionsRequiresBounds(t *testing.T) {
 		"/api/money/transactions?start=2026-01-01&end=2026-01-31&limit=0",
 		"/api/money/transactions?start=2026-01-01&end=2026-01-31&limit=abc",
 		"/api/money/transactions?start=2026-01-01&end=2026-01-31&offset=-1",
+		"/api/money/transactions?start=2026-01-01&end=2026-01-31&order=sideways",
 	} {
 		w := moneyReq(t, http.MethodGet, target)
 		if w.Code != http.StatusUnprocessableEntity {

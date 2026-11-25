@@ -614,6 +614,12 @@ func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, ke
 	mismatch := func(field string) error {
 		return fail("idempotency_key %q was already used for a different transaction (mismatch in %s) — use a new key", key, field)
 	}
+	// A replay of a soft-deleted row is rejected, not returned as a no-op:
+	// the id it would hand back is invisible in every read until restored,
+	// so a silent "success" would read as a write that never landed.
+	if _, flagged := existing["deletedAt"]; flagged {
+		return fail("idempotency_key %q was already used for a transaction that has since been deleted — restore it with restore_transactions to replay", key)
+	}
 	if fmt.Sprint(existing["date"]) != date {
 		return mismatch("date")
 	}
@@ -702,10 +708,12 @@ func (s *Store) Match(ctx context.Context, filt map[string]any) ([]bson.M, error
 	return rows, nil
 }
 
-// liveFilter excludes soft-deleted rows: every read path (Match, Query,
-// scans, derived legs) builds on it, so a flagged row vanishes from all
-// reads the moment it is flagged and returns only via restore — until the
-// 10-day TTL removes it for good.
+// liveFilter excludes soft-deleted rows from the ledger read paths: Match,
+// Query, window scans, derived legs and balances all build on it, so a
+// flagged row vanishes from every aggregate the moment it is flagged and
+// returns only via restore — until the 10-day TTL removes it for good. The
+// by-id verbs (edit, restore, delete-by-id, idempotency replay) read the
+// flag explicitly to reject or restore instead of matching through it.
 func liveFilter() bson.M {
 	return bson.M{"deletedAt": bson.M{"$exists": false}}
 }
@@ -747,6 +755,28 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 		return 0, err
 	}
 	return int(res.ModifiedCount), nil
+}
+
+// CheckID resolves one transaction id for the by-id verbs: malformed ids
+// fail, unknown ids fail like everywhere else, and flagged (soft-deleted)
+// ids fail as already-deleted — naming restore_transactions instead of
+// reading as a typo'd unknown id. Live rows return deleted=false.
+func (s *Store) CheckID(ctx context.Context, id string) (bool, error) {
+	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
+	if err != nil {
+		return false, fail("'%s' is not a transaction id", id)
+	}
+	var existing bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"_id": oid}).Decode(&existing); err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return false, fail("unknown transaction id '%s'", strings.TrimSpace(id))
+		}
+		return false, err
+	}
+	if _, flagged := existing["deletedAt"]; flagged {
+		return true, fail("transaction id '%s' is already deleted — restore it with restore_transactions to see it again", strings.TrimSpace(id))
+	}
+	return false, nil
 }
 
 // RestoreTransaction clears deletedAt on one flagged row, returning it to
@@ -810,6 +840,12 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amountPaise *int
 			return false, fail("unknown transaction id '%s'", strings.TrimSpace(id))
 		}
 		return false, err
+	}
+	// Flagged rows are invisible everywhere else: editing one must fail
+	// upfront like restore's guards do, not succeed-and-stay-flagged (the
+	// handler's readback would then report 0 rows as a fake glitch).
+	if _, flagged := old["deletedAt"]; flagged {
+		return false, fail("transaction id '%s' is deleted — restore it with restore_transactions first", strings.TrimSpace(id))
 	}
 	newPaise := paiseOf(old["amount"])
 	newType := fmt.Sprint(old["type"])

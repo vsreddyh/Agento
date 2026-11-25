@@ -1580,8 +1580,9 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 		t.Fatalf("category blocked by a soft-deleted row: %v", err)
 	}
 
-	// Idempotency survives the flag: replaying the same key+payload returns
-	// the original id as a no-op; a different payload is still rejected.
+	// Idempotency survives the flag as a rejection, not a silent no-op: the
+	// id a replay would hand back is invisible in every read until restored,
+	// so returning it would read as a write that never landed.
 	id3, _, err := s.Insert(ctx, "2026-09-01", 30000, "expense", "groceries", "Cash", "", "", "", "retry-x")
 	if err != nil {
 		t.Fatal(err)
@@ -1590,11 +1591,46 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	id4, created, err := s.Insert(ctx, "2026-09-01", 30000, "expense", "groceries", "Cash", "", "", "", "retry-x")
-	if err != nil || created || id4 != id3 {
-		t.Fatalf("replay of soft-deleted row = %s/%v/%v, want original id as no-op", id4, created, err)
+	if err == nil || created || id4 != "" {
+		t.Fatalf("replay of soft-deleted row = %s/%v/%v, want a rejection naming restore", id4, created, err)
+	} else if !containsStr(err.Error(), "restore_transactions") {
+		t.Fatalf("replay error %q does not name restore_transactions", err)
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 99900, "expense", "groceries", "Cash", "", "", "", "retry-x"); err == nil {
 		t.Fatal("different payload under a soft-deleted key was accepted")
+	}
+
+	// Editing a flagged row fails upfront naming restore — succeeding would
+	// leave it flagged (balances unmoved) while the readback reports 0 rows
+	// as a fake glitch.
+	id5, _, err := s.Insert(ctx, "2026-09-01", 10000, "expense", "groceries", "Cash", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Delete(ctx, map[string]any{"id": id5}); err != nil {
+		t.Fatal(err)
+	}
+	note := "x"
+	if _, err := s.EditTransaction(ctx, id5, nil, nil, nil, nil, nil, nil, &note); err == nil {
+		t.Fatal("editing a soft-deleted row was accepted")
+	} else if !containsStr(err.Error(), "restore_transactions") {
+		t.Fatalf("edit-deleted error %q does not name restore_transactions", err)
+	}
+	// CheckID distinguishes unknown from already-deleted for the by-id
+	// verbs (both are invisible to the live-only Match/Delete).
+	if _, err := s.CheckID(ctx, "000000000000000000000000"); err == nil || !containsStr(err.Error(), "unknown") {
+		t.Fatalf("CheckID unknown = %v, want unknown-id error", err)
+	}
+	if deleted, err := s.CheckID(ctx, id5); err == nil || !deleted || !containsStr(err.Error(), "already deleted") {
+		t.Fatalf("CheckID flagged = %v/%v, want already-deleted error", deleted, err)
+	}
+	if deleted, err := s.CheckID(ctx, id1); err != nil || deleted {
+		t.Fatalf("CheckID live = %v/%v, want false/nil", deleted, err)
+	}
+	// Dry-run validates reassign_to when it would be used, so the preview
+	// catches the typo instead of the live call.
+	if _, _, _, err := s.DeleteCategory(ctx, "groceries", "typo-target", true); err == nil {
+		t.Fatal("dry run with typo'd reassign_to was accepted")
 	}
 }
 

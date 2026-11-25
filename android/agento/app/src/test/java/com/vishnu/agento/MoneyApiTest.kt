@@ -83,4 +83,17 @@ class MoneyApiTest {
         val s = formatPaise(250050L)
         assertTrue("got $s", s.contains("2,500.50"))
     }
+
+    @Test
+    fun `parseMoneyTransactions reads envelope with totals`() {
+        val page = parseMoneyTransactions(
+            """{"ok":true,"count":1,"total":250,"truncated":true,""" +
+                """"transactions":[{"id":"r1","date":"2026-09-01","type":"expense",""" +
+                """"category":"groceries","amount_paise":250050}]}""",
+        )
+        assertEquals(1, page.rows.size)
+        assertEquals(250050L, page.rows[0].amountPaise)
+        assertEquals(250L, page.total)
+        assertEquals(true, page.truncated)
+    }
 }

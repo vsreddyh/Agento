@@ -76,8 +76,18 @@ internal fun parseMoneyBalances(body: String): Pair<List<MoneyAccount>, Long> {
     return out to root.optLong("total_paise", 0L)
 }
 
-/** Parses the transactions envelope: the canonical `transactions` list. */
-internal fun parseMoneyTransactions(body: String): List<MoneyTransaction> {
+/** One page of ledger rows plus the window totals, so the UI can say
+ * showing-N-of-M instead of reading as complete. */
+data class MoneyPage(
+    val rows: List<MoneyTransaction>,
+    val total: Long = 0L,
+    val truncated: Boolean = false,
+)
+
+/** Parses the transactions envelope: the canonical `transactions` list plus
+ * `total`/`truncated` for the showing-N-of-M indicator. A missing envelope
+ * is a shape error, never a clean empty that reads as no rows. */
+internal fun parseMoneyTransactions(body: String): MoneyPage {
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
     val arr = root.optJSONArray("transactions")
@@ -87,7 +97,7 @@ internal fun parseMoneyTransactions(body: String): List<MoneyTransaction> {
         val o = arr.optJSONObject(i) ?: continue
         parseMoneyTransaction(o)?.let { out.add(it) }
     }
-    return out
+    return MoneyPage(out, root.optLong("total", out.size.toLong()), root.optBoolean("truncated", false))
 }
 
 /** One message for a server that does not speak the money shape: names the
@@ -153,18 +163,20 @@ class MoneyApi(context: Context) {
             call("/api/money/balances").mapCatching { parseMoneyBalances(it) }
         }
 
-    /** One page of the ledger, newest last (server returns date-ascending). */
+    /** One page of the ledger, newest first. The server pages from the
+     * newest end on `order=desc`, so the first page is the recent rows —
+     * with `total`/`truncated` saying whether older rows remain. */
     suspend fun transactions(
         start: String,
         end: String,
         account: String? = null,
         limit: Int = 100,
         offset: Int = 0,
-    ): Result<List<MoneyTransaction>> =
+    ): Result<MoneyPage> =
         withContext(Dispatchers.IO) {
             val url = buildString {
                 append("/api/money/transactions?start=${encode(start)}&end=${encode(end)}")
-                append("&limit=$limit&offset=$offset")
+                append("&limit=$limit&offset=$offset&order=desc")
                 if (!account.isNullOrBlank()) append("&account=${encode(account)}")
             }
             call(url).mapCatching { parseMoneyTransactions(it) }

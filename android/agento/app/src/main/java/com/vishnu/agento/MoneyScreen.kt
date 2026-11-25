@@ -182,6 +182,8 @@ private fun MoneyTransactionsView(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var rows by remember { mutableStateOf<List<MoneyTransaction>>(emptyList()) }
+    var total by remember { mutableStateOf(0L) }
+    var truncated by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
@@ -189,15 +191,18 @@ private fun MoneyTransactionsView(
     fun load(silent: Boolean = false) {
         if (!silent) { busy = true; error = "" }
         scope.launch {
-            // Rows never expire: a wide window with paging is the honest
-            // query. v1 shows the first page only (limit 100, date asc).
+            // Rows never expire: a wide window with paging. Newest first
+            // (server order=desc), capped at the first page of 100 — the
+            // subtitle counts whether older rows remain.
             MoneyApi(context).transactions(
                 start = "2020-01-01",
                 end = todayIst(),
                 account = account.name,
             ).fold(
-                onSuccess = {
-                    rows = it
+                onSuccess = { page ->
+                    rows = page.rows
+                    total = page.total
+                    truncated = page.truncated
                     loaded = true
                 },
                 onFailure = { e ->
@@ -239,7 +244,21 @@ private fun MoneyTransactionsView(
                 EmptyState(
                     icon = Icons.Filled.AccountBalanceWallet,
                     title = "No transactions",
-                    subtitle = "Rows logged on ${account.name} appear here, oldest first.",
+                    subtitle = "Rows logged on ${account.name} appear here, newest first.",
+                )
+            }
+            if (loaded && rows.isNotEmpty() && error.isEmpty()) {
+                val showing = if (truncated) {
+                    "Showing newest ${rows.size} of $total"
+                } else {
+                    val n = rows.size
+                    "$n transaction" + if (n == 1) "" else "s"
+                }
+                Text(
+                    showing,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 )
             }
             LazyColumn(

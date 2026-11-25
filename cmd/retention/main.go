@@ -124,7 +124,7 @@ func run() int {
 			prefix, auditN, logCutoff.Time().UTC().Format("2006-01-02"))
 	}
 
-	fmt.Println("[retention] story/resumes/cookbook/projects/money: no retention policy (git repos / permanent).")
+	fmt.Println("[retention] story/resumes/cookbook/projects: no retention policy (git repos / permanent); money: soft-deleted rows TTL away 10 days after flagging (unflagged rows permanent).")
 	return 0
 }
 

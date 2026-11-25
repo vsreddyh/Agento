@@ -544,3 +544,32 @@ func TestRestoreTransactionRejectsUnknownAndLive(t *testing.T) {
 		t.Errorf("error %q does not say the row is not deleted", errMsg)
 	}
 }
+
+// A soft-deleted id is already deleted, not unknown — both dry-run and live
+// delete name restore_transactions instead of reading as a typo.
+func TestDeleteFlagsDeletedIdAsAlreadyDeleted(t *testing.T) {
+	withTestStore(t)
+	text, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount_paise": 10000, "account": "Cash",
+	})
+	if errMsg != "" {
+		t.Fatalf("log: %s", errMsg)
+	}
+	var logged struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(text), &logged); err != nil || logged.ID == "" {
+		t.Fatalf("log result has no id: %v (%s)", err, text)
+	}
+	if _, err := store.Delete(context.Background(), map[string]any{"id": logged.ID}); err != nil {
+		t.Fatalf("flag: %v", err)
+	}
+	_, errMsg = callTool(t, "delete_transactions", map[string]any{"id": logged.ID, "dry_run": true})
+	if errMsg == "" || !strings.Contains(errMsg, "already deleted") {
+		t.Fatalf("dry-run re-delete: %q, want the already-deleted error", errMsg)
+	}
+	_, errMsg = callTool(t, "delete_transactions", map[string]any{"id": logged.ID, "dry_run": false})
+	if errMsg == "" || !strings.Contains(errMsg, "already deleted") {
+		t.Fatalf("live re-delete: %q, want the already-deleted error", errMsg)
+	}
+}
