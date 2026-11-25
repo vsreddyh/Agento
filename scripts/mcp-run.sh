@@ -49,6 +49,28 @@ if [[ ! -x "$bin" ]]; then
     exit 1
 fi
 
+# Refuse a binary older than the sources instead of exec-ing it (#557). `bin/`
+# is git-ignored and only scripts/build-mcps.sh writes it, so a pull/merge plus
+# a T3 restart re-runs the OLD file: that is how the live money server kept a
+# removed 90-day TTL and an 11-tool surface days after main moved to 21 tools.
+# The check is deliberately global (any Go source under cmd/ or internal/, and
+# go.mod/go.sum) rather than per-server: build-mcps.sh rebuilds all six, and a
+# false positive costs one build, while a missed one serves stale tools.
+newest=""
+for f in "$REPO/go.mod" "$REPO/go.sum"; do
+    if [[ -f "$f" && "$f" -nt "$bin" ]]; then
+        newest="$f"
+    fi
+done
+if [[ -z "$newest" ]]; then
+    newest="$(find "$REPO/cmd" "$REPO/internal" -type f -name '*.go' -newer "$bin" -print -quit 2>/dev/null || true)"
+fi
+if [[ -n "$newest" ]]; then
+    echo "mcp-run.sh: bin/$name is stale — $newest is newer than $bin" >&2
+    echo "mcp-run.sh: run ./scripts/build-mcps.sh, then restart T3/opencode" >&2
+    exit 1
+fi
+
 load_root_env_fill MONGODB_URI MONGODB_DB
 trim_env_keys MONGODB_URI MONGODB_DB
 
