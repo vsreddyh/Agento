@@ -1598,6 +1598,8 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 	}
 	if _, _, err := s.Insert(ctx, "2026-09-01", 99900, "expense", "groceries", "Cash", "", "", "", "retry-x"); err == nil {
 		t.Fatal("different payload under a soft-deleted key was accepted")
+	} else if !containsStr(err.Error(), "mismatch in amount") {
+		t.Fatalf("flagged mismatch error %q does not name the field (must not detour through restore)", err)
 	}
 
 	// Editing a flagged row fails upfront naming restore — succeeding would

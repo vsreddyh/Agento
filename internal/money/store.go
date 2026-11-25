@@ -614,12 +614,6 @@ func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, ke
 	mismatch := func(field string) error {
 		return fail("idempotency_key %q was already used for a different transaction (mismatch in %s) — use a new key", key, field)
 	}
-	// A replay of a soft-deleted row is rejected, not returned as a no-op:
-	// the id it would hand back is invisible in every read until restored,
-	// so a silent "success" would read as a write that never landed.
-	if _, flagged := existing["deletedAt"]; flagged {
-		return fail("idempotency_key %q was already used for a transaction that has since been deleted — restore it with restore_transactions to replay", key)
-	}
 	if fmt.Sprint(existing["date"]) != date {
 		return mismatch("date")
 	}
@@ -663,6 +657,15 @@ func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, ke
 		if hasExisting || incomingDst != "" {
 			return mismatch("sending_to")
 		}
+	}
+	// A replay of a soft-deleted row is rejected, not returned as a no-op:
+	// the id it would hand back is invisible in every read until restored,
+	// so a silent "success" would read as a write that never landed. Checked
+	// last so a different payload reports the mismatch (use a new key)
+	// instead of sending the caller on a restore detour that cannot fix the
+	// request.
+	if _, flagged := existing["deletedAt"]; flagged {
+		return fail("idempotency_key %q was already used for a transaction that has since been deleted — restore it with restore_transactions to replay", key)
 	}
 	return nil
 }
@@ -1019,6 +1022,17 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 		filt["$or"] = []bson.M{{"accountId": acct["_id"]}, {"sending_to": acct["_id"]}}
 	}
 	return filt, nil
+}
+
+// CountRange counts the rows a window query would match, for callers that
+// need the total before fetching a page (newest-first paging anchors its
+// slice at the total). Same filters as Query, no rows read.
+func (s *Store) CountRange(ctx context.Context, start, end string, account *string) (int64, error) {
+	filt, err := s.queryFilter(ctx, start, end, nil, nil, account)
+	if err != nil {
+		return 0, err
+	}
+	return s.txns.CountDocuments(ctx, filt)
 }
 
 // Query date-range scan; account filter matches either side of transfers.

@@ -160,24 +160,25 @@ func moneyTransactions(w http.ResponseWriter, r *http.Request) {
 	var total int64
 	var err error
 	if order == "desc" {
-		// Page from the newest end: the store scans ascending, so fetch the
-		// window and slice from the tail. Window-bounded, and the response
-		// is still capped at limit rows.
-		var all []bson.M
-		all, total, err = store.Query(ctx, start, end, nil, nil, acct, 0, 0)
-		if err == nil {
-			if offset < len(all) {
-				all = all[offset:]
-			} else {
-				all = nil
+		// Newest-first pages anchor at the total: page [offset, offset+limit)
+		// newest-first is ascending [total-offset-limit, total-offset). Both
+		// the count and the slice stay bounded (limit rows, never the window).
+		total, err = store.CountRange(ctx, start, end, acct)
+		if err != nil {
+			writeMoneyErr(w, err)
+			return
+		}
+		if skip, n := descWindow(total, offset, limit); n > 0 {
+			rows, _, err = store.Query(ctx, start, end, nil, nil, acct, int(n), int(skip))
+			if err != nil {
+				writeMoneyErr(w, err)
+				return
 			}
-			for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
-				all[i], all[j] = all[j], all[i]
+			for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+				rows[i], rows[j] = rows[j], rows[i]
 			}
-			if len(all) > limit {
-				all = all[:limit]
-			}
-			rows = all
+		} else {
+			rows = []bson.M{}
 		}
 	} else {
 		rows, total, err = store.Query(ctx, start, end, nil, nil, acct, limit, offset)
@@ -208,6 +209,26 @@ func moneyTransactions(w http.ResponseWriter, r *http.Request) {
 		"truncated": truncated, "next_offset": next,
 		"transactions": rows,
 	})
+}
+
+// descWindow maps a newest-first page onto the ascending store scan:
+// page [offset, offset+limit) newest-first is ascending
+// [total-offset-limit, total-offset), clamped to [0, total). Returns the
+// ascending skip and take. Pure, so the paging math is unit-testable
+// without a database.
+func descWindow(total int64, offset, limit int) (skip, n int64) {
+	hi := total - int64(offset)
+	if hi < 0 {
+		hi = 0
+	}
+	if hi > total {
+		hi = total
+	}
+	lo := hi - int64(limit)
+	if lo < 0 {
+		lo = 0
+	}
+	return lo, hi - lo
 }
 
 func writeMoneyErr(w http.ResponseWriter, err error) {
