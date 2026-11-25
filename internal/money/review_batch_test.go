@@ -124,8 +124,11 @@ func TestCategoriesLifecycle(t *testing.T) {
 	if _, _, _, err := s.DeleteCategory(ctx, "other", "", false); err == nil {
 		t.Fatal("deleting 'other' was accepted")
 	}
-	// Deleting a used category reports counts dry-run and rejects live —
-	// unless reassign_to moves the references.
+	// Dry run validates reassign_to too, so the preview catches the typo
+	// instead of the live call.
+	if _, _, _, err := s.DeleteCategory(ctx, "streaming", "typo-target", true); err == nil {
+		t.Fatal("dry run with typo'd reassign_to was accepted")
+	}
 	if _, ntxn, nbud, err := s.DeleteCategory(ctx, "streaming", "", true); err != nil || ntxn != 1 || nbud != 1 {
 		t.Fatalf("dry run = %d/%d/%v, want 1/1 refs reported", ntxn, nbud, err)
 	}

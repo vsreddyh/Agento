@@ -274,6 +274,19 @@ func (s *Store) DeleteCategory(ctx context.Context, name, reassignTo string, dry
 		return "", 0, 0, err
 	}
 	txN, budN := counts[c][0], counts[c][1]
+	// Validate the target whenever it would actually be used — including in
+	// dry-run mode, so the preview catches the typo instead of the live
+	// call. Skipped when nothing references the category (reassign_to is
+	// ignored there, even a typo'd one).
+	to := normalizeCategoryName(reassignTo)
+	if to != "" && txN+budN > 0 {
+		if to == c {
+			return "", 0, 0, fail("delete_category reassign_to must differ from the deleted category")
+		}
+		if _, err := s.requireCategory(ctx, "delete_category", to); err != nil {
+			return "", 0, 0, err
+		}
+	}
 	if dryRun {
 		return c, txN, budN, nil
 	}
@@ -285,15 +298,8 @@ func (s *Store) DeleteCategory(ctx context.Context, name, reassignTo string, dry
 		}
 		return c, 0, 0, nil
 	}
-	to := normalizeCategoryName(reassignTo)
 	if to == "" {
 		return "", 0, 0, fail("delete_category '%s' is used by %d transactions and %d budgets — pass reassign_to to move them first", c, txN, budN)
-	}
-	if to == c {
-		return "", 0, 0, fail("delete_category reassign_to must differ from the deleted category")
-	}
-	if _, err := s.requireCategory(ctx, "delete_category", to); err != nil {
-		return "", 0, 0, err
 	}
 	txnRes, err := s.txns.UpdateMany(ctx, bson.M{"category": c}, bson.M{"$set": bson.M{"category": to}})
 	if err != nil {
