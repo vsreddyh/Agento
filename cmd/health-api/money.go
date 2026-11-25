@@ -104,6 +104,17 @@ func moneyTransactions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "start and end (YYYY-MM-DD) are required"})
 		return
 	}
+	// Shape before order: a malformed date must report the date problem,
+	// not a range error from the lexicographic compare (a "swap your
+	// bounds" hint for 2026-02-30 would be wrong).
+	if _, err := validate.CheckDay(start); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "start must be YYYY-MM-DD"})
+		return
+	}
+	if _, err := validate.CheckDay(end); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "end must be YYYY-MM-DD"})
+		return
+	}
 	if start > end {
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "start is after end"})
 		return
@@ -139,16 +150,6 @@ func moneyTransactions(w http.ResponseWriter, r *http.Request) {
 	var acct *string
 	if a := strings.TrimSpace(q.Get("account")); a != "" {
 		acct = &a
-	}
-	// Calendar-validated before any store touch, so a non-date fails the
-	// same way with or without a database behind it.
-	if _, err := validate.CheckDay(start); err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "start must be YYYY-MM-DD"})
-		return
-	}
-	if _, err := validate.CheckDay(end); err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "end must be YYYY-MM-DD"})
-		return
 	}
 	store, ok := moneyStore(w)
 	if !ok {

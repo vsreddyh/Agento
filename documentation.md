@@ -275,7 +275,7 @@ The custom Android app (`android/agento/`) uses ONE Server URL + Password — th
 | `/api/projects`, `POST /api/projects/reorder`, `POST /api/projects/move` | Project board CRUD + manual order (full-section rewrite, single-row move). health-api also runs the snooze ticker: every 30s it flips due `Paused` rows (`snoozeAt - 1m`) to `Ongoing` and clears `snoozeAt`, so the transition is server-owned and shared by every client |
 | `/api/files`, `/api/files/upload`, `/api/files/download` | The Files tab shelf over `exports/` |
 | `/api/reports` | ∃-Mail inbox (markdown + LaTeX) |
-| `/api/money/balances`, `/api/money/transactions` | Money read surface for the app (derived per-account `balance_paise` + total; paged `amount_paise` rows, `order=asc|desc` default asc) |
+| `/api/money/balances`, `/api/money/transactions` | Money read surface for the app (derived per-account `balance_paise` + total; paged `amount_paise` rows, `order=asc\|desc` default asc). `start`/`end` (YYYY-MM-DD) are required; `limit` defaults 100, clamped to 500; page with `offset` = `next_offset` until `truncated` is false |
 | `/health`, `/health/` | Liveness probe (unauthenticated) |
 
 ```bash

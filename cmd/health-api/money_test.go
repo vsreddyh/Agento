@@ -184,3 +184,20 @@ func TestMoneyTransactionsDescPagesFromNewest(t *testing.T) {
 		t.Fatalf("last page still truncated: %v", b3)
 	}
 }
+
+// Shape before order: start=2026-02-30 sorts after any January end as a
+// string, so the range check would report "start is after end" for what is
+// really a non-calendar date. The date problem must win.
+func TestMoneyTransactionsValidatesShapeBeforeOrder(t *testing.T) {
+	w := moneyReq(t, http.MethodGet,
+		"/api/money/transactions?start=2026-02-30&end=2026-01-01")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("got %d, want 422", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "YYYY-MM-DD") {
+		t.Fatalf("body %q names the range, not the date", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "after end") {
+		t.Fatalf("body %q reports a range error for a non-date", w.Body.String())
+	}
+}

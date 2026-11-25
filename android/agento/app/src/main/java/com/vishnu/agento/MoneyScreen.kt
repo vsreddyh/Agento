@@ -29,16 +29,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-private fun todayIst(): String =
-    java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).toString()
-
-/** Drill-in window end: a year past today. Balances derive from all live
- * rows with no date cap (log_transaction allows far-future dates), so ending
- * the window today would hide future rows the total includes — with no row
- * to explain the gap. */
-private fun windowEndIst(): String =
-    java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).plusYears(1).toString()
-
 @Composable
 internal fun MoneyScreen(
     onMenu: () -> Unit = {},
@@ -191,27 +181,35 @@ private fun MoneyTransactionsView(
     var rows by remember { mutableStateOf<List<MoneyTransaction>>(emptyList()) }
     var total by remember { mutableStateOf(0L) }
     var truncated by remember { mutableStateOf(false) }
+    var nextOffset by remember { mutableStateOf<Int?>(null) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
 
-    fun load(silent: Boolean = false) {
+    fun load(silent: Boolean = false, offset: Int = 0, append: Boolean = false) {
         if (!silent) { busy = true; error = "" }
         scope.launch {
             // Rows never expire: a wide window with paging. Newest first
-            // (server order=desc), capped at the first page of 100 — the
-            // subtitle counts whether older rows remain. The window runs a
-            // year past today so far-future rows (which the total includes)
-            // appear instead of vanishing.
+            // (server order=desc), 100 per page — the subtitle counts
+            // whether older rows remain, and an explicit control fetches
+            // them via offset=next_offset (no silent dead end at 100).
+            // Filtered by stable account id, so a rename never breaks the
+            // drill-in the way a cached name would. The window is
+            // 1970-01-01..2100-12-31: balances derive from all live rows
+            // with no date cap, so a bounded window would hide
+            // out-of-window rows the total includes.
             MoneyApi(context).transactions(
-                start = "2020-01-01",
-                end = windowEndIst(),
-                account = account.name,
+                start = "1970-01-01",
+                end = "2100-12-31",
+                account = account.id,
+                limit = 100,
+                offset = offset,
             ).fold(
                 onSuccess = { page ->
-                    rows = page.rows
+                    rows = if (append) rows + page.rows else page.rows
                     total = page.total
                     truncated = page.truncated
+                    nextOffset = if (page.truncated) offset + page.rows.size else null
                     loaded = true
                 },
                 onFailure = { e ->
@@ -326,6 +324,21 @@ private fun MoneyTransactionsView(
                                     else -> MaterialTheme.colorScheme.onSurface
                                 },
                             )
+                        }
+                    }
+                }
+                // Older rows are one tap away, not a dead end: the server
+                // pages newest-first, so offset=next_offset continues where
+                // this page stopped and appends below.
+                val more = nextOffset
+                if (loaded && truncated && more != null && error.isEmpty()) {
+                    item {
+                        OutlinedButton(
+                            onClick = { load(silent = true, offset = more, append = true) },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Show older transactions")
                         }
                     }
                 }

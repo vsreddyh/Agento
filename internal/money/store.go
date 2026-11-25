@@ -659,11 +659,11 @@ func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, ke
 		}
 	}
 	// A replay of a soft-deleted row is rejected, not returned as a no-op:
-	// the id it would hand back is invisible in every read until restored,
-	// so a silent "success" would read as a write that never landed. Checked
-	// last so a different payload reports the mismatch (use a new key)
-	// instead of sending the caller on a restore detour that cannot fix the
-	// request.
+	// the id it would hand back is invisible in every ledger read until
+	// restored, so a silent "success" would read as a write that never
+	// landed. Checked last so a different payload reports the mismatch
+	// (use a new key) instead of sending the caller on a restore detour
+	// that cannot fix the request.
 	if _, flagged := existing["deletedAt"]; flagged {
 		return fail("idempotency_key %q was already used for a transaction that has since been deleted — restore it with restore_transactions to replay", key)
 	}
