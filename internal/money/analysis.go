@@ -1189,7 +1189,17 @@ func (s *Store) CompareCategories(ctx context.Context, aStart, aEnd, bStart, bEn
 	out := []CategoryDelta{}
 	aAmounts := make([]int64, 0, len(byCat))
 	bAmounts := make([]int64, 0, len(byCat))
-	for cat, g := range byCat {
+	// Iterate in name order: shares100 breaks remainder ties by index, so a
+	// map-ordered build would deal the extra 0.01 to a random category on
+	// even splits. Name order first, caller sort after — like
+	// BreakdownByCategory sorts before sharing.
+	names := make([]string, 0, len(byCat))
+	for cat := range byCat {
+		names = append(names, cat)
+	}
+	sort.Strings(names)
+	for _, cat := range names {
+		g := byCat[cat]
 		d := CategoryDelta{
 			Category: cat, APaise: g.aSum, BPaise: g.bSum,
 			DeltaPaise: g.bSum - g.aSum, Direction: directionOf(g.bSum - g.aSum),

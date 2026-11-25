@@ -162,11 +162,11 @@ func FromEnv() (*Store, error) {
 // types, so `create type="Bank"` stores `bank` instead of rejecting what
 // `log_transaction type="Bank"` accepts.
 //
-// The opening balance is stored once, as an immutable int64-paise seed
-// (`openingBalance`): it is added to the derived leg sums on every read and
-// never written again, so there is no running total to maintain. The tool
-// surface speaks paise (int64), matching storage exactly — no float crosses
-// the MCP boundary.
+// The opening balance is stored once, as an immutable-by-writes int64-paise
+// seed (`openingBalance`): it is added to the derived leg sums on every read,
+// and logged rows never touch it — only edit_account changes it, by delta,
+// with no transaction row. The tool surface speaks paise (int64), matching
+// storage exactly — no float crosses the MCP boundary.
 func (s *Store) CreateAccount(ctx context.Context, name, typ string, balancePaise int64) (bson.M, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -1047,12 +1047,13 @@ func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
 
 func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M, error) {
 	// Amounts are int64 paise here: ints pass through AS PAISE (10 means 10
-	// paise, not ₹10 — the store's contract is paise-native since the int64
-	// migration, and the MCP handler converts rupees before calling).
-	// Rupee floats must be exact paise (round-trip check) or fail — a float
-	// used to silently miss post-migration (stored 1010 vs filter 10.1),
-	// the silent-zero-match class of bug. Non-numerics fail instead of
-	// matching nothing.
+	// paise, not ₹10 — the store and the MCP surface are both paise-native,
+	// so the handler forwards amount_paise straight through with no
+	// conversion. Rupee floats are still accepted from direct store callers
+	// but must be exact paise (round-trip check) or fail — a float used to
+	// silently miss post-migration (stored 1010 vs filter 10.1), the
+	// silent-zero-match class of bug. Non-numerics fail instead of matching
+	// nothing.
 	out := bson.M{}
 	for k, v := range filt {
 		switch k {

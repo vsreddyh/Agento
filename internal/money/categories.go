@@ -277,25 +277,36 @@ func (s *Store) DeleteCategory(ctx context.Context, name, reassignTo string, dry
 	if dryRun {
 		return c, txN, budN, nil
 	}
-	if to := normalizeCategoryName(reassignTo); to != "" {
-		if to == c {
-			return "", 0, 0, fail("delete_category reassign_to must differ from the deleted category")
-		}
-		if _, err := s.requireCategory(ctx, "delete_category", to); err != nil {
+	// Nothing references it: reassign_to is irrelevant (even a typo'd one),
+	// so skip validation and delete outright.
+	if txN+budN == 0 {
+		if _, err := s.cats.DeleteOne(ctx, bson.M{"name": c}); err != nil {
 			return "", 0, 0, err
 		}
-		if _, err := s.txns.UpdateMany(ctx, bson.M{"category": c}, bson.M{"$set": bson.M{"category": to}}); err != nil {
-			return "", 0, 0, err
-		}
-		if _, err := s.budgets.UpdateMany(ctx, bson.M{"category": c}, bson.M{"$set": bson.M{"category": to}}); err != nil {
-			return "", 0, 0, err
-		}
-		txN, budN = 0, 0
-	} else if txN+budN > 0 {
+		return c, 0, 0, nil
+	}
+	to := normalizeCategoryName(reassignTo)
+	if to == "" {
 		return "", 0, 0, fail("delete_category '%s' is used by %d transactions and %d budgets — pass reassign_to to move them first", c, txN, budN)
+	}
+	if to == c {
+		return "", 0, 0, fail("delete_category reassign_to must differ from the deleted category")
+	}
+	if _, err := s.requireCategory(ctx, "delete_category", to); err != nil {
+		return "", 0, 0, err
+	}
+	txnRes, err := s.txns.UpdateMany(ctx, bson.M{"category": c}, bson.M{"$set": bson.M{"category": to}})
+	if err != nil {
+		return "", 0, 0, err
+	}
+	budRes, err := s.budgets.UpdateMany(ctx, bson.M{"category": c}, bson.M{"$set": bson.M{"category": to}})
+	if err != nil {
+		return "", 0, 0, err
 	}
 	if _, err := s.cats.DeleteOne(ctx, bson.M{"name": c}); err != nil {
 		return "", 0, 0, err
 	}
-	return c, txN, budN, nil
+	// Echo the moved counts, not zeros — the operator should see that rows
+	// moved, matching update_category's transactions_renamed/budgets_renamed.
+	return c, txnRes.ModifiedCount, budRes.ModifiedCount, nil
 }

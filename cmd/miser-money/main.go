@@ -179,8 +179,9 @@ type editTransactionInput struct {
 	ID string `json:"id"`
 	// Every edit field is optional: absent means leave it alone (except note:
 	// null means no change, "" clears it). Amount is a pointer so an explicit
-	// 0 is rejected, not mistaken for absent; at least one field must change
-	// or the call is rejected.
+	// 0 is rejected, not mistaken for absent; at least one field must be
+	// supplied or the call is rejected (a same-value supply succeeds with
+	// changed:false).
 	AmountPaise *int64  `json:"amount_paise,omitempty"`
 	Type        string  `json:"type,omitempty"`
 	Category    string  `json:"category,omitempty"`
@@ -280,7 +281,7 @@ func main() {
 // signal that the guard was removed.
 func registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "create_account",
-		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty or whitespace-only defaults to cash). Optional opening balance seed in the same call (defaults to 0, must be an exact paise value like every amount, so no separate funding entry is needed; stored once, never updated — later movement comes only from logged rows)."},
+		Description: "Create a money account (e.g. Cash, HDFC Checking). name unique, trimmed, case-sensitive (Cash and cash are different accounts); type cash|bank|card|wallet|other, case-insensitive (trimmed, so Bank becomes bank; empty or whitespace-only defaults to cash). Optional opening balance seed in int64 paise in the same call (defaults to 0, so no separate funding entry is needed; stored once as the seed and changeable only via edit_account — later movement otherwise comes only from logged rows)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createAccountInput) (*mcp.CallToolResult, map[string]any, error) {
 			if strings.TrimSpace(in.Type) == "" {
 				in.Type = "cash"
@@ -543,7 +544,7 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "edit_transaction",
-		Description: "Edit one transaction by id (the row changes in place; balances derive from rows, so no separate rebalance step exists and a move can never half-land). Required: id (a missing id is rejected, not a silent 0). Optional: amount_paise (integer paise > 0; explicit 0 rejected), type/category (normalized + validated like writes, except blank means no change — pass explicit `other` to reset the category; unknown rejected), account/sending_to (case-sensitive exact name or id hex like writes, unlike type/category; transfer requires sending_to when the result would otherwise have no destination (converting a non-transfer into one) — edits on an existing transfer keep its legs unless a new destination is passed, and it must differ; forbidden on non-transfers except whitespace-only (counts as absent); moving a leg onto an archived account rejects, but resupplying the leg already on the row does not — it is not a move, so copying `account` from a query back into the edit keeps working — even when converting away from a transfer, where the resupplied destination is ignored and the leg drops), date (real YYYY-MM-DD calendar date, IST day like writes when supplied — empty/whitespace means no change, unlike log where it means today; changes the row's date — rows never expire, so any past date stays put), note (capped at 300 bytes like writes; null means no change, \"\" clears it). Absent means no change — except converting to transfer still requires `sending_to`; at least one field must change. Returns the edited row read back by id; if the re-read fails, `ok` stays true with `readback_error` (like log_transaction)."},
+		Description: "Edit one transaction by id (the row changes in place; balances derive from rows, so no separate rebalance step exists and a move can never half-land). Required: id (a missing id is rejected, not a silent 0). Optional: amount_paise (integer paise > 0; explicit 0 rejected), type/category (normalized + validated like writes, except blank means no change — pass explicit `other` to reset the category; unknown rejected), account/sending_to (case-sensitive exact name or id hex like writes, unlike type/category; transfer requires sending_to when the result would otherwise have no destination (converting a non-transfer into one) — edits on an existing transfer keep its legs unless a new destination is passed, and it must differ; forbidden on non-transfers except whitespace-only (counts as absent); moving a leg onto an archived account rejects, but resupplying the leg already on the row does not — it is not a move, so copying `account` from a query back into the edit keeps working — even when converting away from a transfer, where the resupplied destination is ignored and the leg drops), date (real YYYY-MM-DD calendar date, IST day like writes when supplied — empty/whitespace means no change, unlike log where it means today; changes the row's date — rows never expire, so any past date stays put), note (capped at 300 bytes like writes; null means no change, \"\" clears it). Absent means no change — except converting to transfer still requires `sending_to`; at least one field must be supplied (a same-value supply succeeds with changed:false). Returns the edited row read back by id; if the re-read fails, `ok` stays true with `readback_error` (like log_transaction)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in editTransactionInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like delete's filters, so
 			// whitespace-only means absent (no change) instead of an error.

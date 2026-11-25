@@ -124,7 +124,7 @@ func registerCategoryTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_category",
-		Description: "Delete an unused category. dry_run=true (default) reports how many transaction and budget rows reference it and deletes nothing. With dry_run=false the delete is rejected while references remain, unless reassign_to names another existing category to move those rows to. 'other' cannot be deleted."},
+		Description: "Delete a category. dry_run=true (default) reports how many transaction and budget rows reference it and deletes nothing. With dry_run=false an unused category deletes outright (reassign_to is ignored); a referenced one is rejected unless reassign_to names another existing category, in which case those rows move and the echoed transactions/budgets are the moved counts. 'other' cannot be deleted."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteCategoryInput) (*mcp.CallToolResult, map[string]any, error) {
 			if strings.TrimSpace(in.Name) == "" {
 				return failMsg("delete_category category is required.")

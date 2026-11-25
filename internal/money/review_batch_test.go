@@ -132,8 +132,14 @@ func TestCategoriesLifecycle(t *testing.T) {
 	if _, _, _, err := s.DeleteCategory(ctx, "streaming", "", false); err == nil {
 		t.Fatal("deleting a referenced category was accepted")
 	}
-	if _, _, _, err := s.DeleteCategory(ctx, "streaming", "fun", false); err != nil {
-		t.Fatalf("reassign delete: %v", err)
+	movedCat, movedTxn, movedBud, err := s.DeleteCategory(ctx, "streaming", "fun", false)
+	if err != nil || movedCat != "streaming" {
+		t.Fatalf("reassign delete: %v %q", err, movedCat)
+	}
+	// The echoed counts are the moved rows, not zeros — the operator sees
+	// that something moved.
+	if movedTxn != 1 || movedBud != 1 {
+		t.Fatalf("reassign delete moved = %d/%d, want 1/1", movedTxn, movedBud)
 	}
 	rows, err = s.Match(ctx, map[string]any{"category": "fun"})
 	if err != nil || len(rows) != 1 {
@@ -144,8 +150,16 @@ func TestCategoriesLifecycle(t *testing.T) {
 		t.Fatalf("reassigned budget resolves %d/%v/%v, want 500000/true/nil", lim, ok, err)
 	}
 	// An unused category deletes cleanly.
-	if _, _, _, err := s.DeleteCategory(ctx, "streaming", "", false); err == nil {
+	if _, _, _, err := s.DeleteCategory(ctx, "streaming", "", true); err == nil {
 		t.Fatal("deleting an already-moved category was accepted")
+	}
+	// An unused category deletes outright even with a typo'd reassign_to —
+	// nothing needs moving, so the target is never validated.
+	if _, err := s.CreateCategory(ctx, "spare"); err != nil {
+		t.Fatalf("create spare: %v", err)
+	}
+	if _, _, _, err := s.DeleteCategory(ctx, "spare", "typo-target", false); err != nil {
+		t.Fatalf("unused delete with typo'd reassign_to rejected: %v", err)
 	}
 }
 
@@ -287,6 +301,17 @@ func TestCompareCategoriesSharesSumTo100(t *testing.T) {
 	// compare rounded hundredths instead of raw =.
 	if math.Round(aSum*100) != 10000 || math.Round(bSum*100) != 10000 {
 		t.Errorf("shares sum = %v/%v, want exactly 100.00/100.00", aSum, bSum)
+	}
+	// Largest remainder is deterministic: names sort before sharing, so the
+	// extra 0.01 on the even split always lands on bills (alphabetically
+	// first), not on whichever category the map order served first.
+	byName := map[string]CategoryDelta{}
+	for _, d := range deltas {
+		byName[d.Category] = d
+	}
+	if byName["bills"].ASharePct != 33.34 || byName["groceries"].ASharePct != 33.33 || byName["rent"].ASharePct != 33.33 {
+		t.Errorf("shares = bills %v groceries %v rent %v, want 33.34/33.33/33.33",
+			byName["bills"].ASharePct, byName["groceries"].ASharePct, byName["rent"].ASharePct)
 	}
 }
 
