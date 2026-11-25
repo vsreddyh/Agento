@@ -844,7 +844,7 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amountPaise *int
 		}
 		return false, err
 	}
-	// Flagged rows are invisible everywhere else: editing one must fail
+	// Flagged rows are invisible on every ledger read: editing one must fail
 	// upfront like restore's guards do, not succeed-and-stay-flagged (the
 	// handler's readback would then report 0 rows as a fake glitch).
 	if _, flagged := old["deletedAt"]; flagged {

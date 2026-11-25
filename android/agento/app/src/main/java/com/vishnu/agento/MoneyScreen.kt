@@ -93,7 +93,9 @@ internal fun MoneyScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            if (error.isNotEmpty() && accounts.isEmpty()) {
+            // A failed refresh keeps old balances but says so — stale data
+            // must not read as fresh.
+            if (error.isNotEmpty()) {
                 ErrorCard(raw = error, onRetry = { load() },
                     modifier = Modifier.padding(12.dp))
             }
@@ -183,11 +185,15 @@ private fun MoneyTransactionsView(
     var truncated by remember { mutableStateOf(false) }
     var nextOffset by remember { mutableStateOf<Int?>(null) }
     var error by remember { mutableStateOf("") }
+    var appendError by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
 
     fun load(silent: Boolean = false, offset: Int = 0, append: Boolean = false) {
-        if (!silent) { busy = true; error = "" }
+        // Paged failures stay visible with their own retry: a failed append
+        // must not hide the Show-more button (dead end at N of M), and a
+        // failed refresh must not read as fresh data.
+        if (!silent) { busy = true; error = ""; appendError = "" }
         scope.launch {
             // Rows never expire: a wide window with paging. Newest first
             // (server order=desc), 100 per page — the subtitle counts
@@ -210,10 +216,12 @@ private fun MoneyTransactionsView(
                     total = page.total
                     truncated = page.truncated
                     nextOffset = if (page.truncated) offset + page.rows.size else null
+                    if (append) appendError = "" else error = ""
                     loaded = true
                 },
                 onFailure = { e ->
-                    error = e.message ?: e.javaClass.simpleName
+                    val msg = e.message ?: e.javaClass.simpleName
+                    if (append) appendError = msg else error = msg
                     loaded = true
                 },
             )
@@ -243,7 +251,9 @@ private fun MoneyTransactionsView(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            if (error.isNotEmpty() && rows.isEmpty()) {
+            // A failed refresh keeps old rows but says so — stale data must
+            // not read as fresh.
+            if (error.isNotEmpty()) {
                 ErrorCard(raw = error, onRetry = { load() },
                     modifier = Modifier.padding(12.dp))
             }
@@ -329,16 +339,37 @@ private fun MoneyTransactionsView(
                 }
                 // Older rows are one tap away, not a dead end: the server
                 // pages newest-first, so offset=next_offset continues where
-                // this page stopped and appends below.
+                // this page stopped and appends below. A failed append keeps
+                // its own retry inline instead of hiding the button.
                 val more = nextOffset
-                if (loaded && truncated && more != null && error.isEmpty()) {
+                if (loaded && truncated && error.isEmpty() && more != null) {
                     item {
-                        OutlinedButton(
-                            onClick = { load(silent = true, offset = more, append = true) },
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Show older transactions")
+                        if (appendError.isEmpty()) {
+                            OutlinedButton(
+                                onClick = { load(silent = true, offset = more, append = true) },
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Show older transactions")
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "Couldn't load older transactions.",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(
+                                    onClick = { load(silent = true, offset = more, append = true) },
+                                    enabled = !busy,
+                                ) {
+                                    Text("Retry")
+                                }
+                            }
                         }
                     }
                 }

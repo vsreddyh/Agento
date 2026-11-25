@@ -108,8 +108,9 @@ does not resolve, trust the server's tool list over this file.
 
 Destructive tools ask first through the harness permission prompt
 (`opencode.json`); state the scope when it asks: `delete_transactions`,
-`delete_meals`, `prune_old` (health-check only — miser-money has no retention;
-rows are permanent unless deleted), `archive_account`, `delete_budget`
+`delete_meals`, `prune_old` (health-check only — miser-money has no prune
+tool; flagged rows TTL away 10 days after flagging, unflagged rows are
+permanent), `archive_account`, `delete_budget`
 (dry-runs by default like `delete_transactions`), `delete_category`
 (dry-runs by default too; with references it needs `reassign_to`),
 `delete_recipe` (also removes its cook logs), `delete_ingredient`,

@@ -118,4 +118,28 @@ class MoneyApiTest {
             assertTrue(e.message!!.contains("money data"))
         }
     }
+
+    @Test
+    fun `parseMoneyBalances rejects wrong-typed total`() {
+        // A numeric string coerces fine under optLong — strict means a real
+        // JSON number, or the envelope reads as stale.
+        try {
+            parseMoneyBalances("""{"accounts":[],"total_paise":"50000"}""")
+            assertTrue("string total_paise was accepted", false)
+        } catch (e: RuntimeException) {
+            assertTrue(e.message!!.contains("money data"))
+        }
+    }
+
+    @Test
+    fun `parseMoneyTransactions rejects wrong-typed footers`() {
+        try {
+            parseMoneyTransactions(
+                """{"ok":true,"count":1,"transactions":[],"total":"5","truncated":"true"}""",
+            )
+            assertTrue("string total/truncated was accepted", false)
+        } catch (e: RuntimeException) {
+            assertTrue(e.message!!.contains("money data"))
+        }
+    }
 }

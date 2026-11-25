@@ -62,23 +62,23 @@ internal fun parseMoneyTransaction(o: JSONObject): MoneyTransaction? {
 }
 
 /** Parses the balances envelope: the canonical `accounts` list plus
- * `total_paise`. Both are required — a server that omits the total is stale,
- * and reading it as ₹0 would look like a broke account rather than a stale
- * server, so that shape throws instead of zero-filling. */
+ * a numeric `total_paise`. Missing, null, or wrong-typed footers throw —
+ * a stale/corrupt server must read as stale, never as a ₹0 broke account.
+ * JSON numbers arrive as Integer/Long/Double, all of them `Number`;
+ * anything else (including numeric strings) is rejected. */
 internal fun parseMoneyBalances(body: String): Pair<List<MoneyAccount>, Long> {
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
     val arr = root.optJSONArray("accounts")
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
-    if (!root.has("total_paise") || root.isNull("total_paise")) {
-        throw RuntimeException(MONEY_SHAPE_ERROR)
-    }
+    val totalRaw = root.opt("total_paise")
+    if (totalRaw !is Number) throw RuntimeException(MONEY_SHAPE_ERROR)
     val out = mutableListOf<MoneyAccount>()
     for (i in 0 until arr.length()) {
         val o = arr.optJSONObject(i) ?: continue
         parseMoneyAccount(o)?.let { out.add(it) }
     }
-    return out to root.optLong("total_paise", 0L)
+    return out to totalRaw.toLong()
 }
 
 /** One page of ledger rows plus the window totals, so the UI can say
@@ -90,17 +90,18 @@ data class MoneyPage(
 )
 
 /** Parses the transactions envelope: the canonical `transactions` list plus
- * `total`/`truncated` for the showing-N-of-total indicator. Missing footers
- * throw like a missing envelope — defaulting `total` to the page size would
- * read as complete when older rows exist. */
+ * numeric `total` and boolean `truncated` for the showing-N-of-total
+ * indicator. Missing, null, or wrong-typed footers throw like a missing
+ * envelope — defaulting `total` to the page size would read as complete
+ * when older rows exist. */
 internal fun parseMoneyTransactions(body: String): MoneyPage {
     val root = runCatching { JSONObject(body) }.getOrNull()
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
     val arr = root.optJSONArray("transactions")
         ?: throw RuntimeException(MONEY_SHAPE_ERROR)
-    if (!root.has("total") || root.isNull("total") ||
-        !root.has("truncated") || root.isNull("truncated")
-    ) {
+    val totalRaw = root.opt("total")
+    val truncatedRaw = root.opt("truncated")
+    if (totalRaw !is Number || truncatedRaw !is Boolean) {
         throw RuntimeException(MONEY_SHAPE_ERROR)
     }
     val out = mutableListOf<MoneyTransaction>()
@@ -108,7 +109,7 @@ internal fun parseMoneyTransactions(body: String): MoneyPage {
         val o = arr.optJSONObject(i) ?: continue
         parseMoneyTransaction(o)?.let { out.add(it) }
     }
-    return MoneyPage(out, root.optLong("total", 0L), root.optBoolean("truncated", false))
+    return MoneyPage(out, totalRaw.toLong(), truncatedRaw)
 }
 
 /** One message for a server that does not speak the money shape: names the
