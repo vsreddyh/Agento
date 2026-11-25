@@ -3,8 +3,9 @@
 // Collections: money_accounts + money_transactions + money_budgets +
 // money_categories — all permanent. Rows never expire: the only way a row disappears is a
 // user-initiated delete. There is no stored running total: an account's
-// balance is its immutable opening seed plus the signed sum of its ledger
-// legs, computed on read — so a balance can never drift from its rows.
+// balance is its opening seed (changeable only via edit_account) plus the
+// signed sum of its ledger legs, computed on read — so a balance can never
+// drift from its rows.
 package money
 
 import (
@@ -318,7 +319,7 @@ func (s *Store) UnarchiveAccount(ctx context.Context, name string) (string, bool
 }
 
 // EditAccount renames an account, changes its type, and/or corrects its
-// immutable opening-balance seed — the three things archiving cannot fix.
+// opening-balance seed — the three things archiving cannot fix.
 // Name, type and seed are the only mutable account fields; at least one must
 // be set. A rename keeps every transaction row (rows reference the account
 // id, never the name); a colliding name is rejected. A seed correction moves
@@ -755,8 +756,9 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 // Nil means leave the field alone (the handler passes nil for absent or
 // whitespace-only inputs, like delete filters) — except converting
 // a row INTO a transfer, which still requires sending_to; at least one field
-// must change. New values validate exactly like Insert: exact-paise amounts,
-// known type/category, resolved accounts, transfer rules, real calendar
+// must be supplied (a same-value supply succeeds with changed:false). New
+// values validate exactly like Insert: positive int64-paise amounts, known
+// type/category, resolved accounts, transfer rules, real calendar
 // dates. A type/account/amount move changes the row; derived balances follow,
 // so a move can never half-land — there is no second write to fail. A date
 // change just moves the row's date — rows never expire, so any past date
@@ -1202,8 +1204,9 @@ func (s *Store) migrateFloatMoney(ctx context.Context) error {
 	return nil
 }
 
-// migrateStoredBalances converts legacy stored running totals to immutable
-// opening seeds, once: opening = stored balance − signed leg sum. New code
+// migrateStoredBalances converts legacy stored running totals to opening
+// seeds (immutable by ledger writes — only edit_account changes them later),
+// once: opening = stored balance − signed leg sum. New code
 // never writes `balance`, so each legacy account matches once (the filter
 // requires the legacy field and no seed); reruns and fresh databases find
 // nothing to do. Runs after the amount migration so legs sum from paise.

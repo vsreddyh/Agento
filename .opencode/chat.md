@@ -109,11 +109,13 @@ Destructive tools ask first through the harness permission prompt
 (`opencode.json`); state the scope when it asks: `delete_transactions`,
 `delete_meals`, `prune_old` (health-check only — miser-money has no retention;
 rows are permanent unless deleted), `archive_account`, `delete_budget`
-(dry-runs by default like `delete_transactions`),
+(dry-runs by default like `delete_transactions`), `delete_category`
+(dry-runs by default too; with references it needs `reassign_to`),
 `delete_recipe` (also removes its cook logs), `delete_ingredient`,
 `delete_task`, `delete_project`. There is no `delete_cook`; say so instead
 of reaching for it. Money writes also prompt: `create_budget` and
-`update_budget` (like `log_transaction` and `edit_transaction` already do).
+`update_budget` (like `log_transaction` and `edit_transaction` already do),
+plus `edit_account`, `create_category` and `update_category`.
 
 `delete_transactions` dry-runs by default: it returns the rows it would
 remove and deletes nothing unless you pass `dry_run=false`. Show those

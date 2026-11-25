@@ -591,7 +591,8 @@ func (s *Store) AccountFlow(ctx context.Context, start, end string, categories [
 			return nil, err
 		}
 	}
-	// Account directory: every account with its immutable seed.
+	// Account directory: every account with its opening seed (changeable only
+	// via edit_account).
 	cur, err := s.accts.Find(ctx, bson.M{})
 	if err != nil {
 		return nil, err
