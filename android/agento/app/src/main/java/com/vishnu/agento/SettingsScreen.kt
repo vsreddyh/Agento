@@ -71,7 +71,7 @@ internal enum class SettingSection(val title: String) {
     Connection("Connection"),
     Health("Health sync"),
     Appearance("Appearance"),
-    Widget("Home-screen widget"),
+    Widget("Widget"),
     Notifications("Notifications"),
     Behaviour("Behaviour"),
     Storage("Backup"),
@@ -1203,20 +1203,16 @@ internal fun AppUpdateSection() {
     }
 }
 
-/** Task-widget placement settings (Settings → Home-screen widget).
- *
- * The widget's own header controls never rendered on some launchers
- * (#137), so what it shows is changed from the app. This used to sit
- * under the task rows in the Task Manager, which is a poor home for it:
- * it configures the home screen, not the task list. Each placement is
- * configured on its own, because the settings are stored per widget id.
+/** Task-widget placement settings (Settings → Widget, #592): one static
+ * entry plus Configure. Only one placement is used — extra placements on
+ * the home screen are configured nowhere and ignored.
  */
 @Composable
 internal fun WidgetSettingsSection() {
     val context = LocalContext.current
     // Re-read on resume: the user can add or drop a placement (or come
     // back from the launcher) while this screen sits in the back stack,
-    // and a stale list here is worse than useless.
+    // and a stale entry here is worse than useless.
     var tick by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
     // Filtered against each id's own provider info: the voice widget's
@@ -1232,13 +1228,12 @@ internal fun WidgetSettingsSection() {
     ) { tick++ }
 
     SectionCard(
-        title = "Home-screen widget",
-        subtitle = "What the task widget shows: which tasks, in what order, how dense the rows are, and whether due dates and scrolling are on. Every placement keeps its own settings.",
+        title = "Widget",
     ) {
         if (widgetIds.isEmpty()) {
             Text(
                 "No task widget on your home screen yet.",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyLarge,
             )
             Text(
                 "Long-press an empty spot on the home screen, then Widgets → Agento — or use the button below.",
@@ -1259,70 +1254,39 @@ internal fun WidgetSettingsSection() {
                 ) { Text("Add the widget") }
             }
         } else {
-            widgetIds.forEachIndexed { i, id ->
-                if (i > 0) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            // One static entry bound to the first placement id (#592):
+            // the section configures exactly one widget.
+            val first = widgetIds.first()
+            // A previously set custom title prefixes the entry; fresh
+            // placements just say Tasks.
+            val custom = remember(context, tick, first) {
+                widgetTitle(TaskWidget.settingsFor(context, first).title, "")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        if (custom.isEmpty()) "Tasks" else "$custom · Tasks",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Widget ${i + 1}",
-                            style = MaterialTheme.typography.bodyMedium,
+                Spacer(modifier = Modifier.width(12.dp))
+                OutlinedButton(
+                    onClick = {
+                        config.launch(
+                            Intent(context, TaskWidgetConfigActivity::class.java)
+                                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, first)
                         )
-                        Text(
-                            buildString {
-                                // One read of the placement's settings (#536):
-                                // the summary and the widget agree because
-                                // they read the same object.
-                                val settings = TaskWidget.settingsFor(context, id)
-                                // The custom title (#532) first, when set:
-                                // it is what the placement shows, and it is
-                                // the only way to tell two placements apart.
-                                val title = widgetTitle(settings.title, "")
-                                if (title.isNotEmpty()) append("$title · ")
-                                append(settings.view.title)
-                                append(" tasks · ")
-                                append(settings.density.title)
-                                append(" rows")
-                                if (settings.sort != TaskWidgetSort.Server) {
-                                    append(" · ${settings.sort.title}")
-                                }
-                                val hidden = buildList {
-                                    if (!settings.showDue) add("no due dates")
-                                    if (!settings.showRepeat) add("no repeat")
-                                    if (!settings.showParallel) add("no parallel")
-                                    if (!settings.showSections) add("no sections")
-                                    if (!settings.showTitle) add("no title")
-                                    if (!settings.showCount) add("no count")
-                                }
-                                if (hidden.isNotEmpty()) {
-                                    append(" · " + hidden.joinToString(", "))
-                                }
-                                if (!settings.scrollable) {
-                                    append(" · up to ${settings.staticRows.rows} rows")
-                                }
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    OutlinedButton(
-                        onClick = {
-                            config.launch(
-                                Intent(context, TaskWidgetConfigActivity::class.java)
-                                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                            )
-                        },
-                    ) { Text("Configure") }
-                }
+                    },
+                ) { Text("Configure") }
+            }
+            if (widgetIds.size > 1) {
+                Text(
+                    "Only one widget is used, extra placements are ignored.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
-        Text(
-            "On some launchers the widget's own buttons never appear — this screen is the reliable way to change these.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 

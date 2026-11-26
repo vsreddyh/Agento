@@ -253,7 +253,7 @@ class WidgetAgendaTest {
     }
 
     @Test
-    fun `row line has three independent switches`() {
+    fun `row line has independent switches for due date and due time`() {
         val repeating = task(
             "a", dueDate = "2026-08-09", dueTime = "23:00", estimatedMinutes = 60,
             repeatEvery = 3, repeatUnit = "days", parallelable = true)
@@ -263,11 +263,17 @@ class WidgetAgendaTest {
             "Today, 22:00 → 23:00 · Every 3 days · parallel",
             widgetRowLine(repeating, today),
         )
-        // Each switch hides exactly its own bit (#536): the repeat
-        // condition survives the due part going away.
+        // Each switch hides exactly its own bit (#536, #592): the repeat
+        // condition survives either half of the due line going away, and
+        // hiding the date keeps the "22:00 → 23:00" range while hiding the
+        // time keeps "Today".
         assertEquals(
-            "Every 3 days · parallel",
-            widgetRowLine(repeating, today, showDue = false),
+            "22:00 → 23:00 · Every 3 days · parallel",
+            widgetRowLine(repeating, today, showDueDate = false),
+        )
+        assertEquals(
+            "Today · Every 3 days · parallel",
+            widgetRowLine(repeating, today, showDueTime = false),
         )
         assertEquals(
             "Today, 22:00 → 23:00 · parallel",
@@ -277,14 +283,29 @@ class WidgetAgendaTest {
             "Today, 22:00 → 23:00 · Every 3 days",
             widgetRowLine(repeating, today, showParallel = false),
         )
-        assertEquals("", widgetRowLine(repeating, today, false, false, false))
+        assertEquals("", widgetRowLine(repeating, today, false, false, false, false))
+    }
+
+    @Test
+    fun `due date and time split at the comma`() {
+        val repeating = task(
+            "a", dueDate = "2026-08-09", dueTime = "23:00", estimatedMinutes = 60)
+        assertEquals("Today", repeating.dueDatePart(today))
+        assertEquals("22:00 → 23:00", repeating.dueTimePart())
+        // No usable due time: the date stands alone, the time is empty.
+        val dateless = task("a", dueDate = "", dueTime = "")
+        assertEquals("", dateless.dueDatePart(today))
+        assertEquals("", dateless.dueTimePart())
+        val dateOnly = task("a", dueDate = "2026-08-15")
+        assertEquals("Saturday", dateOnly.dueDatePart(today))
+        assertEquals("", dateOnly.dueTimePart())
     }
 
     @Test
     fun `row line is empty for a plain one-shot task with the due part off`() {
         assertEquals(
             "",
-            widgetRowLine(task("a", dueDate = "2026-08-09"), today, showDue = false),
+            widgetRowLine(task("a", dueDate = "2026-08-09"), today, showDueDate = false),
         )
     }
 

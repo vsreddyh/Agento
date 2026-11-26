@@ -18,8 +18,8 @@ import java.time.temporal.ChronoUnit
  * in render(), since service-backed collections broke on Android 16
  * (issue #137). Each factory instance belongs to one placement (the
  * widget id arrives on its service intent) and shows that placement's
- * view (Open/Done/All) in its density (Comfortable/Compact) and row order
- * (matching the Task Manager sort, or server order). Snapshots
+ * view (Open/Done/All) in Comfortable density and row order (matching
+ * the Task Manager sort, or server order). Snapshots
  * come from [TaskWidget]'s per-state cache (same process, no IPC
  * payload) so getViewAt stays cheap; row taps, the ring button
  * (complete) and the skip button fill in to the [TaskCompleteActivity]
@@ -158,12 +158,7 @@ private class TaskFactory(
         // their rows directly via RemoteCollectionItems in render().
         return runCatching {
             when (val item = items.getOrNull(position)) {
-                null -> RemoteViews(appCtx.packageName,
-                    if (placement.density == TaskWidgetDensity.Compact) {
-                        R.layout.task_widget_row_compact
-                    } else {
-                        R.layout.task_widget_row
-                    })
+                null -> RemoteViews(appCtx.packageName, R.layout.task_widget_row)
                 is WidgetItem.Header ->
                     TaskWidget.buildSection(appCtx, item.bucket, item.count).apply {
                         // The list has ONE template (the trampoline), so a
@@ -173,8 +168,7 @@ private class TaskFactory(
                     }
                 is WidgetItem.Row ->
                     TaskWidget.buildLegacyRow(
-                        appCtx.packageName, placement.density == TaskWidgetDensity.Compact,
-                        placement, today, item.task)
+                        appCtx.packageName, placement, today, item.task)
             }
         }.getOrElse {
             TaskWidget.recordFactoryError("getViewAt($position)", it)

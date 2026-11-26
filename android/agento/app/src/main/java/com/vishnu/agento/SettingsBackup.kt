@@ -144,6 +144,10 @@ object SettingsBackup {
     )
     private val BOOLEAN_WIDGET_PREFIXES = listOf(
         "task_widget_due_",
+        // Due date / time split (#592): new keys defaulting back to the
+        // legacy single switch, which stays backed up for downgrades.
+        "task_widget_due_date_",
+        "task_widget_due_time_",
         "task_widget_repeat_",
         "task_widget_parallel_",
         "task_widget_sections_",
@@ -153,8 +157,8 @@ object SettingsBackup {
     )
 
     /** True for a per-widget display key
-     * `task_widget_{view,density,sort,title,static_rows,due,repeat,parallel,
-     * sections,count,show_title,scroll}_<id>`. */
+     * `task_widget_{view,density,sort,title,static_rows,due,due_date,due_time,
+     * repeat,parallel,sections,count,show_title,scroll}_<id>`. */
     fun isWidgetDisplayKey(k: String): Boolean =
         isStringWidgetKey(k) || isBooleanWidgetKey(k)
 
@@ -163,8 +167,8 @@ object SettingsBackup {
     fun isStringWidgetKey(k: String): Boolean =
         STRING_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
 
-    /** True for a `task_widget_{due,repeat,parallel,sections,count,
-     * show_title,scroll}_<numeric id>` key (boolean-valued). */
+    /** True for a `task_widget_{due,due_date,due_time,repeat,parallel,
+     * sections,count,show_title,scroll}_<numeric id>` key (boolean-valued). */
     fun isBooleanWidgetKey(k: String): Boolean =
         BOOLEAN_WIDGET_PREFIXES.any { hasNumericSuffix(k, it) }
 

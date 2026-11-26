@@ -8,6 +8,19 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.9.0]
+- **Widget section trimmed to one static entry (#592).** The section is
+  now just "Widget": a single "Tasks" entry (custom title prefix kept
+  when set) plus Configure — no summary line, no per-widget list. Where
+  several placements exist, a note says only one is used.
+- **Configure dialog cleaned up (#592).** Gone: the live preview and its
+  size switch, the Title group and "Show the title" switch (the title is
+  always on, falling back to the view name), and the density choice
+  (always Comfortable). Row order options now describe what they do.
+- **Due date and due time split (#592).** Two independent toggles (and
+  two backed-up prefs, falling back to the old combined switch) replace
+  the single due-date switch in the widget row and its tests.
+
 ## [9.8.0]
 - **Sidebar gets an update check button (#591).** The drawer bottom (and
   the rail, icon-only with a dot) shows a sync button plus an
