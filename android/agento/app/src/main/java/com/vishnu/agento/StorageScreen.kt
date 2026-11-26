@@ -298,7 +298,9 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     // verbatim-shaped via friendlyError.
     fun uploadFrom(uri: Uri) {
         uploading = true
-        error = ""
+        // error is deliberately left alone: a failed upload must not wipe
+        // a root listing error (the ErrorCard + Retry would vanish into a
+        // spinner with nothing loading).
         // Grabbed up front on Main (cheap handle, not IO): the blocking
         // query/open below must not re-reach into the Activity per call.
         val cr = context.contentResolver

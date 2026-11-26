@@ -11,10 +11,10 @@ see GitHub Releases for older notes.
 ## [9.6.1]
 - **Files top bar goes sync-style (#582).** The header is two actions:
   Upload (cloud icon, still disabled mid-upload) and Sync, which spins
-  while any list fetch or the upload is in flight and rests idle
-  otherwise. The linear progress bar is gone — the first load shows a
-  centered spinner instead. (No Up button to remove: the #583 tree
-  already replaced drill-down navigation with expand/collapse.)
+  while folders load or an upload runs and rests idle otherwise. The
+  linear progress bar is gone — the first load shows a centered spinner
+  instead. (No Up button to remove: the #583 tree already replaced
+  drill-down navigation with expand/collapse.)
 
 ## [9.6.0]
 - **Files grows a tree with download + delete (#583).** The Files tab is
