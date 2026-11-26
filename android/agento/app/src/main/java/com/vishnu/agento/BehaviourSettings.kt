@@ -1,7 +1,6 @@
 package com.vishnu.agento
 
 import android.content.Context
-import android.speech.tts.TextToSpeech
 import androidx.core.content.edit
 import androidx.work.WorkManager
 
@@ -189,25 +188,21 @@ object BehaviourSettings {
         }
     }
 
-    // ── TTS voice / rate / pitch ─────────────────────────────────────────
+    // ── TTS voice / rate / pitch (retired UI, #596) ─────────────────────
+    // The Speech card is gone: reminder speech runs on engine defaults and
+    // no stored voice/rate/pitch is ever applied. The keys stay (backed up
+    // for old-backup import and downgrades), and the reads stay so stored
+    // values keep round-tripping — but nothing writes them any more.
     const val KEY_TTS_VOICE = "tts_voice"
     const val KEY_TTS_RATE_PCT = "tts_rate_pct"
     const val KEY_TTS_PITCH_PCT = "tts_pitch_pct"
     const val DEFAULT_TTS_PCT = 100L
-    /** Engine range is roughly half to double speed; the picker offers steps. */
-    val TTS_PCT_OPTIONS = listOf(50L, 75L, 100L, 125L, 150L, 200L)
 
     /** Voice name, or "" for the engine default (today's behaviour).
-     * Trimmed like the setter, so a hand-imported padded name still
-     * matches the engine's voice instead of missing silently. */
+     * Trimmed, so a hand-imported padded name still round-trips the way
+     * the old setter stored it. */
     fun ttsVoice(ctx: Context): String =
         prefs(ctx).getString(KEY_TTS_VOICE, "").orEmpty().trim()
-
-    fun ttsRate(ctx: Context): Float =
-        ttsRatePct(ctx) / 100f
-
-    fun ttsPitch(ctx: Context): Float =
-        ttsPitchPct(ctx) / 100f
 
     fun ttsRatePct(ctx: Context): Long =
         coerceImport(KEY_TTS_RATE_PCT, prefs(ctx).getLong(KEY_TTS_RATE_PCT, DEFAULT_TTS_PCT))
@@ -215,21 +210,9 @@ object BehaviourSettings {
     fun ttsPitchPct(ctx: Context): Long =
         coerceImport(KEY_TTS_PITCH_PCT, prefs(ctx).getLong(KEY_TTS_PITCH_PCT, DEFAULT_TTS_PCT))
 
-    fun setTtsVoice(ctx: Context, name: String) {
-        prefs(ctx).edit { putString(KEY_TTS_VOICE, name.trim()) }
-    }
-
-    fun setTtsRatePct(ctx: Context, pct: Long) {
-        prefs(ctx).edit { putLong(KEY_TTS_RATE_PCT, pct.coerceIn(50L, 200L)) }
-    }
-
-    fun setTtsPitchPct(ctx: Context, pct: Long) {
-        prefs(ctx).edit { putLong(KEY_TTS_PITCH_PCT, pct.coerceIn(50L, 200L)) }
-    }
-
     /** Keyed label: rate and pitch share 50..200 today, but the coercion
      * rides the caller's key so a future range split can't silently
-     * mis-coerce one side while setters/import stay correct. There is
+     * mis-coerce one side while import stays correct. There is
      * deliberately no unkeyed shorthand: the shorter name is exactly how
      * the next caller would reintroduce the hazard. */
     fun ttsPctLabelFor(key: String, pct: Long): String = "${coerceImport(key, pct)}%"
@@ -331,13 +314,13 @@ object BehaviourSettings {
      * Health sync cadence (interval, Wi-Fi-only, pause) is not one of them:
      * it lives in Settings → Health sync (#588), shows its own values in
      * its own card, and a paused sync reads Paused (not Ready) on the Health
-     * hub row instead of counting here. */
+     * hub row instead of counting here. Retired TTS customs are not counted
+     * either: the Speech card is gone (#596) and stored voice/rate/pitch
+     * are never applied, so a stale custom must not flip this row with no
+     * card to clear it from. */
     fun customCount(ctx: Context): Int = customCount(
         taskMinutes = taskSyncIntervalMinutes(ctx),
         leadMinutes = reminderLeadMinutes(ctx),
-        voice = ttsVoice(ctx),
-        ratePct = ttsRatePct(ctx),
-        pitchPct = ttsPitchPct(ctx),
         remindersOn = TaskReminders.isEnabled(ctx),
         updateHours = updateIntervalHours(ctx),
         updateStartup = updateStartup(ctx),
@@ -352,13 +335,12 @@ object BehaviourSettings {
      * The widget interval is deliberately NOT one of them: it lives in
      * Settings → Widget (#595), and counting it here would flip the
      * Behaviour hub row for a knob that lives elsewhere — like the
-     * per-widget display settings, it is backed up but uncounted. */
+     * per-widget display settings, it is backed up but uncounted. Retired
+     * TTS customs are excluded for the same reason (#596): no card owns
+     * them any more. */
     fun customCount(
         taskMinutes: Long,
         leadMinutes: Long,
-        voice: String,
-        ratePct: Long,
-        pitchPct: Long,
         remindersOn: Boolean,
         // #366 append-only: existing callers (and the pinned test helper)
         // keep compiling, and the defaults match the getters so "nothing
@@ -371,14 +353,9 @@ object BehaviourSettings {
         // the same effective state (a stored 0 reads back as its floor).
         val tm = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, taskMinutes)
         val lm = coerceImport(KEY_REMINDER_LEAD_MINUTES, leadMinutes)
-        val rp = coerceImport(KEY_TTS_RATE_PCT, ratePct)
-        val pp = coerceImport(KEY_TTS_PITCH_PCT, pitchPct)
         var n = 0
         if (tm != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
         if (lm != TaskReminders.BEFORE_START_MINUTES) n++
-        if (voice.trim().isNotEmpty()) n++
-        if (rp != DEFAULT_TTS_PCT) n++
-        if (pp != DEFAULT_TTS_PCT) n++
         // Surfaced-but-pre-existing key counts too: enabling it is a
         // deliberate behaviour change made in this section.
         if (remindersOn) n++
@@ -428,32 +405,4 @@ object BehaviourSettings {
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
-}
-
-/**
- * Applies the stored TTS voice/rate/pitch to a live engine. Each knob is
- * skipped at its default, so an install that never opens the section speaks
- * exactly like 5.12.0 — engine defaults, no setVoice/setSpeechRate/setPitch.
- * The voice is matched by name against THIS engine's voices (Voice objects
- * are engine-specific); a stored name the engine no longer offers is left
- * alone rather than failing the utterance. Never throws (OEM binder
- * breakage is a warning, like the callers already treat it).
- */
-fun applyStoredTtsSettings(tts: TextToSpeech, appCtx: Context) {
-    // Compared as stored Long pcts, never as floats: exact, and skipped at
-    // defaults so untouched installs speak exactly like 5.12.0.
-    runCatching {
-        val pct = BehaviourSettings.ttsRatePct(appCtx)
-        if (pct != BehaviourSettings.DEFAULT_TTS_PCT) tts.setSpeechRate(pct / 100f)
-    }
-    runCatching {
-        val pct = BehaviourSettings.ttsPitchPct(appCtx)
-        if (pct != BehaviourSettings.DEFAULT_TTS_PCT) tts.setPitch(pct / 100f)
-    }
-    val want = BehaviourSettings.ttsVoice(appCtx)
-    if (want.isNotEmpty()) {
-        runCatching {
-            tts.voices?.firstOrNull { it.name == want }?.let { tts.voice = it }
-        }
-    }
 }
