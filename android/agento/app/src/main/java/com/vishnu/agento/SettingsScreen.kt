@@ -610,7 +610,8 @@ internal fun SettingsHub(
                             maxLines = 1,
                         )
                     }
-                    TextButton(onClick = { onPick(row.section) }) { Text("Open") }
+                    // No trailing Open button (#589): the whole row is the
+                    // tap target (role = Button, "Open <section>" label).
                 }
             }
         }
