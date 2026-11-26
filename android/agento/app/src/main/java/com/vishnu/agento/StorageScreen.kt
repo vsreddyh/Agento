@@ -200,8 +200,9 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 return@launch
             }.third
             if (files.none { it.name == f.name }) {
+                val where = if (dir.isEmpty()) "Exports root" else dir
                 toasts.toast(
-                    "“${f.name}” is no longer on the server — refreshing.",
+                    "“${f.name}” in $where is no longer on the server — refreshing.",
                     ToastKind.Error,
                 )
                 loadDir(dir, force = true)

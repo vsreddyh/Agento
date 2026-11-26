@@ -49,6 +49,13 @@ class FriendlyErrorTest {
     }
 
     @Test
+    fun `broken parent chain reads as gone too`() {
+        val gone = friendlyError("HTTP 400: invalid path")
+        assertEquals("That is no longer on the server", gone.title)
+        assertTrue(gone.nextStep.contains("Refresh"))
+    }
+
+    @Test
     fun `unknown routes still point at app updates`() {
         val route = friendlyError("HTTP 404: 404 page not found")
         assertTrue(route.nextStep.contains("App updates"))

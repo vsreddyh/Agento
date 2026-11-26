@@ -178,13 +178,15 @@ fun friendlyError(raw: String): FriendlyError {
             "Tap Refresh to reload the listing, then retry.",
         )
         // A path the server no longer has (VPS-deleted file/folder, a row
-        // deleted elsewhere): the caller refreshes, never an app update.
-        // Unknown routes ("404 page not found") keep the generic arm below.
+        // deleted elsewhere, or a chain broken above it — resolveExport
+        // answers those as "invalid path"): the caller refreshes, never
+        // an app update. Unknown routes ("404 page not found") keep the
+        // generic arm below.
         has("not a file") -> FriendlyError(
             "Folders can't be deleted here",
             "Clear the folder on the VPS itself — the app only deletes files.",
         )
-        has("not found") && !has("page not found") -> FriendlyError(
+        (has("not found") && !has("page not found")) || has("invalid path") -> FriendlyError(
             "That is no longer on the server",
             "Refresh to reload the listing, then retry.",
         )
