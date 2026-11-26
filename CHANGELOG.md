@@ -8,6 +8,11 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.7.2]
+- **Connection section drops its subtitle (#587).** Settings →
+  Connection is now just the title plus the Server URL and Password
+  fields.
+
 ## [9.7.1]
 - **Widget compact tap opens the task (#586).** Tapping the next-task
   name or its due line now deep-links into that task's detail sheet,

@@ -205,8 +205,6 @@ internal fun SettingsScreen(
                     SettingSection.Connection -> {
                         SectionCard(
                             title = "Connection",
-                            // #584 TEMP-REMOVE (∃-Mail): subtitle dropped the inbox; restore it on revert.
-                            subtitle = "One URL for everything. The proxy routes health data, tasks and files to the sync service.",
                         ) {
                             OutlinedTextField(
                                 value = state.serverUrl,
