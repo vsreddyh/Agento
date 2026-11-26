@@ -10,9 +10,9 @@ see GitHub Releases for older notes.
 
 ## [9.13.0]
 - **Task Manager drops toasts and the Select button (#603).** No toast
-  popups anywhere — the list updating in place plus the spinning sync
-  button is the feedback (except creates/duplicates that don't belong
-  under the Done filter — switch filters to verify); failures revert
+  popups anywhere in Task Manager — the list updating in place plus the
+  spinning sync button is the feedback (except creates/duplicates that
+  don't belong under the Done filter — switch filters to verify); failures revert
   and log with the failing item named. Invalid estimates keep Save
   disabled with the form's own hint. An edit conflict reloads silently
   and reopens the draft once the fresh rows land — stamped with the

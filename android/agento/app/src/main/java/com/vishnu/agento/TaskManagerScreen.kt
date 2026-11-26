@@ -272,7 +272,9 @@ internal fun TaskManagerScreen(
     // Set when an edit conflicts (#603): the draft reopens only once the
     // reload it triggered lands, stamped with the fresh row's revision —
     // reopening immediately would carry the losing revision and every
-    // re-save would 409 again. The loader consumes it below.
+    // re-save would 409 again. A failed reload simply leaves it parked
+    // (dialog still closed) until the next success; rotation clears it,
+    // like any unsaved in-memory state. The loader consumes it below.
     var pendingReopen by remember { mutableStateOf<ServerTaskDraft?>(null) }
     // In-flight mutation per task id (#288): only that row's checkbox is
     // disabled while its request runs — the rest of the list, the top bar
@@ -871,8 +873,11 @@ internal fun TaskManagerScreen(
      * widget/alarm poke. Success clears the selection and leaves bulk
      * mode; failure keeps the selection for retry after the reload lands.
      * No toasts either way (#603): the swapped-in list is the record.
+     * Returns whether the batch was launched: the guards below can still
+     * drop it (over-cap, busy/empty), and callers with UI to dismiss must
+     * close only on true.
      */
-    fun runBulkOps(ops: List<BulkOp>) {
+    fun runBulkOps(ops: List<BulkOp>): Boolean {
         // Ops carry normalized ids (BulkOp trims at construction), so the
         // busy set keys exactly what the wire sends and the error names.
         val ids = ops.map { it.id }
@@ -885,7 +890,7 @@ internal fun TaskManagerScreen(
             runCatching {
                 Log.w("TaskManager", "bulk batch over cap: ${ops.size} > $MAX_BULK_SELECT")
             }
-            return
+            return false
         }
         // Re-checked here, not just on the button: recomposition lags a
         // frame, so two taps in the same frame would both pass a stale
@@ -895,7 +900,7 @@ internal fun TaskManagerScreen(
         // no sync runs, so the log is the only record.
         if (!bulkActionsLive(ids.toSet(), busyIds)) {
             runCatching { Log.w("TaskManager", "bulk batch dropped: selection busy or empty") }
-            return
+            return false
         }
         ids.forEach(::markBusy)
         // Pre-batch rows for the update-purge gate below: read now, not on
@@ -958,6 +963,10 @@ internal fun TaskManagerScreen(
                 ids.forEach(::unmarkBusy)
             }
         }
+        // Launched, not landed: true means the batch was handed to IO.
+        // Callers with UI to dismiss (the bulk move dialog) close only on
+        // true; failures still surface through the paths above.
+        return true
     }
 
     /**
@@ -988,10 +997,10 @@ internal fun TaskManagerScreen(
      * Unlike resolve, move applies to any state: re-dating a done row is a
      * legitimate edit, the same as the single-task dialog, which edits done
      * rows freely. */
-    fun doBulkMove(dueDate: String) {
-        if (dueDate.isBlank()) return
+    fun doBulkMove(dueDate: String): Boolean {
+        if (dueDate.isBlank()) return false
         val ids = bulkSelected.toList()
-        if (ids.isEmpty()) return
+        if (ids.isEmpty()) return false
         // Guarded like the single-task edit: each op carries the revision
         // the list showed, so a task changed elsewhere fails the whole batch
         // instead of overwriting. Complete/skip stay unguarded by design —
@@ -1010,10 +1019,9 @@ internal fun TaskManagerScreen(
             }
         }
         if (ops.isEmpty()) {
-            return
+            return false
         }
-        bulkMoveOpen = false
-        runBulkOps(ops)
+        return runBulkOps(ops)
     }
 
     /** One atomic bulk duplicate (#345): one canonical server copy each.
@@ -1692,13 +1700,14 @@ internal fun TaskManagerScreen(
     }
 
     // Bulk move (#345): one date picker for the whole selection. The
-    // dialog closes only when a batch actually goes out (see doBulkMove);
-    // otherwise it stays open so a stale selection reads as not-done.
+    // dialog closes only when a batch actually launches: an empty pick
+    // or a dropped guard keeps it open, so a close means something went
+    // out.
     if (bulkMoveOpen) {
         DueDatePickerDialog(
             initial = "",
             onConfirm = { date ->
-                doBulkMove(date)
+                if (doBulkMove(date)) bulkMoveOpen = false
             },
             onDismiss = { bulkMoveOpen = false },
         )
