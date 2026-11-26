@@ -210,29 +210,35 @@ class MainActivity : ComponentActivity() {
                     // reads as either "up to date" or a dead button.
                     val toasts = remember(scope) { ToastCenter(scope) }
                     // Manual tap while a check is in flight is a no-op (no
-                    // parallel checks). A fresh find opens Settings → About,
-                    // like the notification tap; a clean check stays put.
-                    // Failures toast — a silent stop would read as either
-                    // "up to date" or a dead button.
+                    // parallel checks).
                     fun checkUpdatesNow() {
                         if (updateChecking) return
                         updateChecking = true
                         scope.launch {
                             try {
-                                UpdateCheck.run(context, notify = false)
-                                    .onFailure { e ->
-                                        val fe = friendlyError(e.message ?: "")
-                                        toasts.toast(
-                                            "${fe.title} — ${fe.nextStep}",
-                                            ToastKind.Error,
-                                        )
-                                    }
-                                val rel = UpdateCheck.pendingRelease(context)
-                                // Never cleared in-session: a reinstall (the
-                                // only thing that clears a pending release)
-                                // restarts the process and re-reads fresh.
-                                if (rel != null) {
-                                    updateLabel = UpdateCheck.pendingUpdateLabel(rel)
+                                val result = UpdateCheck.run(context, notify = false)
+                                result.onFailure { e ->
+                                    val fe = friendlyError(e.message ?: "")
+                                    toasts.toast(
+                                        "${fe.title} — ${fe.nextStep}",
+                                        ToastKind.Error,
+                                    )
+                                }
+                                // Refresh from the snapshot on every completed
+                                // run: a clean fetch clears a stale pending
+                                // line in-session instead of waiting for the
+                                // next resume, and a failure keeps the old
+                                // label (the release is still pending — only
+                                // the re-check failed).
+                                if (result.isSuccess) {
+                                    updateLabel = UpdateCheck.pendingRelease(context)
+                                        ?.let(UpdateCheck::pendingUpdateLabel)
+                                }
+                                // Navigate only on a fresh find: a failed run
+                                // must not open About on a stale pending.
+                                if (result.isSuccess &&
+                                    UpdateCheck.pendingRelease(context) != null
+                                ) {
                                     go(Destination.Settings, SettingSection.About)
                                 }
                             } finally {

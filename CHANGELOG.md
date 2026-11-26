@@ -13,8 +13,9 @@ see GitHub Releases for older notes.
   the rail, icon-only with a dot) shows a sync button plus an
   "Update available :- x.y.z" line when a release pends. Tapping the
   line opens Settings → About; tapping the button re-checks and opens
-  About only when the check finds something new. Launch checks already
-  ran through the existing debounced path — this only surfaces them.
+  About only on a fresh find. Launch checks run through the existing
+  debounced path where due; the sidebar surfaces the last completed
+  check and converges on resume or manual check.
 
 ## [9.7.5]
 - **Settings hub drops the footer hint (#590).** The hub ends with the
