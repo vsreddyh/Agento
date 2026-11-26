@@ -35,7 +35,10 @@ value counts as empty and is left unchanged too.
 
 Name matching is exact and case-sensitive everywhere (`Salt` and `salt`
 are distinct rows that can coexist); only `list_*` search is a
-case-insensitive substring.
+case-insensitive substring. Writes trim names/notes/tags
+(whitespace-only counts as empty); renames to an existing name error.
+Unknown get/update targets return `ok:false`; deletes are idempotent
+(`ok:true` with `deleted:false`).
 
 Run: `go run ./cmd/cookbook` (stdio), needs `MONGODB_URI`/`MONGODB_DB`.
 
