@@ -24,11 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import androidx.work.WorkManager
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -202,22 +200,15 @@ class MainActivity : ComponentActivity() {
                     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                         refreshUpdateLabel()
                     }
-                    // Re-read when the launch-time worker lands: it completes
-                    // async after first paint, and the sidebar must show this
-                    // launch's find — not just the previous launch's snapshot
-                    // the resume refresh above would otherwise keep showing.
-                    // One-shot and best-effort: a missed landing converges on
-                    // the next resume or manual check.
-                    LaunchedEffect(Unit) {
-                        runCatching {
-                            WorkManager.getInstance(context)
-                                .getWorkInfosForUniqueWork(AgentoApp.UPDATE_STARTUP_WORK_NAME)
-                                .addListener(
-                                    { refreshUpdateLabel() },
-                                    ContextCompat.getMainExecutor(context),
-                                )
-                        }
-                    }
+                    // No one-shot worker-completion hook: WorkManager reports
+                    // completion through ListenableFuture, which is not on
+                    // this module's compile classpath, so first paint can
+                    // show the previous launch's snapshot until the next
+                    // resume or manual check converges it. Best-effort by
+                    // design — the check itself still runs on launch.
+                    // Update-check failure toasts (#591): a silent stop
+                    // reads as either "up to date" or a dead button.
+                    val toasts = remember(scope) { ToastCenter(scope) }
                     // Manual tap while a check is in flight is a no-op (no
                     // parallel checks). A fresh find opens Settings → About,
                     // like the notification tap; a clean check stays put.
@@ -250,9 +241,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     fun openUpdates() = go(Destination.Settings, SettingSection.About)
-                    // Update-check failure toasts (#591): a silent stop
-                    // reads as either "up to date" or a dead button.
-                    val toasts = remember(scope) { ToastCenter(scope) }
                     Box(modifier = Modifier.fillMaxSize()) {
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val wc = windowClassFor(maxWidth)
