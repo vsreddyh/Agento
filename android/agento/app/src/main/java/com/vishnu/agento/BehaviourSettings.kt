@@ -66,9 +66,6 @@ object BehaviourSettings {
     }
 
     /** User-facing cadence line; never asserts a constant (#355). */
-    fun syncCadenceLine(ctx: Context): String =
-        syncCadenceLine(syncIntervalHours(ctx), syncWifiOnly(ctx), syncPaused(ctx))
-
     fun syncCadenceLine(hours: Long, wifiOnly: Boolean, paused: Boolean): String {
         // Total like every pure helper here: coerce, so a direct caller
         // can never render "every 0 hours".
