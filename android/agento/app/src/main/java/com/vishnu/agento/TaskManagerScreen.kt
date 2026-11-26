@@ -1700,9 +1700,10 @@ internal fun TaskManagerScreen(
     }
 
     // Bulk move (#345): one date picker for the whole selection. The
-    // dialog closes only when a batch actually launches: an empty pick
-    // or a dropped guard keeps it open, so a close means something went
-    // out.
+    // dialog closes on confirm only when a batch actually launches: an
+    // empty pick or a dropped guard keeps it open, so a confirm-close
+    // means something went out. (Dismissal via cancel/back closes without
+    // launching, as usual.)
     if (bulkMoveOpen) {
         DueDatePickerDialog(
             initial = "",
