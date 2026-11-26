@@ -43,6 +43,14 @@ if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     exit 2
 fi
 
+# #584 TEMP-REMOVE (∃-Mail): refuse before the bin/ checks below, so a stale
+# bin/reports left over from before the removal can neither exec nor produce
+# a confusing stale-file error — remove it with `rm -f bin/reports`.
+if [[ "$name" == "reports" ]]; then
+    echo "mcp-run.sh: reports is #584 TEMP-REMOVEd (no inbox, no routes) — refusing to launch" >&2
+    exit 1
+fi
+
 bin="$REPO/bin/$name"
 if [[ ! -x "$bin" ]]; then
     echo "mcp-run.sh: $bin is not built — run ./scripts/build-mcps.sh" >&2
