@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.14.0]
+- **Speech settings return under Notifications (#615).** Settings →
+  Notifications gains a Speech card — voice picker, rate and pitch for
+  reminder speech (restored from the #596 removal, now owned by
+  Notifications instead of Behaviour). Customs apply at speak time;
+  engine defaults apply when nothing is picked, and imported backups
+  apply subject to the existing coercion.
+
 ## [9.13.0]
 - **Task Manager drops toasts and the Select button (#603).** No toast
   popups anywhere in Task Manager — the list updating in place plus the

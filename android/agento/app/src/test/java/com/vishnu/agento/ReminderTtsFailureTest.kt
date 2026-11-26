@@ -12,8 +12,8 @@ import org.junit.Test
  *
  * The engine itself needs Android (not under JVM test); what is pinned here
  * is the pure surface behind it — the lines, the locale rule, and the
- * stored-voice match. (The voice-picker hint went with the Speech card in
- * #596; reminder speech runs on engine defaults now.)
+ * stored-voice match. (The voice-picker hint lives with the Speech card in
+ * Settings → Notifications in #615.)
  */
 class ReminderTtsFailureTest {
 

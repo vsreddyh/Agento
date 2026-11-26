@@ -925,9 +925,9 @@ object ReminderTts {
                 }
                 continue
             }
-            // Reminder speech runs on engine defaults (#596): no stored
-            // voice/rate/pitch is ever applied, so an imported backup's
-            // customs stay inert and every utterance sounds the same.
+            // Stored voice/rate/pitch (#615, Notifications → Speech); always
+            // applied (including defaults) so the long-lived engine converges
+            // to prefs on every utterance.
             //
             // Toggle-off between dequeue and speak (#470 review): a disable
             // landing here would restart audio on the just-stopped engine.
@@ -944,11 +944,26 @@ object ReminderTts {
                 }
                 continue
             }
+            appCtxRef?.let {
+                applyStoredTtsSettings(eng, it)
+                runCatching {
+                    // Unknown (null) is not empty: a binder hiccup answering
+                    // null must not report "your saved voice is gone" for a
+                    // stored pick — the same null-vs-empty distinction the
+                    // voice picker draws (#434). Only a known voice list
+                    // that lacks the pick reports.
+                    val names = eng.voices?.map { v -> v.name } ?: return@runCatching
+                    if (isStoredVoiceMissing(names, BehaviourSettings.ttsVoice(it))) {
+                        reportFailure(next, TtsFailure.VOICE_MISSING)
+                    }
+                }
+            }
             // A throw (broken OEM binder state) counts like ERROR: clear and
             // advance. Uncaught here it would escape from onDone/onError's thread.
-            // Late liveness re-check (#470 review): a drop landing here would
-            // otherwise speak for a dead task and re-post its tag. Retracts
-            // the point's notice too.
+            // Late liveness re-check (#470 review): a drop landing inside
+            // the slow voice block above would otherwise speak for a dead
+            // task and re-post its tag. Retracts the point's notice too —
+            // the voice block may have just posted VOICE_MISSING for it.
             if (!confirmUtteranceLive(next.id)) {
                 appCtxRef?.let { cancelFailureFor(it, next.taskId, next.kindKey) }
                 continue

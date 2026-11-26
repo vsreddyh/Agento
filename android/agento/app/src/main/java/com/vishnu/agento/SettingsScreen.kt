@@ -12,10 +12,12 @@ package com.vishnu.agento
 import android.Manifest
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,7 +63,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 internal enum class SettingSection(val title: String) {
     Connection("Connection"),
     Health("Health sync"),
@@ -522,7 +527,7 @@ internal fun SettingsScreen(
                         WidgetSettingsSection(refreshTick = settingsRefresh)
                     }
                     SettingSection.Notifications -> {
-                        NotificationsSection()
+                        NotificationsSection(refreshTick = settingsRefresh)
                     }
                     SettingSection.Behaviour -> {
                         BehaviourSection(refreshTick = settingsRefresh)
@@ -625,19 +630,32 @@ internal fun SettingSection.hubIcon() = when (this) {
     SettingSection.About -> Icons.Filled.Info
 }
 
-/** Notification permission hub (#493).
+/** Notification permission hub (#493) + spoken-reminder voice (#615).
  *
  * Chat reply alerts are gone with chat. What remains are the reminder and
  * update notices, each with its own switch (reminders in Settings →
  * Behaviour, update notices next to their cadence there). This section
- * owns the one thing they share: the system-level grant.
+ * owns the one thing they share: the system-level grant — plus the
+ * Speech card (voice and delivery for reminder speech), which is
+ * notification delivery and lives here rather than in Behaviour.
  */
 @Composable
-internal fun NotificationsSection() {
+internal fun NotificationsSection(refreshTick: Int = 0) {
     val context = LocalContext.current
+    val appCtx = context.applicationContext
     var canPost by remember { mutableStateOf(UpdateCheck.canPostNotification(context)) }
     var status by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
+
+    var ttsVoice by remember(refreshTick) {
+        mutableStateOf(BehaviourSettings.ttsVoice(context))
+    }
+    var ttsRate by remember(refreshTick) {
+        mutableStateOf(BehaviourSettings.ttsRatePct(context))
+    }
+    var ttsPitch by remember(refreshTick) {
+        mutableStateOf(BehaviourSettings.ttsPitchPct(context))
+    }
 
     LaunchedEffect(Unit) {
         canPost = UpdateCheck.canPostNotification(context)
@@ -653,6 +671,39 @@ internal fun NotificationsSection() {
             "Allowed — reminders and update notices will post."
         } else {
             "Notifications are still blocked. Allow them for Agento in system Settings."
+        }
+    }
+
+    // Engine voices for the picker: a short-lived engine lists, then dies.
+    // Matched by name at speak time (Voice objects are engine-specific).
+    // Bounded: a broken engine answers null, never hangs the section.
+    // Null = unknown until the first listing answers: initializing to
+    // emptyList() would flash "no voices installed" on the first frame
+    // before the engine is ever queried (#434 review). listingVoices starts
+    // true for the same reason — the button reads "Loading…" until the
+    // effect below settles, instead of offering a reload of nothing.
+    var voices by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
+    // Unkeyed on purpose: keying on refreshTick would clear the list on
+    // every import before the effect below runs, so the settled-skip could
+    // never hit and every import would pay the binder spin unconditionally.
+    // `listedGen`/`voiceGen` drive freshness instead.
+    var listingVoices by remember { mutableStateOf(true) }
+    var voiceGen by remember { mutableIntStateOf(0) }
+    var listedGen by remember { mutableStateOf(-1) }
+    LaunchedEffect(refreshTick, voiceGen) {
+        val cur = voices
+        val settled = cur != null && cur.isNotEmpty() && listedGen == voiceGen &&
+            (ttsVoice.isEmpty() || cur.any { it.first == ttsVoice })
+        if (!settled) {
+            listingVoices = true
+            try {
+                // Null on timeout or engine failure: stays null so the hint
+                // below reads as engine failure, not "no voices" (#434).
+                voices = withTimeoutOrNull(10_000L) { listTtsVoices(appCtx) }
+            } finally {
+                listingVoices = false
+            }
+            listedGen = voiceGen
         }
     }
 
@@ -678,7 +729,155 @@ internal fun NotificationsSection() {
             if (failed) ErrorCard(raw = status) else HintLine(status)
         }
     }
+
+    SectionCard(
+        title = "Speech",
+        subtitle = "Voice and delivery for reminder speech.",
+    ) {
+        OptionMenu(
+            label = "Voice",
+            shown = voiceShown(ttsVoice, voices.orEmpty()),
+            options = listOf("" to "Engine default") + voices.orEmpty(),
+            onPick = {
+                BehaviourSettings.setTtsVoice(context, it)
+                ttsVoice = BehaviourSettings.ttsVoice(context)
+            },
+        )
+        voiceListHint(listingVoices, voices, ttsVoice)?.let { HintLine(it) }
+        TextButton(
+            onClick = {
+                // Eager: two rapid taps must not spin two engines before
+                // the effect flips the flag itself.
+                listingVoices = true
+                voiceGen++
+            },
+            enabled = !listingVoices,
+        ) {
+            Text(if (listingVoices) "Loading…" else "Reload voices")
+        }
+        OptionMenu(
+            label = "Rate",
+            shown = BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_RATE_PCT, ttsRate),
+            options = BehaviourSettings.TTS_PCT_OPTIONS.map {
+                it.toString() to BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_RATE_PCT, it)
+            },
+            onPick = {
+                it.toLongOrNull()?.let { p ->
+                    BehaviourSettings.setTtsRatePct(context, p)
+                    ttsRate = BehaviourSettings.ttsRatePct(context)
+                }
+            },
+        )
+        OptionMenu(
+            label = "Pitch",
+            shown = BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_PITCH_PCT, ttsPitch),
+            options = BehaviourSettings.TTS_PCT_OPTIONS.map {
+                it.toString() to BehaviourSettings.ttsPctLabelFor(BehaviourSettings.KEY_TTS_PITCH_PCT, it)
+            },
+            onPick = {
+                it.toLongOrNull()?.let { p ->
+                    BehaviourSettings.setTtsPitchPct(context, p)
+                    ttsPitch = BehaviourSettings.ttsPitchPct(context)
+                }
+            },
+        )
+        if (ttsRate !in BehaviourSettings.TTS_PCT_OPTIONS) {
+            HintLine("Kept from an import: this rate isn't offered above, but it still applies.")
+        }
+        if (ttsPitch !in BehaviourSettings.TTS_PCT_OPTIONS) {
+            HintLine("Kept from an import: this pitch isn't offered above, but it still applies.")
+        }
+    }
 }
+
+private fun voiceShown(saved: String, voices: List<Pair<String, String>>): String {
+    if (saved.isEmpty()) return "Engine default"
+    return voices.firstOrNull { it.first == saved }?.second ?: saved
+}
+
+/**
+ * Voice-picker hint (#434): a dead engine (null) reads as an engine failure
+ * with a retry, distinct from an engine that genuinely offers no voices
+ * (empty) and from a stored pick the engine no longer offers. Null while a
+ * listing is in flight (the button reads "Loading…" instead).
+ */
+internal fun voiceListHint(
+    listing: Boolean,
+    voices: List<Pair<String, String>>?,
+    savedVoice: String,
+): String? {
+    if (listing) return null
+    if (voices == null) {
+        if (savedVoice.isEmpty()) {
+            return "The speech engine isn't answering — voice choices are unavailable until it responds."
+        }
+        return "The speech engine isn't answering — the pick is kept, and Reload voices retries it."
+    }
+    if (voices.isEmpty()) {
+        if (savedVoice.isEmpty()) {
+            return "This engine offers no voices — install a voice pack, or leave Engine default."
+        }
+        return "This engine offers no voices — the pick is kept, and Reload voices retries it."
+    }
+    if (savedVoice.isNotEmpty() && voices.none { it.first == savedVoice }) {
+        return "Kept from an import: this engine no longer offers that voice, but the pick is kept."
+    }
+    return null
+}
+
+/** Lists engine voices as (name to display) pairs, then shuts down.
+ * Never throws and never hangs the caller: a constructor failure or an
+ * init failure answers null (pair with the timeout in the caller, which
+ * cancels and resumes null via invokeOnCancellation's shutdown) — an
+ * engine that inits fine but offers nothing answers an empty list, so
+ * callers can tell "dead engine" apart from "no voices" (#434). */
+private suspend fun listTtsVoices(appCtx: Context): List<Pair<String, String>>? =
+    suspendCancellableCoroutine { cont ->
+        val ref = java.util.concurrent.atomic.AtomicReference<TextToSpeech?>(null)
+        val statusRef = java.util.concurrent.atomic.AtomicInteger(Int.MIN_VALUE)
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finish(tts: TextToSpeech, status: Int) {
+            if (!done.compareAndSet(false, true)) return
+            val out = if (status == TextToSpeech.SUCCESS) {
+                runCatching {
+                    // Stable sort key (locale tag + name), localized label:
+                    // sorting by displayName would reorder the picker on
+                    // every system-language change.
+                    tts.voices.orEmpty()
+                        .sortedWith(compareBy({ it.locale?.toString().orEmpty() }, { it.name }))
+                        .map { v ->
+                            val loc = v.locale?.displayName?.takeIf { it.isNotBlank() }
+                            v.name to if (loc != null) "$loc — ${v.name}" else v.name
+                        }
+                }.getOrNull()
+            } else {
+                null
+            }
+            runCatching { tts.shutdown() }
+            if (cont.isActive) cont.resume(out)
+        }
+        // Synchronous-init OEMs run the callback inside the constructor,
+        // before `ref` is assigned (see ReminderTts): the callback then only
+        // stashes its status, and the tail below finishes explicitly. The
+        // CAS keeps a racing async callback from finishing twice.
+        //
+        // A constructor that throws (missing/broken engine) answers null
+        // instead of escaping the LaunchedEffect with `cont` unresumed.
+        val tts = runCatching {
+            TextToSpeech(appCtx) { status ->
+                statusRef.set(status)
+                ref.get()?.let { finish(it, status) }
+            }
+        }.getOrNull()
+        if (tts == null) {
+            if (done.compareAndSet(false, true) && cont.isActive) cont.resume(null)
+            return@suspendCancellableCoroutine
+        }
+        ref.set(tts)
+        val s = statusRef.get()
+        if (s != Int.MIN_VALUE) finish(tts, s)
+        cont.invokeOnCancellation { runCatching { ref.get()?.shutdown() } }
+    }
 
 /** Backup size past which the export status warns: the stored tasks file
  * rides wholesale, so large restores are slow. */

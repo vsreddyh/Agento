@@ -1,6 +1,7 @@
 package com.vishnu.agento
 
 import android.content.Context
+import android.speech.tts.TextToSpeech
 import androidx.core.content.edit
 import androidx.work.WorkManager
 
@@ -188,27 +189,46 @@ object BehaviourSettings {
         }
     }
 
-    // ── TTS voice / rate / pitch (retired UI, #596) ─────────────────────
-    // The Speech card is gone: reminder speech runs on engine defaults and
-    // no stored voice/rate/pitch is ever applied. The keys stay (backed up
-    // for old-backup import and downgrades), and the reads stay so stored
-    // values keep round-tripping — but nothing writes them any more.
+    // ── TTS voice / rate / pitch (Notifications → Speech, #615) ─────────
+    // Voice and delivery for reminder speech. The Speech card lives in
+    // Settings → Notifications (not Behaviour): speech is notification
+    // delivery. Keys are backed up for old-backup import and downgrades.
     const val KEY_TTS_VOICE = "tts_voice"
     const val KEY_TTS_RATE_PCT = "tts_rate_pct"
     const val KEY_TTS_PITCH_PCT = "tts_pitch_pct"
     const val DEFAULT_TTS_PCT = 100L
+    /** Engine range is roughly half to double speed; the picker offers steps. */
+    val TTS_PCT_OPTIONS = listOf(50L, 75L, 100L, 125L, 150L, 200L)
 
     /** Voice name, or "" for the engine default (today's behaviour).
-     * Trimmed, so a hand-imported padded name still round-trips the way
-     * the old setter stored it. */
+     * Trimmed like the setter, so a hand-imported padded name still
+     * matches the engine's voice instead of missing silently. */
     fun ttsVoice(ctx: Context): String =
         prefs(ctx).getString(KEY_TTS_VOICE, "").orEmpty().trim()
+
+    fun ttsRate(ctx: Context): Float =
+        ttsRatePct(ctx) / 100f
+
+    fun ttsPitch(ctx: Context): Float =
+        ttsPitchPct(ctx) / 100f
 
     fun ttsRatePct(ctx: Context): Long =
         coerceImport(KEY_TTS_RATE_PCT, prefs(ctx).getLong(KEY_TTS_RATE_PCT, DEFAULT_TTS_PCT))
 
     fun ttsPitchPct(ctx: Context): Long =
         coerceImport(KEY_TTS_PITCH_PCT, prefs(ctx).getLong(KEY_TTS_PITCH_PCT, DEFAULT_TTS_PCT))
+
+    fun setTtsVoice(ctx: Context, name: String) {
+        prefs(ctx).edit { putString(KEY_TTS_VOICE, name.trim()) }
+    }
+
+    fun setTtsRatePct(ctx: Context, pct: Long) {
+        prefs(ctx).edit { putLong(KEY_TTS_RATE_PCT, pct.coerceIn(50L, 200L)) }
+    }
+
+    fun setTtsPitchPct(ctx: Context, pct: Long) {
+        prefs(ctx).edit { putLong(KEY_TTS_PITCH_PCT, pct.coerceIn(50L, 200L)) }
+    }
 
     /** Keyed label: rate and pitch share 50..200 today, but the coercion
      * rides the caller's key so a future range split can't silently
@@ -314,10 +334,10 @@ object BehaviourSettings {
      * Health sync cadence (interval, Wi-Fi-only, pause) is not one of them:
      * it lives in Settings → Health sync (#588), shows its own values in
      * its own card, and a paused sync reads Paused (not Ready) on the Health
-     * hub row instead of counting here. Retired TTS customs are not counted
-     * either: the Speech card is gone (#596) and stored voice/rate/pitch
-     * are never applied, so a stale custom must not flip this row with no
-     * card to clear it from. */
+     * hub row instead of counting here. TTS customs are not counted
+     * either: the Speech card lives in Settings → Notifications (#615),
+     * so a stored voice/rate/pitch must not flip the Behaviour row with no
+     * card there to clear it from — like the widget interval (#595). */
     fun customCount(ctx: Context): Int = customCount(
         taskMinutes = taskSyncIntervalMinutes(ctx),
         leadMinutes = reminderLeadMinutes(ctx),
@@ -335,8 +355,9 @@ object BehaviourSettings {
      * The widget interval is deliberately NOT one of them: it lives in
      * Settings → Widget (#595), and counting it here would flip the
      * Behaviour hub row for a knob that lives elsewhere — like the
-     * per-widget display settings, it is backed up but uncounted. Retired
-     * TTS customs are excluded for the same reason (#596): no card owns
+     * per-widget display settings, it is backed up but uncounted. TTS
+     * customs are excluded for the same reason (#615): the Speech card
+     * lives in Settings → Notifications now, so no Behaviour card owns
      * them any more. */
     fun customCount(
         taskMinutes: Long,
@@ -405,4 +426,56 @@ object BehaviourSettings {
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(AgentoApp.PREFS_NAME, Context.MODE_PRIVATE)
+}
+
+/**
+ * Applies the stored TTS voice/rate/pitch to a live engine (#615). Every
+ * call converges the engine toward prefs — including defaults — because
+ * the engine is long-lived (created once in `ensureEngine`, never shut
+ * down on idle) and `setSpeechRate`/`setPitch`/`setVoice` persist on the
+ * instance. Skipping defaults would leave a reverted knob on its old
+ * custom (rate 150 → back to 100 still speaking fast).
+ * The voice is matched by name against THIS engine's voices (Voice objects
+ * are engine-specific). Null (unknown — binder hiccup) leaves the engine
+ * alone, mirroring the VOICE_MISSING report below it; only a known non-null
+ * list lacking the pick — or an empty pick (Engine default) — resets to
+ * the engine default voice so the VOICE_MISSING line ("used the default
+ * voice") describes what played. A null `defaultVoice` falls back to
+ * re-setting the device locale (the init path's reset), best-effort.
+ * Never throws (OEM binder breakage is a warning, like the callers
+ * already treat it).
+ */
+fun applyStoredTtsSettings(tts: TextToSpeech, appCtx: Context) {
+    // Compared as stored Long pcts, never as floats: exact. Always set
+    // (including 1.0f) so a revert converges the long-lived engine back.
+    runCatching {
+        val pct = BehaviourSettings.ttsRatePct(appCtx)
+        tts.setSpeechRate(pct / 100f)
+    }
+    runCatching {
+        val pct = BehaviourSettings.ttsPitchPct(appCtx)
+        tts.setPitch(pct / 100f)
+    }
+    runCatching {
+        val want = BehaviourSettings.ttsVoice(appCtx)
+        // Unknown, not missing: a null binder answer must not flip one
+        // utterance to default with no VOICE_MISSING, then flip back.
+        val voices = tts.voices ?: return@runCatching
+        if (want.isNotEmpty()) {
+            val match = voices.firstOrNull { it.name == want }
+            if (match != null) {
+                tts.voice = match
+                return@runCatching
+            }
+        }
+        // Empty pick or known-missing custom: reset to default. Null
+        // defaultVoice is explicit (not a silent no-op): fall back to the
+        // device locale, the same reset the init path applies.
+        val def = tts.defaultVoice
+        if (def != null) {
+            tts.voice = def
+        } else {
+            tts.language = java.util.Locale.getDefault()
+        }
+    }
 }
