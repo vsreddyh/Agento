@@ -5,7 +5,29 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
 )
+
+func TestTruncateBytes(t *testing.T) {
+	if got := truncateBytes("abcdef", 4); got != "abcd" {
+		t.Fatalf("got %q", got)
+	}
+	if got := truncateBytes("abc", 10); got != "abc" {
+		t.Fatalf("got %q", got)
+	}
+	// "é" is 2 bytes: a 3-byte cap must back off to 2, not store half a rune.
+	if got := truncateBytes("aé", 2); got != "a" {
+		t.Fatalf("got %q", got)
+	}
+	if got := truncateBytes("aé", 3); got != "aé" {
+		t.Fatalf("got %q", got)
+	}
+	// 4-byte emoji: cap inside the rune backs off to the boundary.
+	if got := truncateBytes("ab😀", 5); got != "ab" {
+		t.Fatalf("got %q", got)
+	}
+}
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
@@ -30,7 +52,7 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
-func TestIngredientRecipeRoundTrip(t *testing.T) {
+func TestIngredientCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -39,7 +61,6 @@ func TestIngredientRecipeRoundTrip(t *testing.T) {
 		t.Fatal("expected empty-name error")
 	}
 	// Idempotent: clear leftovers from interrupted runs.
-	_, _, _ = s.DeleteRecipe(ctx, "gotest-soup")
 	_, _ = s.DeleteIngredient(ctx, "gotest-salt")
 	if _, err := s.AddIngredient(ctx, "gotest-salt", "test"); err != nil {
 		t.Fatalf("add: %v", err)
@@ -51,34 +72,27 @@ func TestIngredientRecipeRoundTrip(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %v %v", rows, err)
 	}
-	macros := map[string]any{
-		"kcal": 100.0, "protein_g": 5.0, "carbs_g": 10.0, "fat_g": 2.0, "fiber_g": 1.0}
-	r, err := s.AddRecipe(ctx, "gotest-soup", map[string]any{"gotest-salt": "2 spoons"},
-		macros, 2, "", []string{"test"}, "mcp")
-	if err != nil {
-		t.Fatalf("add recipe: %v", err)
+	got, err := s.GetIngredient(ctx, "gotest-salt")
+	if err != nil || got == nil || got["note"] != "test" {
+		t.Fatalf("got %v %v", got, err)
 	}
-	if _, err := s.DeleteIngredient(ctx, "gotest-salt"); err == nil {
-		t.Fatal("expected ref-in-use error")
+	if _, err := s.GetIngredient(ctx, "gotest-missing"); err != nil {
+		t.Fatalf("get unknown should return nil, nil: %v", err)
 	}
-	sc, err := s.ScaleRecipe(ctx, "gotest-soup", 4)
-	if err != nil || sc["factor"] != 2.0 {
-		t.Fatalf("got %v %v", sc, err)
+	upd, err := s.UpdateIngredient(ctx, "gotest-salt", map[string]any{"note": "flaky"})
+	if err != nil || upd == nil || upd["note"] != "flaky" {
+		t.Fatalf("got %v %v", upd, err)
 	}
-	c, err := s.LogCook(ctx, "gotest-soup", "extra stir", "", "")
-	if err != nil {
-		t.Fatalf("log cook: %v", err)
+	if upd["updatedAt"] == nil {
+		t.Fatal("expected updatedAt to be stamped")
 	}
-	if c["recipe_name"] != "gotest-soup" {
-		t.Fatalf("got %v", c)
+	// Notes trim like names: padding is stripped, whitespace-only reads as empty.
+	upd, err = s.UpdateIngredient(ctx, "gotest-salt", map[string]any{"note": "  padded  "})
+	if err != nil || upd == nil || upd["note"] != "padded" {
+		t.Fatalf("got %v %v", upd, err)
 	}
-	cooks, err := s.ListCooks(ctx, "gotest-soup", 10)
-	if err != nil || len(cooks) != 1 {
-		t.Fatalf("got %v %v", cooks, err)
-	}
-	deleted, logs, err := s.DeleteRecipe(ctx, idstr(r["_id"]))
-	if err != nil || !deleted || logs != 1 {
-		t.Fatalf("got %v %v %v", deleted, logs, err)
+	if _, err := s.UpdateIngredient(ctx, "gotest-salt", map[string]any{"note": "   "}); err == nil {
+		t.Fatal("expected nothing-to-update for whitespace-only note")
 	}
 	done, err := s.DeleteIngredient(ctx, "gotest-salt")
 	if err != nil || !done {
@@ -86,12 +100,117 @@ func TestIngredientRecipeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMacroValidation(t *testing.T) {
-	if _, err := checkMacros(map[string]any{"kcal": 1}); err == nil {
-		t.Fatal("expected missing-macro error")
+func TestRecipeCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := s.AddRecipe(ctx, "", "", nil); err == nil {
+		t.Fatal("expected empty-name error")
 	}
-	if _, err := checkMacros(map[string]any{
-		"kcal": -1.0, "protein_g": 5.0, "carbs_g": 10.0, "fat_g": 2.0, "fiber_g": 1.0}); err == nil {
-		t.Fatal("expected negative error")
+	// Idempotent: clear leftovers from interrupted runs.
+	_, _ = s.DeleteRecipe(ctx, "gotest-soup")
+	r, err := s.AddRecipe(ctx, "gotest-soup", "weeknight", []string{"test"})
+	if err != nil {
+		t.Fatalf("add recipe: %v", err)
+	}
+	if r["note"] != "weeknight" {
+		t.Fatalf("got %v", r)
+	}
+	if _, err := s.AddRecipe(ctx, "gotest-soup", "", nil); err == nil {
+		t.Fatal("expected duplicate error")
+	}
+	rows, err := s.ListRecipes(ctx, "gotest-s", "test")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	rows, err = s.ListRecipes(ctx, "", "no-such-tag")
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	upd, err := s.UpdateRecipe(ctx, "gotest-soup", map[string]any{"tags": []any{"test", "fast"}})
+	if err != nil || upd == nil {
+		t.Fatalf("got %v %v", upd, err)
+	}
+	// Whitespace-only tags read as empty and are left alone, never wiping the list.
+	if _, err := s.UpdateRecipe(ctx, "gotest-soup", map[string]any{"tags": []any{"", "   "}}); err == nil {
+		t.Fatal("expected nothing-to-update for whitespace-only tags")
+	}
+	got, err := s.GetRecipe(ctx, "gotest-soup")
+	if err != nil || got == nil {
+		t.Fatalf("got %v %v", got, err)
+	}
+	deleted, err := s.DeleteRecipe(ctx, idstr(r["_id"]))
+	if err != nil || !deleted {
+		t.Fatalf("got %v %v", deleted, err)
+	}
+}
+
+func TestDeleteUnknownReadsNotDeleted(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Deletes are idempotent across both books: unknown targets read back
+	// as not-deleted, while gets/updates report them as ok:false.
+	done, err := s.DeleteIngredient(ctx, "gotest-no-such-ingredient")
+	if err != nil || done {
+		t.Fatalf("got %v %v", done, err)
+	}
+	done, err = s.DeleteRecipe(ctx, "gotest-no-such-recipe")
+	if err != nil || done {
+		t.Fatalf("got %v %v", done, err)
+	}
+}
+
+func TestEmptyPatchIsRejected(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, _ = s.DeleteIngredient(ctx, "gotest-patch")
+	if _, err := s.AddIngredient(ctx, "gotest-patch", "keep"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	defer func() { _, _ = s.DeleteIngredient(ctx, "gotest-patch") }()
+	if _, err := s.UpdateIngredient(ctx, "gotest-patch", map[string]any{}); err == nil {
+		t.Fatal("expected nothing-to-update error")
+	}
+	// Whitespace-only renames are dropped, which also leaves nothing.
+	if _, err := s.UpdateIngredient(ctx, "gotest-patch", map[string]any{"name": "   "}); err == nil {
+		t.Fatal("expected nothing-to-update error")
+	}
+	got, err := s.GetIngredient(ctx, "gotest-patch")
+	if err != nil || got == nil || got["name"] != "gotest-patch" {
+		t.Fatalf("got %v %v", got, err)
+	}
+}
+
+func TestLegacyRecipeFieldsStrippedOnRead(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, _ = s.DeleteRecipe(ctx, "gotest-legacy")
+	legacy := bson.M{"name": "gotest-legacy", "servings": 2.0,
+		"kcal": 100.0, "protein_g": 5.0, "carbs_g": 1.0, "fat_g": 2.0, "fiber_g": 3.0,
+		"quantities": []bson.M{{"ingredient_id": "abc", "name": "salt", "qty": "2"}},
+		"source":     "mcp", "note": "old", "tags": []string{"t"}}
+	if _, err := s.recipes.InsertOne(ctx, legacy); err != nil {
+		t.Fatalf("insert legacy: %v", err)
+	}
+	defer func() { _, _ = s.DeleteRecipe(ctx, "gotest-legacy") }()
+	r, err := s.GetRecipe(ctx, "gotest-legacy")
+	if err != nil || r == nil {
+		t.Fatalf("got %v %v", r, err)
+	}
+	for _, k := range []string{"servings", "quantities", "source",
+		"kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"} {
+		if _, ok := r[k]; ok {
+			t.Fatalf("legacy key %q still returned: %v", k, r)
+		}
+	}
+	if r["note"] != "old" {
+		t.Fatalf("got %v", r)
 	}
 }

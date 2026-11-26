@@ -1,37 +1,47 @@
 # Cookbook MCP — `mcps/cookbook/`
 
-Reusable recipe library. Permanent data — never pruned.
+Recipe + ingredient books with notes. Permanent data — never pruned.
 
-Collections: `cookbook_ingredients` (name unique + optional note),
-`cookbook_recipes` (dish name unique, per-serving `kcal/protein_g/carbs_g/fat_g/fiber_g`,
-`quantities: [{ingredient_id, name, qty}]` where `qty` is free text like `"2 spoons"`),
-`cookbook_cook_log` (`recipe_id + date + cooking_note + aftertaste_note`).
-
-Flow: `add_ingredient` once → `add_recipe` once → `log_cook` per attempt →
-`update_recipe` only when the user approves. `scale_recipe` is pure math.
+Collections: `cookbook_ingredients` (name unique + note ≤2000 bytes,
+longer notes truncated on a UTF-8 boundary), `cookbook_recipes` (dish name
+unique + note ≤2000 bytes, truncated, + `tags[]`, at most 20 tags of 40
+bytes each, over-cap truncated). No quantities, servings, macros, or cook
+log (#600); `cookbook_cook_log` stays in Atlas untouched but nothing reads
+it. Deletes are idempotent (unknown names return `ok:true` with
+`deleted:false`); lists cap at 500 ingredients / 200 recipes in name
+order with no truncated flag (a full page may hide more — narrow with
+search), and the recipe tag filter is an exact, case-sensitive match.
 
 ## Which arguments are required
 
-The tool descriptions are the contract; this is the short form of it, because three of
-these are not guessable from the argument names.
+The tool descriptions are the contract; this is the short form of it.
 
 | Tool | Required | Optional (and what absent means) |
 |---|---|---|
 | `add_ingredient` | `name` | `note` |
-| `list_ingredients` | — | `search` |
-| `delete_ingredient` | `name_or_id` | — |
-| `add_recipe` | `name`, `ingredient_qtys`, `per_serving` | `servings` (0 → 1), `note`, `tags` |
+| `get_ingredient` | `name_or_id` | — |
+| `list_ingredients` | — | `search` (up to 500, name order) |
+| `update_ingredient` | `name_or_id` | `name`, `note` — **empty args are left alone** |
+| `delete_ingredient` | `name_or_id` | — (idempotent: unknown → `ok:true` `deleted:false`) |
+| `add_recipe` | `name` | `note`, `tags` |
 | `get_recipe` | `name_or_id` | — |
-| `list_recipes` | — | `search`, `tag`, `ingredient` |
-| `update_recipe` | `name_or_id` | everything else — **empty/zero args are left alone** |
-| `delete_recipe` | `name_or_id` | — |
-| `scale_recipe` | `name_or_id`, `servings` | — (nothing defaults `servings` here) |
-| `log_cook` | `recipe` | `cooking_note`, `aftertaste_note`, `date` (absent → today) |
-| `list_cooks` | — | `recipe`, `limit` (0 → 50) |
+| `list_recipes` | — | `search`, `tag` (up to 200, name order; tag exact + case-sensitive) |
+| `update_recipe` | `name_or_id` | `name`, `note`, `tags` — **empty args are left alone**; `tags` replaces the whole list, it is not merged |
+| `delete_recipe` | `name_or_id` | — (idempotent: unknown → `ok:true` `deleted:false`) |
 
-`update_recipe` is patch-shaped and is the only way a recipe changes after a cook, so
-send only the keys you mean to change — a resend of fields you read earlier is how an
-approved edit becomes a whole-record overwrite.
+`update_*` are patch-shaped: only sent keys change; omitted keys are left
+alone — resending a previously-read value is harmless. A whitespace-only
+value counts as empty and is left unchanged too.
+
+Name matching is exact and case-sensitive everywhere (`Salt` and `salt`
+are distinct rows that can coexist); only `list_*` search is a
+case-insensitive substring. Writes trim names/notes/tags
+(whitespace-only counts as empty); renames to an existing name error.
+Unknown get/update targets return `ok:false`; deletes are idempotent
+(`ok:true` with `deleted:false`).
 
 Run: `go run ./cmd/cookbook` (stdio), needs `MONGODB_URI`/`MONGODB_DB`.
-In-container binary: `/usr/local/bin/cookbook`.
+
+The binary is built by `scripts/build-mcps.sh` into `bin/cookbook` and
+registered in `opencode.json` (`mcp.servers["cookbook"]`), which is what
+T3/opencode executes from the repo root.

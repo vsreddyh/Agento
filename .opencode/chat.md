@@ -49,11 +49,11 @@ instead of round-tripping one at a time.
   response carries at most one table. `list_budgets` is unwindowed
   (optional `month_from`/`month_to` only). Budgets live in `money_budgets`
   keyed by (category, month) as dated versions.
-- **cookbook** (11, permanent): `add_ingredient`, `add_recipe`, `log_cook`
-  (`cooking_note` = what differed, `aftertaste_note` = what to improve),
-  `update_recipe`, `scale_recipe` (pure arithmetic),
-  `list_ingredients`, `list_recipes`, `get_recipe`, `list_cooks`,
-  `delete_ingredient`, `delete_recipe`.
+- **cookbook** (10, permanent): `add_ingredient`, `get_ingredient`,
+  `list_ingredients`, `update_ingredient`, `delete_ingredient`,
+  `add_recipe`, `get_recipe`, `list_recipes`, `update_recipe`,
+  `delete_recipe` — recipe + ingredient books with notes (no quantities,
+  servings, macros or cook log).
 - **health-check** (9): `log_meal` takes user-supplied macros only —
   `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, never estimate, ask
   for whatever is missing. At least one item, each with a non-blank name;
@@ -115,7 +115,7 @@ tool; flagged rows TTL away 10 days after flagging, unflagged rows are
 permanent), `archive_account`, `delete_budget`
 (dry-runs by default like `delete_transactions`), `delete_category`
 (dry-runs by default too; with references it needs `reassign_to`),
-`delete_recipe` (also removes its cook logs), `delete_ingredient`,
+`delete_recipe`, `delete_ingredient`,
 `delete_task`, `delete_project`. There is no `delete_cook`; say so instead
 of reaching for it. Money writes also prompt: `create_account`,
 `create_budget` and `update_budget` (like `log_transaction` and
@@ -133,7 +133,7 @@ the `*archive_account*` pattern) even though it restores rather than
 destroys.
 
 Reads (`list_*`, `get_*`, `query_*`, `daily_summary`,
-`get_balances`, `scale_recipe`, `money_*`, `budget_status`) need no confirmation. `fix_last_meal` updates
+`get_balances`, `money_*`, `budget_status`) need no confirmation. `fix_last_meal` updates
 the most recently *recorded* meal in place (insertion order, not date
 order — meals sort by `createdAt`, so after a backfill the fix hits the
 backfilled meal, not the date-latest one): do it when the user just asked

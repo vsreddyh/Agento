@@ -8,11 +8,11 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// Nothing in this file carried `omitempty`, so all twenty-five fields across eleven tools
-// were advertised as required. The two shapes of optionality here are the handler
-// defaulting a zero value (`add_recipe.servings` → 1, `list_cooks.limit` → 50) and the
-// query tools taking filters their own descriptions call optional — and a required filter
-// makes "show me everything" a call that cannot be made.
+// Ten tools, two books (#600): every tool takes its record (add_*) or an
+// identifier (everything else). The only optionality left is the query
+// filters — a required filter makes "show me everything" a call that
+// cannot be made — plus the patch-shaped updates ("Empty/zero args are
+// left alone").
 func TestToolInputSchemaRequired(t *testing.T) {
 	cases := []struct {
 		tool     string
@@ -20,24 +20,18 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		required []string
 	}{
 		{"add_ingredient", addIngredientInput{}, []string{"name"}},
+		{"get_ingredient", getIngredientInput{}, []string{"name_or_id"}},
 		{"list_ingredients", listIngredientsInput{}, nil},
+		{"update_ingredient", updateIngredientInput{}, []string{"name_or_id"}},
 		{"delete_ingredient", deleteIngredientInput{}, []string{"name_or_id"}},
-		// store.AddRecipe rejects an empty name, an empty ingredient list, and a
-		// per_serving missing any macro key. servings is NOT in this list: the handler
-		// turns 0 into 1.
-		{"add_recipe", addRecipeInput{}, []string{"name", "ingredient_qtys", "per_serving"}},
+		// store.AddRecipe rejects an empty name; note and tags are optional.
+		{"add_recipe", addRecipeInput{}, []string{"name"}},
 		{"get_recipe", getRecipeInput{}, []string{"name_or_id"}},
-		// "optionally filtered by name substring, tag, or ingredient name"
+		// "optionally filtered by name substring or tag"
 		{"list_recipes", listRecipesInput{}, nil},
 		// Patch-shaped: "Empty/zero args are left alone".
 		{"update_recipe", updateRecipeInput{}, []string{"name_or_id"}},
 		{"delete_recipe", deleteRecipeInput{}, []string{"name_or_id"}},
-		// store.ScaleRecipe rejects servings <= 0 and, unlike add_recipe, nothing
-		// defaults it first.
-		{"scale_recipe", scaleRecipeInput{}, []string{"name_or_id", "servings"}},
-		// store.LogCook fails on an unknown recipe; an empty date becomes today.
-		{"log_cook", logCookInput{}, []string{"recipe"}},
-		{"list_cooks", listCooksInput{}, nil},
 	}
 
 	for _, c := range cases {
@@ -73,22 +67,20 @@ func TestToolInputSchemaRequired(t *testing.T) {
 // `list_recipes.tag` has no way to ask for recipes by tag at all.
 func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 	optional := map[string][]string{
-		"add_ingredient":   {"note"},
-		"list_ingredients": {"search"},
-		"add_recipe":       {"servings", "note", "tags"},
-		"list_recipes":     {"search", "tag", "ingredient"},
-		"update_recipe":    {"name", "servings", "per_serving", "ingredient_qtys", "note", "tags"},
-		"log_cook":         {"cooking_note", "aftertaste_note", "date"},
-		"list_cooks":       {"recipe", "limit"},
+		"add_ingredient":    {"note"},
+		"list_ingredients":  {"search"},
+		"update_ingredient": {"name", "note"},
+		"add_recipe":        {"note", "tags"},
+		"list_recipes":      {"search", "tag"},
+		"update_recipe":     {"name", "note", "tags"},
 	}
 	inputs := map[string]any{
-		"add_ingredient":   addIngredientInput{},
-		"list_ingredients": listIngredientsInput{},
-		"add_recipe":       addRecipeInput{},
-		"list_recipes":     listRecipesInput{},
-		"update_recipe":    updateRecipeInput{},
-		"log_cook":         logCookInput{},
-		"list_cooks":       listCooksInput{},
+		"add_ingredient":    addIngredientInput{},
+		"list_ingredients":  listIngredientsInput{},
+		"update_ingredient": updateIngredientInput{},
+		"add_recipe":        addRecipeInput{},
+		"list_recipes":      listRecipesInput{},
+		"update_recipe":     updateRecipeInput{},
 	}
 
 	for tool, names := range optional {
