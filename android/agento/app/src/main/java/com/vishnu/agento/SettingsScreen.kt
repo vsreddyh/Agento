@@ -1204,9 +1204,9 @@ internal fun AppUpdateSection() {
 }
 
 /** Task-widget placement settings (Settings → Widget, #592): one static
- * entry plus Configure. Settings configures the first placement; extra
- * home-screen widgets keep rendering with their saved settings (they just
- * have no UI here any more).
+ * entry plus Configure. Settings configures the lowest-numbered placement;
+ * extra home-screen widgets keep rendering with their saved settings (they
+ * just have no UI here any more).
  */
 @Composable
 internal fun WidgetSettingsSection() {
@@ -1218,8 +1218,11 @@ internal fun WidgetSettingsSection() {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
     // Filtered against each id's own provider info: the voice widget's
     // placement must never be listed (or configured) as a task widget.
+    // Sorted ascending so "the first" placement is stable across reboots
+    // and re-adds: raw host order can flip, which would retarget Configure
+    // silently (#592 review).
     val widgetIds = remember(context, tick) {
-        taskWidgetIds(context).toList()
+        taskWidgetIds(context).sorted()
     }
     val canPin = remember(context) {
         AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported
@@ -1255,18 +1258,25 @@ internal fun WidgetSettingsSection() {
                 ) { Text("Add the widget") }
             }
         } else {
-            // One static entry bound to the first placement id (#592):
+            // One static entry bound to the lowest placement id (#592):
             // the section configures exactly one widget.
             val first = widgetIds.first()
-            // A previously set custom title prefixes the entry; fresh
-            // placements just say Tasks.
-            val custom = remember(context, tick, first) {
-                widgetTitle(TaskWidget.settingsFor(context, first).title, "")
+            // Custom title prefixes a static "Tasks"; a non-default view
+            // is appended so the entry names the placement it configures
+            // even without a custom title.
+            val entryLabel = remember(context, tick, first) {
+                val s = TaskWidget.settingsFor(context, first)
+                val custom = widgetTitle(s.title, "")
+                buildString {
+                    if (custom.isNotEmpty()) append("$custom · ")
+                    append("Tasks")
+                    if (s.view != TaskWidgetView.Open) append(" · ${s.view.title}")
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        if (custom.isEmpty()) "Tasks" else "$custom · Tasks",
+                        entryLabel,
                         style = MaterialTheme.typography.bodyLarge,
                     )
                 }
@@ -1282,7 +1292,7 @@ internal fun WidgetSettingsSection() {
             }
             if (widgetIds.size > 1) {
                 Text(
-                    "Settings configures the first placement; other widgets keep their saved settings.",
+                    "Settings configures the lowest-numbered placement; others keep their saved settings.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

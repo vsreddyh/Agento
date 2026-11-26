@@ -11,9 +11,10 @@ see GitHub Releases for older notes.
 ## [9.9.0]
 - **Widget section trimmed to one static entry (#592).** The section is
   now just "Widget": a single "Tasks" entry (custom title prefix kept
-  when set) plus Configure — no summary line, no per-widget list.
-  Settings configures the first placement; extra widgets keep their
-  existing settings.
+  when set, view appended past Open) plus Configure — no summary line,
+  no per-widget list. Settings configures the lowest-numbered placement
+  id, so Configure cannot retarget silently; extra widgets keep rendering
+  with their saved settings.
 - **Configure dialog cleaned up (#592).** Gone: the live preview and its
   size switch, the Title group and "Show the title" switch (the title is
   always on, falling back to the view name), and the density choice

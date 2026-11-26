@@ -380,7 +380,8 @@ internal fun ServerTask.dueTimePart(): String {
  * (#592): the due date and the due time are independent switches, so a
  * placement can drop either half without touching repeat or parallel.
  * Dropping the date keeps the "22:00 → 23:00" range; dropping the time
- * keeps "Today". Either half missing hides the whole due chunk.
+ * keeps "Today". When the task has no usable date at all, the whole due
+ * chunk is hidden even if a time string is stored.
  */
 internal fun widgetRowLine(
     task: ServerTask,
