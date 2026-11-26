@@ -1,3 +1,5 @@
+/* #584 TEMP-REMOVE (∃-Mail): entire file commented out, not deleted.
+ * Restore = uncomment this block. No DB changes; Atlas `reports` data untouched.
 @file:OptIn(ExperimentalMaterial3Api::class)
 
 package com.vishnu.agento
@@ -469,3 +471,4 @@ private fun MathView(html: String, display: Boolean) {
         modifier = Modifier.fillMaxWidth().heightIn(min = 24.dp),
     )
 }
+*/

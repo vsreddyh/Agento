@@ -1,3 +1,5 @@
+/* #584 TEMP-REMOVE (∃-Mail): entire file commented out, not deleted.
+ * Restore = uncomment this block. No DB changes; Atlas `reports` data untouched.
 package com.vishnu.agento
 
 import org.json.JSONObject
@@ -169,3 +171,4 @@ class ReportsApiTest {
         assertEquals("", s.title)
     }
 }
+*/

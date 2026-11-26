@@ -4,7 +4,8 @@
 //	              the ttl_deleted_at index removes them 10 days after flagging)
 //	health-check  hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
 //	cookbook      permanent — no-op
-//	reports       read+unstarred pruned after 7 days; unread/starred NEVER touched
+//	#584 TEMP-REMOVE (∃-Mail): reports read+unstarred pruning disabled,
+//	stored reports left as-is; restore on revert
 //	tasks         reconciled, never pruned: completed structured repeats with
 //	              no successor are REPORTED (#180); plus task_mutations pruned
 //	              after 90 days
@@ -65,33 +66,35 @@ func run() int {
 		fmt.Printf("%shealth-check: would remove %d from %s older than %s\n", prefix, n, c, foodCutoff)
 	}
 
-	// ∃-Mail inbox (#365): conditional 7-day retention. A report is deleted
-	// only when age(createdAt) > 7d AND read AND NOT starred — unread stays
-	// regardless of age (never delete what the user has not seen), starred
-	// stays regardless of age (the star is an explicit keep). createdAt is a
-	// BSON DateTime, so the cutoff is a DateTime like task_mutations, not a
-	// date string like health.
-	reportsCutoff := primitive.NewDateTimeFromTime(today.AddDate(0, 0, -7))
-	reportsFilt := bson.M{
-		"createdAt": bson.M{"$lt": reportsCutoff},
-		"read":      true,
-		"starred":   false,
-	}
-	reportsN, err := d.Collection("reports").CountDocuments(ctx, reportsFilt)
-	if err != nil {
-		fmt.Printf("[retention] reports count failed: %v\n", err)
-		return 1
-	}
-	if !*dry {
-		if _, err := d.Collection("reports").DeleteMany(ctx, reportsFilt); err != nil {
-			fmt.Printf("[retention] reports prune failed: %v\n", err)
-			return 1
-		}
-	}
-	if reportsN > 0 {
-		fmt.Printf("%sreports: would remove %d read+unstarred older than %s\n",
-			prefix, reportsN, reportsCutoff.Time().UTC().Format("2006-01-02"))
-	}
+	// #584 TEMP-REMOVE (∃-Mail): retention pruning disabled. Stored report
+	// documents are left as-is; restore by uncommenting this block.
+	// // ∃-Mail inbox (#365): conditional 7-day retention. A report is deleted
+	// // only when age(createdAt) > 7d AND read AND NOT starred — unread stays
+	// // regardless of age (never delete what the user has not seen), starred
+	// // stays regardless of age (the star is an explicit keep). createdAt is a
+	// // BSON DateTime, so the cutoff is a DateTime like task_mutations, not a
+	// // date string like health.
+	// reportsCutoff := primitive.NewDateTimeFromTime(today.AddDate(0, 0, -7))
+	// reportsFilt := bson.M{
+	// 	"createdAt": bson.M{"$lt": reportsCutoff},
+	// 	"read":      true,
+	// 	"starred":   false,
+	// }
+	// reportsN, err := d.Collection("reports").CountDocuments(ctx, reportsFilt)
+	// if err != nil {
+	// 	fmt.Printf("[retention] reports count failed: %v\n", err)
+	// 	return 1
+	// }
+	// if !*dry {
+	// 	if _, err := d.Collection("reports").DeleteMany(ctx, reportsFilt); err != nil {
+	// 		fmt.Printf("[retention] reports prune failed: %v\n", err)
+	// 		return 1
+	// 	}
+	// }
+	// if reportsN > 0 {
+	// 	fmt.Printf("%sreports: would remove %d read+unstarred older than %s\n",
+	// 		prefix, reportsN, reportsCutoff.Time().UTC().Format("2006-01-02"))
+	// }
 
 	// Tasks: reconcile recurrence, do not prune (#180). This is the only thing in the
 	// stack that notices a repeating task has stopped recurring. Rollover happens as

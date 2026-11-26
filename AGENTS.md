@@ -26,23 +26,24 @@
 
 ## What this project is
 
-A **thin Android client** — Tasks/Projects, Task Manager, Files, ∃-Mail, Health
+A **thin Android client** — Tasks/Projects, Task Manager, Files<!-- #584 TEMP-REMOVE (∃-Mail): , ∃-Mail -->, Health
 Sync, reminders/widgets — plus the small Go backend it talks to: `health-api`
-(sync, tasks, projects, files, reports), an nginx proxy, and a one-shot retention
+(sync, tasks, projects, files<!-- #584 TEMP-REMOVE (∃-Mail): , reports -->), an nginx proxy, and a one-shot retention
 job. **The live stack is fully containerized** — one compose file
 (`docker/docker-compose.yml`) — against remote MongoDB Atlas. Development runs
 the SAME single compose file against Atlas. There is no agent service in it.
 
 The agent runs **on the host in T3/opencode**, configured by `opencode.json`
-and `.opencode/`, with the six kept MCP servers built from this repo
+and `.opencode/`, with the five kept MCP servers built from this repo
 (`./scripts/build-mcps.sh` → `bin/<server>`) reading the same Atlas database,
 plus one external Gmail server (`workspace-mcp`: read + label changes) from a repo-local
-Python venv.
+Python venv. (#584 TEMP-REMOVE (∃-Mail): the `reports` server returns by revert.)
 
+<!-- #584 TEMP-REMOVE (∃-Mail): architecture diagram below omits the reports MCP; restore `,reports`. -->
 ```
 Agento (Android) ──► proxy (:8080 compose default — APP_PORT remaps)
                        └─► /api/* + /health → health-api (:8001 compose default — HEALTH_HOST_PORT remaps)
-T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check,reports}
+T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,project-manager,miser-money,cookbook,health-check}
                        └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv (Gmail: read + labels)
 MongoDB (Atlas)  •  retention (one-shot container)
 workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired story/resumes checkouts, unmanaged)
@@ -66,7 +67,7 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
    rows vanish from ledger reads at once; the `ttl_deleted_at` index removes them 10
    days after flagging; unflagged rows are permanent);
    health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
-   permanent; reports (∃-Mail) prunes read+unstarred >7d (never unread/starred);
+   permanent;<!-- #584 TEMP-REMOVE (∃-Mail): reports pruning disabled, data left as-is — reports (∃-Mail) pruned read+unstarred >7d (never unread/starred); -->
    task_mutations prunes entries >90d.
    It also **reconciles** tasks: completed structured repeats with no successor
    are REPORTED (#180), never repaired — rollover is a side effect of `Complete`,
@@ -82,8 +83,8 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
    `${VAR}` silently falls back empty/default). The Hermes `gateway` service,
    `test/Dockerfile`, `docker/pi/`, `cmd/pi-gateway/` and the tracked
    `gateway/` config are gone; `gateway/` on disk is untracked runtime state only.
-- Agent: `opencode.json` wires the six kept MCP servers (`task-manager`,
-  `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) to
+- Agent: `opencode.json` wires the five kept MCP servers (`task-manager`,
+  `project-manager`, `miser-money`, `cookbook`, `health-check`) to
   `./scripts/mcp-run.sh <server>`, which loads the two Mongo variables from the
   root `.env` and execs `bin/<server>`; `.opencode/chat.md` is the
   persona loaded through `instructions`, and `.opencode/skills/` holds the
@@ -93,10 +94,11 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   themselves and `TestMCPServersLoadTheirOwnEnv` pins that. Anything T3 did
   inherit is still passed through, so start it from a clean shell if that
   matters.
-- Google Workspace (Gmail), #515: the seventh entry, `workspace-mcp`, is the
+- Google Workspace (Gmail), #515: the sixth entry, `workspace-mcp`, is the
   upstream Python server (`taylorwilsdon/google_workspace_mcp`, pinned in
   `scripts/build-workspace-mcp.sh`) in the git-ignored `.workspace-mcp/venv/`,
   launched by `scripts/workspace-mcp.sh` with
+  <!-- #584 TEMP-REMOVE (∃-Mail): was the seventh entry with reports; restore on revert. -->
   `--single-user --permissions gmail:organize --tool-tier complete` and
   `--disabled-tools` covering send/draft/label-management/filters. The verified
   tool list is eight read/utility tools plus **exactly two write tools**,
@@ -180,7 +182,8 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   The servers' configuration comes from the root `.env`, not from T3's own
   environment: T3 is a systemd unit with an empty env (`WorkingDirectory=%h`, no
   `EnvironmentFile`), so a `{env:VAR}` in `opencode.json` expanded to `""` and
-  the six Go servers exited with "MONGODB_URI is not set" (workspace-mcp
+  the six Go servers of the time (five since #584 TEMP-REMOVEd ∃-Mail)
+  exited with "MONGODB_URI is not set" (workspace-mcp
   reported its Google credentials unset). That is the bug the launchers fixed:
   they fill from `.env` when the environment has no value, so an empty `{env:}`
   no longer stops a covered key — which is exactly why `{env:}` stays banned

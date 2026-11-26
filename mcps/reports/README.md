@@ -1,5 +1,9 @@
 # Reports MCP — `mcps/reports/`
+<!-- #584 TEMP-REMOVE (∃-Mail): the writer is unlisted, unbuilt and
+unlaunched; the contract below returns on revert. Stored `reports`
+documents are untouched, retention pruning is disabled. -->
 
+<!-- #584 TEMP-REMOVE (∃-Mail): contract body hidden until revert.
 The ∃-Mail writer: agents file reports the user reads in the app's inbox.
 Read-only inbox — not email: no compose, no reply, no thread, no send, no
 external addresses.
@@ -39,3 +43,4 @@ content is immutable — re-filing a corrected report is a new report.
   filtering in v1.
 - Over-cap input is still stored, but the response carries
   `truncated: {title, body_md, source}` naming which fields lost bytes.
+-->

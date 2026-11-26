@@ -22,6 +22,7 @@ Deep dive into every component of the Agento stack. For a fast start, refer to [
 
 The stack runs a health/domain API, an nginx proxy and a scheduled retention job — **fully in containers**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](docker/docker-compose.yml)). The agent no longer runs in this stack: T3/opencode runs on the host (#494).
 
+<!-- #584 TEMP-REMOVE (∃-Mail): architecture diagram below omits the reports MCP; restore `,reports`. -->
 ```
                                         Remote MongoDB Atlas
                                                   ▲
@@ -30,7 +31,7 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
                                                           /health ──┘
   T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,
                               project-manager,miser-money,cookbook,
-                              health-check,reports} ──► MongoDB Atlas
+                              health-check} ──► MongoDB Atlas
                        └─► scripts/workspace-mcp.sh (venv, Gmail: read + labels)
 
   Both launchers read the root .env themselves (T3 supplies no configuration
@@ -39,7 +40,7 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
   Retention ─────────────► one-shot container (cron 03:00 / on start)
 ```
 
-- **health-api**: Go service (`cmd/health-api/main.go`, net/http) on container port `:8000` (compose default host publish `:8001`, `HEALTH_HOST_PORT` remaps the host side). Serves sync, tasks, projects, files and ∃-Mail reports, and writes them to MongoDB.
+- **health-api**: Go service (`cmd/health-api/main.go`, net/http) on container port `:8000` (compose default host publish `:8001`, `HEALTH_HOST_PORT` remaps the host side). Serves sync, tasks, projects and files<!-- #584 TEMP-REMOVE (∃-Mail): , and ∃-Mail reports -->, and writes them to MongoDB.
 - **proxy**: nginx single entrypoint (`:8080` compose default, `APP_PORT` remaps; `docker/proxy/nginx.conf`) — routes `/api/*` and `/health` → health-api. The app's one Server URL points here.
 - **retention**: one-shot retention job executing the `retention` Go binary (`cmd/retention/main.go`) via cron or on stack start.
 - **Development Isolation**: all database operations go to the Atlas `MONGODB_URI` — point dev checkouts at a separate database to keep prod data untouched (see [Development Mode Isolation](#development-mode-isolation) for which of an exported variable or `.env` wins, per entry point).
@@ -50,9 +51,9 @@ The stack runs a health/domain API, an nginx proxy and a scheduled retention job
 
 The agent runs on the host, not in a container. T3 discovers `opencode.json` by walking up from its working directory, and the relative `./scripts/...` commands in `mcp.servers` resolve against that same directory, so **the repo root must be the cwd** — start T3 anywhere else and no server starts. Once a launcher is running, its own `.env`/`bin/` lookup no longer depends on the cwd: each one resolves the checkout from its own path.
 
-- Build the servers with `./scripts/build-mcps.sh` (static `CGO_ENABLED=0` binaries into git-ignored `bin/`). Kept servers: `task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`. A launcher refuses to exec a stale `bin/<server>` — one older than the non-test files under `cmd/<server>`, its own `internal/<store>` package, or the shared `internal/*` libs that server imports (exact per-server mapping in `scripts/mcp-run.sh`, pinned by `TestMCPWatchSetsMatchGoDeps`), or `go.mod`/`go.sum` (git HEAD backs the mtime check with the same test exclusion, so deletions trip it but test-only commits don't — merge-brought deletions included via `-m --full-history`) — naming the newer file and the rebuild command: pulling and restarting T3 does **not** rebuild `bin/`, so a stale server keeps serving its old tool list (#557). Rebuild after every merge touching those paths, then restart T3.
+- Build the servers with `./scripts/build-mcps.sh` (static `CGO_ENABLED=0` binaries into git-ignored `bin/`). Kept servers: `task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`<!-- #584 TEMP-REMOVE (∃-Mail): , `reports` -->. A launcher refuses to exec a stale `bin/<server>` — one older than the non-test files under `cmd/<server>`, its own `internal/<store>` package, or the shared `internal/*` libs that server imports (exact per-server mapping in `scripts/mcp-run.sh`, pinned by `TestMCPWatchSetsMatchGoDeps`), or `go.mod`/`go.sum` (git HEAD backs the mtime check with the same test exclusion, so deletions trip it but test-only commits don't — merge-brought deletions included via `-m --full-history`) — naming the newer file and the rebuild command: pulling and restarting T3 does **not** rebuild `bin/`, so a stale server keeps serving its old tool list (#557). Rebuild after every merge touching those paths, then restart T3.
 - One server is not built from this repo: `workspace-mcp` (Google Workspace/Gmail: read + label changes) runs from a git-ignored Python venv via [`scripts/workspace-mcp.sh`](scripts/workspace-mcp.sh). Install it with `./scripts/build-workspace-mcp.sh` — or `./scripts/hermes.sh init`, which does it too. See [Google Workspace (Gmail)](#google-workspace-gmail) below.
-- **Each server loads its own environment from the root `.env`** — T3 passes no configuration of its own (it runs from an empty systemd unit; anything it inherited still passes through the launchers, which is why a `.env` value only fills a gap). Every `mcp.servers` entry runs a launcher ([`scripts/mcp-run.sh <server>`](scripts/mcp-run.sh) for the six Go servers, `scripts/workspace-mcp.sh` for Gmail), and the launcher fills only the keys its server needs (`MONGODB_URI`, `MONGODB_DB`; the three Google credentials plus `WORKSPACE_MCP_PORT` and `WORKSPACE_MCP_CREDENTIALS_DIR` for Gmail) through the shared loader in `scripts/lib/common.sh`: parsed, never `source .env` (a pasted Atlas URI carries `&` query params and a secret may hold `$`/backticks, which bare sourcing mangles or executes). In the launchers a variable already exported in the environment wins, so pointing a session at a throwaway Atlas database works — note that `./scripts/hermes.sh`, `./scripts/retention.sh` and `./scripts/sysmon.sh` are the other way round (they load with `load_root_env`, where the file wins), so exporting a throwaway `MONGODB_URI` does not redirect compose, a retention run or sysmon. `.env` holds more than the servers need — `PASSWORD`, the provider key and the compose ports stay there too; the launchers simply do not read them, so a server only sees such a value if it was inherited from whatever started T3 (start T3 from a clean shell if that matters). Do **not** reintroduce `{env:VAR}` in `opencode.json`: under T3's empty systemd environment it expands to `""`, which a launcher then treats as unset and fills anyway, so it buys nothing for the keys a launcher covers — and for a key no launcher covers the empty value is indistinguishable from unset: a required key fails loudly, an optional one silently takes its default (`MONGODB_DB`→`hermes` in the Go servers, the callback port→`8000` in the launcher), which is the quiet failure to watch for. `TestMCPServersLoadTheirOwnEnv` pins this.
+- **Each server loads its own environment from the root `.env`** — T3 passes no configuration of its own (it runs from an empty systemd unit; anything it inherited still passes through the launchers, which is why a `.env` value only fills a gap). Every `mcp.servers` entry runs a launcher ([`scripts/mcp-run.sh <server>`](scripts/mcp-run.sh) for the five Go servers, `scripts/workspace-mcp.sh` for Gmail), and the launcher fills only the keys its server needs (`MONGODB_URI`, `MONGODB_DB`; the three Google credentials plus `WORKSPACE_MCP_PORT` and `WORKSPACE_MCP_CREDENTIALS_DIR` for Gmail) through the shared loader in `scripts/lib/common.sh`: parsed, never `source .env` (a pasted Atlas URI carries `&` query params and a secret may hold `$`/backticks, which bare sourcing mangles or executes). In the launchers a variable already exported in the environment wins, so pointing a session at a throwaway Atlas database works — note that `./scripts/hermes.sh`, `./scripts/retention.sh` and `./scripts/sysmon.sh` are the other way round (they load with `load_root_env`, where the file wins), so exporting a throwaway `MONGODB_URI` does not redirect compose, a retention run or sysmon. `.env` holds more than the servers need — `PASSWORD`, the provider key and the compose ports stay there too; the launchers simply do not read them, so a server only sees such a value if it was inherited from whatever started T3 (start T3 from a clean shell if that matters). Do **not** reintroduce `{env:VAR}` in `opencode.json`: under T3's empty systemd environment it expands to `""`, which a launcher then treats as unset and fills anyway, so it buys nothing for the keys a launcher covers — and for a key no launcher covers the empty value is indistinguishable from unset: a required key fails loudly, an optional one silently takes its default (`MONGODB_DB`→`hermes` in the Go servers, the callback port→`8000` in the launcher), which is the quiet failure to watch for. `TestMCPServersLoadTheirOwnEnv` pins this.
 
 - No secret is written into git; `.env` stays git-ignored.
 - The persona and shared skills live in `.opencode/chat.md` and `.opencode/skills/`; `opencode.json`'s `instructions` entry loads the former.
@@ -83,7 +84,7 @@ What that means in practice: **mark read/unread** (`remove_label_ids: ["UNREAD"]
 
 So the disabled list is load-bearing, not belt-and-braces: `TestWorkspaceMCPWriteSurfaceStaysNarrow` pins it for exactly that reason.
 
-Both write tools are `ask`-gated in `opencode.json` (`*modify_gmail_message_labels*`, `*batch_modify_gmail_message_labels*`), so every mail mutation prompts with its scope before it runs. `TestWorkspaceMCPWriteSurfaceStaysNarrow` (`opencode_perm_test.go`) pins the flags, the disabled list and the two gated tools; widening the surface means editing the launcher, the `ask` rules and that test in the same change. This is a real mailbox surface, unrelated to the app's own ∃-Mail (`reports`).
+Both write tools are `ask`-gated in `opencode.json` (`*modify_gmail_message_labels*`, `*batch_modify_gmail_message_labels*`), so every mail mutation prompts with its scope before it runs. `TestWorkspaceMCPWriteSurfaceStaysNarrow` (`opencode_perm_test.go`) pins the flags, the disabled list and the two gated tools; widening the surface means editing the launcher, the `ask` rules and that test in the same change. This is a real mailbox surface.
 
 **Where the credentials live**
 
@@ -196,7 +197,9 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | `task_mutations` | Task-manager | The change log (#176): one row per mutation — `op`, `task_id`, `source`, `detail`, `at` — from **both** writers. Served read-only as `GET /api/tasks/mutations?task_id=&op=&since=&limit=` and as the `task_history` MCP tool (#350). It outlives its subject on purpose (done tasks are TTL-deleted after 3 days). Pruned at 90 days. Indexed `{task_id, at}` and `{at, _id}` |
 | `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Testing\|Paused\|Done), `note`, `position` (manual board order), `snoozeAt` (RFC3339 instant, Paused only, must be strictly >60s ahead), `snoozeFiredAt` (the snooze instant the server ticker fired), `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab. health-api wakes a due snooze to Ongoing and clears `snoozeAt` one minute early; no client schedules it |
 | `counters` | Project-manager | Single doc `_id: "projects_position"` holding `seq`, the atomic source of `projects.position` (`findOneAndUpdate` `$inc`, seeded from the max in `EnsureSchema`). Inspect with `mongo get counters`; back up and restore with `projects` — a counter restored behind the max reissues an existing position |
+<!-- #584 TEMP-REMOVE (∃-Mail): reports collection row.
 | `reports` | Reports (∃-Mail, #365) | `title`, `body_md` (markdown with `$..$`/`$$..$$` LaTeX, compiled server-side on read), `source`, `read`, `starred`, `createdAt` — **7-day conditional retention**: pruned when `createdAt < today - 7d AND read AND NOT starred` |
+-->
 
 ### Database Helper CLI
 Operators use the `mongo` Go CLI (`cmd/mongo/main.go`) directly:
@@ -225,7 +228,9 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 | `hc_days` | > 30 days | Pruned when `date < today - 30d` |
 | `hc_weight` | Permanent | **Never pruned** |
 | `cookbook_*` | Permanent | **Never pruned** |
+<!-- #584 TEMP-REMOVE (∃-Mail): reports retention row.
 | `reports` (#365) | > 7 days, conditional | Pruned when `createdAt < today - 7d AND read AND NOT starred` — unread/starred never pruned |
+-->
 | `task_mutations` | > 90 days | Pruned when `at < today - 90d` — the task audit log (#176) |
 | `tasks_changes` | Permanent | **Never pruned** — one single-document counter, not a log (#178) |
 | `tasks` (repeats) | n/a | **Reconciled, not pruned**: completed structured repeats with no successor are reported (#180) |
@@ -274,7 +279,9 @@ The custom Android app (`android/agento/`) uses ONE Server URL + Password — th
 | `/api/tasks`, `/api/tasks/batch`, `/api/tasks/mutations`, `/api/tasks/changes` | Task CRUD, batch, audit log and change counter |
 | `/api/projects`, `POST /api/projects/reorder`, `POST /api/projects/move` | Project board CRUD + manual order (full-section rewrite, single-row move). health-api also runs the snooze ticker: every 30s it flips due `Paused` rows (`snoozeAt - 1m`) to `Ongoing` and clears `snoozeAt`, so the transition is server-owned and shared by every client |
 | `/api/files`, `/api/files/upload`, `/api/files/download`, `DELETE /api/files/delete?path=<relative file>` | The Files tab shelf over `exports/` (delete removes one file; folders, escapes and missing rows are named refusals) |
+<!-- #584 TEMP-REMOVE (∃-Mail): reports route row.
 | `/api/reports` | ∃-Mail inbox (markdown + LaTeX) |
+-->
 | `/api/money/balances`, `/api/money/transactions` | Money read surface for the app (derived per-account `balance_paise` + total; paged `amount_paise` rows, `order=asc` oldest-first default, `desc` newest-first). `start`/`end` (YYYY-MM-DD) are required; `limit` defaults 100, clamped to 500 (an explicit `limit=0` is rejected — unlike MCP); optional `account` (name or id hex, matches either side of a transfer); `total` counts the window (not the balances total, which has no date cap); page with `offset` (default 0) = `next_offset` until `truncated` is false (`next_offset` is null when done — never send `offset=null`) |
 | `/health`, `/health/` | Liveness probe (unauthenticated) |
 
@@ -329,7 +336,7 @@ Upgrading with an existing database (e.g. a separate dev database): deleting the
 
 ### Adding an MCP server
 1. Add `cmd/<name>/` and `internal/<name>/` (stdio MCP server, Mongo-backed).
-2. Add the server to `SERVERS` in `scripts/build-mcps.sh`, and to `mcp.servers` in `opencode.json` as `"command": ["./scripts/mcp-run.sh", "<name>"]` — **no `environment` block**: `mcp-run.sh` fills `MONGODB_URI`/`MONGODB_DB` from the root `.env`. A server that needs any other key gets its own launcher script (the way `scripts/workspace-mcp.sh` does it), not a wider list in the shared `mcp-run.sh` — `TestMCPServersLoadTheirOwnEnv` pins that list to exactly those two keys, because one wrapper serves all six servers. `{env:VAR}` expands to `""` under T3's empty systemd environment and the same test rejects it.
+2. Add the server to `SERVERS` in `scripts/build-mcps.sh`, and to `mcp.servers` in `opencode.json` as `"command": ["./scripts/mcp-run.sh", "<name>"]` — **no `environment` block**: `mcp-run.sh` fills `MONGODB_URI`/`MONGODB_DB` from the root `.env`. A server that needs any other key gets its own launcher script (the way `scripts/workspace-mcp.sh` does it), not a wider list in the shared `mcp-run.sh` — `TestMCPServersLoadTheirOwnEnv` pins that list to exactly those two keys, because one wrapper serves all five servers. `{env:VAR}` expands to `""` under T3's empty systemd environment and the same test rejects it.
 3. Run `./scripts/build-mcps.sh`, then confirm with `opencode mcp list` from the repo root.
 
 An external (non-Go) server follows the `workspace-mcp` pattern instead: an installer script that pins the upstream version into a git-ignored directory, a launcher script named in `mcp.servers`, its credentials in the root `.env`, and — if it can write anything — `ask` rules plus a pin like `TestWorkspaceMCPWriteSurfaceStaysNarrow`.

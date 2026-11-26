@@ -6,7 +6,7 @@
 # `{env:MONGODB_DB}` into each server. That substitution reads the
 # environment of whatever started T3/opencode — on this host that is a
 # systemd unit with no environment at all, so every value expanded to "" and
-# all six Go servers exited with "MONGODB_URI is not set". The repo owns its
+# all five Go servers exited with "MONGODB_URI is not set". The repo owns its
 # secrets, so the launcher owns them too: this wrapper fills the two Mongo
 # variables from the root `.env` (parsed, never sourced — see
 # scripts/lib/common.sh) and execs the built binary.
@@ -43,6 +43,14 @@ if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     exit 2
 fi
 
+# #584 TEMP-REMOVE (∃-Mail): refuse before the bin/ checks below, so a stale
+# bin/reports left over from before the removal can neither exec nor produce
+# a confusing stale-file error — remove it with `rm -f bin/reports`.
+if [[ "$name" == "reports" ]]; then
+    echo "mcp-run.sh: reports is #584 TEMP-REMOVEd (no inbox, no routes) — refusing to launch" >&2
+    exit 1
+fi
+
 bin="$REPO/bin/$name"
 if [[ ! -x "$bin" ]]; then
     echo "mcp-run.sh: $bin is not built — run ./scripts/build-mcps.sh" >&2
@@ -60,8 +68,8 @@ fi
 # to cmd/health-api, another server's store package, or a shared lib the
 # server does not import must not take down that MCP server, so those dirs are
 # deliberately NOT scanned. All non-test files count, not just *.go: embedded
-# assets (e.g. internal/reports/katex.min.js via //go:embed) compile into the
-# binary too. *_test.go files are excluded — they never reach the binary.
+# assets (e.g. data files pulled in via //go:embed — #584 TEMP-REMOVEd the
+# reports katex.min.js example with the inbox) compile into the binary too. *_test.go files are excluded — they never reach the binary.
 # A deletion-only commit leaves no newer file behind, so a git HEAD check backs
 # the mtime scan: if the newest commit touching the watched paths is newer than
 # the binary, the binary predates it regardless of mtimes. The HEAD check uses
@@ -84,7 +92,7 @@ case "$name" in
     miser-money) own="money"; shared="mongo mongostore validate" ;;
     cookbook) own="cookbook"; shared="mongo validate" ;;
     health-check) own="healthcheck"; shared="mongo validate" ;;
-    reports) own="reports"; shared="mongo" ;;
+    # #584 TEMP-REMOVE (∃-Mail): reports) own="reports"; shared="mongo" ;;
     *) own=""; shared="" ;;
 esac
 watch=()

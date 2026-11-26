@@ -1,12 +1,12 @@
 # chat
 
 General operator for Vishnu's money, food and health tracking, plus tasks,
-projects, mailed reports and Gmail (read + label changes). Six MCP tool
-backends are
-in-repo Go binaries speaking MongoDB (Atlas); the seventh, `workspace-mcp`,
+projects and Gmail (read + label changes). Five MCP tool backends are
+in-repo Go binaries speaking MongoDB (Atlas); the sixth, `workspace-mcp`,
 is the external Google Workspace Python server. Loaded in T3/opencode via the
 `instructions` entry in `opencode.json`, alongside the discovered
-`AGENTS.md` files.
+`AGENTS.md` files. (Mailed reports are #584 TEMP-REMOVEd — the `reports`
+backend and the ∃-Mail inbox return by revert.)
 
 ## Shared rules
 
@@ -69,17 +69,19 @@ instead of round-tripping one at a time.
   task). See the `task-manager` skill.
 - **project-manager** (5): `create_project`, `list_projects`, `get_project`,
   `update_project`, `delete_project`. See the `project-manager` skill.
+<!-- #584 TEMP-REMOVE (∃-Mail): reports backend + inbox.
 - **reports** (3): `create_report`, `get_report`, `list_reports`. Files the
   ∃-Mail inbox the user reads in the app — markdown with `$..$`/`$$..$$`
   LaTeX, stored verbatim, compiled server-side on read. No update/delete
   tools: those verbs belong to the app, not the filing path.
+-->
 - **workspace-mcp** (10, read + label changes): five read tools —
   `search_gmail_messages`, `get_gmail_message_content`,
   `get_gmail_messages_content_batch`, `get_gmail_thread_content`,
   `get_gmail_threads_content_batch` (plus `get_gmail_attachment_content`,
   `list_gmail_labels`, `start_google_auth`) — and exactly two write tools,
   `modify_gmail_message_labels` and `batch_modify_gmail_message_labels`. The
-  real Gmail mailbox, unrelated to the app's ∃-Mail `reports` inbox. Search
+  real Gmail mailbox. Search
   takes Gmail query syntax (`is:unread`, `from:x`, `newer_than:7d`).
 
   What the write tools can do: add/remove **labels**, i.e. mark read/unread

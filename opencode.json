@@ -19,10 +19,6 @@
         "type": "local",
         "command": ["./scripts/mcp-run.sh", "project-manager"]
       },
-      "reports": {
-        "type": "local",
-        "command": ["./scripts/mcp-run.sh", "reports"]
-      },
       "task-manager": {
         "type": "local",
         "command": ["./scripts/mcp-run.sh", "task-manager"]

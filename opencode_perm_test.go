@@ -482,8 +482,9 @@ func TestWorkspaceMCPWriteSurfaceStaysNarrow(t *testing.T) {
 // (2026-11-14; workspace-mcp reported its Google credentials unset). The repo
 // owns its secrets, so the launcher owns them too:
 //
-//   - each of the six Go servers runs ./scripts/mcp-run.sh <server>, which
+//   - each of the five Go servers runs ./scripts/mcp-run.sh <server>, which
 //     fills MONGODB_URI/MONGODB_DB from the root .env and execs bin/<server>
+//     (#584 TEMP-REMOVE (∃-Mail): was six with reports)
 //   - workspace-mcp runs ./scripts/workspace-mcp.sh, which reads the three
 //     Google credentials plus the callback-port/token-cache overrides the
 //     same way (pinned by TestWorkspaceMCPWriteSurfaceStaysNarrow)
@@ -519,9 +520,9 @@ func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 		"health-check":    {"./scripts/mcp-run.sh", "health-check"},
 		"miser-money":     {"./scripts/mcp-run.sh", "miser-money"},
 		"project-manager": {"./scripts/mcp-run.sh", "project-manager"},
-		"reports":         {"./scripts/mcp-run.sh", "reports"},
-		"task-manager":    {"./scripts/mcp-run.sh", "task-manager"},
-		"workspace-mcp":   {"./scripts/workspace-mcp.sh"},
+		// #584 TEMP-REMOVE (∃-Mail): "reports": {"./scripts/mcp-run.sh", "reports"},
+		"task-manager":  {"./scripts/mcp-run.sh", "task-manager"},
+		"workspace-mcp": {"./scripts/workspace-mcp.sh"},
 	}
 	if len(cfg.MCP.Servers) != len(want) {
 		t.Errorf("opencode.json registers %d servers, want %d — a new server needs a .env-reading launcher here too", len(cfg.MCP.Servers), len(want))
@@ -559,7 +560,8 @@ func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 
 	// Exact token lists, not substrings: `load_root_env_fill MONGODB_URI
 	// MONGODB_DB PASSWORD` contains the substring but hands every one of the
-	// six servers a key none of them needs, so widening either launcher must
+	// five servers a key none of them needs (#584 TEMP-REMOVE (∃-Mail): was
+	// six with reports), so widening either launcher must
 	// fail here.
 	rawRun, err := os.ReadFile("scripts/mcp-run.sh")
 	if err != nil {

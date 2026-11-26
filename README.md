@@ -1,6 +1,6 @@
 # Agento Android stack
 
-The Agento **Android app** (Tasks/Projects, Task Manager, Files, ∃-Mail, Health Sync, reminders and widgets) against a small Go backend: **`health-api`** for sync and domain data, an nginx **proxy** as the app's single URL, a one-shot **`retention`** job, and remote **MongoDB Atlas**.
+The Agento **Android app** (Tasks/Projects, Task Manager, Files<!-- #584 TEMP-REMOVE (∃-Mail): , ∃-Mail -->, Health Sync, reminders and widgets) against a small Go backend: **`health-api`** for sync and domain data, an nginx **proxy** as the app's single URL, a one-shot **`retention`** job, and remote **MongoDB Atlas**.
 
 The agent does not run in this stack any more (#494). **T3/opencode runs on the host**, with the kept MCP servers built from this repo (`./scripts/build-mcps.sh` → `bin/<server>`) and wired in `opencode.json`. It reads and writes the same Atlas database the phone uses.
 
@@ -8,6 +8,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 ## Architecture
 
+<!-- #584 TEMP-REMOVE (∃-Mail): architecture diagram below omits the reports MCP; restore `,reports`. -->
 ```
                                         Remote MongoDB Atlas
                                                   ▲
@@ -16,7 +17,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
                                                           /health ──┘
   T3/opencode (host) ──► scripts/mcp-run.sh <server> ──► bin/{task-manager,
                               project-manager,miser-money,cookbook,
-                              health-check,reports} ──► MongoDB Atlas
+                              health-check} ──► MongoDB Atlas
                        └─► scripts/workspace-mcp.sh ──► .workspace-mcp/venv
                               (Gmail: read + label changes)
 
@@ -26,7 +27,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `health-api` | `health-api` container | `8001` (`HEALTH_HOST_PORT` remaps) | Tasks, projects, files, Health Connect sync and ∃-Mail reports for the app; persists to MongoDB |
+| `health-api` | `health-api` container | `8001` (`HEALTH_HOST_PORT` remaps) | Tasks, projects, files<!-- #584 TEMP-REMOVE (∃-Mail): , ∃-Mail reports -->, Health Connect sync for the app; persists to MongoDB |
 | `proxy` | `proxy` container (nginx) | `8080` (`APP_PORT` remaps) | Single app URL: routes `/api/*` and `/health` → health-api |
 | `retention` | `retention` container (one-shot) | — | Data retention policy runner (`cmd/retention`, its own `docker/retention/Dockerfile` image) |
 
@@ -36,7 +37,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Piece | What it is |
 |---|---|
-| `opencode.json` | T3/opencode config: the six Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`, `reports`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (Gmail: read + label changes — no send, draft, filter/label management or permanent delete) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and a variable inherited from whatever shell started T3 still reaches a server (beating the `.env` value for the keys a launcher fills) |
+| `opencode.json` | T3/opencode config: the five Go MCP servers (`task-manager`, `project-manager`, `miser-money`, `cookbook`, `health-check`) each launched as `./scripts/mcp-run.sh <server>`, plus `workspace-mcp` (Gmail: read + label changes — no send, draft, filter/label management or permanent delete) via `./scripts/workspace-mcp.sh`. Both launchers read the root `.env` themselves: T3 passes no environment of its own, and a variable inherited from whatever shell started T3 still reaches a server (beating the `.env` value for the keys a launcher fills) |
 | `.opencode/chat.md` | The operator persona and per-server rules |
 | `.opencode/skills/` | Shared skills (`podman-management`, `project-manager`, `task-manager`) |
 | `scripts/build-mcps.sh` | Builds the kept MCP binaries into the git-ignored `bin/` |
@@ -53,7 +54,9 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 | Cookbook | `cookbook_*` | **Permanent** |
 | Health tracking | `hc_meals`, `hc_days`, `hc_weight` + Health Connect sync via `health-api` | `hc_meals`/`hc_days` >30d; `hc_weight` **never pruned** |
 | Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |
+<!-- #584 TEMP-REMOVE (∃-Mail): retention row.
 | ∃-Mail | `reports` | Read + unstarred >7d; unread and starred are never pruned |
+-->
 
 (Retired in #289: the `story` and `resumes` side profiles. Their checkouts,
 `workspace/portals` and `workspace/portfolio-resume`, stay on disk, orphaned
@@ -80,7 +83,7 @@ and unmanaged.)
 ### Required External Services & API Keys
 - **OpenCode API Key**: `OPENCODE_API_KEY` from [opencode.ai](https://opencode.ai), for T3/opencode on the host.
 - **Android App Password**: `PASSWORD` (single bearer credential for sync; generate with `openssl rand -hex 32`).
-- **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook/tasks/projects/reports.
+- **MongoDB Cluster**: MongoDB Atlas connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`) — the single data backend for money/health/cookbook/tasks/projects<!-- #584 TEMP-REMOVE (∃-Mail): /reports -->.
 - **Google Workspace (optional)**: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `USER_GOOGLE_EMAIL` from a Google Cloud **Desktop app** OAuth client with the Gmail API enabled. Gmail for the agent — read plus label changes (mark read/unread, archive, trash), no send, draft, filter management, label management or permanent delete; setup and the headless consent steps are in [`documentation.md`](documentation.md#google-workspace-gmail).
 - (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only. Retired: `API_SERVER_KEY`, `HEALTH_SYNC_TOKEN` — `PASSWORD` is now the only app password. Retired with the agent container: every `PI_*` variable and `VPS_SSH_DIR`.)
 
@@ -155,10 +158,12 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 
 ## Android App Screens (8.x thin client)
 
-- **Sidebar**: Tasks (Projects) + Task Manager + Files + ∃-Mail + Settings.
+- **Sidebar**: Tasks (Projects) + Task Manager + Files<!-- #584 TEMP-REMOVE (∃-Mail): + ∃-Mail --> + Settings.
 - **Tasks / Projects**: project board and the task manager; task reminders arrive as exact-alarm notifications and survive reboot.
 - **Files**: two-way file shelf over the VPS `exports/` folder (subfolders supported) — upload from the device picker, download to mobile Downloads; uploads never replace an existing file and refuse past 25 MiB with a named error.
+<!-- #584 TEMP-REMOVE (∃-Mail): inbox bullet.
 - **∃-Mail**: the agent-filed report inbox.
+-->
 - **Task widget**: every setting is per placement — custom title, Tasks shown (Open/Done/All), row style and order, section headers, the header's title and count lines, and three independent row-content switches (due date and time, repeat condition, parallel marker), so a placement can show a repeat condition without the date. The list scrolls, or shows a fixed 4/6/8 rows.
 - **Settings sections**: Connection / Health / Appearance / Widget / Notifications / Behaviour / Storage / About, plus app updates and settings backup.
 - Chat, Skills, Tools, Teach, Memory, Runs, Approvals, Questions, Connectors and model pickers were removed in 8.0.0 (#493); the agent now runs in T3/opencode.
@@ -185,7 +190,9 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 - `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
 - `hc_weight`: **Permanent retention** (never pruned).
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).
+<!-- #584 TEMP-REMOVE (∃-Mail): reports retention bullet.
 - `reports` (∃-Mail): purges records where `createdAt < today - 7d AND read AND NOT starred` — unread and starred are never pruned.
+-->
 - `tasks`: reconciled, never pruned — completed structured repeats with no successor are reported (#180).
 - `task_mutations`: purges entries where `at < today - 90d`.
 
@@ -193,11 +200,12 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 
 ## Repository Layout
 
+<!-- #584 TEMP-REMOVE (∃-Mail): tree below omits the reports MCP/server entries and two inline fragments; restore them on revert. -->
 ```
 ├── AGENTS.md                # Agent rules and guidelines
 ├── README.md                # Stack overview and quickstart guide
 ├── documentation.md         # Deep-dive architecture and component documentation
-├── opencode.json            # T3/opencode config: six Go MCP servers + workspace-mcp (Gmail)
+├── opencode.json            # T3/opencode config: five Go MCP servers + workspace-mcp (Gmail)
 ├── .opencode/               # Persona (chat.md) + shared skills
 ├── .workspace-mcp/          # Gmail MCP venv + OAuth token cache (git-ignored runtime state)
 ├── bin/                     # MCP binaries built by scripts/build-mcps.sh (git-ignored)
@@ -211,19 +219,17 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 │   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
 │   ├── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
 │   ├── task-manager/        # tasks MCP (code in cmd/ + internal/)
-│   ├── project-manager/     # projects MCP (code in cmd/ + internal/)
-│   └── reports/             # reports MCP (∃-Mail inbox writer, 7-day retention; code in cmd/ + internal/)
+│   └── project-manager/     # projects MCP (code in cmd/ + internal/)
 ├── cmd/                     # Go services (each builds to a static binary)
 │   ├── mongo/               # MongoDB CLI helper
 │   ├── retention/           # Data lifecycle prune runner
-│   ├── health-api/          # App backend (sync, tasks, projects, files, reports)
+│   ├── health-api/          # App backend (sync, tasks, projects, files)
 │   ├── miser-money/         # money MCP server (stdio)
 │   ├── cookbook/            # cookbook MCP server (stdio)
 │   ├── health-check/        # health-check MCP server (stdio)
-│   ├── reports/             # reports MCP server — ∃-Mail inbox writer (stdio)
 │   ├── task-manager/        # tasks MCP server (stdio)
 │   └── project-manager/     # projects MCP server (stdio)
-├── internal/                # Shared Go packages (mongo, validate, money, cookbook, healthcheck, reports, tasks, projects)
+├── internal/                # Shared Go packages (mongo, validate, money, cookbook, healthcheck, tasks, projects)
 └── scripts/
     ├── hermes.sh            # Main orchestration CLI
     ├── retention.sh         # Retention execution wrapper

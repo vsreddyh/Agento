@@ -5,7 +5,7 @@ import android.content.SharedPreferences
 /**
  * The one endpoint rule for every gateway client (#398, #433).
  *
- * Tasks, projects, reports, storage and sync all resolve the server URL and
+ * Tasks, projects, storage and sync all resolve the server URL and
  * password through here. One canonical key each, and no retired fallbacks:
  * a config that still holds only `server_url`/`api_base_url`/`auth_token`
  * reads as unconfigured, so the caller can say so loudly instead of silently
