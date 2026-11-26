@@ -191,9 +191,9 @@ func TestMCPRunRefusesStaleBinary(t *testing.T) {
 	})
 
 	t.Run("unimported shared lib does not block", func(t *testing.T) {
-		// cookbook imports mongo+validate, not mongostore.
+		// cookbook imports mongo, not mongostore or validate.
 		c := newFakeCheckout(t, "cookbook")
-		c.seed(old, "cookbook", []string{"mongo", "validate"})
+		c.seed(old, "cookbook", []string{"mongo"})
 		c.write("internal/mongostore/mongostore.go", "package fake\n")
 		c.chtimes("internal/mongostore/mongostore.go", newer)
 		c.expectLaunch(t)
@@ -384,7 +384,7 @@ var wantWatch = map[string][]string{
 	"task-manager":    {"mongo", "mongostore", "tasks", "validate"},
 	"project-manager": {"mongo", "mongostore", "projects"},
 	"miser-money":     {"money", "mongo", "mongostore", "validate"},
-	"cookbook":        {"cookbook", "mongo", "validate"},
+	"cookbook":        {"cookbook", "mongo"},
 	"health-check":    {"healthcheck", "mongo", "validate"},
 	// #584 TEMP-REMOVE (∃-Mail): "reports": {"mongo", "reports"},
 }

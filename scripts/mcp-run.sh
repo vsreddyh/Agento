@@ -90,7 +90,7 @@ case "$name" in
     task-manager) own="tasks"; shared="mongo mongostore validate" ;;
     project-manager) own="projects"; shared="mongo mongostore" ;;
     miser-money) own="money"; shared="mongo mongostore validate" ;;
-    cookbook) own="cookbook"; shared="mongo validate" ;;
+    cookbook) own="cookbook"; shared="mongo" ;;
     health-check) own="healthcheck"; shared="mongo validate" ;;
     # #584 TEMP-REMOVE (∃-Mail): reports) own="reports"; shared="mongo" ;;
     *) own=""; shared="" ;;

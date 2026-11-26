@@ -30,7 +30,7 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
-func TestIngredientRecipeRoundTrip(t *testing.T) {
+func TestIngredientCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -39,7 +39,6 @@ func TestIngredientRecipeRoundTrip(t *testing.T) {
 		t.Fatal("expected empty-name error")
 	}
 	// Idempotent: clear leftovers from interrupted runs.
-	_, _, _ = s.DeleteRecipe(ctx, "gotest-soup")
 	_, _ = s.DeleteIngredient(ctx, "gotest-salt")
 	if _, err := s.AddIngredient(ctx, "gotest-salt", "test"); err != nil {
 		t.Fatalf("add: %v", err)
@@ -51,34 +50,19 @@ func TestIngredientRecipeRoundTrip(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %v %v", rows, err)
 	}
-	macros := map[string]any{
-		"kcal": 100.0, "protein_g": 5.0, "carbs_g": 10.0, "fat_g": 2.0, "fiber_g": 1.0}
-	r, err := s.AddRecipe(ctx, "gotest-soup", map[string]any{"gotest-salt": "2 spoons"},
-		macros, 2, "", []string{"test"}, "mcp")
-	if err != nil {
-		t.Fatalf("add recipe: %v", err)
+	got, err := s.GetIngredient(ctx, "gotest-salt")
+	if err != nil || got == nil || got["note"] != "test" {
+		t.Fatalf("got %v %v", got, err)
 	}
-	if _, err := s.DeleteIngredient(ctx, "gotest-salt"); err == nil {
-		t.Fatal("expected ref-in-use error")
+	if _, err := s.GetIngredient(ctx, "gotest-missing"); err != nil {
+		t.Fatalf("get unknown should return nil, nil: %v", err)
 	}
-	sc, err := s.ScaleRecipe(ctx, "gotest-soup", 4)
-	if err != nil || sc["factor"] != 2.0 {
-		t.Fatalf("got %v %v", sc, err)
+	upd, err := s.UpdateIngredient(ctx, "gotest-salt", map[string]any{"note": "flaky"})
+	if err != nil || upd == nil || upd["note"] != "flaky" {
+		t.Fatalf("got %v %v", upd, err)
 	}
-	c, err := s.LogCook(ctx, "gotest-soup", "extra stir", "", "")
-	if err != nil {
-		t.Fatalf("log cook: %v", err)
-	}
-	if c["recipe_name"] != "gotest-soup" {
-		t.Fatalf("got %v", c)
-	}
-	cooks, err := s.ListCooks(ctx, "gotest-soup", 10)
-	if err != nil || len(cooks) != 1 {
-		t.Fatalf("got %v %v", cooks, err)
-	}
-	deleted, logs, err := s.DeleteRecipe(ctx, idstr(r["_id"]))
-	if err != nil || !deleted || logs != 1 {
-		t.Fatalf("got %v %v %v", deleted, logs, err)
+	if upd["updatedAt"] == nil {
+		t.Fatal("expected updatedAt to be stamped")
 	}
 	done, err := s.DeleteIngredient(ctx, "gotest-salt")
 	if err != nil || !done {
@@ -86,12 +70,40 @@ func TestIngredientRecipeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMacroValidation(t *testing.T) {
-	if _, err := checkMacros(map[string]any{"kcal": 1}); err == nil {
-		t.Fatal("expected missing-macro error")
+func TestRecipeCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := s.AddRecipe(ctx, "", "", nil); err == nil {
+		t.Fatal("expected empty-name error")
 	}
-	if _, err := checkMacros(map[string]any{
-		"kcal": -1.0, "protein_g": 5.0, "carbs_g": 10.0, "fat_g": 2.0, "fiber_g": 1.0}); err == nil {
-		t.Fatal("expected negative error")
+	// Idempotent: clear leftovers from interrupted runs.
+	_, _ = s.DeleteRecipe(ctx, "gotest-soup")
+	r, err := s.AddRecipe(ctx, "gotest-soup", "weeknight", []string{"test"})
+	if err != nil {
+		t.Fatalf("add recipe: %v", err)
+	}
+	if r["note"] != "weeknight" {
+		t.Fatalf("got %v", r)
+	}
+	if _, err := s.AddRecipe(ctx, "gotest-soup", "", nil); err == nil {
+		t.Fatal("expected duplicate error")
+	}
+	rows, err := s.ListRecipes(ctx, "gotest-s", "test")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	rows, err = s.ListRecipes(ctx, "", "no-such-tag")
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	upd, err := s.UpdateRecipe(ctx, "gotest-soup", map[string]any{"tags": []any{"test", "fast"}})
+	if err != nil || upd == nil {
+		t.Fatalf("got %v %v", upd, err)
+	}
+	deleted, err := s.DeleteRecipe(ctx, idstr(r["_id"]))
+	if err != nil || !deleted {
+		t.Fatalf("got %v %v", deleted, err)
 	}
 }
