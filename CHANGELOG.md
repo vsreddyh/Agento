@@ -9,13 +9,16 @@ Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
 ## [9.13.0]
-- **Task Manager drops all toasts and the Select button (#603).** Every
-  action and result toast is gone — the list updating in place plus the
-  spinning sync button is the feedback; failures revert and log. Long-press
-  is the only way into multi-select (the top-bar Select button is gone).
-  In multi-select, Skip and Complete are icon buttons like Move and
-  Duplicate, and deselecting the last row exits selection instead of
-  leaving an empty bar.
+- **Task Manager drops toasts and the Select button (#603).** No toast
+  popups anywhere — the list updating in place plus the spinning sync
+  button is the feedback; failures revert and log with the failing item
+  named. Invalid estimates keep Save disabled with the form's own hint;
+  an edit conflict reloads and reopens the draft so typed input is never
+  lost. Bulk Skip/Complete disable when nothing is actionable and stay
+  icon buttons like Move/Duplicate; a stale move leaves the date dialog
+  open. Long-press is the only way into multi-select (the top-bar Select
+  button is gone), and deselecting the last row exits selection instead
+  of leaving an empty bar.
 
 ## [9.12.1]
 - **Connection drops the guidance hint (#598).** Settings →

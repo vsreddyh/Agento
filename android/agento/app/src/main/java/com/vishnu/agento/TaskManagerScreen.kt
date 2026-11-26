@@ -124,10 +124,11 @@ internal fun TaskManagerScreen(
     var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
     val sort = sortForName(sortName)
     // A corrupt or version-skewed saved value resets to the default above
-    // (#437) — and that reset logs once per distinct raw value per
-    // vintage, naming what was stored and what it became, instead of the
-    // view changing for no apparent reason. A clean read re-arms the
-    // dedupe, so a fix-then-rebreak logs again like the widget path
+    // (#437) — and that reset is logged once per distinct raw value per
+    // vintage, naming what was stored and what it became. The list itself
+    // offers no on-screen reason for the reset (#603: no toasts), so the
+    // log line is the record. A clean read re-arms the dedupe, so a
+    // fix-then-rebreak logs again like the widget path
     // (#480 review). Saveable like the names themselves: a plain
     // remember would reset on rotation while the corrupt name survives,
     // re-logging the same value (#437 review). Lists, not sets — a Set
@@ -233,19 +234,20 @@ internal fun TaskManagerScreen(
 
     // #185: surface a task-response contract mismatch. Without this collector the
     // warning was recorded and shown to nobody, which is the bug the check exists to
-    // fix — the user needs to know the app and the server disagree while the task is
-    // still on screen. consume() inside the collector clears the value, so a
+    // fix. With toasts gone (#603) the surfacing is the log line below; the list
+    // still refreshes first to what was actually stored, since the detail sheet
+    // reads from the cached list and the user must not keep looking at a stale
+    // row. consume() inside the collector clears the value, so a
     // recomposition does not re-show the same warning — but only if it is still the one
     // that was shown, or a warning that arrived meanwhile would be lost.
     LaunchedEffect(Unit) {
         ContractWarnings.mismatched.collect { mismatch ->
             if (mismatch == null) return@collect
-            // Refresh FIRST, then drop the report: the message said the list
-            // holds what was actually stored, and the detail sheet reads from
-            // the cached list — so the user must not keep looking at the
-            // stale row. The refresh is silent (no toast, #603) and the
-            // mismatch detail rides the log line, so no generation dance is
-            // needed around it.
+            // Refresh FIRST, then drop the report: the list must show what
+            // was actually stored, and the detail sheet reads from the cached
+            // list — so the user must not keep looking at the stale row. The
+            // refresh is silent (no toast, #603) and the mismatch detail
+            // rides the log line below, so no generation dance is needed.
             // Backgrounded (#308): the list is swapped under the user
             // rather than blanked to a spinner.
             silentRefresh = true
@@ -896,13 +898,20 @@ internal fun TaskManagerScreen(
                     onFailure = { e ->
                         // The selection is kept: the batch changed nothing, so
                         // the same set is still the right one to retry once the
-                        // reload underneath lands. The failure is logged, not
-                        // toasted (#603): the unchanged list plus the idle
-                        // sync button is the whole signal.
+                        // reload underneath lands. The failure is logged with
+                        // the same item detail the old toast carried (#603):
+                        // the unchanged list plus the idle sync button is the
+                        // on-screen signal; the log names the failing row.
                         silentRefresh = true
                         refreshTick++
+                        val named = e.message?.let(::parseBatchError)
+                        val target = named?.id?.takeIf { it.isNotEmpty() }?.let { id ->
+                            tasks.firstOrNull { it.id == id }?.name?.ifEmpty { null } ?: id
+                        } ?: named?.let { if (it.index >= 0) "item ${it.index + 1}" else null }
+                        val detail = (named?.detail ?: serverDetail(e.message ?: e.javaClass.simpleName)) +
+                            (target?.let { " — $it" } ?: "")
                         runCatching {
-                            Log.w("TaskManager", "bulk ${ops.firstOrNull()?.op} failed", e)
+                            Log.w("TaskManager", "bulk ${ops.firstOrNull()?.op} failed: $detail", e)
                         }
                     },
                 )
@@ -949,7 +958,9 @@ internal fun TaskManagerScreen(
         // the single verbs are last-write-wins too, with no revision to
         // guard on. Only fetched rows move: rows that left the page are set
         // aside, since there is no revision to guard them with. An empty
-        // op set is a silent no-op.
+        // op set sends nothing and leaves the date dialog open (#603): the
+        // open dialog is the signal the move did not happen, and the user
+        // cancels explicitly instead of watching a close that did nothing.
         val byId = tasks.associateBy { it.id }
         val ops = ids.mapNotNull { id ->
             byId[id]?.let { t ->
@@ -961,6 +972,7 @@ internal fun TaskManagerScreen(
         if (ops.isEmpty()) {
             return
         }
+        bulkMoveOpen = false
         runBulkOps(ops)
     }
 
@@ -992,11 +1004,20 @@ internal fun TaskManagerScreen(
                         actions = {
                             // Disabled while any selected row is in flight:
                             // a second tap would send a second batch, and a
-                            // duplicate batch copies twice.
+                            // duplicate batch copies twice. Skip/Complete need
+                            // at least one open row in view, not just a
+                            // non-empty selection: a fully stale selection
+                            // shows disabled buttons instead of a tap that
+                            // silently does nothing (#603).
                             val bulkLive = bulkActionsLive(bulkSelected, busyIds)
+                            val bulkResolvable = remember(bulkSelected, tasks) {
+                                bulkSelected.any { id ->
+                                    tasks.any { it.id == id && it.isOpen() }
+                                }
+                            }
                             IconButton(
                                 onClick = { doBulkResolve("skip") },
-                                enabled = bulkLive,
+                                enabled = bulkLive && bulkResolvable,
                             ) {
                                 Icon(
                                     Icons.Filled.SkipNext,
@@ -1023,7 +1044,7 @@ internal fun TaskManagerScreen(
                             }
                             IconButton(
                                 onClick = { doBulkResolve("complete") },
-                                enabled = bulkLive,
+                                enabled = bulkLive && bulkResolvable,
                             ) {
                                 Icon(
                                     Icons.Filled.Check,
@@ -1420,10 +1441,12 @@ internal fun TaskManagerScreen(
                 deleting = tasks.firstOrNull { it.id == draft.id }
             }),
             onSave = { next ->
+                // Unreachable via UI: Save stays disabled until the form is
+                // valid, with "Fill all * fields to enable Save." shown —
+                // but a race between composition and tap must still fail
+                // closed, never write a bad estimate. The dialog stays open
+                // on the bad value so the user fixes it in place.
                 val mins = next.estimatedMinutes.trim().toIntOrNull()
-                // Invalid estimate refuses silently (#603): the dialog stays
-                // open on the bad value instead of dismissing into an error
-                // toast, so the user fixes it in place.
                 if (mins == null || mins < 0) {
                     return@ServerTaskDialog
                 }
@@ -1583,10 +1606,14 @@ internal fun TaskManagerScreen(
                                     tasks = prev
                                     if (isConflict(e)) {
                                         // Someone else wrote first: reload silently
-                                        // and hold the reverted row — a toast would
-                                        // fight the list it is describing (#603).
+                                        // and reopen the draft with the typed input
+                                        // still in it — the edit is not lost, and
+                                        // the open dialog is the signal to reapply
+                                        // it onto the fresh rows (#603). A toast
+                                        // would fight the list it is describing.
                                         silentRefresh = true
                                         refreshTick++
+                                        editing = next
                                     }
                                     fail(e)
                                 },
@@ -1618,12 +1645,13 @@ internal fun TaskManagerScreen(
         )
     }
 
-    // Bulk move (#345): one date picker for the whole selection.
+    // Bulk move (#345): one date picker for the whole selection. The
+    // dialog closes only when a batch actually goes out (see doBulkMove);
+    // otherwise it stays open so a stale selection reads as not-done.
     if (bulkMoveOpen) {
         DueDatePickerDialog(
             initial = "",
             onConfirm = { date ->
-                bulkMoveOpen = false
                 doBulkMove(date)
             },
             onDismiss = { bulkMoveOpen = false },
