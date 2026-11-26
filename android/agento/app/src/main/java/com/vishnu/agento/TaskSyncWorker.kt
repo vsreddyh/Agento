@@ -15,9 +15,9 @@ import kotlinx.coroutines.awaitAll
  * schedule ([WidgetSyncWorker], Settings → Widget) so each runs as often as
  * its section asks.
  *
- * Two calls, both no-ops when they have nothing to do: `refresh` returns
- * at once if reminders are off. The snooze check is the exception — it
- * lists the board every tick, because seeing a snooze the *agent* or
+ * One of the two calls is a no-op when it has nothing to do: `refresh`
+ * returns at once if reminders are off. The snooze check is the exception
+ * — it lists the board every tick, because seeing a snooze the *agent* or
  * another device set is the only way this device learns to expect its
  * wake. That is one request on a tick that is already running, not a
  * second job.

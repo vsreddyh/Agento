@@ -176,21 +176,6 @@ class BehaviourSettingsTest {
         // (Coerced-to-floor need not be default: 5min reads as 15, custom.)
         assertEquals(1, all(taskMinutes = 5L))
         assertEquals(1, all(ratePct = 0L))
-        // Widget refresh is its own knob (#595): deviating counts too.
-        assertEquals(
-            1,
-            BehaviourSettings.customCount(
-                30L, 5L, "", 100L, 100L, false,
-                widgetMinutes = 60L,
-            ),
-        )
-        assertEquals(
-            1,
-            BehaviourSettings.customCount(
-                30L, 5L, "", 100L, 100L, false,
-                widgetMinutes = 5L,
-            ),
-        )
     }
 
     @Test
@@ -224,6 +209,14 @@ class BehaviourSettingsTest {
         assertEquals("1 hour 30 minutes", BehaviourSettings.minutesChoiceLabel(90L))
         // The singular branch both phrasings share.
         assertEquals("1 hour 1 minute", BehaviourSettings.minutesChoiceLabel(61L))
+        // Keyed picker labels (#595): the widget picker coerces through its
+        // own key. Same outputs today (shared 15..1440 range), pinned so a
+        // future range split cannot silently re-target one side.
+        val widgetKey = BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES
+        assertEquals("1 hour", BehaviourSettings.minutesChoiceLabelFor(widgetKey, 60L))
+        assertEquals("2 hours", BehaviourSettings.minutesChoiceLabelFor(widgetKey, 120L))
+        assertEquals("15 minutes", BehaviourSettings.minutesChoiceLabelFor(widgetKey, 0L))
+        assertEquals("1 hour 30 minutes", BehaviourSettings.minutesChoiceLabelFor(widgetKey, 90L))
     }
 
     @Test

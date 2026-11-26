@@ -171,8 +171,15 @@ object BehaviourSettings {
         return if (h == 1L) "1 hour" else "$h hours"
     }
 
-    fun minutesChoiceLabel(minutes: Long): String {
-        val m = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes)
+    fun minutesChoiceLabel(minutes: Long): String =
+        minutesChoiceLabelFor(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes)
+
+    /** Keyed picker label: both refresh pickers share the 15..1440 range
+     * today, but the coercion rides the caller's key so a future range
+     * split cannot silently mis-coerce one side. There is deliberately no
+     * unkeyed shorthand beyond the task default above. */
+    fun minutesChoiceLabelFor(key: String, minutes: Long): String {
+        val m = coerceImport(key, minutes)
         return when {
             m == 60L -> "1 hour"
             m % 60L == 0L -> "${m / 60L} hours"
@@ -335,13 +342,17 @@ object BehaviourSettings {
         updateHours = updateIntervalHours(ctx),
         updateStartup = updateStartup(ctx),
         updateNotify = updateNotify(ctx),
-        widgetMinutes = widgetSyncIntervalMinutes(ctx),
     )
 
-    /** Pure deviation count, JVM-pinned: every knob that differs from its
-     * default, including the surfaced-but-pre-existing reminder switch
-     * (enabling reminders elsewhere still counts — deliberate, and the
-     * hub copy says "custom", not "changed here"). */
+    /** Pure deviation count, JVM-pinned: every Behaviour knob that differs
+     * from its default, including the surfaced-but-pre-existing reminder
+     * switch (enabling reminders elsewhere still counts — deliberate, and
+     * the hub copy says "custom", not "changed here").
+     *
+     * The widget interval is deliberately NOT one of them: it lives in
+     * Settings → Widget (#595), and counting it here would flip the
+     * Behaviour hub row for a knob that lives elsewhere — like the
+     * per-widget display settings, it is backed up but uncounted. */
     fun customCount(
         taskMinutes: Long,
         leadMinutes: Long,
@@ -355,7 +366,6 @@ object BehaviourSettings {
         updateHours: Long = DEFAULT_UPDATE_INTERVAL_HOURS,
         updateStartup: Boolean = true,
         updateNotify: Boolean = false,
-        widgetMinutes: Long = DEFAULT_WIDGET_SYNC_INTERVAL_MINUTES,
     ): Int {
         // Total like the cadence lines: coerce, so both overloads agree on
         // the same effective state (a stored 0 reads back as its floor).
@@ -378,7 +388,6 @@ object BehaviourSettings {
         if (coerceImport(KEY_UPDATE_INTERVAL_HOURS, updateHours) != DEFAULT_UPDATE_INTERVAL_HOURS) n++
         if (!updateStartup) n++
         if (updateNotify) n++
-        if (coerceImport(KEY_WIDGET_SYNC_INTERVAL_MINUTES, widgetMinutes) != DEFAULT_WIDGET_SYNC_INTERVAL_MINUTES) n++
         return n
     }
 

@@ -289,6 +289,14 @@ object SettingsBackup {
             unreadable,
         )
     }
+    /** True when the backup carries a runnable long for `k` (Long or Int,
+     * mirroring the LONG_KEYS loop above): a fractional Double or a missing
+     * key stores nothing, so there is no new cadence to schedule. */
+    private fun hasLong(values: JSONObject, k: String): Boolean {
+        val v = values.opt(k)
+        return v is Long || v is Int
+    }
+
     /** Applies a backup produced by [export]; unknown keys and mistyped values
      * are skipped. Version 1 backups (prefs only) still import. Returns the
      * number of prefs + files applied, plus the files that were skipped.
@@ -350,6 +358,21 @@ object SettingsBackup {
                         applied++
                     }
                 }
+            }
+            // The refresh intervals bypass their setters on import the same
+            // way the reminders toggle does: a raw write would leave the
+            // pickers showing new values while agenteo_task_sync /
+            // agenteo_widget_sync keep their old cadences until the next
+            // cold start. Re-enqueue each worker whose key the backup
+            // carried with a runnable type — but only then, so an unrelated
+            // import never churns live schedules (#470 pattern, #595).
+            // Sync/update intervals keep the pre-existing restart-required
+            // behavior; this covers the two schedules this split owns.
+            if (hasLong(values, BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES)) {
+                AgentoApp.scheduleTaskSync(context)
+            }
+            if (hasLong(values, BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES)) {
+                AgentoApp.scheduleWidgetSync(context)
             }
             // The reminders toggle bypasses its setter on import: a raw
             // write would leave armed alarms + queued speech + failure tags

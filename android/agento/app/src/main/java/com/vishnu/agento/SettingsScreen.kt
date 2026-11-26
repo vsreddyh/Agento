@@ -1309,9 +1309,11 @@ internal fun WidgetSettingsSection(refreshTick: Int = 0) {
     ) {
         OptionMenu(
             label = "Refresh every",
-            shown = BehaviourSettings.minutesChoiceLabel(widgetMinutes),
+            shown = BehaviourSettings.minutesChoiceLabelFor(
+                BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES, widgetMinutes),
             options = BehaviourSettings.WIDGET_SYNC_INTERVAL_OPTIONS_MINUTES.map {
-                it.toString() to BehaviourSettings.minutesChoiceLabel(it)
+                it.toString() to BehaviourSettings.minutesChoiceLabelFor(
+                    BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES, it)
             },
             onPick = {
                 it.toLongOrNull()?.let { m ->
