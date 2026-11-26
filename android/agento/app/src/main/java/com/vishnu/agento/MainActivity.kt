@@ -20,12 +20,15 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.work.WorkManager
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -199,21 +202,58 @@ class MainActivity : ComponentActivity() {
                     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                         refreshUpdateLabel()
                     }
+                    // Re-read when the launch-time worker lands: it completes
+                    // async after first paint, and the sidebar must show this
+                    // launch's find — not just the previous launch's snapshot
+                    // the resume refresh above would otherwise keep showing.
+                    // One-shot and best-effort: a missed landing converges on
+                    // the next resume or manual check.
+                    LaunchedEffect(Unit) {
+                        runCatching {
+                            WorkManager.getInstance(context)
+                                .getWorkInfosForUniqueWork(AgentoApp.UPDATE_STARTUP_WORK_NAME)
+                                .addListener(
+                                    { refreshUpdateLabel() },
+                                    ContextCompat.getMainExecutor(context),
+                                )
+                        }
+                    }
                     // Manual tap while a check is in flight is a no-op (no
                     // parallel checks). A fresh find opens Settings → About,
                     // like the notification tap; a clean check stays put.
+                    // Failures toast — a silent stop would read as either
+                    // "up to date" or a dead button.
                     fun checkUpdatesNow() {
                         if (updateChecking) return
                         updateChecking = true
                         scope.launch {
-                            UpdateCheck.run(context, notify = false)
-                            val rel = UpdateCheck.pendingRelease(context)
-                            updateLabel = rel?.let(UpdateCheck::pendingUpdateLabel)
-                            updateChecking = false
-                            if (rel != null) go(Destination.Settings, SettingSection.About)
+                            try {
+                                UpdateCheck.run(context, notify = false)
+                                    .onFailure { e ->
+                                        val fe = friendlyError(e.message ?: "")
+                                        toasts.toast(
+                                            "${fe.title} — ${fe.nextStep}",
+                                            ToastKind.Error,
+                                        )
+                                    }
+                                val rel = UpdateCheck.pendingRelease(context)
+                                // Never cleared in-session: a reinstall (the
+                                // only thing that clears a pending release)
+                                // restarts the process and re-reads fresh.
+                                if (rel != null) {
+                                    updateLabel = UpdateCheck.pendingUpdateLabel(rel)
+                                    go(Destination.Settings, SettingSection.About)
+                                }
+                            } finally {
+                                updateChecking = false
+                            }
                         }
                     }
                     fun openUpdates() = go(Destination.Settings, SettingSection.About)
+                    // Update-check failure toasts (#591): a silent stop
+                    // reads as either "up to date" or a dead button.
+                    val toasts = remember(scope) { ToastCenter(scope) }
+                    Box(modifier = Modifier.fillMaxSize()) {
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val wc = windowClassFor(maxWidth)
                         val navContent: @Composable () -> Unit = {
@@ -314,6 +354,8 @@ class MainActivity : ComponentActivity() {
                                 ) { Box { navContent() } }
                             }
                         }
+                        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
+                    }
                     }
                 }
             }
