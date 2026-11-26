@@ -640,9 +640,14 @@ internal fun OptionMenu(
 /** A top-bar sync button's icon, shared by Tasks and Task Manager (#578,
  * #579): a plain sync glyph at rest, a continuously rotating one while any
  * fetch or mutation write is in flight. TalkBack names the state, not just
- * the button. */
+ * the button. Descriptions are overridable for non-sync uses (the sidebar
+ * update check reuses the spin). */
 @Composable
-internal fun SyncButtonIcon(spinning: Boolean) {
+internal fun SyncButtonIcon(
+    spinning: Boolean,
+    idleDescription: String = "Sync",
+    spinningDescription: String = "Syncing",
+) {
     if (spinning) {
         val transition = rememberInfiniteTransition(label = "syncSpin")
         val angle by transition.animateFloat(
@@ -655,10 +660,10 @@ internal fun SyncButtonIcon(spinning: Boolean) {
         )
         Icon(
             Icons.Filled.Sync,
-            contentDescription = "Syncing",
+            contentDescription = spinningDescription,
             modifier = Modifier.rotate(angle),
         )
     } else {
-        Icon(Icons.Filled.Sync, contentDescription = "Sync")
+        Icon(Icons.Filled.Sync, contentDescription = idleDescription)
     }
 }

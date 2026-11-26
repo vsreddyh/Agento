@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -23,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -178,6 +181,39 @@ class MainActivity : ComponentActivity() {
                         section = s
                         scope.launch { drawerState.close() }
                     }
+                    // Sidebar update check (#591): the persisted pending
+                    // release, refreshed on resume and after every manual
+                    // check — the launch-time worker already ran through
+                    // UpdateCheck.run, so the sidebar reflects it instead of
+                    // triggering its own.
+                    var updateLabel by remember {
+                        mutableStateOf(
+                            UpdateCheck.pendingRelease(context)?.let(UpdateCheck::pendingUpdateLabel),
+                        )
+                    }
+                    var updateChecking by remember { mutableStateOf(false) }
+                    fun refreshUpdateLabel() {
+                        updateLabel = UpdateCheck.pendingRelease(context)
+                            ?.let(UpdateCheck::pendingUpdateLabel)
+                    }
+                    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                        refreshUpdateLabel()
+                    }
+                    // Manual tap while a check is in flight is a no-op (no
+                    // parallel checks). A fresh find opens Settings → About,
+                    // like the notification tap; a clean check stays put.
+                    fun checkUpdatesNow() {
+                        if (updateChecking) return
+                        updateChecking = true
+                        scope.launch {
+                            UpdateCheck.run(context, notify = false)
+                            val rel = UpdateCheck.pendingRelease(context)
+                            updateLabel = rel?.let(UpdateCheck::pendingUpdateLabel)
+                            updateChecking = false
+                            if (rel != null) go(Destination.Settings, SettingSection.About)
+                        }
+                    }
+                    fun openUpdates() = go(Destination.Settings, SettingSection.About)
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val wc = windowClassFor(maxWidth)
                         val navContent: @Composable () -> Unit = {
@@ -232,6 +268,10 @@ class MainActivity : ComponentActivity() {
                                             dest = dest,
                                             // #584 TEMP-REMOVE (∃-Mail).
                                             // reportsUnread = reportsUnread,
+                                            updateLabel = updateLabel,
+                                            updateChecking = updateChecking,
+                                            onCheckUpdates = ::checkUpdatesNow,
+                                            onOpenUpdates = ::openUpdates,
                                             onDest = { go(it) },
                                         )
                                     },
@@ -245,6 +285,12 @@ class MainActivity : ComponentActivity() {
                                             // #584 TEMP-REMOVE (∃-Mail).
                                             // reportsUnread = reportsUnread,
                                             onDest = { go(it) },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        RailUpdateButton(
+                                            updateLabel = updateLabel,
+                                            checking = updateChecking,
+                                            onCheck = ::checkUpdatesNow,
                                         )
                                     }
                                     Box(modifier = Modifier.weight(1f)) { navContent() }
@@ -257,6 +303,10 @@ class MainActivity : ComponentActivity() {
                                             dest = dest,
                                             // #584 TEMP-REMOVE (∃-Mail).
                                             // reportsUnread = reportsUnread,
+                                            updateLabel = updateLabel,
+                                            updateChecking = updateChecking,
+                                            onCheckUpdates = ::checkUpdatesNow,
+                                            onOpenUpdates = ::openUpdates,
                                             permanent = true,
                                             onDest = { go(it) },
                                         )
@@ -279,14 +329,30 @@ private fun DrawerContent(
     permanent: Boolean = false,
     // #584 TEMP-REMOVE (∃-Mail).
     // reportsUnread: Int? = null,
+    updateLabel: String?,
+    updateChecking: Boolean,
+    onCheckUpdates: () -> Unit,
+    onOpenUpdates: () -> Unit,
 ) {
+    @Composable
+    fun content() {
+        Column(modifier = Modifier.fillMaxHeight()) {
+            DrawerList(dest, onDest, modifier = Modifier.weight(1f))
+            UpdateCheckFooter(
+                updateLabel = updateLabel,
+                checking = updateChecking,
+                onCheck = onCheckUpdates,
+                onOpen = onOpenUpdates,
+            )
+        }
+    }
     if (permanent) {
         PermanentDrawerSheet(modifier = Modifier.widthIn(max = 280.dp)) {
-            DrawerList(dest, onDest)
+            content()
         }
     } else {
         ModalDrawerSheet {
-            DrawerList(dest, onDest)
+            content()
         }
     }
 }
@@ -297,10 +363,11 @@ private fun DrawerList(
     onDest: (Destination) -> Unit,
     // #584 TEMP-REMOVE (∃-Mail).
     // reportsUnread: Int? = null,
+    modifier: Modifier = Modifier,
 ) {
     // Scrollable (#105): destinations overflow short screens — without
     // this the bottom items are cut off with no way to reach them.
-    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+    Column(modifier = modifier.verticalScroll(rememberScrollState())) {
         Text(
             "Agento",
             style = MaterialTheme.typography.titleLarge,
@@ -337,10 +404,11 @@ private fun RailContent(
     onDest: (Destination) -> Unit,
     // #584 TEMP-REMOVE (∃-Mail).
     // reportsUnread: Int? = null,
+    modifier: Modifier = Modifier,
 ) {
     // Scrollable like the drawer (#105): the rail overflows the same way
     // on short landscape screens.
-    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+    Column(modifier = modifier.verticalScroll(rememberScrollState())) {
         Destination.entries.forEach { d ->
             NavigationRailItem(
                 selected = dest == d,
@@ -359,6 +427,66 @@ private fun RailContent(
                     // }
                 },
                 label = { Text(d.title) },
+            )
+        }
+    }
+}
+
+/** Sidebar bottom: a manual update check plus the pending-release line
+ * (#591). The line opens Settings → About like the notification tap; the
+ * button re-checks (and opens About when the check finds something). The
+ * rail variant is icon-only with a dot while a release pends. */
+@Composable
+private fun UpdateCheckFooter(
+    updateLabel: String?,
+    checking: Boolean,
+    onCheck: () -> Unit,
+    onOpen: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        HorizontalDivider()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onCheck) {
+                SyncButtonIcon(
+                    spinning = checking,
+                    idleDescription = "Check for updates",
+                    spinningDescription = "Checking for updates",
+                )
+            }
+            Text(
+                "Check for updates",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+                    .clickable(onClick = onCheck),
+            )
+        }
+        if (updateLabel != null) {
+            Text(
+                "Update available :- $updateLabel",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpen)
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** Rail twin of the footer: icon-only, with a dot while a release pends. */
+@Composable
+private fun RailUpdateButton(
+    updateLabel: String?,
+    checking: Boolean,
+    onCheck: () -> Unit,
+) {
+    BadgedBox(badge = { if (updateLabel != null) Badge() }) {
+        IconButton(onClick = onCheck) {
+            SyncButtonIcon(
+                spinning = checking,
+                idleDescription = "Check for updates",
+                spinningDescription = "Checking for updates",
             )
         }
     }

@@ -136,6 +136,13 @@ object UpdateCheck {
         return UpdateManager.isNewer(rel.tag, name, code)
     }
 
+    /** Sidebar "Update available :- x.y.z" line (#591): the release tag's
+     * semver when it parses, else the release name (or the raw tag when
+     * that is blank too). Pure and JVM-pinned. */
+    internal fun pendingUpdateLabel(release: AppRelease): String =
+        UpdateManager.parseTag(release.tag)?.first?.joinToString(".")
+            ?: release.name.ifBlank { release.tag }
+
     /** Startup checks are on only when enabled AND outside the debounce. */
     fun startupDue(lastCheckAt: Long, now: Long, enabled: Boolean): Boolean {
         if (!enabled) return false
