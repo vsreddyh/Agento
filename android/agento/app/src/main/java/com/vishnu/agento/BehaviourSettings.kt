@@ -80,7 +80,7 @@ object BehaviourSettings {
         }
     }
 
-    // ── Task / widget / reminder refresh ─────────────────────────────────
+    // ── Task refresh ───────────────────────────────────────────────────
     const val KEY_TASK_SYNC_INTERVAL_MINUTES = "task_sync_interval_minutes"
     const val DEFAULT_TASK_SYNC_INTERVAL_MINUTES = AgentoApp.TASK_SYNC_INTERVAL_MINUTES
     val TASK_SYNC_INTERVAL_OPTIONS_MINUTES = listOf(15L, 30L, 60L, 120L)
@@ -100,11 +100,38 @@ object BehaviourSettings {
     fun taskSyncCadenceLine(minutes: Long): String {
         val m = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes)
         return when {
-            m == 60L -> "Task and widget refresh runs every hour."
-            m % 60L == 0L -> "Task and widget refresh runs every ${m / 60L} hours."
+            m == 60L -> "Task refresh runs every hour."
+            m % 60L == 0L -> "Task refresh runs every ${m / 60L} hours."
             // Same humanizer as the lead copy: adjacent cards must agree.
-            m > 60L -> "Task and widget refresh runs every ${leadCopy(m)}."
-            else -> "Task and widget refresh runs every $m minutes."
+            m > 60L -> "Task refresh runs every ${leadCopy(m)}."
+            else -> "Task refresh runs every $m minutes."
+        }
+    }
+
+    // ── Widget refresh ─────────────────────────────────────────────────
+    const val KEY_WIDGET_SYNC_INTERVAL_MINUTES = "widget_sync_interval_minutes"
+    const val DEFAULT_WIDGET_SYNC_INTERVAL_MINUTES = AgentoApp.WIDGET_SYNC_INTERVAL_MINUTES
+    val WIDGET_SYNC_INTERVAL_OPTIONS_MINUTES = listOf(15L, 30L, 60L, 120L)
+
+    fun widgetSyncIntervalMinutes(ctx: Context): Long =
+        coerceImport(KEY_WIDGET_SYNC_INTERVAL_MINUTES,
+            prefs(ctx).getLong(KEY_WIDGET_SYNC_INTERVAL_MINUTES, DEFAULT_WIDGET_SYNC_INTERVAL_MINUTES))
+
+    fun setWidgetSyncIntervalMinutes(ctx: Context, minutes: Long) {
+        prefs(ctx).edit { putLong(KEY_WIDGET_SYNC_INTERVAL_MINUTES, minutes.coerceIn(15L, 24L * 60L)) }
+        AgentoApp.scheduleWidgetSync(ctx)
+    }
+
+    fun widgetSyncCadenceLine(ctx: Context): String =
+        widgetSyncCadenceLine(widgetSyncIntervalMinutes(ctx))
+
+    fun widgetSyncCadenceLine(minutes: Long): String {
+        val m = coerceImport(KEY_WIDGET_SYNC_INTERVAL_MINUTES, minutes)
+        return when {
+            m == 60L -> "Widget refresh runs every hour."
+            m % 60L == 0L -> "Widget refresh runs every ${m / 60L} hours."
+            m > 60L -> "Widget refresh runs every ${leadCopy(m)}."
+            else -> "Widget refresh runs every $m minutes."
         }
     }
 
@@ -308,6 +335,7 @@ object BehaviourSettings {
         updateHours = updateIntervalHours(ctx),
         updateStartup = updateStartup(ctx),
         updateNotify = updateNotify(ctx),
+        widgetMinutes = widgetSyncIntervalMinutes(ctx),
     )
 
     /** Pure deviation count, JVM-pinned: every knob that differs from its
@@ -327,6 +355,7 @@ object BehaviourSettings {
         updateHours: Long = DEFAULT_UPDATE_INTERVAL_HOURS,
         updateStartup: Boolean = true,
         updateNotify: Boolean = false,
+        widgetMinutes: Long = DEFAULT_WIDGET_SYNC_INTERVAL_MINUTES,
     ): Int {
         // Total like the cadence lines: coerce, so both overloads agree on
         // the same effective state (a stored 0 reads back as its floor).
@@ -349,6 +378,7 @@ object BehaviourSettings {
         if (coerceImport(KEY_UPDATE_INTERVAL_HOURS, updateHours) != DEFAULT_UPDATE_INTERVAL_HOURS) n++
         if (!updateStartup) n++
         if (updateNotify) n++
+        if (coerceImport(KEY_WIDGET_SYNC_INTERVAL_MINUTES, widgetMinutes) != DEFAULT_WIDGET_SYNC_INTERVAL_MINUTES) n++
         return n
     }
 
@@ -378,6 +408,7 @@ object BehaviourSettings {
     fun coerceImport(key: String, value: Long): Long = when (key) {
         KEY_SYNC_INTERVAL_HOURS -> value.coerceIn(1L, 24L)
         KEY_TASK_SYNC_INTERVAL_MINUTES -> value.coerceIn(15L, 24L * 60L)
+        KEY_WIDGET_SYNC_INTERVAL_MINUTES -> value.coerceIn(15L, 24L * 60L)
         KEY_REMINDER_LEAD_MINUTES -> value.coerceIn(0L, 24L * 60L)
         KEY_TTS_RATE_PCT, KEY_TTS_PITCH_PCT -> value.coerceIn(50L, 200L)
         // 0 is a real value here (off), unlike the cadences above whose

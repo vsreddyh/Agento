@@ -527,7 +527,7 @@ internal fun SettingsScreen(
                         }
                     }
                     SettingSection.Widget -> {
-                        WidgetSettingsSection()
+                        WidgetSettingsSection(refreshTick = settingsRefresh)
                     }
                     SettingSection.Notifications -> {
                         NotificationsSection()
@@ -1204,13 +1204,16 @@ internal fun AppUpdateSection() {
 }
 
 /** Task-widget placement settings (Settings → Widget, #592): one static
- * entry plus Configure. Settings configures the lowest-numbered placement;
- * extra home-screen widgets keep rendering with their saved settings (they
- * just have no UI here any more).
+ * entry plus Configure, and the widget refresh cadence (#595). Settings
+ * configures the lowest-numbered placement; extra home-screen widgets keep
+ * rendering with their saved settings (they just have no UI here any more).
  */
 @Composable
-internal fun WidgetSettingsSection() {
+internal fun WidgetSettingsSection(refreshTick: Int = 0) {
     val context = LocalContext.current
+    var widgetMinutes by remember(refreshTick) {
+        mutableStateOf(BehaviourSettings.widgetSyncIntervalMinutes(context))
+    }
     // Re-read on resume: the user can add or drop a placement (or come
     // back from the launcher) while this screen sits in the back stack,
     // and a stale entry here is worse than useless.
@@ -1298,6 +1301,25 @@ internal fun WidgetSettingsSection() {
                 )
             }
         }
+    }
+
+    SectionCard(
+        title = "Widget refresh",
+        subtitle = "How often the home-screen widget re-renders.",
+    ) {
+        OptionMenu(
+            label = "Refresh every",
+            shown = BehaviourSettings.minutesChoiceLabel(widgetMinutes),
+            options = BehaviourSettings.WIDGET_SYNC_INTERVAL_OPTIONS_MINUTES.map {
+                it.toString() to BehaviourSettings.minutesChoiceLabel(it)
+            },
+            onPick = {
+                it.toLongOrNull()?.let { m ->
+                    BehaviourSettings.setWidgetSyncIntervalMinutes(context, m)
+                    widgetMinutes = BehaviourSettings.widgetSyncIntervalMinutes(context)
+                }
+            },
+        )
     }
 }
 

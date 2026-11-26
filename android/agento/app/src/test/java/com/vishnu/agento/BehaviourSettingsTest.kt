@@ -111,24 +111,36 @@ class BehaviourSettingsTest {
         // Pure overloads coerce: no caller renders "every 0 hours".
         assertEquals("Automatic sync runs every hour.", BehaviourSettings.syncCadenceLine(0L, false, false))
         assertEquals(
-            "Task and widget refresh runs every hour.",
+            "Task refresh runs every hour.",
             BehaviourSettings.taskSyncCadenceLine(60L),
         )
         assertEquals(
-            "Task and widget refresh runs every 2 hours.",
+            "Task refresh runs every 2 hours.",
             BehaviourSettings.taskSyncCadenceLine(120L),
         )
         assertEquals(
-            "Task and widget refresh runs every 45 minutes.",
+            "Task refresh runs every 45 minutes.",
             BehaviourSettings.taskSyncCadenceLine(45L),
         )
         assertEquals(
-            "Task and widget refresh runs every 1 hour 30 minutes.",
+            "Task refresh runs every 1 hour 30 minutes.",
             BehaviourSettings.taskSyncCadenceLine(90L),
         )
         assertEquals(
-            "Task and widget refresh runs every 15 minutes.",
+            "Task refresh runs every 15 minutes.",
             BehaviourSettings.taskSyncCadenceLine(0L),
+        )
+        assertEquals(
+            "Widget refresh runs every hour.",
+            BehaviourSettings.widgetSyncCadenceLine(60L),
+        )
+        assertEquals(
+            "Widget refresh runs every 2 hours.",
+            BehaviourSettings.widgetSyncCadenceLine(120L),
+        )
+        assertEquals(
+            "Widget refresh runs every 15 minutes.",
+            BehaviourSettings.widgetSyncCadenceLine(0L),
         )
     }
 
@@ -164,12 +176,28 @@ class BehaviourSettingsTest {
         // (Coerced-to-floor need not be default: 5min reads as 15, custom.)
         assertEquals(1, all(taskMinutes = 5L))
         assertEquals(1, all(ratePct = 0L))
+        // Widget refresh is its own knob (#595): deviating counts too.
+        assertEquals(
+            1,
+            BehaviourSettings.customCount(
+                30L, 5L, "", 100L, 100L, false,
+                widgetMinutes = 60L,
+            ),
+        )
+        assertEquals(
+            1,
+            BehaviourSettings.customCount(
+                30L, 5L, "", 100L, 100L, false,
+                widgetMinutes = 5L,
+            ),
+        )
     }
 
     @Test
     fun `import coercion matches live floors`() {
         assertEquals(1L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_SYNC_INTERVAL_HOURS, 0L))
         assertEquals(15L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES, 5L))
+        assertEquals(15L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES, 5L))
         assertEquals(0L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_REMINDER_LEAD_MINUTES, 0L))
         assertEquals(50L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_TTS_RATE_PCT, 0L))
         assertEquals(0L, BehaviourSettings.coerceImport("usage_total_chat", -3L))
@@ -243,6 +271,7 @@ class BehaviourSettingsTest {
         for (k in listOf(
             BehaviourSettings.KEY_SYNC_INTERVAL_HOURS,
             BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES,
+            BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES,
             BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
             BehaviourSettings.KEY_TTS_RATE_PCT,
             BehaviourSettings.KEY_TTS_PITCH_PCT,

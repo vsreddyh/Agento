@@ -97,6 +97,7 @@ object SettingsBackup {
     val LONG_KEYS: List<String> = listOf(
         BehaviourSettings.KEY_SYNC_INTERVAL_HOURS,
         BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES,
+        BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES,
         BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
         BehaviourSettings.KEY_TTS_RATE_PCT,
         BehaviourSettings.KEY_TTS_PITCH_PCT,

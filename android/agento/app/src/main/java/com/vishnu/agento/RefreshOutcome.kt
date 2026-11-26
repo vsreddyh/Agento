@@ -10,7 +10,7 @@ package com.vishnu.agento
  *
  * Two entries are success in the only sense that matters to a caller —
  * "nothing to retry" — and one is not: a run that ended unable to reach
- * the server is the one [TaskSyncWorker] backs off and retries.
+ * the server is the one the periodic workers back off and retry.
  */
 enum class RefreshOutcome {
     /** No placement is installed: nothing to fetch for, and not a failure. */
