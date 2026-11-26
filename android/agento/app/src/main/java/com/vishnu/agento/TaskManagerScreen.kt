@@ -269,6 +269,14 @@ internal fun TaskManagerScreen(
     // Editor draft (id empty = new task) and delete target.
     var editing by remember { mutableStateOf<ServerTaskDraft?>(null) }
     var deleting by remember { mutableStateOf<ServerTask?>(null) }
+    // Set when an edit conflict reopens the draft (#603): the draft carries
+    // the losing revision, so a re-save must guard against the fresh row,
+    // not the stale draft — otherwise every re-save 409s again. Cleared on
+    // a landed save and whenever the draft closes.
+    var staleDraft by remember { mutableStateOf(false) }
+    LaunchedEffect(editing) {
+        if (editing == null) staleDraft = false
+    }
     // In-flight mutation per task id (#288): only that row's checkbox is
     // disabled while its request runs — the rest of the list, the top bar
     // and the editor stay live. Synthetic "__create__" covers the dialog
@@ -494,9 +502,13 @@ internal fun TaskManagerScreen(
 
     // Mutation failures revert in place and log (#603): with no toasts,
     // the list updating (or pointedly not updating) plus the sync button
-    // stopping is the feedback; the log line keeps the reason.
-    fun fail(e: Throwable) {
-        runCatching { Log.w("TaskManager", serverDetail(e.message ?: e.javaClass.simpleName)) }
+    // stopping is the feedback; the log line keeps the reason, naming the
+    // row so a failure is attributable.
+    fun fail(e: Throwable, item: String? = null) {
+        val what = item?.takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+        runCatching {
+            Log.w("TaskManager", serverDetail(e.message ?: e.javaClass.simpleName) + what, e)
+        }
     }
 
     // Push fresh counts to the home-screen widget (#101) after mutations,
@@ -602,7 +614,7 @@ internal fun TaskManagerScreen(
                     },
                     onFailure = { e ->
                         tasks = prev
-                        fail(e)
+                        fail(e, t.name)
                     },
                 )
             } finally {
@@ -732,7 +744,7 @@ internal fun TaskManagerScreen(
                         // dropped the row.
                         exiting = exiting - t.id
                         tasks = prev
-                        fail(e)
+                        fail(e, t.name)
                     },
                 )
             } finally {
@@ -773,7 +785,7 @@ internal fun TaskManagerScreen(
                     },
                     onFailure = { e ->
                         tasks = prev
-                        fail(e)
+                        fail(e, t.name)
                     },
                 )
             } finally {
@@ -809,7 +821,7 @@ internal fun TaskManagerScreen(
                     },
                     onFailure = { e ->
                         tasks = prev
-                        fail(e)
+                        fail(e, t.name)
                     },
                 )
             } finally {
@@ -848,9 +860,12 @@ internal fun TaskManagerScreen(
         // Cap guard, like the 50-cap on selection: unreachable via the UI
         // (toggleBulkId refuses over-cap adds), but a future direct caller
         // building BulkOp lists by hand must stop here, not with a server
-        // 422 mid-flow. Silent, like the selection cap: the bar not moving
-        // is the signal.
+        // 422 mid-flow. Silent in UI like the selection cap — but logged,
+        // since nothing is reverted and no sync runs.
         if (ops.size > MAX_BULK_SELECT) {
+            runCatching {
+                Log.w("TaskManager", "bulk batch over cap: ${ops.size} > $MAX_BULK_SELECT")
+            }
             return
         }
         // Re-checked here, not just on the button: recomposition lags a
@@ -936,7 +951,8 @@ internal fun TaskManagerScreen(
         // on one stale row — or going out unguarded. Nothing here needs a
         // refresh: the list is already current for this filter. An
         // all-set-aside tap is a silent no-op: the unchanged selection is
-        // the whole signal.
+        // the whole signal. (Best-effort like the disabled buttons above:
+        // a tasks change between composition and tap can still land here.)
         val actionable = ids.filter { byId[it]?.isOpen() == true }
         if (actionable.isEmpty()) {
             return
@@ -1512,7 +1528,7 @@ internal fun TaskManagerScreen(
                                 },
                                 onFailure = { e ->
                                     tasks = prev
-                                    fail(e)
+                                    fail(e, next.name)
                                 },
                             )
                         } finally {
@@ -1569,10 +1585,22 @@ internal fun TaskManagerScreen(
                                 // The revision the dialog read, not a fresh
                                 // lookup: the task may have scrolled out of the
                                 // fetched page, and a null lookup would send
-                                // the edit unguarded (#184).
-                                expectedRevision = next.revision,
+                                // the edit unguarded (#184). Exception: a
+                                // conflict-reopened draft carries the losing
+                                // revision, so it guards against the fresh row
+                                // instead — otherwise every re-save 409s again
+                                // (#603).
+                                expectedRevision = if (staleDraft) {
+                                    tasks.firstOrNull { it.id == next.id }?.revision ?: next.revision
+                                } else {
+                                    next.revision
+                                },
                             ).fold(
                                 onSuccess = { saved ->
+                                    // A landed save retires the conflict-reopen
+                                    // state: the next edit starts from a fresh
+                                    // draft with its own revision.
+                                    staleDraft = false
                                     // Purge only when speech/schedule-relevant
                                     // fields moved — or the pre-edit row is
                                     // unknown: exactly the background
@@ -1611,11 +1639,16 @@ internal fun TaskManagerScreen(
                                         // the open dialog is the signal to reapply
                                         // it onto the fresh rows (#603). A toast
                                         // would fight the list it is describing.
+                                        // staleDraft: the reopened draft carries the
+                                        // losing revision, so the re-save below
+                                        // guards against the fresh row instead of
+                                        // 409ing forever.
                                         silentRefresh = true
                                         refreshTick++
                                         editing = next
+                                        staleDraft = true
                                     }
-                                    fail(e)
+                                    fail(e, next.name)
                                 },
                             )
                         } finally {
