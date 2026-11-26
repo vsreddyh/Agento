@@ -438,7 +438,7 @@ class TaskNumericCoercionTest {
     fun `a sourceless page parse writes nothing and evicts nothing`() {
         // The blank-source default is write-free by KDoc: no fetch happened,
         // so neither the per-fetch record nor the per-row eviction may fire
-        // — otherwise a diagnostic parse deletes the About detail it
+        // — otherwise a diagnostic parse deletes the diagnostics detail it
         // promised to leave alone (#480 review).
         val key = "single:" + singleCoercionState("a")
         try {
@@ -660,9 +660,9 @@ class WidgetCoercionTest {
 
     @Test
     fun `a deleted placement prunes diagnostics and log dedupe`() {
-        // #480 review: deletion is the ultimate fix — the About screen
-        // must not name resets for widgets that no longer exist, and a
-        // later placement reusing the id must re-log a real corruption.
+        // #480 review: deletion is the ultimate fix — stale notes for
+        // widgets that no longer exist must not linger, and a later
+        // placement reusing the id must re-log a real corruption.
         val key = "task_widget_sort_9902"
         val seen = "$key|Priority"
         try {
@@ -683,14 +683,13 @@ class TaskCoercedMessageTest {
 
     @Test
     fun `singular and plural count rows, not values`() {
-        // One row with three bad fields counts once; the diagnostics
-        // detail names each field as a sample (#480 review).
+        // One row with three bad fields counts once (#480 review).
         assertEquals(
-            "1 task showed reset values — see the device log for a sample of what changed.",
+            "1 task showed reset values.",
             taskCoercedMessage(1),
         )
         assertEquals(
-            "3 tasks showed reset values — see the device log for a sample of what changed.",
+            "3 tasks showed reset values.",
             taskCoercedMessage(3),
         )
     }

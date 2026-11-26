@@ -14,7 +14,9 @@ see GitHub Releases for older notes.
   (copy/save/clear report buttons, reminder-budget banner) and no info
   `HintLine`s (manual-check result, update-check status, update cadence).
   Check for updates, Download & install, the progress bar and release
-  notes work as before, and failures still surface via `ErrorCard`.
+  notes work as before; transient confirmations arrive as toasts, and
+  failures — fresh or persisted from a background check — surface via
+  `ErrorCard`.
   The diagnostics backend (`TaskWidget.diagnostics`/`buildReport`/
   `dumpLog`) stays in place.
 

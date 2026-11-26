@@ -325,7 +325,7 @@ internal fun SettingsScreen(
                         }
                     }
                     SettingSection.About -> {
-                        AppUpdateSection()
+                        AppUpdateSection(toasts)
                     }
                     SettingSection.Health -> {
                         HealthStatusCard(state)
@@ -1025,11 +1025,15 @@ internal fun SettingsBackupSection(
  *
  * Issue #366: the manual button now funnels through [UpdateCheck.run], so
  * this section, the startup one-shot and the periodic worker all read and
- * write the same persisted snapshot — the status line below can never
+ * write the same persisted snapshot — the pending release below can never
  * disagree with a completed automatic check.
+ *
+ * About stays HintLine-free (#597): transient successes toast (the
+ * section-wide [ToastHost] is the record for a tap that worked), while
+ * failures — fresh or persisted — surface via [ErrorCard].
  */
 @Composable
-internal fun AppUpdateSection() {
+internal fun AppUpdateSection(toasts: ToastCenter) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Re-read on resume: an automatic check can land while the user is
@@ -1044,9 +1048,11 @@ internal fun AppUpdateSection() {
     val (installedName, installedCode) = remember(context, tick, checkSeq) {
         UpdateManager.currentVersion(context)
     }
-    // The persisted pending release (manual or automatic check outcome).
-    // `checkSeq` re-derives it after our own manual check finishes, so the
-    // button and download target always agree without refetching.
+    // The persisted outcome of the latest completed check (manual or
+    // automatic). `checkSeq` re-derives it after our own manual check
+    // finishes, so the pending release and the persisted failure below
+    // always agree without refetching.
+    val snapshot = remember(context, tick, checkSeq) { UpdateCheck.snapshot(context) }
     val pending = remember(context, tick, checkSeq) { UpdateCheck.pendingRelease(context) }
     var status by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
@@ -1074,8 +1080,7 @@ internal fun AppUpdateSection() {
         ActivityResultContracts.StartActivityForResult()
     ) {
         if (UpdateManager.canInstallUnknownApps(context)) {
-            failed = false
-            status = "Allowed — tap Download & install again."
+            toasts.toast("Allowed — tap Download & install again.")
         } else {
             failed = true
             status = "Install permission still off. Turn on “Allow from this source”, then retry."
@@ -1100,9 +1105,9 @@ internal fun AppUpdateSection() {
                         UpdateCheck.run(context, notify = false)
                             .onSuccess { rel ->
                                 if (UpdateManager.isNewer(rel.tag, installedName, installedCode)) {
-                                    status = "Update available: ${rel.name}"
+                                    toasts.toast("Update available: ${rel.name}")
                                 } else {
-                                    status = Toasts.UP_TO_DATE
+                                    toasts.toast(Toasts.UP_TO_DATE, ToastKind.Success)
                                 }
                                 checkSeq++
                             }
@@ -1139,7 +1144,7 @@ internal fun AppUpdateSection() {
                         )
                         UpdateManager.download(rel.apkUrl, dest) { p -> progress = p }
                             .onSuccess { apk ->
-                                status = "Downloaded — opening the installer…"
+                                toasts.toast("Downloaded — opening the installer…")
                                 runCatching {
                                     context.startActivity(UpdateManager.installIntent(context, apk))
                                 }.onFailure { e ->
@@ -1179,11 +1184,17 @@ internal fun AppUpdateSection() {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        // Failures surface via ErrorCard; success needs no line — the
-        // pending release above (or its absence) already says what a
-        // fresh check found, and the buttons stay the record.
+        // Failures surface via ErrorCard, fresh or persisted: `status`
+        // carries the manual result (cleared on resume), while
+        // `snapshot.error` carries the last failed check until a later
+        // success clears it — a failed background poll still shows after
+        // reopening Settings. Success needs no line: the pending release
+        // above (or its absence, confirmed by toast) already says what a
+        // fresh check found.
         if (failed && status.isNotEmpty()) {
             ErrorCard(raw = status)
+        } else if (snapshot.error.isNotBlank()) {
+            ErrorCard(raw = "Last check failed: ${snapshot.error}")
         }
     }
 }

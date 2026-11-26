@@ -12,8 +12,8 @@ import java.util.Locale
 /**
  * Fatal-crash logs (#290): crash logs only, not every error. Client and
  * server, 5-day TTL everywhere, saved on the device; the user retrieves the
- * files by hand (adb / Device File Explorer) or through the Settings → About
- * diagnostics export, which appends them.
+ * files by hand (adb / Device File Explorer). TaskWidget.buildReport also
+ * bundles them for adb pull.
  *
  * One file per crash under `filesDir/crashlogs/`, written by a
  * `Thread.setDefaultUncaughtExceptionHandler` that chains to the previous

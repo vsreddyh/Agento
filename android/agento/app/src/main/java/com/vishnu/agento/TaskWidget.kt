@@ -800,8 +800,8 @@ class TaskWidget : AppWidgetProvider() {
             return "seen v$seen, app speaks v$TASK_CONTRACT_VERSION"
         }
 
-        /** One-screen widget health summary for Settings → About, so
-         * widget failures can be diagnosed without adb. Never throws
+        /** Widget health summary for the diagnostics log, so widget
+         * failures leave a record an adb reader can pull. Never throws
          * (a diagnostics call must not become a second crash). */
         fun diagnostics(appCtx: Context): String = runCatching {
             val ctx = appCtx.applicationContext
@@ -851,7 +851,7 @@ class TaskWidget : AppWidgetProvider() {
                 // Highest task contract this install has spoken, and the one
                 // it speaks (#185). A value nothing reads is not
                 // diagnosability, it is a write — so it lives here, in the
-                // report a user can copy out of Settings → About.
+                // report a diagnostics-log reader can pull via adb.
                 appendLine("taskContract=" + taskContractLine(ctx))
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
