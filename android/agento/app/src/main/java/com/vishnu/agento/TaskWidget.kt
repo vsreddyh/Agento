@@ -391,9 +391,17 @@ internal fun widgetRowLine(
     showParallel: Boolean = true,
 ): String {
     val bits = ArrayList<String>(4)
-    val date = if (showDueDate) task.dueDatePart(today) else ""
+    // The date's presence decides whether the chunk exists at all: a time
+    // with no date is corrupt data, not a line. Each toggle then only
+    // hides its own half.
+    val fullDate = task.dueDatePart(today)
+    val date = if (showDueDate) fullDate else ""
     val time = if (showDueTime) task.dueTimePart() else ""
-    val due = if (date.isEmpty()) "" else if (time.isEmpty()) date else "$date, $time"
+    val due = if (fullDate.isEmpty()) {
+        ""
+    } else {
+        listOf(date, time).filter { it.isNotEmpty() }.joinToString(", ")
+    }
     if (due.isNotEmpty()) bits.add(due)
     if (showRepeat) task.repeatLabel().takeIf { it.isNotEmpty() }?.let(bits::add)
     if (showParallel && task.parallelable) bits.add("parallel")

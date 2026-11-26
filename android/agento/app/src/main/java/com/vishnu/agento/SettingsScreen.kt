@@ -1204,8 +1204,9 @@ internal fun AppUpdateSection() {
 }
 
 /** Task-widget placement settings (Settings → Widget, #592): one static
- * entry plus Configure. Only one placement is used — extra placements on
- * the home screen are configured nowhere and ignored.
+ * entry plus Configure. Settings configures the first placement; extra
+ * home-screen widgets keep rendering with their saved settings (they just
+ * have no UI here any more).
  */
 @Composable
 internal fun WidgetSettingsSection() {
@@ -1281,7 +1282,7 @@ internal fun WidgetSettingsSection() {
             }
             if (widgetIds.size > 1) {
                 Text(
-                    "Only one widget is used, extra placements are ignored.",
+                    "Settings configures the first placement; other widgets keep their saved settings.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

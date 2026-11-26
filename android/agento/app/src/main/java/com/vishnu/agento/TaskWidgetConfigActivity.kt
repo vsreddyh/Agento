@@ -94,6 +94,13 @@ class TaskWidgetConfigActivity : ComponentActivity() {
                             putString("task_widget_sort_$appWidgetId", picked.sort.name)
                             putBoolean("task_widget_due_date_$appWidgetId", picked.showDueDate)
                             putBoolean("task_widget_due_time_$appWidgetId", picked.showDueTime)
+                            // Keep the legacy combined key in step so an old
+                            // build degrades to all-or-nothing instead of
+                            // contradicting the new split.
+                            putBoolean(
+                                "task_widget_due_$appWidgetId",
+                                picked.showDueDate && picked.showDueTime,
+                            )
                             putBoolean("task_widget_repeat_$appWidgetId", picked.showRepeat)
                             putBoolean("task_widget_parallel_$appWidgetId", picked.showParallel)
                             putBoolean("task_widget_sections_$appWidgetId", picked.showSections)
