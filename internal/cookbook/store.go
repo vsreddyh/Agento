@@ -192,7 +192,8 @@ func (s *Store) DeleteIngredient(ctx context.Context, nameOrID string) (bool, er
 	if err != nil || ing == nil {
 		return false, err
 	}
-	res, err := s.ings.DeleteOne(ctx, bson.M{"_id": ing["_id"]})
+	oid, _ := primitive.ObjectIDFromHex(idstr(ing["_id"]))
+	res, err := s.ings.DeleteOne(ctx, bson.M{"_id": oid})
 	if err != nil {
 		return false, err
 	}

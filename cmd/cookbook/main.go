@@ -110,7 +110,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "cookbook", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "add_ingredient",
-		Description: "Add an ingredient name (optional note). Names are unique."},
+		Description: "Add an ingredient name (optional note). Names are unique; notes over 2000 chars are truncated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			ing, err := store.AddIngredient(ctx, in.Name, in.Note)
 			if err != nil {
@@ -143,7 +143,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_ingredient",
-		Description: "Patch an ingredient's name or note (at least one required). Empty args are left unchanged; notes cannot be cleared to empty."},
+		Description: "Patch an ingredient's name or note (at least one required). Empty args are left unchanged; notes cannot be cleared to empty, over-cap notes are truncated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
@@ -173,7 +173,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "add_recipe",
-		Description: "Save a recipe: a name with an optional note and tags. No quantities or macros — just a named note."},
+		Description: "Save a recipe: a name with an optional note and tags. No quantities, servings or macros — just a named note. Notes over 2000 chars (tags over 20 entries of 40 chars) are truncated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.AddRecipe(ctx, in.Name, in.Note, in.Tags)
 			if err != nil {
@@ -206,7 +206,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
-		Description: "Patch a recipe's name, note or tags (at least one required). Empty args are left unchanged; note/tags cannot be cleared to empty."},
+		Description: "Patch a recipe's name, note or tags (at least one required). Empty args are left unchanged; note/tags cannot be cleared to empty, over-cap values are truncated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {

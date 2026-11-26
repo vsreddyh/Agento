@@ -53,7 +53,7 @@ instead of round-tripping one at a time.
   `list_ingredients`, `update_ingredient`, `delete_ingredient`,
   `add_recipe`, `get_recipe`, `list_recipes`, `update_recipe`,
   `delete_recipe` — recipe + ingredient books with notes (no quantities,
-  macros or cook log).
+  servings, macros or cook log).
 - **health-check** (9): `log_meal` takes user-supplied macros only —
   `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, never estimate, ask
   for whatever is missing. At least one item, each with a non-blank name;

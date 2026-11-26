@@ -2,10 +2,11 @@
 
 Recipe + ingredient books with notes. Permanent data — never pruned.
 
-Collections: `cookbook_ingredients` (name unique + note ≤2000),
-`cookbook_recipes` (dish name unique + note ≤2000 + `tags[]`, at most 20
-tags of 40 chars each). No quantities, servings, macros, or cook log
-(#600); `cookbook_cook_log` stays in Atlas untouched but nothing reads it.
+Collections: `cookbook_ingredients` (name unique + note ≤2000, longer notes
+truncated), `cookbook_recipes` (dish name unique + note ≤2000, truncated, +
+`tags[]`, at most 20 tags of 40 chars each, over-cap truncated). No
+quantities, servings, macros, or cook log (#600); `cookbook_cook_log`
+stays in Atlas untouched but nothing reads it.
 
 ## Which arguments are required
 
