@@ -436,9 +436,12 @@ object BehaviourSettings {
  * instance. Skipping defaults would leave a reverted knob on its old
  * custom (rate 150 → back to 100 still speaking fast).
  * The voice is matched by name against THIS engine's voices (Voice objects
- * are engine-specific); a stored name the engine no longer offers — or an
- * empty pick (Engine default) — resets to the engine default voice so the
- * VOICE_MISSING line ("used the default voice") describes what played.
+ * are engine-specific). Null (unknown — binder hiccup) leaves the engine
+ * alone, mirroring the VOICE_MISSING report below it; only a known non-null
+ * list lacking the pick — or an empty pick (Engine default) — resets to
+ * the engine default voice so the VOICE_MISSING line ("used the default
+ * voice") describes what played. A null `defaultVoice` falls back to
+ * re-setting the device locale (the init path's reset), best-effort.
  * Never throws (OEM binder breakage is a warning, like the callers
  * already treat it).
  */
@@ -455,15 +458,24 @@ fun applyStoredTtsSettings(tts: TextToSpeech, appCtx: Context) {
     }
     runCatching {
         val want = BehaviourSettings.ttsVoice(appCtx)
+        // Unknown, not missing: a null binder answer must not flip one
+        // utterance to default with no VOICE_MISSING, then flip back.
+        val voices = tts.voices ?: return@runCatching
         if (want.isNotEmpty()) {
-            val match = tts.voices?.firstOrNull { it.name == want }
+            val match = voices.firstOrNull { it.name == want }
             if (match != null) {
                 tts.voice = match
-            } else {
-                tts.defaultVoice?.let { tts.voice = it }
+                return@runCatching
             }
+        }
+        // Empty pick or known-missing custom: reset to default. Null
+        // defaultVoice is explicit (not a silent no-op): fall back to the
+        // device locale, the same reset the init path applies.
+        val def = tts.defaultVoice
+        if (def != null) {
+            tts.voice = def
         } else {
-            tts.defaultVoice?.let { tts.voice = it }
+            tts.language = java.util.Locale.getDefault()
         }
     }
 }
