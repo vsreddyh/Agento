@@ -23,6 +23,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -30,6 +31,7 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -42,7 +44,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
@@ -54,6 +55,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -61,6 +63,8 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -1418,6 +1422,10 @@ internal fun TaskManagerScreen(
                                                 // same flow as the sheet's
                                                 // Skip button.
                                                 onSkip = { doSkip(t) },
+                                                // Left-swipe Duplicate (#576):
+                                                // same flow as the sheet's
+                                                // Duplicate button.
+                                                onDuplicate = { doDuplicate(t) },
                                             )
                                             if (i < rows.lastIndex) {
                                                 HorizontalDivider(
@@ -1845,8 +1853,9 @@ internal fun mergeRefresh(
  * detail sheet. Name + one friendly due line; description, estimate,
  * repeat, and timestamps live on the detail page. Overdue open tasks
  * render the due line in error color; done rows dim with a
- * strikethrough. Deliberately cardless — the section stacks the rows
- * with inset dividers. */
+ * strikethrough. Swipe right skips an open task and swipe left duplicates
+ * it (#576) — both snap back and neither replaces the tap. Deliberately
+ * cardless — the section stacks the rows with inset dividers. */
 @Composable
 internal fun ServerTaskRow(
     task: ServerTask,
@@ -1870,9 +1879,15 @@ internal fun ServerTaskRow(
     onLongPress: () -> Unit = {},
     /**
      * Per-task Skip (#345). Null hides it: bulk mode taps toggle, and
-     * closed tasks have nothing to skip.
+     * closed tasks have nothing to skip. Also the right-swipe action
+     * (#576), offered for open tasks in normal mode only.
      */
     onSkip: (() -> Unit)? = null,
+    /**
+     * Per-task Duplicate (#576): the left-swipe action, same flow as the
+     * detail sheet's Duplicate. Null disables swiping entirely.
+     */
+    onDuplicate: (() -> Unit)? = null,
 ) {
     val done = !task.isOpen() || completed
     // On the Done/All filters a completion leaves the row where it is and
@@ -1888,100 +1903,177 @@ internal fun ServerTaskRow(
         animationSpec = tween(ROW_ANIM_MS),
         label = "taskRowName",
     )
-    Row(
-        modifier = Modifier.fillMaxWidth()
-            .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
-            .padding(horizontal = 4.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    // Neither swipe dismisses the row (#576): each action is refused after it
+    // runs, so the box settles back to rest and the action's own UI owns what
+    // happens next — the leave animation for Skip, the placeholder row for
+    // Duplicate. Read through `rememberUpdatedState` so the remembered state
+    // never holds a stale task or callback after a refresh.
+    val currentTask by rememberUpdatedState(task)
+    val currentOnSkip by rememberUpdatedState(onSkip)
+    val currentOnDuplicate by rememberUpdatedState(onDuplicate)
+    val skipSwipeAvailable = task.isOpen() && onSkip != null
+    val swipeState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { target ->
+            when (target) {
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    // A closed task has nothing to skip: the gesture settles
+                    // back untouched rather than doing something else.
+                    if (currentTask.isOpen()) currentOnSkip?.invoke()
+                    false
+                }
+                SwipeToDismissBoxValue.EndToStart -> {
+                    currentOnDuplicate?.invoke()
+                    false
+                }
+                SwipeToDismissBoxValue.Settled -> true
+            }
+        },
+    )
+    SwipeToDismissBox(
+        state = swipeState,
+        backgroundContent = {
+            TaskSwipeBackground(state = swipeState, skipAvailable = skipSwipeAvailable)
+        },
+        // Bulk mode has no per-row gesture (a swipe would fight the toggle),
+        // and a row with a request in flight or one that is leaving must not
+        // start another action.
+        gesturesEnabled = !bulkMode && actionsEnabled && onDuplicate != null,
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        if (bulkMode) {
-            // The selection control: checked state only, the row tap and
-            // this box do the same toggle.
-            Checkbox(
-                checked = bulkChecked,
-                onCheckedChange = { onToggle() },
-                enabled = actionsEnabled,
-            )
-        } else {
-        IconButton(onClick = onToggle, enabled = actionsEnabled) {
-            // Two different questions, two different answers. The ICON follows
-            // what is DRAWN (`done`), so a row that is leaving (#308) shows the
-            // filled check its dimmed, struck-through text already implies
-            // rather than an empty circle. The LABEL names the action this
-            // button is, which is still "complete" while that leave animation
-            // runs: the row is being completed, not reopened, and TalkBack
-            // reads the label, not the glyph.
-            if (done) {
-                Icon(
-                    Icons.Filled.CheckCircle,
-                    contentDescription = if (task.isOpen()) "Complete task" else "Reopen task",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(26.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (bulkMode) {
+                // The selection control: checked state only, the row tap and
+                // this box do the same toggle.
+                Checkbox(
+                    checked = bulkChecked,
+                    onCheckedChange = { onToggle() },
+                    enabled = actionsEnabled,
                 )
             } else {
-                Icon(
-                    Icons.Filled.RadioButtonUnchecked,
-                    contentDescription = "Complete task",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(26.dp),
+            IconButton(onClick = onToggle, enabled = actionsEnabled) {
+                // Two different questions, two different answers. The ICON follows
+                // what is DRAWN (`done`), so a row that is leaving (#308) shows the
+                // filled check its dimmed, struck-through text already implies
+                // rather than an empty circle. The LABEL names the action this
+                // button is, which is still "complete" while that leave animation
+                // runs: the row is being completed, not reopened, and TalkBack
+                // reads the label, not the glyph.
+                if (done) {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = if (task.isOpen()) "Complete task" else "Reopen task",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(26.dp),
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.RadioButtonUnchecked,
+                        contentDescription = "Complete task",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+            }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    task.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textDecoration = if (done) TextDecoration.LineThrough else null,
+                    color = nameColor,
                 )
+                // One line, always all three (#532): due → repeat → parallel.
+                // The widget composes its own line from per-placement switches
+                // (#536), so it can drop any of the three; the in-app row does
+                // not.
+                val dueBits = task.dueBits(today)
+                if (dueBits.isNotEmpty()) {
+                    Text(
+                        dueBits,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = if (overdue) FontWeight.SemiBold else null,
+                        color = if (overdue) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                } else if (task.description.isNotEmpty()) {
+                    Text(
+                        task.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // No "Has details" glyph (#576): the note is already the row's
+            // second line, and tapping the row opens the rest.
+            // Per-task Skip (#345): one tap from the row into the same flow as
+            // the sheet's Skip. Open tasks in normal mode only: in bulk mode
+            // taps toggle membership, and a closed task has nothing to skip.
+            if (onSkip != null && task.isOpen() && !bulkMode) {
+                TextButton(
+                    onClick = onSkip,
+                    enabled = actionsEnabled,
+                    contentPadding = PaddingValues(horizontal = 4.dp),
+                ) { Text("Skip") }
             }
         }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                task.name,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textDecoration = if (done) TextDecoration.LineThrough else null,
-                color = nameColor,
-            )
-            // One line, always all three (#532): due → repeat → parallel.
-            // The widget composes its own line from per-placement switches
-            // (#536), so it can drop any of the three; the in-app row does
-            // not.
-            val dueBits = task.dueBits(today)
-            if (dueBits.isNotEmpty()) {
-                Text(
-                    dueBits,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    fontWeight = if (overdue) FontWeight.SemiBold else null,
-                    color = if (overdue) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            } else if (task.description.isNotEmpty()) {
-                Text(
-                    task.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (task.description.isNotEmpty()) {
+    }
+}
+
+/** What sits behind a task row while it swipes (#576): skip on a right
+ * swipe, duplicate on a left swipe. A closed task has no skip action, so its
+ * right swipe reveals nothing. */
+@Composable
+private fun TaskSwipeBackground(
+    state: SwipeToDismissBoxState,
+    skipAvailable: Boolean,
+) {
+    val direction = state.dismissDirection
+    val container = when (direction) {
+        SwipeToDismissBoxValue.StartToEnd ->
+            if (skipAvailable) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+        SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.tertiaryContainer
+        SwipeToDismissBoxValue.Settled -> Color.Transparent
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(12.dp))
+            .background(container)
+            .padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (direction == SwipeToDismissBoxValue.StartToEnd && skipAvailable) {
             Icon(
-                Icons.Filled.Description,
-                contentDescription = "Has details",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 4.dp),
+                Icons.Filled.SkipNext,
+                contentDescription = "Skip",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
             )
+        } else {
+            Spacer(modifier = Modifier.width(24.dp))
         }
-        // Per-task Skip (#345): one tap from the row into the same flow as
-        // the sheet's Skip. Open tasks in normal mode only: in bulk mode
-        // taps toggle membership, and a closed task has nothing to skip.
-        if (onSkip != null && task.isOpen() && !bulkMode) {
-            TextButton(
-                onClick = onSkip,
-                enabled = actionsEnabled,
-                contentPadding = PaddingValues(horizontal = 4.dp),
-            ) { Text("Skip") }
+        if (direction == SwipeToDismissBoxValue.EndToStart) {
+            Icon(
+                Icons.Filled.ContentCopy,
+                contentDescription = "Duplicate",
+                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+        } else {
+            Spacer(modifier = Modifier.width(24.dp))
         }
     }
 }
@@ -2009,34 +2101,15 @@ internal fun ServerTaskDetailSheet(
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    task.name,
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                if (task.isOpen()) {
-                    // Static badge, not a chip: the status isn't actionable
-                    // and a clickable chip would be a dead target.
-                    Text(
-                        if (overdue) "Overdue" else "Open",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (overdue) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        },
-                    )
-                } else {
-                    Text(
-                        // Skipped reads as "not done" (#287, #209): a skipped
-                        // occurrence must never render as completed work.
-                        if (task.skipped) "Skipped" else "Done",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            // No status badge beside the title (#576): "Open" reads as a dead
+            // button and the rest is noise — the row's own filter already
+            // says where the task sits, and the Due line below still
+            // highlights when the task is overdue.
+            Text(
+                task.name,
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.fillMaxWidth(),
+            )
             if (task.description.isNotEmpty()) {
                 SelectionContainer {
                     Text(
