@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.6.1]
+- **Files top bar goes sync-style (#582).** The header is two actions:
+  Upload (cloud icon, still disabled mid-upload) and Sync, which spins
+  while any list fetch or the upload is in flight and rests idle
+  otherwise. The linear progress bar is gone — the first load shows a
+  centered spinner instead. (No Up button to remove: the #583 tree
+  already replaced drill-down navigation with expand/collapse.)
+
 ## [9.6.0]
 - **Files grows a tree with download + delete (#583).** The Files tab is
   now an indented tree: folders expand inline (one list per folder,

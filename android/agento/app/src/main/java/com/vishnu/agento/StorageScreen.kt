@@ -22,14 +22,13 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -360,8 +359,8 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     },
                 )
             } finally {
-                // Stuck-disabled Upload (or a wedged progress bar) after a
-                // throw outside the Result wrappers must be impossible.
+                // Stuck-disabled Upload after a throw outside the Result
+                // wrappers must be impossible.
                 uploading = false
             }
         }
@@ -377,6 +376,9 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
 
     val rows = remember(tree, openDirs) { flattenTree(tree, openDirs) }
     val rootLoaded = "" in tree
+    // Any list fetch or the upload in flight spins the top-bar sync
+    // button (#582): one affordance for every run.
+    val syncing = loadingDirs.isNotEmpty() || uploading
 
     // The toast card floats top-end over the content (Box overlay, not
     // the bottom-anchored Scaffold slot) so it never shifts the layout.
@@ -395,7 +397,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                         onClick = { picker.launch(arrayOf("*/*")) },
                         enabled = !uploading,
                     ) {
-                        Icon(Icons.Filled.Upload, contentDescription = "Upload")
+                        Icon(Icons.Filled.CloudUpload, contentDescription = "Upload")
                     }
                     IconButton(
                         // Refetches the root; open folders refetch from its
@@ -404,14 +406,18 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                         // any child refetch can toast for it. Closed folders
                         // drop their listings, so the next expansion
                         // refetches instead of serving a VPS-changed cache.
+                        // Never gated, like Task Manager and Projects: a tap
+                        // only queues an idempotent reload.
                         onClick = {
                             tree = tree.filterKeys { it.isEmpty() || it in openDirs }
                             refreshAfterRoot = true
                             loadDir("", force = true)
                         },
-                        enabled = !uploading && loadingDirs.isEmpty(),
                     ) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                        // Sync state lives on the button itself (#582): it
+                        // spins while any list fetch or the upload is in
+                        // flight, and rests idle otherwise.
+                        SyncButtonIcon(spinning = syncing)
                     }
                 },
             )
@@ -422,8 +428,15 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(modifier = Modifier.contentWidth(WindowClass.Compact)) {
-                if (uploading || loadingDirs.isNotEmpty()) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if ("" !in tree && error.isEmpty()) {
+                    // First load has no rows to protect yet: a centered
+                    // spinner instead of the old linear bar (#582).
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 }
                 HintLine(
                     "Uploads land in the Exports root.",
