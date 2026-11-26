@@ -170,8 +170,38 @@ class StorageApi(context: Context) {
             }
         }
 
-    /** Enqueues a download into public Downloads; returns the system download id. */
-    fun download(path: String, name: String): Long {
+    /** Deletes one file (`dir` + `name`, both server-confined); the server
+     * refuses folders, escapes and missing rows with named errors. Returns
+     * the deleted name on success. */
+    suspend fun delete(dir: String, name: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            val base = base()
+            if (base.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
+            }
+            val url = "$base/api/files/delete?path=" +
+                java.net.URLEncoder.encode(
+                    (if (dir.isEmpty()) "" else "$dir/") + name, "UTF-8")
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer ${password()}")
+                .delete()
+                .build()
+            runCatching {
+                http.newCall(request).execute().use { response ->
+                    val raw = response.body?.string() ?: ""
+                    if (!response.isSuccessful) {
+                        val detail = runCatching {
+                            JSONObject(raw).optString("detail", raw)
+                        }.getOrDefault(raw).ifEmpty { raw }
+                        throw RuntimeException("HTTP ${response.code}: ${detail.take(300)}")
+                    }
+                    JSONObject(raw).optString("name", name)
+                }
+            }
+        }
+
+    /** Enqueues a download into public Downloads; returns the system download id. */    fun download(path: String, name: String): Long {
         val base = base()
         val url = "$base/api/files/download?path=" +
             java.net.URLEncoder.encode(

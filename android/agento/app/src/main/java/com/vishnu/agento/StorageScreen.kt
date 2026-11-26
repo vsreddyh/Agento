@@ -3,26 +3,30 @@
 package com.vishnu.agento
 
 /**
- * VPS exports browser (#163, last of four moves).
+ * VPS exports browser (#163, last of four moves): a readable tree with
+ * per-file download + delete (#583).
  *
- * Moved verbatim out of MainActivity.kt; the only changes are
- * visibility (`private` to `internal`, same package) and the import
- * list, which carries exactly what this file uses.
+ * Folders expand inline (one server list per folder, fetched on first
+ * expansion and cached), files show an icon + name + size with download
+ * and delete icon buttons. Deletes confirm first, then refresh the
+ * parent folder. Uploads land at the root; the tree shows them after the
+ * refresh.
  */
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Upload
@@ -35,46 +39,114 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-/** VPS files shelf with breadcrumbs + mobile downloads + uploads (#26, #340). */
+
+/** One folder's cached listing: subfolders first, then files. */
+internal data class DirListing(
+    val dirs: List<RemoteEntry>,
+    val files: List<RemoteEntry>,
+)
+
+/** One visible tree row, flattened with its indent depth. */
+internal sealed interface TreeRow {
+    data class Dir(val path: String, val name: String, val depth: Int) : TreeRow
+    data class File(val dir: String, val entry: RemoteEntry, val depth: Int) : TreeRow
+}
+
+/** Flattens the cached tree into visible rows: every folder lists its
+ * subfolders (then its files), and an open folder's rows follow it one
+ * level deeper. Folders with no cached listing contribute nothing — the
+ * row is only drawn once its list has landed. */
+internal fun flattenTree(
+    tree: Map<String, DirListing>,
+    open: Set<String>,
+): List<TreeRow> {
+    val out = mutableListOf<TreeRow>()
+    fun walk(path: String, depth: Int) {
+        val listing = tree[path] ?: return
+        listing.dirs.forEach { d ->
+            val p = if (path.isEmpty()) d.name else "$path/${d.name}"
+            out.add(TreeRow.Dir(p, d.name, depth))
+            if (p in open) walk(p, depth + 1)
+        }
+        listing.files.forEach { f -> out.add(TreeRow.File(path, f, depth)) }
+    }
+    walk("", 0)
+    return out
+}
+
 @Composable
 internal fun StorageScreen(onMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val toasts = remember(scope) { ToastCenter(scope) }
-    var path by remember { mutableStateOf("") }
-    var dirs by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
-    var files by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
+    // Path -> cached listing, fetched on first expansion. Keys are the
+    // slash-joined relative paths the server lists by ("" = root).
+    var tree by remember { mutableStateOf(mapOf<String, DirListing>()) }
+    var openDirs by remember { mutableStateOf(setOf<String>()) }
+    // One folder's fetch in flight: the row shows a spinner of its own, so
+    // expanding a folder never blanks the rows already on screen.
+    var loadingDirs by remember { mutableStateOf(setOf<String>()) }
     var error by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
+    // (dir, file) awaiting delete confirmation.
+    var deleting by remember { mutableStateOf<Pair<String, RemoteEntry>?>(null) }
 
-    fun load(p: String) {
-        busy = true
-        error = ""
+    fun loadDir(p: String, force: Boolean = false) {
+        // A cached folder opens without refetching; a refresh passes force
+        // (delete, upload, manual refresh).
+        if (!force && p in tree) {
+            openDirs = openDirs + p
+            return
+        }
+        if (p in loadingDirs) return
+        loadingDirs = loadingDirs + p
+        if (p.isEmpty()) error = ""
         scope.launch {
             StorageApi(context).list(p).fold(
-                onSuccess = { (cur, d, f) ->
-                    path = cur.ifEmpty { "" }
-                    dirs = d
-                    files = f
+                onSuccess = { (_, d, f) ->
+                    tree = tree + (p to DirListing(d, f))
+                    openDirs = openDirs + p
                 },
-                onFailure = { e -> error = e.message ?: e.javaClass.simpleName },
+                onFailure = { e ->
+                    val msg = e.message ?: e.javaClass.simpleName
+                    // A failed folder keeps its collapsed row in place and
+                    // says so; only a failed root replaces the list with
+                    // the error card.
+                    if (p.isEmpty()) error = msg
+                    else toasts.toast(friendlyError(msg).title, ToastKind.Error)
+                },
             )
-            busy = false
+            loadingDirs = loadingDirs - p
+        }
+    }
+
+    fun doDelete(dir: String, f: RemoteEntry) {
+        deleting = null
+        scope.launch {
+            StorageApi(context).delete(dir, f.name).fold(
+                onSuccess = {
+                    toasts.toast("Deleted $it", ToastKind.Success)
+                    loadDir(dir, force = true)
+                },
+                onFailure = { e ->
+                    toasts.toast(
+                        friendlyError(e.message ?: "").title,
+                        ToastKind.Error,
+                    )
+                },
+            )
         }
     }
 
     // Uploads go through the system picker (OpenDocument: no storage
-    // permission needed, same SAF shape as Settings import) into the current
-    // folder. The server confines, caps (25 MiB) and never replaces; every
-    // refusal is a named error the toast shows verbatim-shaped via
-    // friendlyError.
+    // permission needed, same SAF shape as Settings import) and always land
+    // at the root (#583): per-folder targets need a per-row affordance that
+    // does not exist yet. The server confines, caps (25 MiB) and never
+    // replaces; every refusal is a named error the toast shows
+    // verbatim-shaped via friendlyError.
     fun uploadFrom(uri: Uri) {
         uploading = true
         error = ""
-        // The target folder is captured now, not read at completion: a
-        // navigation mid-upload must not retarget the refresh.
-        val target = path
         // Grabbed up front on Main (cheap handle, not IO): the blocking
         // query/open below must not re-reach into the Activity per call.
         val cr = context.contentResolver
@@ -116,7 +188,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                 "file_too_large: this file is over the 25 MiB upload limit")
                         }
                         val mime = cr.getType(uri) ?: "application/octet-stream"
-                        StorageApi(context).upload(target, displayName, mime, size) {
+                        StorageApi(context).upload("", displayName, mime, size) {
                             cr.openInputStream(uri)
                         }.getOrThrow()
                     }
@@ -124,7 +196,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 result.fold(
                     onSuccess = {
                         toasts.toast("Uploaded ${it.name}", ToastKind.Success)
-                        load(target)
+                        loadDir("", force = true)
                     },
                     onFailure = { e ->
                         // Refusals are the expected path here, not an edge
@@ -148,14 +220,10 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         if (uri != null) uploadFrom(uri)
     }
 
-    LaunchedEffect(Unit) { load("") }
+    LaunchedEffect(Unit) { loadDir("", force = true) }
 
-    val crumbs = remember(path) {
-        if (path.isEmpty()) emptyList()
-        else path.split("/").scan("") { acc, part ->
-            if (acc.isEmpty()) part else "$acc/$part"
-        }.drop(1)
-    }
+    val rows = remember(tree, openDirs) { flattenTree(tree, openDirs) }
+    val rootLoaded = "" in tree
 
     // The toast card floats top-end over the content (Box overlay, not
     // the bottom-anchored Scaffold slot) so it never shifts the layout.
@@ -170,19 +238,16 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     }
                 },
                 actions = {
-                    if (path.isNotEmpty()) {
-                        TextButton(onClick = {
-                            val parent = if ("/" in path) path.substringBeforeLast("/") else ""
-                            load(parent)
-                        }) { Text("Up") }
-                    }
                     IconButton(
                         onClick = { picker.launch(arrayOf("*/*")) },
                         enabled = !uploading,
                     ) {
                         Icon(Icons.Filled.Upload, contentDescription = "Upload")
                     }
-                    IconButton(onClick = { load(path) }, enabled = !busy && !uploading) {
+                    IconButton(
+                        onClick = { loadDir("", force = true) },
+                        enabled = !uploading && "" !in loadingDirs,
+                    ) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
                 },
@@ -194,36 +259,20 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(modifier = Modifier.contentWidth(WindowClass.Compact)) {
-                if (path.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TextButton(onClick = { load("") }) { Text("Files") }
-                        crumbs.forEach { c ->
-                            Text(" / ", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            TextButton(onClick = { load(c) }) {
-                                Text(c.substringAfterLast("/"), maxLines = 1)
-                            }
-                        }
-                    }
-                }
-                if (busy || uploading) {
+                if (uploading || "" in loadingDirs) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
-                if (error.isNotEmpty()) {
-                    ErrorCard(raw = error, onRetry = { load(path) },
+                if (error.isNotEmpty() && !rootLoaded) {
+                    ErrorCard(raw = error, onRetry = { loadDir("", force = true) },
                         modifier = Modifier.padding(12.dp))
                 }
-                if (!busy && !uploading && dirs.isEmpty() && files.isEmpty() && error.isEmpty()) {
+                if (rootLoaded && rows.isEmpty() && error.isEmpty()) {
                     EmptyState(
                         icon = Icons.Filled.Folder,
-                        title = "This folder is empty",
+                        title = "Exports is empty",
                         subtitle = "Use Upload to park a file here, or drop files into the VPS exports folder to see them.",
                         actionLabel = "Refresh",
-                        onAction = { load(path) },
+                        onAction = { loadDir("", force = true) },
                     )
                 }
                 LazyColumn(
@@ -231,48 +280,102 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    items(dirs, key = { "d:" + it.name }) { d ->
-                        Card(
-                            onClick = { load(if (path.isEmpty()) d.name else "$path/${d.name}") },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(Icons.Filled.Folder, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(d.name, style = MaterialTheme.typography.bodyLarge)
-                            }
+                    items(rows, key = {
+                        when (it) {
+                            is TreeRow.Dir -> "d:${it.path}"
+                            is TreeRow.File -> "f:${it.dir}/${it.entry.name}"
                         }
-                    }
-                    items(files, key = { "f:" + it.name }) { f ->
-                        Card(modifier = Modifier.fillMaxWidth()) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(Icons.Filled.Description, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(f.name, style = MaterialTheme.typography.bodyLarge)
-                                    Text(
-                                        humanSize(f.size),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                TextButton(onClick = {
-                                    runCatching {
-                                        StorageApi(context).download(path, f.name)
-                                        toasts.toast("Saving ${f.name}…", ToastKind.Success)
-                                    }.onFailure { e ->
-                                        toasts.toast(
-                                            friendlyError(e.message ?: "").title,
-                                            ToastKind.Error,
+                    }) { row ->
+                        when (row) {
+                            is TreeRow.Dir -> {
+                                val open = row.path in openDirs
+                                Card(
+                                    onClick = {
+                                        if (open) openDirs = openDirs - row.path
+                                        else loadDir(row.path)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                        .padding(start = (row.depth * 20).dp),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            if (open) Icons.Filled.KeyboardArrowDown
+                                            else Icons.Filled.KeyboardArrowRight,
+                                            contentDescription =
+                                                if (open) "Collapse ${row.name}"
+                                                else "Expand ${row.name}",
                                         )
+                                        Icon(Icons.Filled.Folder, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            row.name,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        if (row.path in loadingDirs) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(20.dp),
+                                                strokeWidth = 2.dp,
+                                            )
+                                        }
                                     }
-                                }) { Text("Save") }
+                                }
+                            }
+                            is TreeRow.File -> {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth()
+                                        .padding(start = (row.depth * 20).dp),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(Icons.Filled.Description, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                row.entry.name,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                            )
+                                            Text(
+                                                humanSize(row.entry.size),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        IconButton(onClick = {
+                                            // The system DownloadManager owns
+                                            // the completion notice, so no
+                                            // "Saving…" toast is needed —
+                                            // only failures toast.
+                                            runCatching {
+                                                StorageApi(context).download(
+                                                    row.dir, row.entry.name)
+                                            }.onFailure { e ->
+                                                toasts.toast(
+                                                    friendlyError(e.message ?: "").title,
+                                                    ToastKind.Error,
+                                                )
+                                            }
+                                        }) {
+                                            Icon(
+                                                Icons.Filled.CloudDownload,
+                                                contentDescription = "Download",
+                                            )
+                                        }
+                                        IconButton(onClick = {
+                                            deleting = row.dir to row.entry
+                                        }) {
+                                            Icon(
+                                                Icons.Filled.Delete,
+                                                contentDescription = "Delete",
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -281,5 +384,22 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         }
         ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
     }
+    }
+
+    val target = deleting
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete file?") },
+            text = { Text("“${target.second.name}” will be permanently deleted.") },
+            confirmButton = {
+                TextButton(onClick = { doDelete(target.first, target.second) }) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) { Text("Cancel") }
+            },
+        )
     }
 }
