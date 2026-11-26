@@ -103,6 +103,17 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     // (dir, file) awaiting delete confirmation.
     var deleting by remember { mutableStateOf<Pair<String, RemoteEntry>?>(null) }
 
+    // Collapsing drops the same cascade: a collapsed subtree is
+    // invisible, so keeping its open entries would serve them stale on
+    // re-expand and refetch them pointlessly on Refresh.
+    fun collapseDir(p: String) {
+        val cut = setOf(p) + openDirs.filter { it.startsWith("$p/") } +
+            tree.keys.filter { it.startsWith("$p/") }
+        openDirs = openDirs - cut
+        tree = tree - cut
+        pendingReload = pendingReload - cut
+    }
+
     // Folders whose listing changed while a fetch was in flight (a delete
     // or upload landing mid-load): the in-flight list was snapshotted
     // before the change, so it is refetched once it lands instead of
@@ -221,13 +232,17 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 },
                 onFailure = { e ->
                     val msg = e.message ?: ""
-                    // Already gone (second client, VPS rm, or a VPS-deleted
-                    // parent, which answers 400, not 404): the rows are
-                    // dropped by the refresh; the toast names the loss
-                    // instead of blaming the app version.
-                    if (isGone(msg)) loadDir(dir, force = true)
-                    val fe = friendlyError(msg)
-                    toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+                    if (isGone(msg)) {
+                        // Already gone (second client, VPS rm, or a
+                        // VPS-deleted parent, which answers 400, not 404):
+                        // the forced reload drops the rows and toasts once
+                        // with guidance (or lands silently when the parent
+                        // listing is intact) — no second toast here.
+                        loadDir(dir, force = true)
+                    } else {
+                        val fe = friendlyError(msg)
+                        toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+                    }
                 },
             )
         }
@@ -402,7 +417,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                 val open = row.path in openDirs
                                 Card(
                                     onClick = {
-                                        if (open) openDirs = openDirs - row.path
+                                        if (open) collapseDir(row.path)
                                         else {
                                             // Optimistic: the chevron flips
                                             // at once; the rows follow when
