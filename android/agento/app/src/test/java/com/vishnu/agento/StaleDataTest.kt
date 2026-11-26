@@ -194,6 +194,9 @@ class StaleDataTest {
         assertEquals("Syncing…", hubHealthStatus(true, false, false, true, true, ""))
         assertEquals("Synced", hubHealthStatus(true, false, false, true, false, "t"))
         assertEquals("Ready", hubHealthStatus(true, false, false, true, false, ""))
+        assertEquals("Paused", hubHealthStatus(true, false, false, true, false, "", true))
+        assertEquals("Paused", hubHealthStatus(true, false, false, true, false, "t", true))
+        assertEquals("Paused", hubHealthStatus(true, false, false, true, true, "", true))
     }
 
     @Test

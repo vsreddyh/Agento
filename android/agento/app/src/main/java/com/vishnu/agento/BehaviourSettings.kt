@@ -293,10 +293,11 @@ object BehaviourSettings {
     // chat bar is gone, so the key is no longer read or written; a stale
     // copy in an old backup is skipped on import like any unknown key.
 
-    /** Hub one-liner: how many knobs differ from their defaults. Health
-     * sync cadence (interval, Wi-Fi-only, pause) lives in Settings →
-     * Health sync (#588), so it counts there — or rather, it shows its
-     * own values in its own card, and never in this Behaviour total. */
+    /** Hub one-liner: how many Behaviour knobs differ from their defaults.
+     * Health sync cadence (interval, Wi-Fi-only, pause) is not one of them:
+     * it lives in Settings → Health sync (#588), shows its own values in
+     * its own card, and a paused sync reads Paused (not Ready) on the Health
+     * hub row instead of counting here. */
     fun customCount(ctx: Context): Int = customCount(
         taskMinutes = taskSyncIntervalMinutes(ctx),
         leadMinutes = reminderLeadMinutes(ctx),

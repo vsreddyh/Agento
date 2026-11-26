@@ -177,6 +177,7 @@ internal fun SettingsScreen(
                                 permissionsGranted = state.permissionsGranted,
                                 syncing = state.syncing,
                                 lastSyncAt = state.lastSyncAt,
+                                paused = BehaviourSettings.syncPaused(context),
                             ),
                             themeStatus = when (themeMode) {
                                 ThemeStore.LIGHT -> "Light"
@@ -1505,7 +1506,8 @@ internal fun healthStatusLine(
 
 /** Hub Health row (#435 review): same order as [healthStatusLine], short
  * strings for the hub. A transiently dead client reads as not responding,
- * never "setup needed" — setup cannot fix it. Pure for the same reason. */
+ * never "setup needed" — setup cannot fix it. A paused sync reads Paused,
+ * never Ready/Synced — nothing runs while paused (#588). Pure for the same reason. */
 internal fun hubHealthStatus(
     healthAvailable: Boolean,
     healthUpdateRequired: Boolean,
@@ -1513,11 +1515,13 @@ internal fun hubHealthStatus(
     permissionsGranted: Boolean,
     syncing: Boolean,
     lastSyncAt: String,
+    paused: Boolean = false,
 ): String = when {
     healthUpdateRequired -> "Update needed"
     healthTransient -> "Not responding"
     !healthAvailable -> "Not installed"
     !permissionsGranted -> "Setup needed"
+    paused -> "Paused"
     syncing -> "Syncing…"
     lastSyncAt.isNotEmpty() -> "Synced"
     else -> "Ready"
