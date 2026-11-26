@@ -169,9 +169,9 @@ class BehaviourSettingsTest {
         // as their defaults, so both overloads agree on effective state.
         // (Coerced-to-floor need not be default: 5min reads as 15, custom.)
         assertEquals(1, all(taskMinutes = 5L))
-        // Retired TTS customs (#596) count nothing: the voice/rate/pitch
-        // params are gone, so a stale stored custom cannot flip the hub —
-        // there is no card left to clear it from.
+        // TTS customs (#615) count nothing in Behaviour: voice/rate/pitch
+        // live in Settings → Notifications now, so a stored custom cannot
+        // flip the Behaviour hub — there is no card there to clear it from.
     }
 
     @Test

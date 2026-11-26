@@ -21,7 +21,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 /**
  * Settings → Behaviour (#355): every device-local knob in one place —
  * task refresh, reminder lead time + enable, and the app update checks.
- * Reminder speech runs on engine defaults (the Speech card is gone, #596).
+ * Reminder speech voice/rate/pitch live in Settings → Notifications
+ * (Speech card, #615).
  * (Health sync cadence lives with the Sync card in Settings → Health sync,
  * #588; widget refresh lives with the Widget section, #595.)
  *
