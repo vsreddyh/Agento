@@ -110,7 +110,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "cookbook", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "add_ingredient",
-		Description: "Add an ingredient name (optional note). Names are unique; notes over 2000 chars are truncated."},
+		Description: "Add an ingredient name (optional note). Names are unique; notes over 2000 bytes are truncated on a UTF-8 boundary."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			ing, err := store.AddIngredient(ctx, in.Name, in.Note)
 			if err != nil {
@@ -133,7 +133,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
-		Description: "List ingredient names, optionally filtered by substring."},
+		Description: "List ingredient names, optionally filtered by substring (up to 500, sorted by name)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListIngredients(ctx, in.Search)
 			if err != nil {
@@ -143,7 +143,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_ingredient",
-		Description: "Patch an ingredient's name or note (at least one required). Empty args are left unchanged; notes cannot be cleared to empty, over-cap notes are truncated."},
+		Description: "Patch an ingredient's name or note (at least one required). Empty args are left unchanged; notes cannot be cleared to empty, over-cap notes are truncated UTF-8-safe."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
@@ -163,7 +163,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_ingredient",
-		Description: "Delete an ingredient by name or id."},
+		Description: "Delete an ingredient by name or id. Idempotent: unknown names return ok:true with deleted:false."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.DeleteIngredient(ctx, in.NameOrID)
 			if err != nil {
@@ -173,7 +173,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "add_recipe",
-		Description: "Save a recipe: a name with an optional note and tags. No quantities, servings or macros — just a named note. Notes over 2000 chars (tags over 20 entries of 40 chars) are truncated."},
+		Description: "Save a recipe: a name with an optional note and tags. No quantities, servings or macros — just a named note. Notes over 2000 bytes (tags over 20 entries of 40 bytes) are truncated on a UTF-8 boundary."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.AddRecipe(ctx, in.Name, in.Note, in.Tags)
 			if err != nil {
@@ -196,7 +196,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_recipes",
-		Description: "List recipes, optionally filtered by name substring or tag."},
+		Description: "List recipes, optionally filtered by name substring (case-insensitive) or tag (exact, case-sensitive). Up to 200, sorted by name."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listRecipesInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListRecipes(ctx, in.Search, in.Tag)
 			if err != nil {
@@ -206,7 +206,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
-		Description: "Patch a recipe's name, note or tags (at least one required). Empty args are left unchanged; note/tags cannot be cleared to empty, over-cap values are truncated."},
+		Description: "Patch a recipe's name, note or tags (at least one required). Empty args are left unchanged; note/tags cannot be cleared to empty, over-cap values are truncated UTF-8-safe."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
@@ -233,7 +233,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_recipe",
-		Description: "Delete a recipe by name or id."},
+		Description: "Delete a recipe by name or id. Idempotent: unknown names return ok:true with deleted:false."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.DeleteRecipe(ctx, in.NameOrID)
 			if err != nil {

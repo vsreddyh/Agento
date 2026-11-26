@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/mongo"
 
@@ -23,8 +24,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// Notes cap at 2000 chars for both books (#600); tags stay capped at
-// 20 entries of 40 chars each, like before the trim.
+// Notes cap at 2000 bytes for both books (#600); tags stay capped at
+// 20 entries of 40 bytes each. Byte caps, like money's: a CJK/emoji-heavy
+// note hits the cap earlier than a char count would suggest.
 const maxNoteLen = 2000
 const maxTags = 20
 const maxTagLen = 40
@@ -103,9 +105,7 @@ func FromEnv() (*Store, error) { return New() }
 func capTags(tags []string) []string {
 	capped := make([]string, 0, len(tags))
 	for _, t := range tags {
-		if len(t) > maxTagLen {
-			t = t[:maxTagLen]
-		}
+		t = truncateBytes(t, maxTagLen)
 		capped = append(capped, t)
 		if len(capped) >= maxTags {
 			break
@@ -119,9 +119,7 @@ func (s *Store) AddIngredient(ctx context.Context, name, note string) (bson.M, e
 	if name == "" {
 		return nil, fail("ingredient name is required")
 	}
-	if len(note) > maxNoteLen {
-		note = note[:maxNoteLen]
-	}
+	note = truncateBytes(note, maxNoteLen)
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{"name": name, "note": note, "createdAt": now, "updatedAt": now}
 	res, err := s.ings.InsertOne(ctx, doc)
@@ -165,10 +163,7 @@ func (s *Store) UpdateIngredient(ctx context.Context, nameOrID string, patch map
 		upd["name"] = strings.TrimSpace(v)
 	}
 	if v, ok := patch["note"].(string); ok && v != "" {
-		if len(v) > maxNoteLen {
-			v = v[:maxNoteLen]
-		}
-		upd["note"] = v
+		upd["note"] = truncateBytes(v, maxNoteLen)
 	}
 	if len(upd) == 0 {
 		return nil, fail("nothing to update — pass a new name or note")
@@ -219,9 +214,7 @@ func (s *Store) AddRecipe(ctx context.Context, name, note string, tags []string)
 	if name == "" {
 		return nil, fail("recipe name is required")
 	}
-	if len(note) > maxNoteLen {
-		note = note[:maxNoteLen]
-	}
+	note = truncateBytes(note, maxNoteLen)
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{"name": name, "note": note, "tags": capTags(tags),
 		"createdAt": now, "updatedAt": now}
@@ -274,19 +267,12 @@ func (s *Store) UpdateRecipe(ctx context.Context, nameOrID string, patch map[str
 		upd["name"] = strings.TrimSpace(v)
 	}
 	if v, ok := patch["note"].(string); ok && v != "" {
-		if len(v) > maxNoteLen {
-			v = v[:maxNoteLen]
-		}
-		upd["note"] = v
+		upd["note"] = truncateBytes(v, maxNoteLen)
 	}
 	if v, ok := patch["tags"].([]any); ok && len(v) > 0 {
 		capped := []string{}
 		for _, t := range v {
-			ts := fmt.Sprint(t)
-			if len(ts) > maxTagLen {
-				ts = ts[:maxTagLen]
-			}
-			capped = append(capped, ts)
+			capped = append(capped, truncateBytes(fmt.Sprint(t), maxTagLen))
 			if len(capped) >= maxTags {
 				break
 			}
@@ -337,3 +323,17 @@ func allOut(ctx context.Context, cur *mongoDrv.Cursor) ([]bson.M, error) {
 }
 
 func idstr(v any) string { return mongo.IDString(v) }
+
+// truncateBytes caps s at n bytes without splitting a UTF-8 rune: a naive
+// s[:n] can cut a multi-byte character mid-sequence and store invalid bytes.
+// Same shape as money's — the caps below are byte caps.
+func truncateBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
+}

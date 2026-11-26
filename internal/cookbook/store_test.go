@@ -9,6 +9,26 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
+func TestTruncateBytes(t *testing.T) {
+	if got := truncateBytes("abcdef", 4); got != "abcd" {
+		t.Fatalf("got %q", got)
+	}
+	if got := truncateBytes("abc", 10); got != "abc" {
+		t.Fatalf("got %q", got)
+	}
+	// "é" is 2 bytes: a 3-byte cap must back off to 2, not store half a rune.
+	if got := truncateBytes("aé", 2); got != "a" {
+		t.Fatalf("got %q", got)
+	}
+	if got := truncateBytes("aé", 3); got != "aé" {
+		t.Fatalf("got %q", got)
+	}
+	// 4-byte emoji: cap inside the rune backs off to the boundary.
+	if got := truncateBytes("ab😀", 5); got != "ab" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	if os.Getenv("MONGODB_URI") == "" {
