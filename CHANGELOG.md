@@ -13,7 +13,7 @@ see GitHub Releases for older notes.
   the rail, icon-only with a dot) shows a sync button plus an
   "Update available :- x.y.z" line when a release pends. Tapping the
   line opens Settings → About; tapping the button re-checks and opens
-  About only on a fresh find. Launch checks run through the existing
+  About whenever the check confirms a pending release. Launch checks run through the existing
   debounced path where due; the sidebar surfaces the last completed
   check and converges on resume or manual check.
 
