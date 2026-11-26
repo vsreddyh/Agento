@@ -13,9 +13,10 @@ see GitHub Releases for older notes.
   popups anywhere — the list updating in place plus the spinning sync
   button is the feedback; failures revert and log with the failing item
   named. Invalid estimates keep Save disabled with the form's own hint.
-  An edit conflict reloads silently and reopens the draft so typed input
-  is never lost (re-saves guard against the fresh row, not the losing
-  revision). Bulk Skip/Complete disable when nothing is actionable and
+  An edit conflict reloads silently and reopens the draft once the fresh
+  rows land — stamped with the fresh revision, so typed input is never
+  lost and re-saves guard against the new server state instead of 409ing
+  again. Bulk Skip/Complete disable when nothing is actionable and
   stay icon buttons like Move/Duplicate; a stale move leaves the date
   dialog open. Long-press is the only way into multi-select (the top-bar
   Select button is gone), and deselecting the last row exits selection

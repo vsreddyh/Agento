@@ -269,14 +269,11 @@ internal fun TaskManagerScreen(
     // Editor draft (id empty = new task) and delete target.
     var editing by remember { mutableStateOf<ServerTaskDraft?>(null) }
     var deleting by remember { mutableStateOf<ServerTask?>(null) }
-    // Set when an edit conflict reopens the draft (#603): the draft carries
-    // the losing revision, so a re-save must guard against the fresh row,
-    // not the stale draft — otherwise every re-save 409s again. Cleared on
-    // a landed save and whenever the draft closes.
-    var staleDraft by remember { mutableStateOf(false) }
-    LaunchedEffect(editing) {
-        if (editing == null) staleDraft = false
-    }
+    // Set when an edit conflicts (#603): the draft reopens only once the
+    // reload it triggered lands, stamped with the fresh row's revision —
+    // reopening immediately would carry the losing revision and every
+    // re-save would 409 again. The loader consumes it below.
+    var pendingReopen by remember { mutableStateOf<ServerTaskDraft?>(null) }
     // In-flight mutation per task id (#288): only that row's checkbox is
     // disabled while its request runs — the rest of the list, the top bar
     // and the editor stay live. Synthetic "__create__" covers the dialog
@@ -369,6 +366,23 @@ internal fun TaskManagerScreen(
                 // only, so a failed fetch leaves the old stamp untouched.
                 lastSyncedAt = System.currentTimeMillis()
                 writeLastSyncedAt(context, lastSyncedAt)
+                // Conflict reopen (#603): a draft parked here by a 409 opens
+                // now that fresh rows have landed, stamped with the fresh
+                // row's revision — a re-save guards against the new server
+                // state instead of 409ing on the losing one again. Skipped
+                // if the user opened something else meanwhile: clobbering
+                // an in-progress edit would lose worse than it saves.
+                pendingReopen?.let { draft ->
+                    pendingReopen = null
+                    if (editing == null) {
+                        val fresh = tasks.firstOrNull { it.id == draft.id }
+                        editing = if (fresh != null) draft.copy(revision = fresh.revision) else draft
+                    } else {
+                        runCatching {
+                            Log.w("TaskManager", "dropping conflict reopen: editor busy")
+                        }
+                    }
+                }
                 if (!scheduledOnce) {
                     scheduledOnce = true
                     TaskReminders.refresh(context)
@@ -568,7 +582,8 @@ internal fun TaskManagerScreen(
      *
      * The server validates the source (a task with no usable contents is
      * rejected with the reason), so there is no client-side precheck: the
-     * sheet is already dismissed, and the error toast says what to fix.
+     * sheet is already dismissed, and the failure is logged naming the
+     * source row.
      */
     fun doDuplicate(t: ServerTask) {
         // One duplicate per tap: a second tap while the first is in flight
@@ -577,8 +592,8 @@ internal fun TaskManagerScreen(
         // the placeholder) also holds the bulk bar, whose liveness check
         // reads these same ids.
         if (exiting.containsKey(t.id) || t.id in busyIds) return
-        // Closed here rather than by the caller, so the toast lands on the
-        // list the copy will appear in.
+        // Closed here rather than by the caller, so the sheet is gone
+        // before the placeholder swaps into the list.
         selected = null
         // Optimistic placeholder: the copy appears instantly with a temp id
         // and is swapped for the server answer — no full-reload flicker.
@@ -601,7 +616,7 @@ internal fun TaskManagerScreen(
                         val copy = items.firstOrNull()?.task
                         if (copy == null) {
                             tasks = prev
-                            fail(IllegalStateException("Duplicate failed."))
+                            fail(IllegalStateException("Duplicate failed."), t.name)
                         } else {
                             editing = null
                             // Only when the placeholder is still there to be replaced:
@@ -1585,22 +1600,10 @@ internal fun TaskManagerScreen(
                                 // The revision the dialog read, not a fresh
                                 // lookup: the task may have scrolled out of the
                                 // fetched page, and a null lookup would send
-                                // the edit unguarded (#184). Exception: a
-                                // conflict-reopened draft carries the losing
-                                // revision, so it guards against the fresh row
-                                // instead — otherwise every re-save 409s again
-                                // (#603).
-                                expectedRevision = if (staleDraft) {
-                                    tasks.firstOrNull { it.id == next.id }?.revision ?: next.revision
-                                } else {
-                                    next.revision
-                                },
+                                // the edit unguarded (#184).
+                                expectedRevision = next.revision,
                             ).fold(
                                 onSuccess = { saved ->
-                                    // A landed save retires the conflict-reopen
-                                    // state: the next edit starts from a fresh
-                                    // draft with its own revision.
-                                    staleDraft = false
                                     // Purge only when speech/schedule-relevant
                                     // fields moved — or the pre-edit row is
                                     // unknown: exactly the background
@@ -1633,20 +1636,19 @@ internal fun TaskManagerScreen(
                                 onFailure = { e ->
                                     tasks = prev
                                     if (isConflict(e)) {
-                                        // Someone else wrote first: reload silently
-                                        // and reopen the draft with the typed input
-                                        // still in it — the edit is not lost, and
-                                        // the open dialog is the signal to reapply
-                                        // it onto the fresh rows (#603). A toast
-                                        // would fight the list it is describing.
-                                        // staleDraft: the reopened draft carries the
-                                        // losing revision, so the re-save below
-                                        // guards against the fresh row instead of
-                                        // 409ing forever.
+                                        // Someone else wrote first: reload silently,
+                                        // and reopen the draft once the fresh rows
+                                        // land (see the loader) — the edit is not
+                                        // lost, and the open dialog is the signal
+                                        // to reapply it onto the fresh rows (#603).
+                                        // A toast would fight the list it is
+                                        // describing. The reopened draft carries
+                                        // the fresh revision, so a re-save guards
+                                        // against the new server state instead of
+                                        // 409ing on the losing one again.
                                         silentRefresh = true
                                         refreshTick++
-                                        editing = next
-                                        staleDraft = true
+                                        pendingReopen = next
                                     }
                                     fail(e, next.name)
                                 },
