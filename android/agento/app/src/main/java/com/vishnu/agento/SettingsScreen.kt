@@ -616,7 +616,8 @@ internal fun SettingsHub(
             }
         }
     }
-    HintLine("Connection first — nothing else works until the server is set.")
+    // No footer hint (#590): the Connection row's own status ("Not set
+    // up" vs the URL) already says what needs doing.
 }
 
 internal data class HubRow(val section: SettingSection, val status: String)
