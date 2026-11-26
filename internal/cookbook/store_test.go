@@ -86,6 +86,14 @@ func TestIngredientCRUD(t *testing.T) {
 	if upd["updatedAt"] == nil {
 		t.Fatal("expected updatedAt to be stamped")
 	}
+	// Notes trim like names: padding is stripped, whitespace-only reads as empty.
+	upd, err = s.UpdateIngredient(ctx, "gotest-salt", map[string]any{"note": "  padded  "})
+	if err != nil || upd == nil || upd["note"] != "padded" {
+		t.Fatalf("got %v %v", upd, err)
+	}
+	if _, err := s.UpdateIngredient(ctx, "gotest-salt", map[string]any{"note": "   "}); err == nil {
+		t.Fatal("expected nothing-to-update for whitespace-only note")
+	}
 	done, err := s.DeleteIngredient(ctx, "gotest-salt")
 	if err != nil || !done {
 		t.Fatalf("got %v %v", done, err)
@@ -123,6 +131,14 @@ func TestRecipeCRUD(t *testing.T) {
 	upd, err := s.UpdateRecipe(ctx, "gotest-soup", map[string]any{"tags": []any{"test", "fast"}})
 	if err != nil || upd == nil {
 		t.Fatalf("got %v %v", upd, err)
+	}
+	// Whitespace-only tags read as empty and are left alone, never wiping the list.
+	if _, err := s.UpdateRecipe(ctx, "gotest-soup", map[string]any{"tags": []any{"", "   "}}); err == nil {
+		t.Fatal("expected nothing-to-update for whitespace-only tags")
+	}
+	got, err := s.GetRecipe(ctx, "gotest-soup")
+	if err != nil || got == nil {
+		t.Fatalf("got %v %v", got, err)
 	}
 	deleted, err := s.DeleteRecipe(ctx, idstr(r["_id"]))
 	if err != nil || !deleted {

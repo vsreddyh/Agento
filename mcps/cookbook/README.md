@@ -29,9 +29,9 @@ The tool descriptions are the contract; this is the short form of it.
 | `update_recipe` | `name_or_id` | `name`, `note`, `tags` — **empty args are left alone**; `tags` replaces the whole list, it is not merged |
 | `delete_recipe` | `name_or_id` | — (idempotent: unknown → `ok:true` `deleted:false`) |
 
-`update_*` are patch-shaped: send only the keys you mean to change — a
-resend of fields you read earlier is how an approved edit becomes a
-whole-record overwrite.
+`update_*` are patch-shaped: only sent keys change; omitted keys are left
+alone — resending a previously-read value is harmless. A whitespace-only
+value counts as empty and is left unchanged too.
 
 Name matching is exact and case-sensitive everywhere (`Salt` and `salt`
 are distinct rows that can coexist); only `list_*` search is a

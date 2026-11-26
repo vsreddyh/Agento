@@ -133,7 +133,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
-		Description: "List ingredient names, optionally filtered by case-insensitive substring (up to 500, sorted by name; a full page may hide more — narrow with search)."},
+		Description: "List ingredients, optionally filtered by case-insensitive substring (up to 500, sorted by name; a full page may hide more — narrow with search)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListIngredients(ctx, in.Search)
 			if err != nil {

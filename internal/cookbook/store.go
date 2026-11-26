@@ -125,7 +125,8 @@ func (s *Store) AddIngredient(ctx context.Context, name, note string) (bson.M, e
 	if name == "" {
 		return nil, fail("ingredient name is required")
 	}
-	note = truncateBytes(note, maxNoteLen)
+	// Trimmed like names: a whitespace-only note is empty, not content.
+	note = truncateBytes(strings.TrimSpace(note), maxNoteLen)
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{"name": name, "note": note, "createdAt": now, "updatedAt": now}
 	res, err := s.ings.InsertOne(ctx, doc)
@@ -174,8 +175,10 @@ func (s *Store) UpdateIngredient(ctx context.Context, nameOrID string, patch map
 	if v, ok := patch["name"].(string); ok && strings.TrimSpace(v) != "" {
 		upd["name"] = strings.TrimSpace(v)
 	}
-	if v, ok := patch["note"].(string); ok && v != "" {
-		upd["note"] = truncateBytes(v, maxNoteLen)
+	if v, ok := patch["note"].(string); ok {
+		if v = strings.TrimSpace(v); v != "" {
+			upd["note"] = truncateBytes(v, maxNoteLen)
+		}
 	}
 	if len(upd) == 0 {
 		return nil, fail("nothing to update — pass a new name or note")
@@ -208,7 +211,9 @@ func (s *Store) DeleteIngredient(ctx context.Context, nameOrID string) (bool, er
 }
 
 func (s *Store) findIng(ctx context.Context, nameOrID string) (bson.M, error) {
-	if o, err := oid(nameOrID); err == nil {
+	// IDs are trimmed like names: a copy-pasted id with surrounding
+	// whitespace must resolve the same as the bare id (#600 review).
+	if o, err := oid(strings.TrimSpace(nameOrID)); err == nil {
 		var ing bson.M
 		if err := s.ings.FindOne(ctx, bson.M{"_id": o}).Decode(&ing); err == nil {
 			return ing, nil
@@ -234,7 +239,7 @@ func (s *Store) AddRecipe(ctx context.Context, name, note string, tags []string)
 	if name == "" {
 		return nil, fail("recipe name is required")
 	}
-	note = truncateBytes(note, maxNoteLen)
+	note = truncateBytes(strings.TrimSpace(note), maxNoteLen)
 	now := primitive.NewDateTimeFromTime(time.Now().UTC())
 	doc := bson.M{"name": name, "note": note, "tags": capTags(tags),
 		"createdAt": now, "updatedAt": now}
@@ -251,7 +256,7 @@ func (s *Store) AddRecipe(ctx context.Context, name, note string, tags []string)
 
 func (s *Store) GetRecipe(ctx context.Context, nameOrID string) (bson.M, error) {
 	var r bson.M
-	if o, err := oid(nameOrID); err == nil {
+	if o, err := oid(strings.TrimSpace(nameOrID)); err == nil {
 		if err := s.recipes.FindOne(ctx, bson.M{"_id": o}).Decode(&r); err == nil {
 			return docOut(r), nil
 		} else if err != mongoDrv.ErrNoDocuments {
@@ -291,15 +296,19 @@ func (s *Store) UpdateRecipe(ctx context.Context, nameOrID string, patch map[str
 	if v, ok := patch["name"].(string); ok && strings.TrimSpace(v) != "" {
 		upd["name"] = strings.TrimSpace(v)
 	}
-	if v, ok := patch["note"].(string); ok && v != "" {
-		upd["note"] = truncateBytes(v, maxNoteLen)
+	if v, ok := patch["note"].(string); ok {
+		if v = strings.TrimSpace(v); v != "" {
+			upd["note"] = truncateBytes(v, maxNoteLen)
+		}
 	}
 	if v, ok := patch["tags"].([]any); ok && len(v) > 0 {
 		str := make([]string, 0, len(v))
 		for _, t := range v {
 			str = append(str, fmt.Sprint(t))
 		}
-		upd["tags"] = capTags(str)
+		if capped := capTags(str); len(capped) > 0 {
+			upd["tags"] = capped
+		}
 	}
 	if len(upd) == 0 {
 		return nil, fail("nothing to update — pass a new name, note or tags")
