@@ -189,8 +189,8 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | `hc_meals` | Health-check | `date` (YYYY-MM-DD), `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, `totals` (computed), `createdAt` |
 | `hc_days` | Health-check / Health Sync | `date` (YYYY-MM-DD, unique), `steps` (int), `active_kcal` (float), `sleep_hours` (float), `workouts[{type, minutes, kcal}]`, `updatedAt` |
 | `hc_weight` | Health-check | `date` (YYYY-MM-DD, unique), `kg` (float) — **exempt from retention pruning** |
-| `cookbook_ingredients` | Cookbook | `name` (unique), `note` (≤2000 bytes, UTF-8-safe cut), `createdAt`, `updatedAt` — **permanent** |
-| `cookbook_recipes` | Cookbook | `name` (unique), `note` (≤2000 bytes, UTF-8-safe cut), `tags[]` (≤20 entries, ≤40 bytes each), `createdAt`, `updatedAt` — **permanent** |
+| `cookbook_ingredients` | Cookbook | `name` (unique, case-sensitive), `note` (≤2000 bytes, UTF-8-safe cut), `createdAt`, `updatedAt` — **permanent** |
+| `cookbook_recipes` | Cookbook | `name` (unique, case-sensitive), `note` (≤2000 bytes, UTF-8-safe cut), `tags[]` (≤20 entries, ≤40 bytes each), `createdAt`, `updatedAt` — **permanent** |
 | `cookbook_cook_log` | Cookbook (retired #600) | pre-trim rows stay in Atlas untouched; nothing reads or writes them — **permanent** |
 | `tasks` | Task-manager | `idempotency_key` (client key, UNIQUE+SPARSE — makes create idempotent, #176), `source` (app vs MCP), `name`, `description`, `due_date`, `due_time`, `estimated_minutes`, `repeat_rule` (verbatim) — no status field; `completedAt` null = open, done tasks TTL 3d via `expiresAt`; `skippedAt` + derived `skipped` on occurrences skipped via the skip verb (#287) — still read as "not done" |
 | `tasks_changes` | Task-manager | Single document (`_id: "revision"`) holding the collection-wide change counter every task write advances — create, update, complete (plus its rollover successor), skip, reopen, delete — from **both** writers, because the marker is bumped by the store itself (#178). Served read-only as `GET /api/tasks/changes?since=`; a collection that has never been written reports revision 0. **Permanent** |

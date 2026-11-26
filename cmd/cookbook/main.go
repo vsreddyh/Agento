@@ -120,7 +120,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_ingredient",
-		Description: "Get one ingredient by name or id."},
+		Description: "Get one ingredient by exact name (case-sensitive) or id."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			ing, err := store.GetIngredient(ctx, in.NameOrID)
 			if err != nil {
@@ -133,7 +133,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
-		Description: "List ingredient names, optionally filtered by substring (up to 500, sorted by name)."},
+		Description: "List ingredient names, optionally filtered by substring (up to 500, sorted by name; a full page may hide more — narrow with search)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListIngredients(ctx, in.Search)
 			if err != nil {
@@ -163,7 +163,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_ingredient",
-		Description: "Delete an ingredient by name or id. Idempotent: unknown names return ok:true with deleted:false."},
+		Description: "Delete an ingredient by exact name (case-sensitive) or id. Idempotent: unknown names return ok:true with deleted:false."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.DeleteIngredient(ctx, in.NameOrID)
 			if err != nil {
@@ -183,7 +183,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_recipe",
-		Description: "Get one recipe by dish name or id."},
+		Description: "Get one recipe by exact dish name (case-sensitive) or id."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.GetRecipe(ctx, in.NameOrID)
 			if err != nil {
@@ -196,7 +196,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_recipes",
-		Description: "List recipes, optionally filtered by name substring (case-insensitive) or tag (exact, case-sensitive). Up to 200, sorted by name."},
+		Description: "List recipes, optionally filtered by name substring (case-insensitive) or tag (exact, case-sensitive). Up to 200, sorted by name; a full page may hide more — narrow with search."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listRecipesInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListRecipes(ctx, in.Search, in.Tag)
 			if err != nil {
@@ -206,7 +206,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
-		Description: "Patch a recipe's name, note or tags (at least one required). Empty args are left unchanged; note/tags cannot be cleared to empty, over-cap values are truncated UTF-8-safe."},
+		Description: "Patch a recipe's name, note or tags (at least one required; tags replace the whole list, not merged). Empty args are left unchanged; note/tags cannot be cleared to empty, over-cap values are truncated UTF-8-safe."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
@@ -233,7 +233,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_recipe",
-		Description: "Delete a recipe by name or id. Idempotent: unknown names return ok:true with deleted:false."},
+		Description: "Delete a recipe by exact name (case-sensitive) or id. Idempotent: unknown names return ok:true with deleted:false."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			done, err := store.DeleteRecipe(ctx, in.NameOrID)
 			if err != nil {
