@@ -832,7 +832,7 @@ class TaskWidget : AppWidgetProvider() {
                 }
                 // Task rows that parsed only by resetting a mistyped number
                 // (#437): the latest notes per fetched state, so each
-                // screen's hint points at its own rows' detail (#480).
+                // fetch's entry points at its own rows' detail (#480).
                 val taskCoerced = TasksApi.lastCoercedNotes
                 if (taskCoerced.isNotEmpty()) {
                     appendLine("taskCoerced=" + taskCoerced.toSortedMap()
