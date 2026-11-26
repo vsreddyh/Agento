@@ -97,6 +97,23 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     // settling stale.
     var pendingReload by remember { mutableStateOf(setOf<String>()) }
 
+    // Drops a folder and everything under it from the cached tree, the
+    // open set and the queued refetches: the VPS removed it out from under
+    // the app (a 404/400 on refetch), so keeping it would re-request a
+    // path that can never list again — every future Refresh would toast
+    // the same failure with no row left to collapse.
+    fun pruneTree(p: String) {
+        val cut = setOf(p) + tree.keys.filter { it.startsWith("$p/") }
+        tree = tree - cut
+        openDirs = openDirs - cut
+        pendingReload = pendingReload - cut
+    }
+
+    // True for refusals that describe the path, not the moment: the folder
+    // is gone (or its chain broke), so retrying cannot help. Transient
+    // failures (auth, 5xx, network) keep their cache entries.
+    fun isGone(msg: String) = "HTTP 404" in msg || "invalid path" in msg
+
     fun loadDir(p: String, force: Boolean = false) {
         // A cached folder opens without refetching; a refresh passes force
         // (delete, upload, manual refresh).
@@ -122,11 +139,18 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 onFailure = { e ->
                     val msg = e.message ?: e.javaClass.simpleName
                     // A failed folder keeps its collapsed row in place and
-                    // says so out loud. A failed root replaces the list with
-                    // the error card on first load, but toasts once rows are
-                    // already on screen — otherwise a manual refresh on a
-                    // flaky network would fail silently under a stale tree.
-                    if (p.isEmpty() && "" !in tree) error = msg
+                    // says so out loud — unless the path itself is gone, in
+                    // which case its rows are pruned so Refresh stops
+                    // re-requesting them. A failed root replaces the list
+                    // with the error card on first load, but toasts once
+                    // rows are already on screen — otherwise a manual
+                    // refresh on a flaky network would fail silently under
+                    // a stale tree.
+                    if (p.isNotEmpty() && isGone(msg)) {
+                        pruneTree(p)
+                        val fe = friendlyError(msg)
+                        toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+                    } else if (p.isEmpty() && "" !in tree) error = msg
                     else {
                         val fe = friendlyError(msg)
                         toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
@@ -141,12 +165,40 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         }
     }
 
+    fun doDownload(dir: String, f: RemoteEntry) {
+        // DownloadManager reports HTTP failures (wrong password, vanished
+        // file) asynchronously in its own notification — enqueueing throws
+        // only for local failures. So auth and existence are confirmed
+        // first, where a refusal still toasts with recovery guidance.
+        scope.launch {
+            val res = StorageApi(context).list(dir)
+            val files = res.getOrElse { e ->
+                val fe = friendlyError(e.message ?: "")
+                toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+                return@launch
+            }.third
+            if (files.none { it.name == f.name }) {
+                toasts.toast(
+                    "“${f.name}” is no longer on the server — refreshing.",
+                    ToastKind.Error,
+                )
+                loadDir(dir, force = true)
+                return@launch
+            }
+            runCatching { StorageApi(context).download(dir, f.name) }.onFailure { e ->
+                val fe = friendlyError(e.message ?: "")
+                toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+            }
+        }
+    }
+
     fun doDelete(dir: String, f: RemoteEntry) {
         deleting = null
         scope.launch {
             StorageApi(context).delete(dir, f.name).fold(
                 onSuccess = {
-                    toasts.toast("Deleted $it", ToastKind.Success)
+                    val where = if (dir.isEmpty()) "Exports root" else dir
+                    toasts.toast("Deleted “$it” in $where", ToastKind.Success)
                     loadDir(dir, force = true)
                 },
                 onFailure = { e ->
@@ -381,20 +433,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                             )
                                         }
                                         IconButton(onClick = {
-                                            // The system DownloadManager owns
-                                            // the completion notice, so no
-                                            // "Saving…" toast is needed —
-                                            // only failures toast.
-                                            runCatching {
-                                                StorageApi(context).download(
-                                                    row.dir, row.entry.name)
-                                            }.onFailure { e ->
-                                                val fe = friendlyError(e.message ?: "")
-                                                toasts.toast(
-                                                    "${fe.title} — ${fe.nextStep}",
-                                                    ToastKind.Error,
-                                                )
-                                            }
+                                            doDownload(row.dir, row.entry)
                                         }) {
                                             Icon(
                                                 Icons.Filled.CloudDownload,
