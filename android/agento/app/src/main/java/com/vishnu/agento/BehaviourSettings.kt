@@ -429,29 +429,41 @@ object BehaviourSettings {
 }
 
 /**
- * Applies the stored TTS voice/rate/pitch to a live engine (#615). Each knob
- * is skipped at its default, so an install that never opens the section speaks
- * exactly like 5.12.0 — engine defaults, no setVoice/setSpeechRate/setPitch.
+ * Applies the stored TTS voice/rate/pitch to a live engine (#615). Every
+ * call converges the engine toward prefs — including defaults — because
+ * the engine is long-lived (created once in `ensureEngine`, never shut
+ * down on idle) and `setSpeechRate`/`setPitch`/`setVoice` persist on the
+ * instance. Skipping defaults would leave a reverted knob on its old
+ * custom (rate 150 → back to 100 still speaking fast).
  * The voice is matched by name against THIS engine's voices (Voice objects
- * are engine-specific); a stored name the engine no longer offers is left
- * alone rather than failing the utterance. Never throws (OEM binder
- * breakage is a warning, like the callers already treat it).
+ * are engine-specific); a stored name the engine no longer offers — or an
+ * empty pick (Engine default) — resets to the engine default voice so the
+ * VOICE_MISSING line ("used the default voice") describes what played.
+ * Never throws (OEM binder breakage is a warning, like the callers
+ * already treat it).
  */
 fun applyStoredTtsSettings(tts: TextToSpeech, appCtx: Context) {
-    // Compared as stored Long pcts, never as floats: exact, and skipped at
-    // defaults so untouched installs speak exactly like 5.12.0.
+    // Compared as stored Long pcts, never as floats: exact. Always set
+    // (including 1.0f) so a revert converges the long-lived engine back.
     runCatching {
         val pct = BehaviourSettings.ttsRatePct(appCtx)
-        if (pct != BehaviourSettings.DEFAULT_TTS_PCT) tts.setSpeechRate(pct / 100f)
+        tts.setSpeechRate(pct / 100f)
     }
     runCatching {
         val pct = BehaviourSettings.ttsPitchPct(appCtx)
-        if (pct != BehaviourSettings.DEFAULT_TTS_PCT) tts.setPitch(pct / 100f)
+        tts.setPitch(pct / 100f)
     }
-    val want = BehaviourSettings.ttsVoice(appCtx)
-    if (want.isNotEmpty()) {
-        runCatching {
-            tts.voices?.firstOrNull { it.name == want }?.let { tts.voice = it }
+    runCatching {
+        val want = BehaviourSettings.ttsVoice(appCtx)
+        if (want.isNotEmpty()) {
+            val match = tts.voices?.firstOrNull { it.name == want }
+            if (match != null) {
+                tts.voice = match
+            } else {
+                tts.defaultVoice?.let { tts.voice = it }
+            }
+        } else {
+            tts.defaultVoice?.let { tts.voice = it }
         }
     }
 }
