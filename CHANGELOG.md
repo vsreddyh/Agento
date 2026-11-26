@@ -11,14 +11,16 @@ see GitHub Releases for older notes.
 ## [9.13.0]
 - **Task Manager drops toasts and the Select button (#603).** No toast
   popups anywhere — the list updating in place plus the spinning sync
-  button is the feedback; failures revert and log with the failing item
-  named. Invalid estimates keep Save disabled with the form's own hint.
-  An edit conflict reloads silently and reopens the draft once the fresh
-  rows land — stamped with the fresh revision, so typed input survives
-  the reload and re-saves guard against the new server state (unless
-  you've opened another editor in the meantime, in which case the
-  conflicted draft is dropped with a log line). Bulk Skip/Complete
-  disable when nothing is actionable and stay icon buttons like
+  button is the feedback (except creates/duplicates that don't belong
+  under the Done filter — switch filters to verify); failures revert
+  and log with the failing item named. Invalid estimates keep Save
+  disabled with the form's own hint. An edit conflict reloads silently
+  and reopens the draft once the fresh rows land — stamped with the
+  fresh revision, so typed input survives the reload and re-saves guard
+  against the new server state (unless you've opened another editor in
+  the meantime, in which case the conflicted draft is dropped with a
+  log line, or the row was deleted elsewhere, in which case the save
+  fails as unknown). Bulk Skip/Complete disable when nothing is actionable and stay icon buttons like
   Move/Duplicate; a stale move leaves the date dialog open. Long-press
   is the only way into multi-select (the top-bar Select button is
   gone), and deselecting the last row exits selection instead of

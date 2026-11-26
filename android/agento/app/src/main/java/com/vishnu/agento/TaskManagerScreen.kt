@@ -2184,7 +2184,7 @@ internal fun ServerTaskDetailSheet(
                 }
                 // Skip sits beside Complete (#345): the same skip the bulk
                 // bar and the notification action run, with the same
-                // toast/refresh behaviour as completing. Closed tasks keep
+                // silent-refresh behaviour as completing. Closed tasks keep
                 // Edit here instead.
                 if (task.isOpen()) {
                     OutlinedButton(
@@ -2461,7 +2461,7 @@ internal fun ServerTaskDialog(
                 )
                 // Recreate draft: a kept time with no date yet is the one
                 // state the labels don't explain on their own, so say it
-                // here rather than only in a toast that can be missed.
+                // here — with no toasts, this HintLine is the only surface.
                 if (dueDate.isEmpty() && dueTime.isNotEmpty()) {
                     HintLine("Time kept from the completed task — pick a date to keep it.")
                 }
