@@ -1,5 +1,8 @@
 # KaTeX display assets (∃-Mail math, #365)
 
+<!-- #584 TEMP-REMOVE (∃-Mail): server-side rendering is disabled
+(`internal/reports` commented out) and the inbox screen that styled the
+pre-rendered HTML is gone — these assets are orphaned until revert. -->
 KaTeX 0.16.21 static CSS + woff2 fonts, from
 `https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/`. MIT licensed
 (KaTeX Authors). Display-only: the server compiles LaTeX to HTML
