@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.5.0]
+- **Task rows swipe (#576).** Swipe right to skip an open task, swipe left
+  to duplicate it — both settle straight back and reuse the sheet's own
+  flows. Tap still opens the detail sheet and long-press still enters
+  bulk-select; closed tasks offer no skip swipe.
+- **Task rows shed the document glyph (#576).** The "Has details" icon is
+  gone: the note is already the row's second line when there is no due line,
+  and the rest is one tap away.
+- **Detail sheet drops the status badge (#576).** No more "Open" /
+  "Overdue" / "Skipped" / "Done" text beside the title — the Due line still
+  highlights when overdue.
+
 ## [9.4.2]
 - **Projects board gestures swapped.** Swipe right to edit, swipe left to
   delete — the swipe-left reveal stays gated by the *Delete project?* prompt,
