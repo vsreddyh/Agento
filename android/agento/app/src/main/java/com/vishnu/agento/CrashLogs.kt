@@ -37,7 +37,7 @@ object CrashLogs {
     /** 5 days: crash files older than this are deleted on prune. */
     const val TTL_MS = 5L * 24 * 60 * 60 * 1000
 
-    /** Cap for the diagnostics-export section below. */
+    /** Cap for the buildReport crash-log section below. */
     const val REPORT_MAX_CHARS = 60_000
 
     /** Install the handler; safe to call on every cold start. */

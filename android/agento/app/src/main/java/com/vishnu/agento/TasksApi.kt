@@ -800,9 +800,9 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
                 coercedNotes.take(3).joinToString("; ").take(400))
         }
     }
-    // The diagnostics screen reads this per fetch, so one screen's
-    // hint points at its own rows — and a clean page clears only its own
-    // fetch's entry, never another screen's (#480 review). The full
+    // The diagnostics log reads this per fetch, so each fetch's notes
+    // point at their own rows — and a clean page clears only its own
+    // fetch's entry, never another fetch's (#480 review). The full
     // note list lands here (page-bounded: at most one page of rows, replaced
     // wholesale per fetch), while the log line above and [TaskList.coercedNotes]
     // keep the first-3 sample — so evicting the single entries never deletes
@@ -912,8 +912,7 @@ class TasksApi(context: Context) {
          * single slot lets one fetch clobber or clear another's detail
          * — including same-state
          * fetches at different limits. Read by [TaskWidget.diagnostics]
-         * so each screen's hint points at detail that is actually on that
-         * screen. A clean page clears only its own entry; sibling states
+         * so each fetch's entry points at detail from that fetch. A clean page clears only its own entry; sibling states
          * under one source survive parallel writes, and each surface that
          * switches states (manager, widget factory) prunes its stale
          * siblings explicitly ([clearCoercedNotesExcept]); when a source's

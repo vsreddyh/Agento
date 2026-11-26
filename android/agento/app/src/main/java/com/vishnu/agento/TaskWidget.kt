@@ -1076,9 +1076,9 @@ class TaskWidget : AppWidgetProvider() {
          * Drops every diagnostics + log-dedupe entry for one placement's
          * display keys (#480 review): deletion is the ultimate fix, and
          * the clean-read clear never fires for a gone id — without this
-         * the About screen would name resets for widgets that no longer
-         * exist. Clearing the seen-set too, so a later placement reusing
-         * the id re-logs a real corruption.
+         * the diagnostics log would keep naming resets for widgets that no
+         * longer exist. Clearing the seen-set too, so a later placement
+         * reusing the id re-logs a real corruption.
          */
         internal fun pruneCoercionsFor(appWidgetId: Int) {
             synchronized(coercionLock) {
