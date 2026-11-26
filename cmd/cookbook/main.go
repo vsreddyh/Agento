@@ -110,7 +110,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "cookbook", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "add_ingredient",
-		Description: "Add an ingredient name (optional note). Names are unique; notes over 2000 bytes are truncated on a UTF-8 boundary."},
+		Description: "Add an ingredient name (optional note). Names are unique and case-sensitive — duplicates error; notes over 2000 bytes are truncated on a UTF-8 boundary."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			ing, err := store.AddIngredient(ctx, in.Name, in.Note)
 			if err != nil {
@@ -133,7 +133,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
-		Description: "List ingredient names, optionally filtered by substring (up to 500, sorted by name; a full page may hide more — narrow with search)."},
+		Description: "List ingredient names, optionally filtered by case-insensitive substring (up to 500, sorted by name; a full page may hide more — narrow with search)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
 			rows, err := store.ListIngredients(ctx, in.Search)
 			if err != nil {
@@ -173,7 +173,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "add_recipe",
-		Description: "Save a recipe: a name with an optional note and tags. No quantities, servings or macros — just a named note. Notes over 2000 bytes (tags over 20 entries of 40 bytes) are truncated on a UTF-8 boundary."},
+		Description: "Save a recipe: a name with an optional note and tags. Names are unique and case-sensitive — duplicates error. No quantities, servings or macros — just a named note. Notes over 2000 bytes (tags over 20 entries of 40 bytes) are truncated on a UTF-8 boundary."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in addRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.AddRecipe(ctx, in.Name, in.Note, in.Tags)
 			if err != nil {

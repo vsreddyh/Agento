@@ -10,6 +10,7 @@ package cookbook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -105,8 +106,13 @@ func FromEnv() (*Store, error) { return New() }
 func capTags(tags []string) []string {
 	capped := make([]string, 0, len(tags))
 	for _, t := range tags {
-		t = truncateBytes(t, maxTagLen)
-		capped = append(capped, t)
+		// Trimmed and empties dropped: the tag filter trims too, so a
+		// stored `"  test  "` or `""` would be unqueryable (#600 review).
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		capped = append(capped, truncateBytes(t, maxTagLen))
 		if len(capped) >= maxTags {
 			break
 		}
@@ -136,7 +142,13 @@ func (s *Store) AddIngredient(ctx context.Context, name, note string) (bson.M, e
 func (s *Store) GetIngredient(ctx context.Context, nameOrID string) (bson.M, error) {
 	ing, err := s.findIng(ctx, nameOrID)
 	if err != nil {
-		return nil, nil
+		// Unknown reads back as missing; a real DB failure propagates
+		// instead of masquerading as not-found (#600 review).
+		var se *StoreError
+		if errors.As(err, &se) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	return docOut(ing), nil
 }
@@ -200,11 +212,19 @@ func (s *Store) findIng(ctx context.Context, nameOrID string) (bson.M, error) {
 		var ing bson.M
 		if err := s.ings.FindOne(ctx, bson.M{"_id": o}).Decode(&ing); err == nil {
 			return ing, nil
+		} else if err != mongoDrv.ErrNoDocuments {
+			return nil, err
 		}
 	}
 	var ing bson.M
 	if err := s.ings.FindOne(ctx, bson.M{"name": strings.TrimSpace(nameOrID)}).Decode(&ing); err != nil {
-		return nil, fail("unknown ingredient '%s'", nameOrID)
+		// Only a genuine miss reads as unknown: a transient Atlas
+		// failure must surface as an error, never as ok:false/ok:true
+		// deleted:false (#600 review).
+		if err == mongoDrv.ErrNoDocuments {
+			return nil, fail("unknown ingredient '%s'", nameOrID)
+		}
+		return nil, err
 	}
 	return ing, nil
 }
@@ -234,10 +254,15 @@ func (s *Store) GetRecipe(ctx context.Context, nameOrID string) (bson.M, error) 
 	if o, err := oid(nameOrID); err == nil {
 		if err := s.recipes.FindOne(ctx, bson.M{"_id": o}).Decode(&r); err == nil {
 			return docOut(r), nil
+		} else if err != mongoDrv.ErrNoDocuments {
+			return nil, err
 		}
 	}
 	if err := s.recipes.FindOne(ctx, bson.M{"name": strings.TrimSpace(nameOrID)}).Decode(&r); err != nil {
-		return nil, nil
+		if err == mongoDrv.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
 	}
 	return docOut(r), nil
 }
@@ -270,14 +295,11 @@ func (s *Store) UpdateRecipe(ctx context.Context, nameOrID string, patch map[str
 		upd["note"] = truncateBytes(v, maxNoteLen)
 	}
 	if v, ok := patch["tags"].([]any); ok && len(v) > 0 {
-		capped := []string{}
+		str := make([]string, 0, len(v))
 		for _, t := range v {
-			capped = append(capped, truncateBytes(fmt.Sprint(t), maxTagLen))
-			if len(capped) >= maxTags {
-				break
-			}
+			str = append(str, fmt.Sprint(t))
 		}
-		upd["tags"] = capped
+		upd["tags"] = capTags(str)
 	}
 	if len(upd) == 0 {
 		return nil, fail("nothing to update — pass a new name, note or tags")
