@@ -2,6 +2,11 @@ package com.vishnu.agento
 
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -23,6 +28,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -50,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -614,5 +621,31 @@ internal fun OptionMenu(
                 }
             }
         }
+    }
+}
+
+/** A top-bar sync button's icon, shared by Tasks and Task Manager (#578,
+ * #579): a plain sync glyph at rest, a continuously rotating one while any
+ * fetch or mutation write is in flight. TalkBack names the state, not just
+ * the button. */
+@Composable
+internal fun SyncButtonIcon(spinning: Boolean) {
+    if (spinning) {
+        val transition = rememberInfiniteTransition(label = "syncSpin")
+        val angle by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = LinearEasing),
+            ),
+            label = "syncAngle",
+        )
+        Icon(
+            Icons.Filled.Sync,
+            contentDescription = "Syncing",
+            modifier = Modifier.rotate(angle),
+        )
+    } else {
+        Icon(Icons.Filled.Sync, contentDescription = "Sync")
     }
 }

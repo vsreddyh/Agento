@@ -3,8 +3,8 @@
 package com.vishnu.agento
 
 /**
- * Projects board (#519): collapsible status sections, swipe right to edit,
- * swipe left to ask before deleting (confirm dialog, then Undo), long-press
+ * Projects board (#519): collapsible status sections, swipe left to edit,
+ * swipe right to ask before deleting (confirm dialog, then Undo), long-press
  * drag to reorder inside a section. Ordering is persisted server-side
  * (`position`, see [ProjectsApi.reorder]).
  *
@@ -33,7 +33,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -247,7 +246,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         loading = false
     }
 
-    // Swipe left = delete (#519, confirmed first), swipe right = edit. Both
+    // Swipe right = delete (#579, confirmed first), swipe left = edit. Both
     // gestures settle the row back: the delete dialog decides, and editing
     // never moves the card. A confirmed delete runs here; Undo recreates
     // the row from the cached fields. It is a new row, so it comes back at
@@ -483,7 +482,9 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                         onClick = { refreshTick++ },
                         enabled = !busy,
                     ) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                        // Sync state lives on the button itself (#579):
+                        // it spins while a load or a mutation is in flight.
+                        SyncButtonIcon(spinning = busy || loading)
                     }
                 },
             )
@@ -517,9 +518,6 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                }
-                if (busy) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 if (loading && projects.isEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -732,14 +730,14 @@ private fun SectionHeader(
     }
 }
 
-/** What sits behind the card while it swipes: edit on a right swipe,
- * delete on a left swipe. */
+/** What sits behind the card while it swipes: delete on a right swipe,
+ * edit on a left swipe. */
 @Composable
 private fun SwipeBackground(state: SwipeToDismissBoxState) {
     val direction = state.dismissDirection
     val container = when (direction) {
-        SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.secondaryContainer
-        SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.errorContainer
+        SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.errorContainer
+        SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.secondaryContainer
         SwipeToDismissBoxValue.Settled -> Color.Transparent
     }
     Row(
@@ -753,18 +751,18 @@ private fun SwipeBackground(state: SwipeToDismissBoxState) {
     ) {
         if (direction == SwipeToDismissBoxValue.StartToEnd) {
             Icon(
-                Icons.Filled.Edit,
-                contentDescription = "Edit",
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                Icons.Filled.Delete,
+                contentDescription = "Delete",
+                tint = MaterialTheme.colorScheme.onErrorContainer,
             )
         } else {
             Spacer(modifier = Modifier.width(24.dp))
         }
         if (direction == SwipeToDismissBoxValue.EndToStart) {
             Icon(
-                Icons.Filled.Delete,
-                contentDescription = "Delete",
-                tint = MaterialTheme.colorScheme.onErrorContainer,
+                Icons.Filled.Edit,
+                contentDescription = "Edit",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
             )
         } else {
             Spacer(modifier = Modifier.width(24.dp))
@@ -773,7 +771,7 @@ private fun SwipeBackground(state: SwipeToDismissBoxState) {
 }
 
 /** One project card: title + note + timestamp. No menu, no edit button —
- * swipe right edits, swipe left asks to delete, long press drags (#519). The
+ * swipe left edits, swipe right asks to delete, long press drags (#519). The
  * `resetToken` recreates the swipe state after a failed delete so the row
  * snaps back instead of staying dismissed. */
 @Composable
@@ -820,16 +818,16 @@ internal fun TaskCard(
             confirmValueChange = { target ->
                 when (target) {
                     SwipeToDismissBoxValue.StartToEnd -> {
-                        // Edit must leave the row where it was: refusing
-                        // the change settles it back immediately.
-                        onEdit()
-                        false
-                    }
-                    SwipeToDismissBoxValue.EndToStart -> {
                         // Delete is confirmed in a dialog first, so the row
                         // must not stay dismissed: refusing settles it back
                         // and Cancel costs nothing.
                         onDelete()
+                        false
+                    }
+                    SwipeToDismissBoxValue.EndToStart -> {
+                        // Edit must leave the row where it was: refusing
+                        // the change settles it back immediately.
+                        onEdit()
                         false
                     }
                     SwipeToDismissBoxValue.Settled -> true

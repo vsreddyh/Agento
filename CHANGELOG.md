@@ -8,6 +8,17 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.5.2]
+- **Projects swipe directions swapped (#579).** Swipe left to edit, swipe
+  right to delete — the delete swipe still asks first (*Delete project?*,
+  then Undo), the edit swipe never moves the card, and neither gesture
+  fires while a delete/restore is in flight.
+- **Projects sync moves onto the sync button (#579).** Same treatment as
+  Task Manager (#578): the top bar's Refresh becomes a shared spinning
+  Sync icon (now in `UiKit`, used by both boards) that rotates while a
+  load or a mutation is in flight. The linear progress bar is gone; a
+  clean load shows no toast.
+
 ## [9.5.1]
 - **Sync state moves onto the sync button (#578).** The top bar's Refresh
   becomes Sync: it rotates while any fetch or mutation write is in flight
