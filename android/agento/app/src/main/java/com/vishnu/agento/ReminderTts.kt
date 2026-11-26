@@ -925,8 +925,9 @@ object ReminderTts {
                 }
                 continue
             }
-            // Stored voice/rate/pitch (#615, Notifications → Speech); skipped
-            // at defaults so untouched installs speak exactly like before.
+            // Stored voice/rate/pitch (#615, Notifications → Speech); always
+            // applied (including defaults) so the long-lived engine converges
+            // to prefs on every utterance.
             //
             // Toggle-off between dequeue and speak (#470 review): a disable
             // landing here would restart audio on the just-stopped engine.
