@@ -13,7 +13,8 @@ see GitHub Releases for older notes.
   now an indented tree: folders expand inline (one list per folder,
   cached), files show name + size with download and delete icon buttons.
   The old `Save` text button is gone — the system downloader owns the
-  completion notice. Deletes ask first, then refresh the parent folder.
+  completion notice; tapping download toasts that it started. Deletes ask
+  first, then refresh the parent folder.
   Server side, `DELETE /api/files/delete?path=<relative file>` removes
   one file (folders, escapes and missing rows are named refusals). Uploads
   now land at the exports root.

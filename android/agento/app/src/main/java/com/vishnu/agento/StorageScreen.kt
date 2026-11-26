@@ -134,8 +134,11 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
 
     // True for refusals that describe the path, not the moment: the folder
     // is gone (or its chain broke), so retrying cannot help. Transient
-    // failures (auth, 5xx, network) keep their cache entries.
-    fun isGone(msg: String) = "HTTP 404" in msg || "invalid path" in msg
+    // failures (auth, 5xx, network) — and unknown routes ("page not
+    // found", the version-skew case friendlyError keeps on the app-update
+    // copy) — keep their cache entries.
+    fun isGone(msg: String) =
+        ("HTTP 404" in msg || "invalid path" in msg) && "page not found" !in msg
 
     fun loadDir(p: String, force: Boolean = false) {
         // A cached folder opens without refetching; a refresh passes force
@@ -230,10 +233,16 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         // toast) instead of duplicating its handling here.
         scope.launch {
             val res = StorageApi(context).list(dir)
-            val files = res.getOrElse {
+            val (_, dirs, files) = res.getOrElse {
                 loadDir(dir, force = true)
                 return@launch
-            }.third
+            }
+            // Cache the fresh listing (same guard as loadDir): the fetch
+            // already happened, so leaving the tree stale would hide rows
+            // the app holds until the next manual Refresh.
+            if (dir.isEmpty() || dir in openDirs) {
+                tree = tree + (dir to DirListing(dirs, files))
+            }
             if (files.none { it.name == f.name }) {
                 val where = if (dir.isEmpty()) "Exports root" else dir
                 toasts.toast(
@@ -246,6 +255,11 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
             runCatching { StorageApi(context).download(dir, f.name) }.onFailure { e ->
                 val fe = friendlyError(e.message ?: "")
                 toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+            }.onSuccess {
+                // Enqueueing is silent by design (the "Saving…" card is
+                // gone), but the tap still needs feedback: the system
+                // notification only arrives on completion.
+                toasts.toast(Toasts.DOWNLOADING)
             }
         }
     }
