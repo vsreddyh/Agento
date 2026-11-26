@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.7.3]
+- **Health sync cadence moves into Health sync (#588).** The interval
+  picker, Wi-Fi-only switch and pause switch now sit next to the Sync
+  card instead of in Settings → Behaviour, and the Sync subtitle is
+  just the push line — no repeated cadence, no pointer elsewhere.
+
 ## [9.7.2]
 - **Connection section drops its subtitle (#587).** Settings →
   Connection is now just the title plus the Server URL and Password

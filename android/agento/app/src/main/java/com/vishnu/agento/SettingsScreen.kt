@@ -334,6 +334,22 @@ internal fun SettingsScreen(
                     SettingSection.Health -> {
                         HealthStatusCard(state)
 
+                        // Health sync cadence (#588): the interval,
+                        // Wi-Fi-only and pause controls live with the Sync
+                        // card, not in Behaviour. Declared here rather than
+                        // in the gate branch below so a gate change never
+                        // resets them; keyed on settingsRefresh so a
+                        // settings import reloads them.
+                        var syncHours by remember(settingsRefresh) {
+                            mutableStateOf(BehaviourSettings.syncIntervalHours(context))
+                        }
+                        var wifiOnly by remember(settingsRefresh) {
+                            mutableStateOf(BehaviourSettings.syncWifiOnly(context))
+                        }
+                        var paused by remember(settingsRefresh) {
+                            mutableStateOf(BehaviourSettings.syncPaused(context))
+                        }
+
                         /** Three-step gate: install Health Connect, grant permissions, then sync. */
                         when {
                             // SDK available but the client failed to build
@@ -436,9 +452,7 @@ internal fun SettingsScreen(
                             else -> {
                                 SectionCard(
                                     title = "Sync",
-                                    subtitle = "Push the latest health data to your server now. " +
-                                        BehaviourSettings.syncCadenceLine(context) +
-                                        " Cadence, Wi-Fi-only and pause live in Settings → Behaviour.",
+                                    subtitle = "Push the latest health data to your server now.",
                                 ) {
                                     Button(
                                         onClick = { viewModel.syncNow() },
@@ -449,6 +463,49 @@ internal fun SettingsScreen(
                                     }
                                     if (state.syncing) {
                                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                    }
+                                }
+                                // Health sync cadence (#588): the interval,
+                                // Wi-Fi-only and pause controls live with the
+                                // Sync card, not in Behaviour.
+                                SectionCard(
+                                    title = "Health sync cadence",
+                                    subtitle = "How often health data pushes while the app is idle. Changes apply from the next scheduled run.",
+                                ) {
+                                    OptionMenu(
+                                        label = "Sync every",
+                                        shown = BehaviourSettings.intervalChoiceLabel(syncHours),
+                                        options = BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS.map {
+                                            it.toString() to BehaviourSettings.intervalChoiceLabel(it)
+                                        },
+                                        onPick = {
+                                            it.toLongOrNull()?.let { h ->
+                                                BehaviourSettings.setSyncIntervalHours(context, h)
+                                                syncHours = BehaviourSettings.syncIntervalHours(context)
+                                            }
+                                        },
+                                    )
+                                    SwitchRow(
+                                        text = "Wi-Fi only",
+                                        sub = "Sync on unmetered Wi-Fi; mobile data never syncs.",
+                                        checked = wifiOnly,
+                                        onChange = {
+                                            BehaviourSettings.setSyncWifiOnly(context, it)
+                                            wifiOnly = it
+                                        },
+                                    )
+                                    SwitchRow(
+                                        text = "Pause sync",
+                                        sub = "Stops health sync entirely until resumed (task refresh keeps running).",
+                                        checked = paused,
+                                        onChange = {
+                                            BehaviourSettings.setSyncPaused(context, it)
+                                            paused = it
+                                        },
+                                    )
+                                    HintLine(BehaviourSettings.syncCadenceLine(syncHours, wifiOnly, paused))
+                                    if (syncHours !in BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS) {
+                                        HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
                                     }
                                 }
                             }
