@@ -15,11 +15,7 @@ import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -59,7 +55,6 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Sort
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.Saver
@@ -67,7 +62,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -1750,33 +1744,6 @@ private const val ROW_ANIM_MS = 220
  * longer.
  */
 private const val ROW_EXIT_FALLBACK_MS = 500L
-
-/**
- * The top-bar sync button's icon (#578): a plain sync glyph at rest, a
- * continuously rotating one while any fetch or mutation write is in
- * flight. TalkBack names the state, not just the button.
- */
-@Composable
-private fun SyncButtonIcon(spinning: Boolean) {
-    if (spinning) {
-        val transition = rememberInfiniteTransition(label = "syncSpin")
-        val angle by transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(1000, easing = LinearEasing),
-            ),
-            label = "syncAngle",
-        )
-        Icon(
-            Icons.Filled.Sync,
-            contentDescription = "Syncing",
-            modifier = Modifier.rotate(angle),
-        )
-    } else {
-        Icon(Icons.Filled.Sync, contentDescription = "Sync")
-    }
-}
 
 /**
  * One task row wrapped in its enter/leave animation (#308).
