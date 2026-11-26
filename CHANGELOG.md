@@ -8,6 +8,11 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.7.4]
+- **Settings hub drops the Open buttons (#589).** Each section row was
+  already fully tappable — the trailing button duplicated it. The row
+  keeps its Button role and "Open <section>" TalkBack action.
+
 ## [9.7.3]
 - **Health sync cadence moves into Health sync (#588).** The interval
   picker, Wi-Fi-only switch and pause switch now sit next to the Sync
