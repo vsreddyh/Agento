@@ -156,26 +156,22 @@ class BehaviourSettingsTest {
         fun all(
             taskMinutes: Long = 30L,
             leadMinutes: Long = 5L,
-            voice: String = "",
-            ratePct: Long = 100L,
-            pitchPct: Long = 100L,
             remindersOn: Boolean = false,
         ) = BehaviourSettings.customCount(
-            taskMinutes, leadMinutes, voice,
-            ratePct, pitchPct,
+            taskMinutes, leadMinutes,
             remindersOn,
         )
         assertEquals(0, all())
         assertEquals(1, all(leadMinutes = 15L))
-        assertEquals(1, all(voice = "en-x"))
-        assertEquals(1, all(ratePct = 150L))
         assertEquals(1, all(remindersOn = true))
         assertEquals(2, all(leadMinutes = 15L, remindersOn = true))
         // Pure overload coerces like the getters: out-of-floor inputs read
         // as their defaults, so both overloads agree on effective state.
         // (Coerced-to-floor need not be default: 5min reads as 15, custom.)
         assertEquals(1, all(taskMinutes = 5L))
-        assertEquals(1, all(ratePct = 0L))
+        // Retired TTS customs (#596) count nothing: the voice/rate/pitch
+        // params are gone, so a stale stored custom cannot flip the hub —
+        // there is no card left to clear it from.
     }
 
     @Test
@@ -346,16 +342,12 @@ class BehaviourSettingsTest {
         fun all(
             taskMinutes: Long = 30L,
             leadMinutes: Long = 5L,
-            voice: String = "",
-            ratePct: Long = 100L,
-            pitchPct: Long = 100L,
             remindersOn: Boolean = false,
             updateHours: Long = 24L,
             updateStartup: Boolean = true,
             updateNotify: Boolean = false,
         ) = BehaviourSettings.customCount(
-            taskMinutes, leadMinutes, voice,
-            ratePct, pitchPct,
+            taskMinutes, leadMinutes,
             remindersOn, updateHours, updateStartup, updateNotify,
         )
         // Defaults (daily poll, startup on, silent) count zero.

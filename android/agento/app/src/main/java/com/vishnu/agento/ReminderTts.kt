@@ -227,9 +227,10 @@ object ReminderTts {
     @Volatile private var engine: TextToSpeech? = null
     private var ready = false
     private var inited = false
-    /** Application context for reading stored TTS prefs in pump(). Set on
-     * every speak(); the object never holds an Activity. Volatile like the
-     * engine: written on the caller thread, read off the TTS callback. */
+    /** Application context for the dequeue-time checks in pump() (silence,
+     * toggle) and the failure-tag cancels. Set on every speak(); the object
+     * never holds an Activity. Volatile like the engine: written on the
+     * caller thread, read off the TTS callback. */
     @Volatile private var appCtxRef: Context? = null
     private var speaking = false
     private var speakingId: String? = null
@@ -917,18 +918,16 @@ object ReminderTts {
                 // utterance dropped here would otherwise orphan its
                 // ENGINE_INIT tag — nothing later can retract it, since
                 // the success path is gone with the item (#470 review).
-                // Same as the DND receiver and the VOICE_MISSING refire.
+                // Same as the DND receiver.
                 cancelFailureFor(ctx, next.taskId, next.kindKey)
                 runCatching {
                     Log.w("ReminderTts", "DND/silent, dropping queued speech ${next.id}")
                 }
                 continue
             }
-            // Stored voice/rate/pitch (#355); skipped at defaults so
-            // untouched installs speak exactly like before. Runs AFTER the
-            // toggle re-check below: its VOICE_MISSING report would
-            // otherwise post a notice the disabled-drop branch never
-            // retracts (#470 review).
+            // Reminder speech runs on engine defaults (#596): no stored
+            // voice/rate/pitch is ever applied, so an imported backup's
+            // customs stay inert and every utterance sounds the same.
             //
             // Toggle-off between dequeue and speak (#470 review): a disable
             // landing here would restart audio on the just-stopped engine.
@@ -945,26 +944,11 @@ object ReminderTts {
                 }
                 continue
             }
-            appCtxRef?.let {
-                applyStoredTtsSettings(eng, it)
-                runCatching {
-                    // Unknown (null) is not empty: a binder hiccup answering
-                    // null must not report "your saved voice is gone" for a
-                    // stored pick — the same null-vs-empty distinction the
-                    // voice picker draws (#434). Only a known voice list
-                    // that lacks the pick reports.
-                    val names = eng.voices?.map { v -> v.name } ?: return@runCatching
-                    if (isStoredVoiceMissing(names, BehaviourSettings.ttsVoice(it))) {
-                        reportFailure(next, TtsFailure.VOICE_MISSING)
-                    }
-                }
-            }
             // A throw (broken OEM binder state) counts like ERROR: clear and
             // advance. Uncaught here it would escape from onDone/onError's thread.
-            // Late liveness re-check (#470 review): a drop landing inside
-            // the slow voice block above would otherwise speak for a dead
-            // task and re-post its tag. Retracts the point's notice too —
-            // the voice block may have just posted VOICE_MISSING for it.
+            // Late liveness re-check (#470 review): a drop landing here would
+            // otherwise speak for a dead task and re-post its tag. Retracts
+            // the point's notice too.
             if (!confirmUtteranceLive(next.id)) {
                 appCtxRef?.let { cancelFailureFor(it, next.taskId, next.kindKey) }
                 continue
