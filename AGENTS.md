@@ -181,7 +181,8 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root, created lazily. Se
   The servers' configuration comes from the root `.env`, not from T3's own
   environment: T3 is a systemd unit with an empty env (`WorkingDirectory=%h`, no
   `EnvironmentFile`), so a `{env:VAR}` in `opencode.json` expanded to `""` and
-  the six Go servers exited with "MONGODB_URI is not set" (workspace-mcp
+  the six Go servers of the time (five since #584 TEMP-REMOVEd ∃-Mail)
+  exited with "MONGODB_URI is not set" (workspace-mcp
   reported its Google credentials unset). That is the bug the launchers fixed:
   they fill from `.env` when the environment has no value, so an empty `{env:}`
   no longer stops a covered key — which is exactly why `{env:}` stays banned

@@ -560,7 +560,8 @@ func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 
 	// Exact token lists, not substrings: `load_root_env_fill MONGODB_URI
 	// MONGODB_DB PASSWORD` contains the substring but hands every one of the
-	// six servers a key none of them needs, so widening either launcher must
+	// five servers a key none of them needs (#584 TEMP-REMOVE (∃-Mail): was
+	// six with reports), so widening either launcher must
 	// fail here.
 	rawRun, err := os.ReadFile("scripts/mcp-run.sh")
 	if err != nil {
