@@ -177,6 +177,7 @@ internal fun SettingsScreen(
                                 permissionsGranted = state.permissionsGranted,
                                 syncing = state.syncing,
                                 lastSyncAt = state.lastSyncAt,
+                                paused = BehaviourSettings.syncPaused(context),
                             ),
                             themeStatus = when (themeMode) {
                                 ThemeStore.LIGHT -> "Light"
@@ -334,6 +335,22 @@ internal fun SettingsScreen(
                     SettingSection.Health -> {
                         HealthStatusCard(state)
 
+                        // Health sync cadence (#588): the interval,
+                        // Wi-Fi-only and pause controls live with the Sync
+                        // card, not in Behaviour. Declared here rather than
+                        // in the gate branch below so a gate change never
+                        // resets them; keyed on settingsRefresh so a
+                        // settings import reloads them.
+                        var syncHours by remember(settingsRefresh) {
+                            mutableStateOf(BehaviourSettings.syncIntervalHours(context))
+                        }
+                        var wifiOnly by remember(settingsRefresh) {
+                            mutableStateOf(BehaviourSettings.syncWifiOnly(context))
+                        }
+                        var paused by remember(settingsRefresh) {
+                            mutableStateOf(BehaviourSettings.syncPaused(context))
+                        }
+
                         /** Three-step gate: install Health Connect, grant permissions, then sync. */
                         when {
                             // SDK available but the client failed to build
@@ -436,9 +453,7 @@ internal fun SettingsScreen(
                             else -> {
                                 SectionCard(
                                     title = "Sync",
-                                    subtitle = "Push the latest health data to your server now. " +
-                                        BehaviourSettings.syncCadenceLine(context) +
-                                        " Cadence, Wi-Fi-only and pause live in Settings → Behaviour.",
+                                    subtitle = "Push the latest health data to your server now.",
                                 ) {
                                     Button(
                                         onClick = { viewModel.syncNow() },
@@ -454,6 +469,51 @@ internal fun SettingsScreen(
                             }
                         }
 
+                        // Health sync cadence (#588): the interval, Wi-Fi-only
+                        // and pause controls live with the Sync card, not in
+                        // Behaviour — and outside the readiness gate above,
+                        // so cadence stays configurable before Health
+                        // Connect is installed or granted.
+                        SectionCard(
+                            title = "Health sync cadence",
+                            subtitle = "How often health data pushes while the app is idle. Changes apply from the next scheduled run.",
+                        ) {
+                            OptionMenu(
+                                label = "Sync every",
+                                shown = BehaviourSettings.intervalChoiceLabel(syncHours),
+                                options = BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS.map {
+                                    it.toString() to BehaviourSettings.intervalChoiceLabel(it)
+                                },
+                                onPick = {
+                                    it.toLongOrNull()?.let { h ->
+                                        BehaviourSettings.setSyncIntervalHours(context, h)
+                                        syncHours = BehaviourSettings.syncIntervalHours(context)
+                                    }
+                                },
+                            )
+                            SwitchRow(
+                                text = "Wi-Fi only",
+                                sub = "Sync on unmetered Wi-Fi; mobile data never syncs.",
+                                checked = wifiOnly,
+                                onChange = {
+                                    BehaviourSettings.setSyncWifiOnly(context, it)
+                                    wifiOnly = it
+                                },
+                            )
+                            SwitchRow(
+                                text = "Pause sync",
+                                sub = "Stops health sync entirely until resumed (task refresh keeps running).",
+                                checked = paused,
+                                onChange = {
+                                    BehaviourSettings.setSyncPaused(context, it)
+                                    paused = it
+                                },
+                            )
+                            HintLine(BehaviourSettings.syncCadenceLine(syncHours, wifiOnly, paused))
+                            if (syncHours !in BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS) {
+                                HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
+                            }
+                        }
 
                         if (state.lastSyncAt.isNotEmpty()) {
                             HintLine("Last sync: ${formatSyncTime(state.lastSyncAt)}")
@@ -1446,7 +1506,8 @@ internal fun healthStatusLine(
 
 /** Hub Health row (#435 review): same order as [healthStatusLine], short
  * strings for the hub. A transiently dead client reads as not responding,
- * never "setup needed" — setup cannot fix it. Pure for the same reason. */
+ * never "setup needed" — setup cannot fix it. A paused sync reads Paused,
+ * never Ready/Synced — nothing runs while paused (#588). Pure for the same reason. */
 internal fun hubHealthStatus(
     healthAvailable: Boolean,
     healthUpdateRequired: Boolean,
@@ -1454,11 +1515,13 @@ internal fun hubHealthStatus(
     permissionsGranted: Boolean,
     syncing: Boolean,
     lastSyncAt: String,
+    paused: Boolean = false,
 ): String = when {
     healthUpdateRequired -> "Update needed"
     healthTransient -> "Not responding"
     !healthAvailable -> "Not installed"
     !permissionsGranted -> "Setup needed"
+    paused -> "Paused"
     syncing -> "Syncing…"
     lastSyncAt.isNotEmpty() -> "Synced"
     else -> "Ready"

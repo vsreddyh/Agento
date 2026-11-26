@@ -66,9 +66,6 @@ object BehaviourSettings {
     }
 
     /** User-facing cadence line; never asserts a constant (#355). */
-    fun syncCadenceLine(ctx: Context): String =
-        syncCadenceLine(syncIntervalHours(ctx), syncWifiOnly(ctx), syncPaused(ctx))
-
     fun syncCadenceLine(hours: Long, wifiOnly: Boolean, paused: Boolean): String {
         // Total like every pure helper here: coerce, so a direct caller
         // can never render "every 0 hours".
@@ -296,11 +293,12 @@ object BehaviourSettings {
     // chat bar is gone, so the key is no longer read or written; a stale
     // copy in an old backup is skipped on import like any unknown key.
 
-    /** Hub one-liner: how many knobs differ from their defaults. */
+    /** Hub one-liner: how many Behaviour knobs differ from their defaults.
+     * Health sync cadence (interval, Wi-Fi-only, pause) is not one of them:
+     * it lives in Settings → Health sync (#588), shows its own values in
+     * its own card, and a paused sync reads Paused (not Ready) on the Health
+     * hub row instead of counting here. */
     fun customCount(ctx: Context): Int = customCount(
-        syncHours = syncIntervalHours(ctx),
-        wifiOnly = syncWifiOnly(ctx),
-        paused = syncPaused(ctx),
         taskMinutes = taskSyncIntervalMinutes(ctx),
         leadMinutes = reminderLeadMinutes(ctx),
         voice = ttsVoice(ctx),
@@ -317,9 +315,6 @@ object BehaviourSettings {
      * (enabling reminders elsewhere still counts — deliberate, and the
      * hub copy says "custom", not "changed here"). */
     fun customCount(
-        syncHours: Long,
-        wifiOnly: Boolean,
-        paused: Boolean,
         taskMinutes: Long,
         leadMinutes: Long,
         voice: String,
@@ -335,21 +330,11 @@ object BehaviourSettings {
     ): Int {
         // Total like the cadence lines: coerce, so both overloads agree on
         // the same effective state (a stored 0 reads back as its floor).
-        val sh = coerceImport(KEY_SYNC_INTERVAL_HOURS, syncHours)
         val tm = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, taskMinutes)
         val lm = coerceImport(KEY_REMINDER_LEAD_MINUTES, leadMinutes)
         val rp = coerceImport(KEY_TTS_RATE_PCT, ratePct)
         val pp = coerceImport(KEY_TTS_PITCH_PCT, pitchPct)
         var n = 0
-        // Paused suspends the whole cadence card: interval and wifiOnly
-        // are both moot while no sync runs, so neither counts then — or
-        // pausing with a custom cadence reads as two changes for zero
-        // effective behaviour change.
-        if (!paused) {
-            if (sh != DEFAULT_SYNC_INTERVAL_HOURS) n++
-            if (wifiOnly) n++
-        }
-        if (paused) n++
         if (tm != DEFAULT_TASK_SYNC_INTERVAL_MINUTES) n++
         if (lm != TaskReminders.BEFORE_START_MINUTES) n++
         if (voice.trim().isNotEmpty()) n++

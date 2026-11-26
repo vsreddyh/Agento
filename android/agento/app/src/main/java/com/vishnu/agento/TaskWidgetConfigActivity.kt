@@ -259,13 +259,13 @@ private fun WidgetSettingsScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                SwitchRow(
+                ConfigSwitchRow(
                     title = "Show the title",
                     subtitle = "Hides the name; the refresh button stays",
                     checked = pickedShowTitle,
                     onChange = { pickedShowTitle = it },
                 )
-                SwitchRow(
+                ConfigSwitchRow(
                     title = "Show the count line",
                     subtitle = "The \"3 open tasks\" line under the title",
                     checked = pickedShowCount,
@@ -276,19 +276,19 @@ private fun WidgetSettingsScreen(
             // repeat condition has to survive turning the due date and time
             // off, so it can never ride the due switch.
             SettingsGroup("Row content") {
-                SwitchRow(
+                ConfigSwitchRow(
                     title = "Due date and time",
                     subtitle = "e.g. Today, 09:00 → 10:00",
                     checked = pickedDue,
                     onChange = { pickedDue = it },
                 )
-                SwitchRow(
+                ConfigSwitchRow(
                     title = "Repeat condition",
                     subtitle = "e.g. Every 3 days — stays with the due date off",
                     checked = pickedRepeat,
                     onChange = { pickedRepeat = it },
                 )
-                SwitchRow(
+                ConfigSwitchRow(
                     title = "Parallel marker",
                     subtitle = "The word \"parallel\" on a parallel task",
                     checked = pickedParallel,
@@ -336,13 +336,13 @@ private fun WidgetSettingsScreen(
                         ) { Text(v.title) }
                     }
                 }
-                SwitchRow(
+                ConfigSwitchRow(
                     title = "Section headers",
                     subtitle = "Overdue → Current → … → No due date",
                     checked = pickedSections,
                     onChange = { pickedSections = it },
                 )
-                SwitchRow(
+                ConfigSwitchRow(
                     title = "Scrolling list",
                     subtitle = if (pickedScroll) {
                         "Up to ${TaskWidget.MAX_COLLECTION_ROWS} tasks, scroll through them"
@@ -444,7 +444,7 @@ private fun SortRow(
 
 /** One switch with an explanatory subtitle; the whole row toggles. */
 @Composable
-private fun SwitchRow(
+private fun ConfigSwitchRow(
     title: String,
     subtitle: String,
     checked: Boolean,

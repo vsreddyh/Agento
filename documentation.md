@@ -245,8 +245,9 @@ Run manual dry-runs via:
 The retention windows above and the agent's personality and instructions
 (`.opencode/chat.md`, `.opencode/skills/`) are operator-set by design: they live
 in the repo / deployment, not in the app. The app's Settings → Behaviour section
-owns the device-local knobs (sync cadence, reminder lead time, notifications) —
-everything with an obvious default that the device can apply itself.
+owns the device-local knobs (reminder lead time, notifications) — everything
+with an obvious default that the device can apply itself. Health sync cadence
+lives with the Sync card in Settings → Health sync (#588).
 
 ---
 

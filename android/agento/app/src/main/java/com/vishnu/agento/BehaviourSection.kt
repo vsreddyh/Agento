@@ -24,8 +24,9 @@ import kotlin.coroutines.resume
 
 /**
  * Settings → Behaviour (#355): every device-local knob in one place —
- * sync cadence, task refresh, reminder lead time + enable, TTS voice/rate/
- * pitch, and the app update checks.
+ * task refresh, reminder lead time + enable, TTS voice/rate/
+ * pitch, and the app update checks. (Health sync cadence lives with the
+ * Sync card in Settings → Health sync, #588.)
  *
  * All reads/writes go through [BehaviourSettings] (the single inventory);
  * this file owns no pref key spelling. [refreshTick] re-reads everything
@@ -42,15 +43,6 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     var resumeTick by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
 
-    var syncHours by remember(refreshTick) {
-        mutableStateOf(BehaviourSettings.syncIntervalHours(context))
-    }
-    var wifiOnly by remember(refreshTick) {
-        mutableStateOf(BehaviourSettings.syncWifiOnly(context))
-    }
-    var paused by remember(refreshTick) {
-        mutableStateOf(BehaviourSettings.syncPaused(context))
-    }
     var taskMinutes by remember(refreshTick) {
         mutableStateOf(BehaviourSettings.taskSyncIntervalMinutes(context))
     }
@@ -218,47 +210,6 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     // flip between this read and the arm can still disagree about that
     // instance's mode.
     val exactAlarms = remember(resumeTick) { canScheduleExactAlarms(appCtx) }
-
-    SectionCard(
-        title = "Health sync cadence",
-        subtitle = "How often health data pushes while the app is idle. Changes apply from the next scheduled run.",
-    ) {
-        OptionMenu(
-            label = "Sync every",
-            shown = BehaviourSettings.intervalChoiceLabel(syncHours),
-            options = BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS.map {
-                it.toString() to BehaviourSettings.intervalChoiceLabel(it)
-            },
-            onPick = {
-                it.toLongOrNull()?.let { h ->
-                    BehaviourSettings.setSyncIntervalHours(context, h)
-                    syncHours = BehaviourSettings.syncIntervalHours(context)
-                }
-            },
-        )
-        SwitchRow(
-            text = "Wi-Fi only",
-            sub = "Sync on unmetered Wi-Fi; mobile data never syncs.",
-            checked = wifiOnly,
-            onChange = {
-                BehaviourSettings.setSyncWifiOnly(context, it)
-                wifiOnly = it
-            },
-        )
-        SwitchRow(
-            text = "Pause sync",
-            sub = "Stops health sync entirely until resumed (task refresh keeps running).",
-            checked = paused,
-            onChange = {
-                BehaviourSettings.setSyncPaused(context, it)
-                paused = it
-            },
-        )
-        HintLine(BehaviourSettings.syncCadenceLine(syncHours, wifiOnly, paused))
-        if (syncHours !in BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS) {
-            HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
-        }
-    }
 
     SectionCard(
         title = "Task and widget refresh",
@@ -443,7 +394,7 @@ private fun hasNotifPermission(appCtx: Context): Boolean =
 
 /** One labelled switch row, the Notifications section's shape reused. */
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     text: String,
     sub: String,
     checked: Boolean,
