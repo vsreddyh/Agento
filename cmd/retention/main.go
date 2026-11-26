@@ -4,7 +4,8 @@
 //	              the ttl_deleted_at index removes them 10 days after flagging)
 //	health-check  hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
 //	cookbook      permanent — no-op
-//	reports       read+unstarred pruned after 7 days; unread/starred NEVER touched
+//	#584 TEMP-REMOVE (∃-Mail): reports read+unstarred pruning disabled,
+//	stored reports left as-is; restore on revert
 //	tasks         reconciled, never pruned: completed structured repeats with
 //	              no successor are REPORTED (#180); plus task_mutations pruned
 //	              after 90 days

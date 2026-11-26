@@ -14,7 +14,8 @@ see GitHub Releases for older notes.
   the `/api/reports*` routes and the reports retention pruning are all
   commented out with `#584` markers — restore is a revert, not a rewrite.
   Stored `reports` documents in Atlas are untouched; uploads of new
-  reports have nowhere to file until the feature returns.
+  reports have nowhere to file until the feature returns. Pre-update apps
+  get 404 on the Reports screen and badge fetch until upgraded.
 
 ## [9.6.1]
 - **Files top bar goes sync-style (#582).** The header is two actions:
