@@ -875,7 +875,7 @@ object TaskReminders {
     ) {
         val dropped: Int get() = droppedOneShots + droppedNags
 
-        /** One line, for the diagnostics log and the exported report. */
+        /** One line, for the diagnostics log via `diagnostics()`/`buildReport`. */
         fun line(): String {
             // Only the non-zero counts: "dropped 0 alert(s) and 3 nag(s)"
             // reads as a bug in the counter rather than as a fact.

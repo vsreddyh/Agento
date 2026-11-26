@@ -856,11 +856,10 @@ class TaskWidget : AppWidgetProvider() {
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
 
-        /** Full diagnostics report for file export: health summary plus
-         * a larger redacted log slice than the clipboard variant. The
-         * file variant captures system-wide logs: a host-side widget
-         * failure is thrown in the LAUNCHER's process, so our own log
-         * never contains the reason (#137). */
+        /** Full diagnostics report for adb pull: health summary plus a
+         * redacted system-wide log slice — a host-side widget failure is
+         * thrown in the LAUNCHER's process, so our own log never
+         * contains the reason (#137). Crash logs are bundled too. */
         fun buildReport(appCtx: Context): String {
             val head = diagnostics(appCtx)
             val mine = dumpLog(interestingLines = 100, tailLines = 30)
@@ -901,13 +900,13 @@ class TaskWidget : AppWidgetProvider() {
             }
         }.getOrDefault("logcat unavailable")
 
-        /** Recent log lines, self-read so no adb is needed. Self-process
-         * only by default (light, privacy-safe). [allProcesses] widens to
+        /** Recent log lines, self-read for the diagnostics log (adb pull).
+         * Self-process only by default (light, privacy-safe). [allProcesses] widens to
          * the whole system buffer at Warn+, which is what a HOST-side
          * widget failure looks like: the launcher throws in its own
          * process, so our pid's log never shows it (issue #137).
-         * Privacy: output is user-initiated and shared, so bearer secrets
-         * are redacted before it leaves the device (see [redactSecrets]). */
+         * Privacy: output leaves the device only via adb pull, so bearer
+         * secrets are redacted beforehand (see [redactSecrets]). */
         fun dumpLog(
             allProcesses: Boolean = false,
             interestingLines: Int = 40,
