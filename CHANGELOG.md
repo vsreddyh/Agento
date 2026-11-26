@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.7.1]
+- **Widget compact tap opens the task (#586).** Tapping the next-task
+  name or its due line now deep-links into that task's detail sheet,
+  like notification taps and full-size widget rows do. A task that no
+  longer exists lands on the plain list instead.
+
 ## [9.7.0]
 - **∃-Mail temporarily removed (#584).** The Reports destination, its
   drawer/rail entries and unread badge, the `reports` MCP server entry,
