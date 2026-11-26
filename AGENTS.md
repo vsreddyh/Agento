@@ -94,10 +94,11 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
   themselves and `TestMCPServersLoadTheirOwnEnv` pins that. Anything T3 did
   inherit is still passed through, so start it from a clean shell if that
   matters.
-- Google Workspace (Gmail), #515: the seventh entry, `workspace-mcp`, is the
+- Google Workspace (Gmail), #515: the sixth entry, `workspace-mcp`, is the
   upstream Python server (`taylorwilsdon/google_workspace_mcp`, pinned in
   `scripts/build-workspace-mcp.sh`) in the git-ignored `.workspace-mcp/venv/`,
   launched by `scripts/workspace-mcp.sh` with
+  <!-- #584 TEMP-REMOVE (∃-Mail): was the seventh entry with reports; restore on revert. -->
   `--single-user --permissions gmail:organize --tool-tier complete` and
   `--disabled-tools` covering send/draft/label-management/filters. The verified
   tool list is eight read/utility tools plus **exactly two write tools**,
