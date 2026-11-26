@@ -14,9 +14,10 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 /**
- * Application entry point; ensures the health sync and the task refresh
- * both survive process death. Cadences come from [BehaviourSettings]
- * (defaults: hourly sync, half-hourly refresh); see the Behaviour section.
+ * Application entry point; ensures the health sync, the task refresh and
+ * the widget refresh all survive process death. Cadences come from
+ * [BehaviourSettings] (defaults: hourly sync, half-hourly task and widget
+ * refreshes); see the Behaviour and Widget sections.
  */
 class AgentoApp : Application() {
 
@@ -33,6 +34,7 @@ class AgentoApp : Application() {
             (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         scheduleSync(this)
         scheduleTaskSync(this)
+        scheduleWidgetSync(this)
         scheduleUpdateChecks(this)
         // Retired scheduler (#491): 6.x enqueued 30-min agenteo_cron_sync
         // ticks that WorkManager persists across upgrades, so cancel the
@@ -57,6 +59,7 @@ class AgentoApp : Application() {
         const val SYNC_WORK_NAME = "agento_sync"
         const val SYNC_INTERVAL_HOURS = 1L
         const val TASK_SYNC_WORK_NAME = "agento_task_sync"
+        const val WIDGET_SYNC_WORK_NAME = "agento_widget_sync"
         /** Retired in #491 (class deleted): the cron scheduler's unique
          * periodic work. Cancelled, never enqueued — see
          * cancelRetiredCronSync. */
@@ -71,14 +74,21 @@ class AgentoApp : Application() {
         }
 
         /**
-         * How often the task widget and reminder alarms re-derive
-         * themselves. Half an hour sits between "often enough that a task
-         * the agent just made shows up while you are still looking at the
-         * home screen" and "often enough to notice": it is the smallest
-         * interval that keeps a glanceable surface honest, and it is well
-         * inside the battery case for a single small fetch.
+         * How often the task surfaces (reminder alarms + project snoozes)
+         * re-derive themselves. Half an hour sits between "often enough
+         * that a task the agent just made arms while you are still looking"
+         * and "often enough to notice": it is the smallest interval that
+         * keeps reminders honest, and it is well inside the battery case
+         * for a small fetch.
          */
         const val TASK_SYNC_INTERVAL_MINUTES = 30L
+
+        /**
+         * How often the home-screen widget re-renders. Same default as the
+         * task refresh so an install that never opens either section behaves
+         * exactly like before the split; each schedule is independent after.
+         */
+        const val WIDGET_SYNC_INTERVAL_MINUTES = 30L
 
         /** Unique periodic work with UPDATE policy so reinstalls never duplicate. */
         fun scheduleSync(context: Context) {
@@ -117,9 +127,12 @@ class AgentoApp : Application() {
         }
 
         /**
-         * Unique periodic work with UPDATE policy, as above. Safe to call
-         * repeatedly: WorkManager keeps one job and replaces its definition,
-         * so a cold start, a reboot and a reinstall all land on the same one.
+         * Task refresh: reminder alarms + project snoozes. Unique periodic
+         * work with UPDATE policy, as above. Safe to call repeatedly:
+         * WorkManager keeps one job and replaces its definition, so a cold
+         * start, a reboot and a reinstall all land on the same one.
+         * Independent of [scheduleWidgetSync]: changing one never touches
+         * the other.
          */
         fun scheduleTaskSync(context: Context) {
             val appCtx = context.applicationContext
@@ -139,6 +152,28 @@ class AgentoApp : Application() {
             ).build()
             WorkManager.getInstance(appCtx).enqueueUniquePeriodicWork(
                 TASK_SYNC_WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }
+
+        /**
+         * Widget refresh: the home-screen widget re-render. Separate unique
+         * periodic work from the task refresh above, on its own interval,
+         * so each runs as often as its section asks.
+         */
+        fun scheduleWidgetSync(context: Context) {
+            val appCtx = context.applicationContext
+            val minutes = BehaviourSettings.widgetSyncIntervalMinutes(appCtx)
+            val request = PeriodicWorkRequestBuilder<WidgetSyncWorker>(
+                minutes, TimeUnit.MINUTES
+            ).setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            ).build()
+            WorkManager.getInstance(appCtx).enqueueUniquePeriodicWork(
+                WIDGET_SYNC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
                 request,
             )

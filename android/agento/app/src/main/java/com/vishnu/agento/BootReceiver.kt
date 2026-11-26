@@ -12,8 +12,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Re-arms all periodic jobs right after a reboot or an update (#366 adds
- * the update poll to the sync + task pair): WorkManager persists them,
- * this avoids waiting for the next window.
+ * the update poll to the sync + task + widget set): WorkManager persists
+ * them, this avoids waiting for the next window.
  */
 class BootReceiver : BroadcastReceiver() {
     /** Holds the broadcast until work finishes; returning early would let
@@ -32,6 +32,7 @@ class BootReceiver : BroadcastReceiver() {
                 // an app update clears nothing here and a fresh install has
                 // no schedule at all — re-asserting is idempotent either way.
                 AgentoApp.scheduleTaskSync(context)
+                AgentoApp.scheduleWidgetSync(context)
                 // Same for the update poll (#366): re-asserted, never doubled.
                 // Deliberately only the PERIODIC poll (#409): the startup
                 // one-shot is enqueued by AgentoApp.onCreate on the next cold

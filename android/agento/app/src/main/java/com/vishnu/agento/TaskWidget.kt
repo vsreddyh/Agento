@@ -981,6 +981,7 @@ class TaskWidget : AppWidgetProvider() {
                 l.contains("agento") || l.contains("com.vishnu") ||
                 l.contains("RemoteCollection") ||
                 l.contains("TasksApi") || l.contains("TaskSyncWorker") ||
+                l.contains("WidgetSyncWorker") ||
                 l.contains("SyncRunner") ||
                 // Inline complete/skip failures (#532) log under TaskNotif;
                 // the claim "logged to diagnostics" is otherwise false.
@@ -1341,7 +1342,7 @@ class TaskWidget : AppWidgetProvider() {
         /** Re-pull server tasks and push to every installed widget. Call
          * after task mutations so the home screen never goes stale.
          * Returns a Deferred so callers that must outlive a broadcast
-         * (BootReceiver) can wait on it — and so [TaskSyncWorker] can read
+         * (BootReceiver) can wait on it — and so [WidgetSyncWorker] can read
          * how the run ended, one run at a time rather than out of a shared
          * field. */
         fun refresh(context: Context): Deferred<RefreshOutcome> {
@@ -1373,7 +1374,7 @@ class TaskWidget : AppWidgetProvider() {
          *
          * Returns how it ended rather than leaving that in a field: the
          * scope is shared, so a refresh started by an in-app mutation and
-         * one started by [TaskSyncWorker] can be in flight together, and a
+         * one started by [WidgetSyncWorker] can be in flight together, and a
          * shared value hands each caller the other one's result.
          *
          * All three states are fetched (in parallel) so every placement's

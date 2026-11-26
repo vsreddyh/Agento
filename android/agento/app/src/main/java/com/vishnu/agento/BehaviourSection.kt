@@ -26,7 +26,8 @@ import kotlin.coroutines.resume
  * Settings → Behaviour (#355): every device-local knob in one place —
  * task refresh, reminder lead time + enable, TTS voice/rate/
  * pitch, and the app update checks. (Health sync cadence lives with the
- * Sync card in Settings → Health sync, #588.)
+ * Sync card in Settings → Health sync, #588; widget refresh lives with the
+ * Widget section, #595.)
  *
  * All reads/writes go through [BehaviourSettings] (the single inventory);
  * this file owns no pref key spelling. [refreshTick] re-reads everything
@@ -212,8 +213,8 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
     val exactAlarms = remember(resumeTick) { canScheduleExactAlarms(appCtx) }
 
     SectionCard(
-        title = "Task and widget refresh",
-        subtitle = "How often open tasks, the widget and reminder alarms re-derive. Changes apply from the next scheduled run.",
+        title = "Task refresh",
+        subtitle = "How often reminders and snoozed projects re-check.",
     ) {
         OptionMenu(
             label = "Refresh every",
@@ -228,13 +229,6 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
                 }
             },
         )
-        HintLine(BehaviourSettings.taskSyncCadenceLine(taskMinutes))
-        if (taskMinutes !in BehaviourSettings.TASK_SYNC_INTERVAL_OPTIONS_MINUTES) {
-            HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
-        }
-        if (taskMinutes > (BehaviourSettings.TASK_SYNC_INTERVAL_OPTIONS_MINUTES.maxOrNull() ?: 120L)) {
-            HintLine("Above the offered range (kept from an import): refresh may lag up to a day behind task changes.")
-        }
     }
 
     SectionCard(

@@ -111,24 +111,36 @@ class BehaviourSettingsTest {
         // Pure overloads coerce: no caller renders "every 0 hours".
         assertEquals("Automatic sync runs every hour.", BehaviourSettings.syncCadenceLine(0L, false, false))
         assertEquals(
-            "Task and widget refresh runs every hour.",
+            "Task refresh runs every hour.",
             BehaviourSettings.taskSyncCadenceLine(60L),
         )
         assertEquals(
-            "Task and widget refresh runs every 2 hours.",
+            "Task refresh runs every 2 hours.",
             BehaviourSettings.taskSyncCadenceLine(120L),
         )
         assertEquals(
-            "Task and widget refresh runs every 45 minutes.",
+            "Task refresh runs every 45 minutes.",
             BehaviourSettings.taskSyncCadenceLine(45L),
         )
         assertEquals(
-            "Task and widget refresh runs every 1 hour 30 minutes.",
+            "Task refresh runs every 1 hour 30 minutes.",
             BehaviourSettings.taskSyncCadenceLine(90L),
         )
         assertEquals(
-            "Task and widget refresh runs every 15 minutes.",
+            "Task refresh runs every 15 minutes.",
             BehaviourSettings.taskSyncCadenceLine(0L),
+        )
+        assertEquals(
+            "Widget refresh runs every hour.",
+            BehaviourSettings.widgetSyncCadenceLine(60L),
+        )
+        assertEquals(
+            "Widget refresh runs every 2 hours.",
+            BehaviourSettings.widgetSyncCadenceLine(120L),
+        )
+        assertEquals(
+            "Widget refresh runs every 15 minutes.",
+            BehaviourSettings.widgetSyncCadenceLine(0L),
         )
     }
 
@@ -170,6 +182,7 @@ class BehaviourSettingsTest {
     fun `import coercion matches live floors`() {
         assertEquals(1L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_SYNC_INTERVAL_HOURS, 0L))
         assertEquals(15L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES, 5L))
+        assertEquals(15L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES, 5L))
         assertEquals(0L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_REMINDER_LEAD_MINUTES, 0L))
         assertEquals(50L, BehaviourSettings.coerceImport(BehaviourSettings.KEY_TTS_RATE_PCT, 0L))
         assertEquals(0L, BehaviourSettings.coerceImport("usage_total_chat", -3L))
@@ -196,6 +209,14 @@ class BehaviourSettingsTest {
         assertEquals("1 hour 30 minutes", BehaviourSettings.minutesChoiceLabel(90L))
         // The singular branch both phrasings share.
         assertEquals("1 hour 1 minute", BehaviourSettings.minutesChoiceLabel(61L))
+        // Keyed picker labels (#595): the widget picker coerces through its
+        // own key. Same outputs today (shared 15..1440 range), pinned so a
+        // future range split cannot silently re-target one side.
+        val widgetKey = BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES
+        assertEquals("1 hour", BehaviourSettings.minutesChoiceLabelFor(widgetKey, 60L))
+        assertEquals("2 hours", BehaviourSettings.minutesChoiceLabelFor(widgetKey, 120L))
+        assertEquals("15 minutes", BehaviourSettings.minutesChoiceLabelFor(widgetKey, 0L))
+        assertEquals("1 hour 30 minutes", BehaviourSettings.minutesChoiceLabelFor(widgetKey, 90L))
     }
 
     @Test
@@ -243,6 +264,7 @@ class BehaviourSettingsTest {
         for (k in listOf(
             BehaviourSettings.KEY_SYNC_INTERVAL_HOURS,
             BehaviourSettings.KEY_TASK_SYNC_INTERVAL_MINUTES,
+            BehaviourSettings.KEY_WIDGET_SYNC_INTERVAL_MINUTES,
             BehaviourSettings.KEY_REMINDER_LEAD_MINUTES,
             BehaviourSettings.KEY_TTS_RATE_PCT,
             BehaviourSettings.KEY_TTS_PITCH_PCT,

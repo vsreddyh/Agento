@@ -80,7 +80,7 @@ object BehaviourSettings {
         }
     }
 
-    // ── Task / widget / reminder refresh ─────────────────────────────────
+    // ── Task refresh ───────────────────────────────────────────────────
     const val KEY_TASK_SYNC_INTERVAL_MINUTES = "task_sync_interval_minutes"
     const val DEFAULT_TASK_SYNC_INTERVAL_MINUTES = AgentoApp.TASK_SYNC_INTERVAL_MINUTES
     val TASK_SYNC_INTERVAL_OPTIONS_MINUTES = listOf(15L, 30L, 60L, 120L)
@@ -100,11 +100,38 @@ object BehaviourSettings {
     fun taskSyncCadenceLine(minutes: Long): String {
         val m = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes)
         return when {
-            m == 60L -> "Task and widget refresh runs every hour."
-            m % 60L == 0L -> "Task and widget refresh runs every ${m / 60L} hours."
+            m == 60L -> "Task refresh runs every hour."
+            m % 60L == 0L -> "Task refresh runs every ${m / 60L} hours."
             // Same humanizer as the lead copy: adjacent cards must agree.
-            m > 60L -> "Task and widget refresh runs every ${leadCopy(m)}."
-            else -> "Task and widget refresh runs every $m minutes."
+            m > 60L -> "Task refresh runs every ${leadCopy(m)}."
+            else -> "Task refresh runs every $m minutes."
+        }
+    }
+
+    // ── Widget refresh ─────────────────────────────────────────────────
+    const val KEY_WIDGET_SYNC_INTERVAL_MINUTES = "widget_sync_interval_minutes"
+    const val DEFAULT_WIDGET_SYNC_INTERVAL_MINUTES = AgentoApp.WIDGET_SYNC_INTERVAL_MINUTES
+    val WIDGET_SYNC_INTERVAL_OPTIONS_MINUTES = listOf(15L, 30L, 60L, 120L)
+
+    fun widgetSyncIntervalMinutes(ctx: Context): Long =
+        coerceImport(KEY_WIDGET_SYNC_INTERVAL_MINUTES,
+            prefs(ctx).getLong(KEY_WIDGET_SYNC_INTERVAL_MINUTES, DEFAULT_WIDGET_SYNC_INTERVAL_MINUTES))
+
+    fun setWidgetSyncIntervalMinutes(ctx: Context, minutes: Long) {
+        prefs(ctx).edit { putLong(KEY_WIDGET_SYNC_INTERVAL_MINUTES, minutes.coerceIn(15L, 24L * 60L)) }
+        AgentoApp.scheduleWidgetSync(ctx)
+    }
+
+    fun widgetSyncCadenceLine(ctx: Context): String =
+        widgetSyncCadenceLine(widgetSyncIntervalMinutes(ctx))
+
+    fun widgetSyncCadenceLine(minutes: Long): String {
+        val m = coerceImport(KEY_WIDGET_SYNC_INTERVAL_MINUTES, minutes)
+        return when {
+            m == 60L -> "Widget refresh runs every hour."
+            m % 60L == 0L -> "Widget refresh runs every ${m / 60L} hours."
+            m > 60L -> "Widget refresh runs every ${leadCopy(m)}."
+            else -> "Widget refresh runs every $m minutes."
         }
     }
 
@@ -144,8 +171,15 @@ object BehaviourSettings {
         return if (h == 1L) "1 hour" else "$h hours"
     }
 
-    fun minutesChoiceLabel(minutes: Long): String {
-        val m = coerceImport(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes)
+    fun minutesChoiceLabel(minutes: Long): String =
+        minutesChoiceLabelFor(KEY_TASK_SYNC_INTERVAL_MINUTES, minutes)
+
+    /** Keyed picker label: both refresh pickers share the 15..1440 range
+     * today, but the coercion rides the caller's key so a future range
+     * split cannot silently mis-coerce one side. There is deliberately no
+     * unkeyed shorthand beyond the task default above. */
+    fun minutesChoiceLabelFor(key: String, minutes: Long): String {
+        val m = coerceImport(key, minutes)
         return when {
             m == 60L -> "1 hour"
             m % 60L == 0L -> "${m / 60L} hours"
@@ -310,10 +344,15 @@ object BehaviourSettings {
         updateNotify = updateNotify(ctx),
     )
 
-    /** Pure deviation count, JVM-pinned: every knob that differs from its
-     * default, including the surfaced-but-pre-existing reminder switch
-     * (enabling reminders elsewhere still counts — deliberate, and the
-     * hub copy says "custom", not "changed here"). */
+    /** Pure deviation count, JVM-pinned: every Behaviour knob that differs
+     * from its default, including the surfaced-but-pre-existing reminder
+     * switch (enabling reminders elsewhere still counts — deliberate, and
+     * the hub copy says "custom", not "changed here").
+     *
+     * The widget interval is deliberately NOT one of them: it lives in
+     * Settings → Widget (#595), and counting it here would flip the
+     * Behaviour hub row for a knob that lives elsewhere — like the
+     * per-widget display settings, it is backed up but uncounted. */
     fun customCount(
         taskMinutes: Long,
         leadMinutes: Long,
@@ -378,6 +417,7 @@ object BehaviourSettings {
     fun coerceImport(key: String, value: Long): Long = when (key) {
         KEY_SYNC_INTERVAL_HOURS -> value.coerceIn(1L, 24L)
         KEY_TASK_SYNC_INTERVAL_MINUTES -> value.coerceIn(15L, 24L * 60L)
+        KEY_WIDGET_SYNC_INTERVAL_MINUTES -> value.coerceIn(15L, 24L * 60L)
         KEY_REMINDER_LEAD_MINUTES -> value.coerceIn(0L, 24L * 60L)
         KEY_TTS_RATE_PCT, KEY_TTS_PITCH_PCT -> value.coerceIn(50L, 200L)
         // 0 is a real value here (off), unlike the cadences above whose
