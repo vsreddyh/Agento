@@ -151,4 +151,15 @@ class UpdateCheckTest {
             ),
         )
     }
+
+    @Test
+    fun `sidebar line shows the release semver`() {
+        fun rel(tag: String, name: String = "") =
+            AppRelease(tag, name, "u", 1L, "", "")
+        assertEquals("9.7.5", UpdateCheck.pendingUpdateLabel(rel("agento-v9.7.5")))
+        assertEquals("9.7.5", UpdateCheck.pendingUpdateLabel(rel("v9.7.5")))
+        // Unparseable tag falls back to the name, then to the raw tag.
+        assertEquals("Nightly build", UpdateCheck.pendingUpdateLabel(rel("nightly", "Nightly build")))
+        assertEquals("nightly", UpdateCheck.pendingUpdateLabel(rel("nightly")))
+    }
 }

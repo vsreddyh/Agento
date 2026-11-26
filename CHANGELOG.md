@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.8.0]
+- **Sidebar gets an update check button (#591).** The drawer bottom (and
+  the rail, icon-only with a dot) shows a sync button plus an
+  "Update available :- x.y.z" line when a release pends. Tapping the
+  line opens Settings → About; tapping the button re-checks and opens
+  About whenever the check confirms a pending release. Launch checks run through the existing
+  debounced path where due; the sidebar surfaces the last completed
+  check and converges on resume or manual check.
+
 ## [9.7.5]
 - **Settings hub drops the footer hint (#590).** The hub ends with the
   section rows; the Connection row's own status already says what needs

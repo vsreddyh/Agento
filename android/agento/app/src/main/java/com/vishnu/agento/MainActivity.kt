@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -19,10 +20,13 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -178,6 +182,72 @@ class MainActivity : ComponentActivity() {
                         section = s
                         scope.launch { drawerState.close() }
                     }
+                    // Sidebar update check (#591): the persisted pending
+                    // release, refreshed on resume and after every manual
+                    // check — the launch-time worker already ran through
+                    // UpdateCheck.run, so the sidebar reflects it instead of
+                    // triggering its own.
+                    var updateLabel by remember {
+                        mutableStateOf(
+                            UpdateCheck.pendingRelease(context)?.let(UpdateCheck::pendingUpdateLabel),
+                        )
+                    }
+                    var updateChecking by remember { mutableStateOf(false) }
+                    fun refreshUpdateLabel() {
+                        updateLabel = UpdateCheck.pendingRelease(context)
+                            ?.let(UpdateCheck::pendingUpdateLabel)
+                    }
+                    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                        refreshUpdateLabel()
+                    }
+                    // No one-shot worker-completion hook: WorkManager reports
+                    // completion through ListenableFuture, which is not on
+                    // this module's compile classpath, so first paint can
+                    // show the previous launch's snapshot until the next
+                    // resume or manual check converges it. Best-effort by
+                    // design — the check itself still runs on launch.
+                    // Update-check failure toasts (#591): a silent stop
+                    // reads as either "up to date" or a dead button.
+                    val toasts = remember(scope) { ToastCenter(scope) }
+                    // Manual tap while a check is in flight is a no-op (no
+                    // parallel checks).
+                    fun checkUpdatesNow() {
+                        if (updateChecking) return
+                        updateChecking = true
+                        scope.launch {
+                            try {
+                                val result = UpdateCheck.run(context, notify = false)
+                                result.onFailure { e ->
+                                    val fe = friendlyError(e.message ?: "")
+                                    toasts.toast(
+                                        "${fe.title} — ${fe.nextStep}",
+                                        ToastKind.Error,
+                                    )
+                                }
+                                // Refresh from the snapshot on every completed
+                                // run: a clean fetch clears a stale pending
+                                // line in-session instead of waiting for the
+                                // next resume, and a failure keeps the old
+                                // label (the release is still pending — only
+                                // the re-check failed).
+                                if (result.isSuccess) {
+                                    updateLabel = UpdateCheck.pendingRelease(context)
+                                        ?.let(UpdateCheck::pendingUpdateLabel)
+                                }
+                                // Navigate only on a fresh find: a failed run
+                                // must not open About on a stale pending.
+                                if (result.isSuccess &&
+                                    UpdateCheck.pendingRelease(context) != null
+                                ) {
+                                    go(Destination.Settings, SettingSection.About)
+                                }
+                            } finally {
+                                updateChecking = false
+                            }
+                        }
+                    }
+                    fun openUpdates() = go(Destination.Settings, SettingSection.About)
+                    Box(modifier = Modifier.fillMaxSize()) {
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val wc = windowClassFor(maxWidth)
                         val navContent: @Composable () -> Unit = {
@@ -232,6 +302,10 @@ class MainActivity : ComponentActivity() {
                                             dest = dest,
                                             // #584 TEMP-REMOVE (∃-Mail).
                                             // reportsUnread = reportsUnread,
+                                            updateLabel = updateLabel,
+                                            updateChecking = updateChecking,
+                                            onCheckUpdates = ::checkUpdatesNow,
+                                            onOpenUpdates = ::openUpdates,
                                             onDest = { go(it) },
                                         )
                                     },
@@ -245,6 +319,12 @@ class MainActivity : ComponentActivity() {
                                             // #584 TEMP-REMOVE (∃-Mail).
                                             // reportsUnread = reportsUnread,
                                             onDest = { go(it) },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        RailUpdateButton(
+                                            updateLabel = updateLabel,
+                                            checking = updateChecking,
+                                            onCheck = ::checkUpdatesNow,
                                         )
                                     }
                                     Box(modifier = Modifier.weight(1f)) { navContent() }
@@ -257,6 +337,10 @@ class MainActivity : ComponentActivity() {
                                             dest = dest,
                                             // #584 TEMP-REMOVE (∃-Mail).
                                             // reportsUnread = reportsUnread,
+                                            updateLabel = updateLabel,
+                                            updateChecking = updateChecking,
+                                            onCheckUpdates = ::checkUpdatesNow,
+                                            onOpenUpdates = ::openUpdates,
                                             permanent = true,
                                             onDest = { go(it) },
                                         )
@@ -264,6 +348,8 @@ class MainActivity : ComponentActivity() {
                                 ) { Box { navContent() } }
                             }
                         }
+                        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
+                    }
                     }
                 }
             }
@@ -279,14 +365,30 @@ private fun DrawerContent(
     permanent: Boolean = false,
     // #584 TEMP-REMOVE (∃-Mail).
     // reportsUnread: Int? = null,
+    updateLabel: String?,
+    updateChecking: Boolean,
+    onCheckUpdates: () -> Unit,
+    onOpenUpdates: () -> Unit,
 ) {
+    @Composable
+    fun content() {
+        Column(modifier = Modifier.fillMaxHeight()) {
+            DrawerList(dest, onDest, modifier = Modifier.weight(1f))
+            UpdateCheckFooter(
+                updateLabel = updateLabel,
+                checking = updateChecking,
+                onCheck = onCheckUpdates,
+                onOpen = onOpenUpdates,
+            )
+        }
+    }
     if (permanent) {
         PermanentDrawerSheet(modifier = Modifier.widthIn(max = 280.dp)) {
-            DrawerList(dest, onDest)
+            content()
         }
     } else {
         ModalDrawerSheet {
-            DrawerList(dest, onDest)
+            content()
         }
     }
 }
@@ -297,10 +399,11 @@ private fun DrawerList(
     onDest: (Destination) -> Unit,
     // #584 TEMP-REMOVE (∃-Mail).
     // reportsUnread: Int? = null,
+    modifier: Modifier = Modifier,
 ) {
     // Scrollable (#105): destinations overflow short screens — without
     // this the bottom items are cut off with no way to reach them.
-    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+    Column(modifier = modifier.verticalScroll(rememberScrollState())) {
         Text(
             "Agento",
             style = MaterialTheme.typography.titleLarge,
@@ -337,10 +440,11 @@ private fun RailContent(
     onDest: (Destination) -> Unit,
     // #584 TEMP-REMOVE (∃-Mail).
     // reportsUnread: Int? = null,
+    modifier: Modifier = Modifier,
 ) {
     // Scrollable like the drawer (#105): the rail overflows the same way
     // on short landscape screens.
-    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+    Column(modifier = modifier.verticalScroll(rememberScrollState())) {
         Destination.entries.forEach { d ->
             NavigationRailItem(
                 selected = dest == d,
@@ -359,6 +463,66 @@ private fun RailContent(
                     // }
                 },
                 label = { Text(d.title) },
+            )
+        }
+    }
+}
+
+/** Sidebar bottom: a manual update check plus the pending-release line
+ * (#591). The line opens Settings → About like the notification tap; the
+ * button re-checks (and opens About when the check finds something). The
+ * rail variant is icon-only with a dot while a release pends. */
+@Composable
+private fun UpdateCheckFooter(
+    updateLabel: String?,
+    checking: Boolean,
+    onCheck: () -> Unit,
+    onOpen: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        HorizontalDivider()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onCheck) {
+                SyncButtonIcon(
+                    spinning = checking,
+                    idleDescription = "Check for updates",
+                    spinningDescription = "Checking for updates",
+                )
+            }
+            Text(
+                "Check for updates",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+                    .clickable(onClick = onCheck),
+            )
+        }
+        if (updateLabel != null) {
+            Text(
+                "Update available :- $updateLabel",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpen)
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** Rail twin of the footer: icon-only, with a dot while a release pends. */
+@Composable
+private fun RailUpdateButton(
+    updateLabel: String?,
+    checking: Boolean,
+    onCheck: () -> Unit,
+) {
+    BadgedBox(badge = { if (updateLabel != null) Badge() }) {
+        IconButton(onClick = onCheck) {
+            SyncButtonIcon(
+                spinning = checking,
+                idleDescription = "Check for updates",
+                spinningDescription = "Checking for updates",
             )
         }
     }
