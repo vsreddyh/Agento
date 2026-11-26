@@ -17,6 +17,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -1083,6 +1084,16 @@ internal fun TaskManagerScreen(
                                 onClick = { doBulkResolve("complete") },
                                 enabled = bulkLive,
                             ) { Text("Complete") }
+                            // The same sync affordance as the normal bar
+                            // (#578): a bulk batch is the longest run on
+                            // this screen, so the spin must live here too.
+                            // Never gated, like its twin below.
+                            IconButton(onClick = {
+                                silentRefresh = true
+                                refreshTick++
+                            }) {
+                                SyncButtonIcon(spinning = syncActive)
+                            }
                         },
                     )
                 } else {
@@ -1094,7 +1105,7 @@ internal fun TaskManagerScreen(
                     },
                     title = { Text("Task Manager") },
                     // Never gated: mutations are per-row now, so the Select,
-                    // New and Refresh stay live while a request runs.
+                    // New and Sync stay live while a request runs.
                     actions = {
                         TextButton(onClick = { bulkMode = true }) { Text("Select") }
                         IconButton(onClick = { editing = ServerTaskDraft() }) {
@@ -1120,7 +1131,7 @@ internal fun TaskManagerScreen(
         ) {
             // Sync state lives on the top-bar button (#578): it spins while
             // any fetch or mutation write is in flight, and rests idle
-            // otherwise. No toast, no linear bar.
+            // otherwise. No fetch-state toast, no linear bar.
             Column(
                 modifier = Modifier.contentWidth(wc)
                     .verticalScroll(rememberScrollState())
