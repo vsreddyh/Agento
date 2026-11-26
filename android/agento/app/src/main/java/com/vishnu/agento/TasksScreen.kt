@@ -478,9 +478,11 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                     ) {
                         Icon(Icons.Filled.Add, contentDescription = "New task")
                     }
+                    // Never gated, like Task Manager (#578): a tap only
+                    // bumps refreshTick for an idempotent list, so it
+                    // stays live while a mutation runs.
                     IconButton(
                         onClick = { refreshTick++ },
-                        enabled = !busy,
                     ) {
                         // Sync state lives on the button itself (#579):
                         // it spins while a load or a mutation is in flight.
