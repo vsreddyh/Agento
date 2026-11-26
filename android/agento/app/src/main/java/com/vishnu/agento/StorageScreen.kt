@@ -103,32 +103,25 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     // (dir, file) awaiting delete confirmation.
     var deleting by remember { mutableStateOf<Pair<String, RemoteEntry>?>(null) }
 
-    // Collapsing drops the same cascade: a collapsed subtree is
-    // invisible, so keeping its open entries would serve them stale on
-    // re-expand and refetch them pointlessly on Refresh.
-    fun collapseDir(p: String) {
-        val cut = setOf(p) + openDirs.filter { it.startsWith("$p/") } +
-            tree.keys.filter { it.startsWith("$p/") }
-        openDirs = openDirs - cut
-        tree = tree - cut
-        pendingReload = pendingReload - cut
-    }
-
     // Folders whose listing changed while a fetch was in flight (a delete
     // or upload landing mid-load): the in-flight list was snapshotted
     // before the change, so it is refetched once it lands instead of
     // settling stale.
     var pendingReload by remember { mutableStateOf(setOf<String>()) }
 
-    // Drops a folder and everything under it from the cached tree, the
-    // open set and the queued refetches: the VPS removed it out from under
-    // the app (a 404/400 on refetch), so keeping it would re-request a
-    // path that can never list again — every future Refresh would toast
-    // the same failure with no row left to collapse.
-    fun pruneTree(p: String) {
-        val cut = setOf(p) + tree.keys.filter { it.startsWith("$p/") }
-        tree = tree - cut
+    // Drops a folder and everything under it from the open set, the cache
+    // and the queued refetches — on collapse (a collapsed subtree is
+    // invisible, so keeping its rows would serve them stale on re-expand
+    // and refetch them pointlessly on Refresh) and on prune (the VPS
+    // removed it out from under the app, so keeping it would re-request a
+    // path that can never list again). Children are cut by prefix, not
+    // just cached keys: an in-flight child has an open entry but no
+    // listing yet, and must not survive on its own.
+    fun dropSubtree(p: String) {
+        val cut = setOf(p) + openDirs.filter { it.startsWith("$p/") } +
+            tree.keys.filter { it.startsWith("$p/") }
         openDirs = openDirs - cut
+        tree = tree - cut
         pendingReload = pendingReload - cut
     }
 
@@ -172,7 +165,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     // refresh on a flaky network would fail silently under
                     // a stale tree.
                     if (p.isNotEmpty() && isGone(msg)) {
-                        pruneTree(p)
+                        dropSubtree(p)
                         val fe = friendlyError(msg)
                         toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
                     } else if (p.isEmpty() && "" !in tree) error = msg
@@ -417,7 +410,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                 val open = row.path in openDirs
                                 Card(
                                     onClick = {
-                                        if (open) collapseDir(row.path)
+                                        if (open) dropSubtree(row.path)
                                         else {
                                             // Optimistic: the chevron flips
                                             // at once; the rows follow when
