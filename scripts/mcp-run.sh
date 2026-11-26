@@ -84,7 +84,7 @@ case "$name" in
     miser-money) own="money"; shared="mongo mongostore validate" ;;
     cookbook) own="cookbook"; shared="mongo validate" ;;
     health-check) own="healthcheck"; shared="mongo validate" ;;
-    reports) own="reports"; shared="mongo" ;;
+    # #584 TEMP-REMOVE (∃-Mail): reports) own="reports"; shared="mongo" ;;
     *) own=""; shared="" ;;
 esac
 watch=()

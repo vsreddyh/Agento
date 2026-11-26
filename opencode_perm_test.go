@@ -519,9 +519,9 @@ func TestMCPServersLoadTheirOwnEnv(t *testing.T) {
 		"health-check":    {"./scripts/mcp-run.sh", "health-check"},
 		"miser-money":     {"./scripts/mcp-run.sh", "miser-money"},
 		"project-manager": {"./scripts/mcp-run.sh", "project-manager"},
-		"reports":         {"./scripts/mcp-run.sh", "reports"},
-		"task-manager":    {"./scripts/mcp-run.sh", "task-manager"},
-		"workspace-mcp":   {"./scripts/workspace-mcp.sh"},
+		// #584 TEMP-REMOVE (∃-Mail): "reports": {"./scripts/mcp-run.sh", "reports"},
+		"task-manager":  {"./scripts/mcp-run.sh", "task-manager"},
+		"workspace-mcp": {"./scripts/workspace-mcp.sh"},
 	}
 	if len(cfg.MCP.Servers) != len(want) {
 		t.Errorf("opencode.json registers %d servers, want %d — a new server needs a .env-reading launcher here too", len(cfg.MCP.Servers), len(want))

@@ -150,7 +150,7 @@ func main() {
 	registerFiles(mux)
 	registerTasks(mux)
 	registerProjects(mux)
-	registerReports(mux)
+	// #584 TEMP-REMOVE (∃-Mail): registerReports(mux)
 	registerMoney(mux)
 	startProjectSnoozeTicker()
 	// Rate limiting wraps everything, and lives here because main is the only place

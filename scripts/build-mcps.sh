@@ -19,7 +19,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.." # repo root
 
 # shellcheck disable=SC2034
-SERVERS="task-manager project-manager miser-money cookbook health-check reports"
+# #584 TEMP-REMOVE (∃-Mail): reports omitted until the feature returns.
+SERVERS="task-manager project-manager miser-money cookbook health-check"
 
 mkdir -p bin
 export CGO_ENABLED=0

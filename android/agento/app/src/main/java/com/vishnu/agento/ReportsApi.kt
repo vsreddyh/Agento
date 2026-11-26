@@ -1,3 +1,5 @@
+/* #584 TEMP-REMOVE (∃-Mail): entire file commented out, not deleted.
+ * Restore = uncomment this block. No DB changes; Atlas `reports` data untouched.
 package com.vishnu.agento
 
 import android.content.Context
@@ -256,3 +258,4 @@ class ReportsApi(context: Context) {
             call("DELETE", "/api/reports/${encode(id.trim())}").map { }
         }
 }
+*/

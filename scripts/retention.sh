@@ -15,8 +15,8 @@ set -euo pipefail
 #               the ttl_deleted_at index removes them 10 days after flagging)
 #   health-check hc_meals + hc_days pruned after 30 days; hc_weight is NEVER touched
 #   cookbook    permanent — no-op
-#   reports     read+unstarred pruned when createdAt is >7 days old;
-#               unread and starred are NEVER touched
+#   #584 TEMP-REMOVE (∃-Mail): reports read+unstarred pruned when
+#   createdAt is >7 days old; unread and starred are NEVER touched
 #   tasks       reconciled, never pruned (structured repeats with no
 #               successor are REPORTED); task_mutations pruned after 90 days
 

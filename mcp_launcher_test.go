@@ -198,21 +198,23 @@ func TestMCPRunRefusesStaleBinary(t *testing.T) {
 		c.expectLaunch(t)
 	})
 
-	t.Run("reports ignores validate", func(t *testing.T) {
-		// reports imports only mongo besides its own package.
-		c := newFakeCheckout(t, "reports")
-		c.seed(old, "reports", []string{"mongo"})
-		c.write("internal/validate/validate.go", "package fake\n")
-		c.chtimes("internal/validate/validate.go", newer)
-		c.expectLaunch(t)
-	})
+	// #584 TEMP-REMOVE (∃-Mail): reports subtests commented out with the
+	// mcp-run.sh mapping; restore both together.
+	// t.Run("reports ignores validate", func(t *testing.T) {
+	// 	// reports imports only mongo besides its own package.
+	// 	c := newFakeCheckout(t, "reports")
+	// 	c.seed(old, "reports", []string{"mongo"})
+	// 	c.write("internal/validate/validate.go", "package fake\n")
+	// 	c.chtimes("internal/validate/validate.go", newer)
+	// 	c.expectLaunch(t)
+	// })
 
-	t.Run("reports watches mongo", func(t *testing.T) {
-		c := newFakeCheckout(t, "reports")
-		c.seed(old, "reports", []string{"mongo"})
-		c.chtimes("internal/mongo/lib.go", newer)
-		c.expectRefuse(t, "lib.go")
-	})
+	// t.Run("reports watches mongo", func(t *testing.T) {
+	// 	c := newFakeCheckout(t, "reports")
+	// 	c.seed(old, "reports", []string{"mongo"})
+	// 	c.chtimes("internal/mongo/lib.go", newer)
+	// 	c.expectRefuse(t, "lib.go")
+	// })
 
 	t.Run("unrelated cmd dir does not block", func(t *testing.T) {
 		c := newFakeCheckout(t, "miser-money")
@@ -383,7 +385,7 @@ var wantWatch = map[string][]string{
 	"miser-money":     {"money", "mongo", "mongostore", "validate"},
 	"cookbook":        {"cookbook", "mongo", "validate"},
 	"health-check":    {"healthcheck", "mongo", "validate"},
-	"reports":         {"mongo", "reports"},
+	// #584 TEMP-REMOVE (∃-Mail): "reports": {"mongo", "reports"},
 }
 
 // TestMCPWatchSetsMatchGoDeps pins the launcher's per-server watch sets to

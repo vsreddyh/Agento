@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,13 +27,14 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 
 /** Sidebar destinations for the thin phone client (#493, #571): Tasks/Projects,
- * Task Manager, Files, ∃-Mail, Money and Settings. Chat and the agent-management
+ * Task Manager, Files, Money and Settings. Chat and the agent-management
  * screens are gone. */
+// #584 TEMP-REMOVE (∃-Mail): no mail entry until the feature returns.
 private enum class Destination(val title: String) {
     Tasks("Projects"),
     TaskManager("Task Manager"),
     Storage("Files"),
-    Reports("∃-Mail"),
+    // Reports("∃-Mail"),
     Money("Money"),
     Settings("Settings"),
 }
@@ -43,7 +43,7 @@ private fun Destination.icon() = when (this) {
     Destination.Tasks -> Icons.Filled.List
     Destination.TaskManager -> Icons.Filled.Assignment
     Destination.Storage -> Icons.Filled.Folder
-    Destination.Reports -> Icons.Filled.Mail
+    // #584 TEMP-REMOVE (∃-Mail): Destination.Reports -> Icons.Filled.Mail
     Destination.Money -> Icons.Filled.AccountBalanceWallet
     Destination.Settings -> Icons.Filled.Settings
 }
@@ -160,18 +160,19 @@ class MainActivity : ComponentActivity() {
                     }
                     val drawerState = rememberDrawerState(DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
+                    // #584 TEMP-REMOVE (∃-Mail): drawer badge + startup fetch.
                     // ∃-Mail drawer badge (unread count, #365): fetched once
                     // at startup and refreshed by the inbox screen itself on
                     // every load (open, star, delete) via onUnreadChanged —
                     // refresh-on-open, no poll, no push in v1. Null = unknown
                     // (never configured or not yet fetched), so no badge.
-                    var reportsUnread by remember { mutableStateOf<Int?>(null) }
-                    LaunchedEffect(Unit) {
-                        ReportsApi(context).list().fold(
-                            onSuccess = { reportsUnread = it.count { r -> !r.read } },
-                            onFailure = { },
-                        )
-                    }
+                    // var reportsUnread by remember { mutableStateOf<Int?>(null) }
+                    // LaunchedEffect(Unit) {
+                    //     ReportsApi(context).list().fold(
+                    //         onSuccess = { reportsUnread = it.count { r -> !r.read } },
+                    //         onFailure = { },
+                    //     )
+                    // }
                     fun go(d: Destination, s: SettingSection? = null) {
                         dest = d
                         section = s
@@ -194,10 +195,11 @@ class MainActivity : ComponentActivity() {
                                 Destination.Storage -> StorageScreen(
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
-                                Destination.Reports -> ReportsScreen(
-                                    onMenu = { scope.launch { drawerState.open() } },
-                                    onUnreadChanged = { reportsUnread = it },
-                                )
+                                // #584 TEMP-REMOVE (∃-Mail).
+                                // Destination.Reports -> ReportsScreen(
+                                //     onMenu = { scope.launch { drawerState.open() } },
+                                //     onUnreadChanged = { reportsUnread = it },
+                                // )
                                 Destination.Money -> MoneyScreen(
                                     onMenu = { scope.launch { drawerState.open() } },
                                 )
@@ -228,7 +230,8 @@ class MainActivity : ComponentActivity() {
                                     drawerContent = {
                                         DrawerContent(
                                             dest = dest,
-                                            reportsUnread = reportsUnread,
+                                            // #584 TEMP-REMOVE (∃-Mail).
+                                            // reportsUnread = reportsUnread,
                                             onDest = { go(it) },
                                         )
                                     },
@@ -239,7 +242,8 @@ class MainActivity : ComponentActivity() {
                                     NavigationRail {
                                         RailContent(
                                             dest = dest,
-                                            reportsUnread = reportsUnread,
+                                            // #584 TEMP-REMOVE (∃-Mail).
+                                            // reportsUnread = reportsUnread,
                                             onDest = { go(it) },
                                         )
                                     }
@@ -251,7 +255,8 @@ class MainActivity : ComponentActivity() {
                                     drawerContent = {
                                         DrawerContent(
                                             dest = dest,
-                                            reportsUnread = reportsUnread,
+                                            // #584 TEMP-REMOVE (∃-Mail).
+                                            // reportsUnread = reportsUnread,
                                             permanent = true,
                                             onDest = { go(it) },
                                         )
@@ -272,15 +277,16 @@ private fun DrawerContent(
     dest: Destination,
     onDest: (Destination) -> Unit,
     permanent: Boolean = false,
-    reportsUnread: Int? = null,
+    // #584 TEMP-REMOVE (∃-Mail).
+    // reportsUnread: Int? = null,
 ) {
     if (permanent) {
         PermanentDrawerSheet(modifier = Modifier.widthIn(max = 280.dp)) {
-            DrawerList(dest, onDest, reportsUnread)
+            DrawerList(dest, onDest)
         }
     } else {
         ModalDrawerSheet {
-            DrawerList(dest, onDest, reportsUnread)
+            DrawerList(dest, onDest)
         }
     }
 }
@@ -289,7 +295,8 @@ private fun DrawerContent(
 private fun DrawerList(
     dest: Destination,
     onDest: (Destination) -> Unit,
-    reportsUnread: Int? = null,
+    // #584 TEMP-REMOVE (∃-Mail).
+    // reportsUnread: Int? = null,
 ) {
     // Scrollable (#105): destinations overflow short screens — without
     // this the bottom items are cut off with no way to reach them.
@@ -307,14 +314,13 @@ private fun DrawerList(
                 label = {
                     Text(d.title, maxLines = 1)
                 },
-                // ∃-Mail unread badge (#365): refresh-on-open, no poll.
-                // Null/zero = nothing to surface, so no badge.
-                badge = {
-                    val n = reportsUnread
-                    if (d == Destination.Reports && n != null && n > 0) {
-                        Badge { Text(if (n > 99) "99+" else "$n") }
-                    }
-                },
+                // #584 TEMP-REMOVE (∃-Mail unread badge, #365).
+                // badge = {
+                //     val n = reportsUnread
+                //     if (d == Destination.Reports && n != null && n > 0) {
+                //         Badge { Text(if (n > 99) "99+" else "$n") }
+                //     }
+                // },
                 icon = { Icon(d.icon(), contentDescription = null) },
                 selected = dest == d,
                 onClick = { onDest(d) },
@@ -329,27 +335,28 @@ private fun DrawerList(
 private fun RailContent(
     dest: Destination,
     onDest: (Destination) -> Unit,
-    reportsUnread: Int? = null,
+    // #584 TEMP-REMOVE (∃-Mail).
+    // reportsUnread: Int? = null,
 ) {
     // Scrollable like the drawer (#105): the rail overflows the same way
     // on short landscape screens.
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Destination.entries.forEach { d ->
-            // Rail has no badge slot (unlike the drawer item above), so
-            // the ∃-Mail unread count wraps the icon instead. Same
-            // refresh-on-open rule: null/zero shows no badge.
-            val unread = reportsUnread
             NavigationRailItem(
                 selected = dest == d,
                 onClick = { onDest(d) },
                 icon = {
-                    if (d == Destination.Reports && unread != null && unread > 0) {
-                        BadgedBox(badge = { Badge { Text(if (unread > 99) "99+" else "$unread") } }) {
-                            Icon(d.icon(), contentDescription = d.title)
-                        }
-                    } else {
-                        Icon(d.icon(), contentDescription = d.title)
-                    }
+                    Icon(d.icon(), contentDescription = d.title)
+                    // #584 TEMP-REMOVE (∃-Mail unread badge, #365): wrapped
+                    // the icon in a BadgedBox while reports existed.
+                    // val unread = reportsUnread
+                    // if (d == Destination.Reports && unread != null && unread > 0) {
+                    //     BadgedBox(badge = { Badge { Text(if (unread > 99) "99+" else "$unread") } }) {
+                    //         Icon(d.icon(), contentDescription = d.title)
+                    //     }
+                    // } else {
+                    //     Icon(d.icon(), contentDescription = d.title)
+                    // }
                 },
                 label = { Text(d.title) },
             )
