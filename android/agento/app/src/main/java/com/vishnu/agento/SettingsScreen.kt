@@ -3,8 +3,7 @@
 package com.vishnu.agento
 
 /**
- * Settings UI: the hub, every section, and the widget diagnostics (#163,
- * third of four moves).
+ * Settings UI: the hub and every section (#163, third of four moves).
  *
  * Moved verbatim out of MainActivity.kt; the only changes are visibility
  * (`private` to `internal`, same package, so every caller keeps working)

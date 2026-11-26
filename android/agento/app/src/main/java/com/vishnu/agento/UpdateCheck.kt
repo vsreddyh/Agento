@@ -166,7 +166,9 @@ object UpdateCheck {
     ): Boolean = newer && enabled && canPost && !inForeground && tag.isNotBlank() &&
         alreadyPostedTag != tag
 
-    /** Short status line for the App updates card; pure, JVM-pinned. A
+    /** Short status line for the App updates card; pure, JVM-pinned. No UI
+     * caller since #597 (About shows no status line) — kept for the
+     * backend and tests, like `diagnostics()`/`buildReport`. A
      * failed check never hides a known pending release: the download stays
      * available behind the error, and the line says so. */
     fun statusLine(snap: Snapshot, now: Long, pending: Boolean): String {

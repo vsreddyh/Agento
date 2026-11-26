@@ -76,7 +76,7 @@ class HealthConnectManager(context: Context) {
                 else -> HealthConnectAvailability.AVAILABLE
             }
 
-        /** Human-readable Health Connect install state for the diagnostics UI. */
+        /** Human-readable Health Connect install state for the Health section. */
         fun healthConnectPackageInfo(context: Context): String {
             return try {
                 val pm = context.packageManager

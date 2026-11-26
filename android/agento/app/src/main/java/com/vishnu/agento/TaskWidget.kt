@@ -780,8 +780,8 @@ class TaskWidget : AppWidgetProvider() {
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
         // Last RemoteViewsFactory failure (same process — the service has
-        // no android:process). Surfaced in diagnostics so an on-device
-        // widget crash names itself without adb.
+        // no android:process). Surfaced in the diagnostics log so an
+        // on-device widget crash names itself for an adb reader.
         @Volatile var lastFactoryError: String? = null
             private set
 
