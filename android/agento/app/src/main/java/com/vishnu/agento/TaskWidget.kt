@@ -131,10 +131,11 @@ enum class TaskWidgetView(val state: String, val title: String) {
     All("all", "All"),
 }
 
-/** Row density for one widget placement. */
-enum class TaskWidgetDensity(val title: String) {
-    Comfortable("Comfortable"),
-    Compact("Compact"),
+/** Row density for one widget placement. Comfortable is the only density
+ * (#592): the Compact value and its row layout were removed, and a stored
+ * "Compact" coerces back to Comfortable on read. */
+enum class TaskWidgetDensity {
+    Comfortable,
 }
 
 /**
@@ -175,18 +176,20 @@ internal data class WidgetSettings(
     val view: TaskWidgetView = TaskWidgetView.Open,
     val density: TaskWidgetDensity = TaskWidgetDensity.Comfortable,
     val sort: TaskWidgetSort = TaskWidgetSort.Server,
-    /** Custom header title; null or blank follows the view name. */
+    /** Custom header title (#532); null or blank follows the view name.
+     * Read-only since #592 (the Configure screen no longer edits it), but
+     * kept so existing custom titles keep showing. */
     val title: String? = null,
-    /** The due part of a row line: date, time and the start → due range. */
-    val showDue: Boolean = true,
+    /** The due date half of a row line ("Today"), shown unless hidden. */
+    val showDueDate: Boolean = true,
+    /** The due time half ("22:00 → 23:00"), shown unless hidden. */
+    val showDueTime: Boolean = true,
     /** The repeat condition ("Every 3 days") on a row line. */
     val showRepeat: Boolean = true,
     /** The "parallel" marker on a row line. */
     val showParallel: Boolean = true,
     /** Section headers (Overdue → Current → … → No due date). */
     val showSections: Boolean = true,
-    /** The header title text (the refresh button stays reachable). */
-    val showTitle: Boolean = true,
     /** The header count line. */
     val showCount: Boolean = true,
     val scrollable: Boolean = true,
@@ -251,8 +254,7 @@ internal fun widgetAgenda(
  * the headers, never reorders the rows. Done keeps its own flat path
  * ([widgetAgenda] with `grouped = false`, i.e. the placement's sort order),
  * because buckets carry no meaning for finished work; only a grouped view
- * with headers off goes through here. The settings preview flattens its
- * fake sections the same way, so the two cannot promise different orders.
+ * with headers off goes through here.
  */
 internal fun List<WidgetItem>.withoutHeaders(): List<WidgetItem> =
     filter { it is WidgetItem.Row }
@@ -345,24 +347,63 @@ internal fun widgetIsCompact(minWidthDp: Int, minHeightDp: Int): Boolean =
         (minHeightDp in 1 until COMPACT_MIN_HEIGHT_DP)
 
 /**
- * The secondary line a widget row shows (#536): the due line (date + time),
- * the repeat condition and the parallel marker, each behind its own
+ * The secondary line a widget row shows (#536): the due line (date and/or
+ * time), the repeat condition and the parallel marker, each behind its own
  * per-placement switch, joined with " · ".
  *
  * Deliberately separate from the Task Manager's [dueBits] (#532): the app
  * row always shows all three, while a placement can drop any of them — and
  * dropping the date must never take the repeat condition with it, which is
- * why they are three switches rather than one. Pure and JVM-pinned.
+ * why they are four switches rather than one. Pure and JVM-pinned.
+ *
+ * The due line itself splits into independent date and time halves (#592):
+ * [ServerTask.dueDatePart] is the anchored day ("Today"), [ServerTask.dueTimePart]
+ * the range ("22:00 → 23:00"); dropping either half hides only that half.
+ */
+internal fun ServerTask.dueDatePart(today: java.time.LocalDate): String {
+    val anchor = startParts()?.first ?: dueDate
+    return friendlyDue(anchor, "", today)
+}
+
+/** The time half of a widget row's due line (#592): the "22:00 → 23:00"
+ * range (a lone "09:00" when there is no start to range from), the raw
+ * stored time when no usable instant exists, or "" when the row has no
+ * time at all. Pure and JVM-pinned like [widgetRowLine]. */
+internal fun ServerTask.dueTimePart(): String {
+    val start = startParts() ?: return dueTime.trim()
+    val at = dueMillisOrNull() ?: return start.second
+    val d = java.time.Instant.ofEpochMilli(at).atZone(IST).toLocalDateTime()
+    val time = String.format(java.util.Locale.ROOT, "%02d:%02d", d.hour, d.minute)
+    return "${start.second} → $time"
+}
+/** The date half, the time half, or both of a widget row's due line
+ * (#592): the due date and the due time are independent switches, so a
+ * placement can drop either half without touching repeat or parallel.
+ * Dropping the date keeps the "22:00 → 23:00" range; dropping the time
+ * keeps "Today". When the task has no usable date at all, the whole due
+ * chunk is hidden even if a time string is stored.
  */
 internal fun widgetRowLine(
     task: ServerTask,
     today: java.time.LocalDate,
-    showDue: Boolean = true,
+    showDueDate: Boolean = true,
+    showDueTime: Boolean = true,
     showRepeat: Boolean = true,
     showParallel: Boolean = true,
 ): String {
-    val bits = ArrayList<String>(3)
-    if (showDue) task.startToDueLine(today).takeIf { it.isNotEmpty() }?.let(bits::add)
+    val bits = ArrayList<String>(4)
+    // The date's presence decides whether the chunk exists at all: a time
+    // with no date is corrupt data, not a line. Each toggle then only
+    // hides its own half.
+    val fullDate = task.dueDatePart(today)
+    val date = if (showDueDate) fullDate else ""
+    val time = if (showDueTime) task.dueTimePart() else ""
+    val due = if (fullDate.isEmpty()) {
+        ""
+    } else {
+        listOf(date, time).filter { it.isNotEmpty() }.joinToString(", ")
+    }
+    if (due.isNotEmpty()) bits.add(due)
     if (showRepeat) task.repeatLabel().takeIf { it.isNotEmpty() }?.let(bits::add)
     if (showParallel && task.parallelable) bits.add("parallel")
     return bits.joinToString(" · ")
@@ -467,7 +508,7 @@ fun taskWidgetIds(context: Context): IntArray {
  * Home-screen task manager widget (#101): header (title + count +
  * refresh) above a scrollable or plain-rows task list. View switching and
  * display settings live in [TaskWidgetConfigActivity], reachable from
- * Settings → Home-screen widget — the widget's own controls never rendered
+ * Settings → Widget — the widget's own controls never rendered
  * on some launchers (#137). Tap contract (#370): the ring completes inline,
  * a row opens its detail sheet, and everything else (background, header,
  * empty line) opens the Task Manager. Row taps deep-link into the task's
@@ -570,7 +611,7 @@ class TaskWidget : AppWidgetProvider() {
         // The header shortcuts are gone from fresh renders (#370): the
         // title opened the config screen and the view label cycled the
         // view, but the tap contract says header opens the Task Manager,
-        // and config lives in Settings → Home-screen widget. ACTION_VIEW
+        // and config lives in Settings → Widget. ACTION_VIEW
         // is still handled so a PendingIntent cached by an older build
         // still cycles instead of erroring.
         if (intent.action == ACTION_REFRESH) {
@@ -601,6 +642,8 @@ class TaskWidget : AppWidgetProvider() {
                 remove("task_widget_density_$id")
                 remove("task_widget_sort_$id")
                 remove("task_widget_due_$id")
+                remove("task_widget_due_date_$id")
+                remove("task_widget_due_time_$id")
                 remove("task_widget_repeat_$id")
                 remove("task_widget_parallel_$id")
                 remove("task_widget_sections_$id")
@@ -772,9 +815,10 @@ class TaskWidget : AppWidgetProvider() {
                     appendLine("id=$id view=${s.view} " +
                         "title=${titleFor(ctx, id, "(default)")} " +
                         "density=${s.density} sort=${s.sort} " +
-                        "showDue=${s.showDue} showRepeat=${s.showRepeat} " +
+                        "showDueDate=${s.showDueDate} showDueTime=${s.showDueTime} " +
+                        "showRepeat=${s.showRepeat} " +
                         "showParallel=${s.showParallel} sections=${s.showSections} " +
-                        "count=${s.showCount} showTitle=${s.showTitle} " +
+                        "count=${s.showCount} " +
                         "staticRows=${s.staticRows.rows} " +
                         "scrollable=${s.scrollable}")
                 }
@@ -1054,6 +1098,23 @@ class TaskWidget : AppWidgetProvider() {
         fun showDueFor(context: Context, appWidgetId: Int): Boolean =
             prefs(context).getBoolean("task_widget_due_$appWidgetId", true)
 
+        /** Whether this placement's rows show the due date half (#592).
+         * Falls back to the legacy single due switch, so a placement
+         * that hid the whole line keeps hiding both halves. */
+        fun showDueDateFor(context: Context, appWidgetId: Int): Boolean {
+            val key = "task_widget_due_date_$appWidgetId"
+            val p = prefs(context)
+            return if (p.contains(key)) p.getBoolean(key, true) else showDueFor(context, appWidgetId)
+        }
+
+        /** Whether this placement's rows show the due time half (#592).
+         * Same legacy fallback as [showDueDateFor]. */
+        fun showDueTimeFor(context: Context, appWidgetId: Int): Boolean {
+            val key = "task_widget_due_time_$appWidgetId"
+            val p = prefs(context)
+            return if (p.contains(key)) p.getBoolean(key, true) else showDueFor(context, appWidgetId)
+        }
+
         /** This placement's non-scrolling row cap (#536), defaulting to
          * Eight. Resets report like [viewFor] (#437). */
         fun staticRowsFor(context: Context, appWidgetId: Int): TaskWidgetStaticRows {
@@ -1087,11 +1148,11 @@ class TaskWidget : AppWidgetProvider() {
                 density = densityFor(context, appWidgetId),
                 sort = sortFor(context, appWidgetId),
                 title = prefs(context).getString("task_widget_title_$appWidgetId", null),
-                showDue = showDueFor(context, appWidgetId),
+                showDueDate = showDueDateFor(context, appWidgetId),
+                showDueTime = showDueTimeFor(context, appWidgetId),
                 showRepeat = switchFor(context, appWidgetId, "task_widget_repeat_"),
                 showParallel = switchFor(context, appWidgetId, "task_widget_parallel_"),
                 showSections = switchFor(context, appWidgetId, "task_widget_sections_"),
-                showTitle = switchFor(context, appWidgetId, "task_widget_show_title_"),
                 showCount = switchFor(context, appWidgetId, "task_widget_count_"),
                 scrollable = scrollableFor(context, appWidgetId),
                 staticRows = staticRowsFor(context, appWidgetId),
@@ -1107,10 +1168,11 @@ class TaskWidget : AppWidgetProvider() {
          * template: all immutable, so hosts that balk at the mutable
          * template (or at fill-in merging) still complete/open rows
          * (issue #137). Same layout and content as [buildRow]; complete and
-         * skip are broadcasts so the tap never foregrounds the app (#532). */
+         * skip are broadcasts so the tap never foregrounds the app (#532).
+         * Rows are always Comfortable now (#592): the Compact layout is
+         * gone, so there is no compact branch to take. */
         internal fun buildRowWithIntents(
             context: Context,
-            compact: Boolean,
             settings: WidgetSettings,
             today: java.time.LocalDate,
             task: ServerTask,
@@ -1137,7 +1199,7 @@ class TaskWidget : AppWidgetProvider() {
                     .setData("agento://task/${task.id}".toUri()),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            return buildRow(context.packageName, compact, settings, today, task).apply {
+            return buildRow(context.packageName, settings, today, task).apply {
                 setOnClickPendingIntent(R.id.task_widget_row_check, complete)
                 setOnClickPendingIntent(R.id.task_widget_row_skip, skip)
                 setOnClickPendingIntent(R.id.task_widget_row, openTask)
@@ -1205,28 +1267,26 @@ class TaskWidget : AppWidgetProvider() {
          * scrollable template (fill-ins). Keeping the two apart means a row
          * can never carry both an explicit intent and a fill-in for the
          * same view, where which one wins is an implementation detail of
-         * the host. */
+         * the host. A single Comfortable layout (#592): the Compact row
+         * layout was removed, so there is no density branch here any more. */
         internal fun buildRow(
             packageName: String,
-            compact: Boolean,
             settings: WidgetSettings,
             today: java.time.LocalDate,
             task: ServerTask,
         ): RemoteViews {
-            val layout = if (compact) {
-                R.layout.task_widget_row_compact
-            } else {
-                R.layout.task_widget_row
-            }
+            val layout = R.layout.task_widget_row
             return RemoteViews(packageName, layout).apply {
                 setTextViewText(R.id.task_widget_row_name, task.name)
-                // One line, three independent switches (#536): due date and
-                // time, repeat condition, parallel marker. The repeat
-                // condition survives turning the due part off, which is why
-                // it has its own switch rather than riding this one.
+                // One line, four independent switches (#536, #592): due
+                // date, due time, repeat condition, parallel marker. The
+                // repeat condition survives turning either due half off,
+                // which is why it has its own switch rather than riding
+                // them.
                 val due = widgetRowLine(
                     task, today,
-                    showDue = settings.showDue,
+                    showDueDate = settings.showDueDate,
+                    showDueTime = settings.showDueTime,
                     showRepeat = settings.showRepeat,
                     showParallel = settings.showParallel,
                 )
@@ -1248,11 +1308,10 @@ class TaskWidget : AppWidgetProvider() {
          */
         internal fun buildLegacyRow(
             packageName: String,
-            compact: Boolean,
             settings: WidgetSettings,
             today: java.time.LocalDate,
             task: ServerTask,
-        ): RemoteViews = buildRow(packageName, compact, settings, today, task).apply {
+        ): RemoteViews = buildRow(packageName, settings, today, task).apply {
             setOnClickFillInIntent(
                 R.id.task_widget_row_check,
                 Intent().putExtra(TaskWidget.EXTRA_COMPLETE_ID, task.id),
@@ -1484,7 +1543,8 @@ class TaskWidget : AppWidgetProvider() {
                     setTextViewText(
                         R.id.task_widget_title,
                         // Custom title wins; the view name is the default,
-                        // same rule as the full layout.
+                        // same rule as the full layout. Read-only since
+                        // #592 (no UI sets it any more).
                         widgetTitle(settings.title, view.title),
                     )
                     setTextViewText(
@@ -1499,7 +1559,8 @@ class TaskWidget : AppWidgetProvider() {
                         setTextViewText(R.id.task_widget_next, next.name)
                         val line = widgetRowLine(
                             next, today,
-                            showDue = settings.showDue,
+                            showDueDate = settings.showDueDate,
+                            showDueTime = settings.showDueTime,
                             showRepeat = settings.showRepeat,
                             showParallel = settings.showParallel,
                         )
@@ -1570,7 +1631,6 @@ class TaskWidget : AppWidgetProvider() {
                     applyTapTargets(this, openPending, refreshPending, PLAIN_TAP_IDS)
                     if (tasks != null) {
                         val today = java.time.LocalDate.now(IST)
-                        val compact = settings.density == TaskWidgetDensity.Compact
                         // Same agenda order as the collection paths (#532).
                         // Headers off keeps that order, minus the headers
                         // ([withoutHeaders]) — the switch removes chrome,
@@ -1588,9 +1648,7 @@ class TaskWidget : AppWidgetProvider() {
                         // each time would append, leaving ghost rows when
                         // the list shrinks.
                         removeAllViews(R.id.task_widget_static_list)
-                        // The cap is this placement's own (#536), and the
-                        // preview promises the same number from the same
-                        // setting.
+                        // The cap is this placement's own (#536).
                         agenda.takeAgendaRows(settings.staticRows.rows).forEach { item ->
                             addView(
                                 R.id.task_widget_static_list,
@@ -1600,7 +1658,7 @@ class TaskWidget : AppWidgetProvider() {
                                             context, item.bucket, item.count, openPending)
                                     is WidgetItem.Row ->
                                         buildRowWithIntents(
-                                            context, compact, settings, today, item.task)
+                                            context, settings, today, item.task)
                                 },
                             )
                         }
@@ -1635,7 +1693,6 @@ class TaskWidget : AppWidgetProvider() {
                     // view would TransactionTooLarge the update (the
                     // header count below still shows the true total).
                     val today = java.time.LocalDate.now(IST)
-                    val compact = settings.density == TaskWidgetDensity.Compact
                     // Agenda order (#532): overdue → today → upcoming →
                     // someday, with a header item per non-empty bucket. The
                     // Done view stays flat; a grouped view with headers off
@@ -1662,7 +1719,7 @@ class TaskWidget : AppWidgetProvider() {
                                             context, item.bucket, item.count, openPending)
                                     is WidgetItem.Row ->
                                         buildRowWithIntents(
-                                            context, compact, settings, today, item.task)
+                                            context, settings, today, item.task)
                                 },
                             )
                         }
@@ -1690,7 +1747,8 @@ class TaskWidget : AppWidgetProvider() {
                 }
                 // The header title doubles as the view name (the toggle
                 // button is gone — it never rendered on this host), and a
-                // placement's custom title (#532) wins over it.
+                // placement's custom title (#532) wins over it. Read-only
+                // since #592: nothing edits it any more.
                 setTextViewText(R.id.task_widget_title,
                     widgetTitle(settings.title, view.title))
                 setTextViewText(R.id.task_widget_count,
@@ -1731,10 +1789,8 @@ class TaskWidget : AppWidgetProvider() {
          * the title and count are hidden, or the header would be a dead
          * strip. */
         private fun applyHeaderSwitches(views: RemoteViews, settings: WidgetSettings) {
-            views.setViewVisibility(
-                R.id.task_widget_title,
-                if (settings.showTitle) View.VISIBLE else View.GONE,
-            )
+            // The title is always visible now (#592): only the count line
+            // is still switchable.
             views.setViewVisibility(
                 R.id.task_widget_count,
                 if (settings.showCount) View.VISIBLE else View.GONE,

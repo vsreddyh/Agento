@@ -137,9 +137,9 @@
             android:noHistory="true"
             android:exported="true" />
 
-        <!-- Per-widget settings (title, view, density, sort, due line,
-             scrolling): launched by the system at add time via
-             android:configure and from Settings → Home-screen widget. -->
+        <!-- Per-widget settings (view, sort, due line, scrolling):
+             launched by the system at add time via android:configure
+             and from Settings → Widget. -->
         <activity
             android:name=".TaskWidgetConfigActivity"
             android:theme="@style/Theme.Agento"

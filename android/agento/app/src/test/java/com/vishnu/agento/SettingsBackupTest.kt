@@ -27,6 +27,8 @@ class SettingsBackupTest {
         assertTrue(SettingsBackup.isStringWidgetKey("task_widget_title_12"))
         assertFalse(SettingsBackup.isBooleanWidgetKey("task_widget_title_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_due_12"))
+        assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_due_date_12"))
+        assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_due_time_12"))
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_scroll_12"))
         // Row content switches and the display switches added in #536.
         assertTrue(SettingsBackup.isWidgetDisplayKey("task_widget_repeat_12"))
@@ -77,6 +79,9 @@ class SettingsBackupTest {
         assertFalse(SettingsBackup.isStringWidgetKey("task_widget_due_12"))
         assertFalse(SettingsBackup.isStringWidgetKey("task_widget_scroll_12"))
         assertTrue(SettingsBackup.isBooleanWidgetKey("task_widget_due_12"))
+        assertTrue(SettingsBackup.isBooleanWidgetKey("task_widget_due_date_12"))
+        assertTrue(SettingsBackup.isBooleanWidgetKey("task_widget_due_time_12"))
+        assertFalse(SettingsBackup.isStringWidgetKey("task_widget_due_date_12"))
         assertTrue(SettingsBackup.isBooleanWidgetKey("task_widget_scroll_12"))
         assertFalse(SettingsBackup.isBooleanWidgetKey("task_widget_view_12"))
         assertFalse(SettingsBackup.isBooleanWidgetKey("task_widget_density_12"))

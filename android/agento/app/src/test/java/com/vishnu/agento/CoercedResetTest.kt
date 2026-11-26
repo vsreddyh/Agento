@@ -580,8 +580,10 @@ class WidgetCoercionTest {
     fun `known widget names parse with no coercion`() {
         assertEquals(TaskWidgetView.Done, widgetViewForName("Done"))
         assertNull(widgetViewCoercion("Done"))
-        assertEquals(TaskWidgetDensity.Compact, widgetDensityForName("Compact"))
-        assertNull(widgetDensityCoercion("Compact"))
+        // Comfortable is the only density (#592): the retired Compact name
+        // coerces like any unknown name now.
+        assertEquals(TaskWidgetDensity.Comfortable, widgetDensityForName("Compact"))
+        assertEquals("\"Compact\"->Comfortable", widgetDensityCoercion("Compact"))
         assertEquals(TaskWidgetSort.Name, widgetSortForName("Name"))
         assertNull(widgetSortCoercion("Name"))
     }
