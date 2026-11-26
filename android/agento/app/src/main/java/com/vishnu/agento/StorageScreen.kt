@@ -103,6 +103,13 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     // (dir, file) awaiting delete confirmation.
     var deleting by remember { mutableStateOf<Pair<String, RemoteEntry>?>(null) }
 
+    // Set by manual Refresh: when the root listing lands, open folders are
+    // pruned to what the fresh root (plus cached parent listings) can
+    // still reach, and only the survivors refetch. A VPS-deleted parent
+    // therefore prunes its whole subtree before any child refetch can
+    // toast for it — landing order stops mattering.
+    var refreshAfterRoot by remember { mutableStateOf(false) }
+
     // Folders whose listing changed while a fetch was in flight (a delete
     // or upload landing mid-load): the in-flight list was snapshotted
     // before the change, so it is refetched once it lands instead of
@@ -149,13 +156,36 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         scope.launch {
             StorageApi(context).list(p).fold(
                 onSuccess = { (_, d, f) ->
-                    tree = tree + (p to DirListing(d, f))
-                    // Re-add only if still open: a collapse that landed
-                    // mid-flight must win, or the row pops back open.
-                    if (p in openDirs) openDirs = openDirs + p
+                    // Cache only what is still wanted: a collapse or prune
+                    // that landed mid-flight must not resurrect an invisible
+                    // listing (the next expansion refetches fresh instead
+                    // of serving it stale). The root always renders.
+                    if (p.isEmpty() || p in openDirs) {
+                        tree = tree + (p to DirListing(d, f))
+                    }
+                    if (p.isEmpty() && refreshAfterRoot) {
+                        refreshAfterRoot = false
+                        val keep = mutableSetOf("")
+                        openDirs.filter { it.isNotEmpty() }.sortedBy { it.length }
+                            .forEach { q ->
+                                val parent = q.substringBeforeLast("/", "")
+                                if (parent in keep &&
+                                    tree[parent]?.dirs?.any { it.name == q.substringAfterLast("/") } == true
+                                ) {
+                                    keep += q
+                                }
+                            }
+                        (openDirs - keep).forEach { dropSubtree(it) }
+                        openDirs.filter { it.isNotEmpty() }.forEach { q ->
+                            loadDir(q, force = true)
+                        }
+                    }
                 },
                 onFailure = { e ->
                     val msg = e.message ?: e.javaClass.simpleName
+                    // A chained child refetch never starts when the root
+                    // itself failed: the root error owns the outcome.
+                    if (p.isEmpty()) refreshAfterRoot = false
                     // A failed folder keeps its collapsed row in place and
                     // says so out loud — unless the path itself is gone, in
                     // which case its rows are pruned so Refresh stops
@@ -354,17 +384,16 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                         Icon(Icons.Filled.Upload, contentDescription = "Upload")
                     }
                     IconButton(
-                        // Refetches the root and every open folder: cached
-                        // subfolders would otherwise go stale behind a
-                        // fresh root. Closed folders drop their listings,
-                        // so the next expansion refetches instead of
-                        // serving a cache the VPS may have changed.
+                        // Refetches the root; open folders refetch from its
+                        // landing (pruned to what is still reachable), so a
+                        // VPS-deleted parent prunes its whole subtree before
+                        // any child refetch can toast for it. Closed folders
+                        // drop their listings, so the next expansion
+                        // refetches instead of serving a VPS-changed cache.
                         onClick = {
                             tree = tree.filterKeys { it.isEmpty() || it in openDirs }
+                            refreshAfterRoot = true
                             loadDir("", force = true)
-                            openDirs.forEach { p ->
-                                if (p.isNotEmpty()) loadDir(p, force = true)
-                            }
                         },
                         enabled = !uploading && loadingDirs.isEmpty(),
                     ) {
