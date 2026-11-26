@@ -74,11 +74,12 @@ internal fun flattenTree(
         }
         listing.files.forEach { f -> out.add(TreeRow.File(path, f, depth)) }
         // The root's emptiness belongs to the full-screen EmptyState; only
-        // subfolders draw the inline hint.
+        // subfolders draw the inline hint, at the depth their rows would
+        // have had.
         if (path.isNotEmpty() && path in open &&
             listing.dirs.isEmpty() && listing.files.isEmpty()
         ) {
-            out.add(TreeRow.Empty(path, depth + 1))
+            out.add(TreeRow.Empty(path, depth))
         }
     }
     walk("", 0)
@@ -145,7 +146,9 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
             StorageApi(context).list(p).fold(
                 onSuccess = { (_, d, f) ->
                     tree = tree + (p to DirListing(d, f))
-                    openDirs = openDirs + p
+                    // Re-add only if still open: a collapse that landed
+                    // mid-flight must win, or the row pops back open.
+                    if (p in openDirs) openDirs = openDirs + p
                 },
                 onFailure = { e ->
                     val msg = e.message ?: e.javaClass.simpleName
@@ -180,12 +183,13 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         // DownloadManager reports HTTP failures (wrong password, vanished
         // file) asynchronously in its own notification — enqueueing throws
         // only for local failures. So auth and existence are confirmed
-        // first, where a refusal still toasts with recovery guidance.
+        // first, where a refusal still toasts with recovery guidance. A
+        // failed pre-check routes through the forced reload (prune + one
+        // toast) instead of duplicating its handling here.
         scope.launch {
             val res = StorageApi(context).list(dir)
-            val files = res.getOrElse { e ->
-                val fe = friendlyError(e.message ?: "")
-                toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+            val files = res.getOrElse {
+                loadDir(dir, force = true)
                 return@launch
             }.third
             if (files.none { it.name == f.name }) {
@@ -397,7 +401,13 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                 Card(
                                     onClick = {
                                         if (open) openDirs = openDirs - row.path
-                                        else loadDir(row.path)
+                                        else {
+                                            // Optimistic: the chevron flips
+                                            // at once; the rows follow when
+                                            // the list lands.
+                                            openDirs = openDirs + row.path
+                                            loadDir(row.path)
+                                        }
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                         .padding(start = (row.depth * 20).dp),
