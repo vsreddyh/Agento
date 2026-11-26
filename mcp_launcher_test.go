@@ -175,8 +175,9 @@ func TestMCPRunRefusesStaleBinary(t *testing.T) {
 	t.Run("non-Go embedded asset refuses", func(t *testing.T) {
 		c := newFakeCheckout(t, "miser-money")
 		c.seed(old, "money", []string{"mongo", "mongostore", "validate"})
-		// e.g. internal/reports/katex.min.js rides into its binary via
-		// //go:embed; a *.go-only scan would miss it entirely.
+		// Non-Go assets ride into the binary too (e.g. the seed.json below
+		// via //go:embed — #584 TEMP-REMOVEd the reports katex.min.js
+		// example with the inbox); a *.go-only scan would miss them entirely.
 		c.write("internal/money/seed.json", "{}\n")
 		c.chtimes("internal/money/seed.json", newer)
 		c.expectRefuse(t, "seed.json")

@@ -482,8 +482,9 @@ func TestWorkspaceMCPWriteSurfaceStaysNarrow(t *testing.T) {
 // (2026-11-14; workspace-mcp reported its Google credentials unset). The repo
 // owns its secrets, so the launcher owns them too:
 //
-//   - each of the six Go servers runs ./scripts/mcp-run.sh <server>, which
+//   - each of the five Go servers runs ./scripts/mcp-run.sh <server>, which
 //     fills MONGODB_URI/MONGODB_DB from the root .env and execs bin/<server>
+//     (#584 TEMP-REMOVE (∃-Mail): was six with reports)
 //   - workspace-mcp runs ./scripts/workspace-mcp.sh, which reads the three
 //     Google credentials plus the callback-port/token-cache overrides the
 //     same way (pinned by TestWorkspaceMCPWriteSurfaceStaysNarrow)

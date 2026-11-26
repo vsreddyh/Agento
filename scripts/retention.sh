@@ -18,7 +18,6 @@ set -euo pipefail
 #   #584 TEMP-REMOVE (∃-Mail): reports pruning is DISABLED, stored reports
 #   are left as-is (growth is no longer 7-day bounded). Restore the block
 #   in cmd/retention/main.go on revert.
-#   tasks       reconciled, never pruned: completed structured repeats with
 #   tasks       reconciled, never pruned (structured repeats with no
 #               successor are REPORTED); task_mutations pruned after 90 days
 
