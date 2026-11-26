@@ -4,9 +4,9 @@ package com.vishnu.agento
 
 /**
  * Projects board (#519): collapsible status sections, swipe left to edit,
- * swipe right to delete with Undo, long-press drag to reorder inside a
- * section. Ordering is persisted server-side (`position`, see
- * [ProjectsApi.reorder]).
+ * swipe right to ask before deleting (confirm dialog, then Undo), long-press
+ * drag to reorder inside a section. Ordering is persisted server-side
+ * (`position`, see [ProjectsApi.reorder]).
  *
  * Legacy note: this file moved verbatim out of MainActivity.kt in #163;
  * the only parts left from that move are the status helpers and the
@@ -124,6 +124,9 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
     val api = remember(context) { ProjectsApi(context) }
     var projects by remember { mutableStateOf<List<ServerProject>>(emptyList()) }
     var editing by remember { mutableStateOf<ServerProject?>(null) }
+    // Delete is permanent, so a swipe only opens this prompt: the row
+    // settles back and nothing is sent until the user says yes.
+    var deleting by remember { mutableStateOf<ServerProject?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     // Bumped after every load/mutation so the loader below reruns.
@@ -244,11 +247,12 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         loading = false
     }
 
-    // Swipe right = delete (#519): the row settles dismissed, the delete
-    // runs, and Undo recreates it from the cached fields. It is a new row,
-    // so it comes back at the end of its section (id and position are
-    // server-assigned). A failure bumps refreshTick so TaskCard's
-    // resetToken snaps the row back.
+    // Swipe right = delete (#519), but only after the confirmation dialog:
+    // the swipe settles the row back while it is open, and Cancel leaves
+    // everything untouched. A confirmed delete runs here; Undo recreates
+    // the row from the cached fields. It is a new row, so it comes back at
+    // the end of its section (id and position are server-assigned). A
+    // failure bumps refreshTick so TaskCard's resetToken snaps the row back.
     fun doDelete(t: ServerProject) {
         if (busy) return
         busy = true
@@ -561,7 +565,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                 items(section.rows, key = { cardKey(it.id) }) { t ->
                                     TaskCard(
                                         task = t,
-                                        onDelete = { doDelete(t) },
+                                        onDelete = { if (!busy) deleting = t },
                                         onEdit = {
                                             if (!busy) editing =
                                                 t.copy(status = normalizeStatus(t.status))
@@ -594,7 +598,7 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                                     val isDragging = draggingId == t.id
                                     TaskCard(
                                         task = t,
-                                        onDelete = { doDelete(t) },
+                                        onDelete = { if (!busy) deleting = t },
                                         onEdit = {
                                             if (!busy) editing =
                                                 t.copy(status = normalizeStatus(t.status))
@@ -661,6 +665,35 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
                 }
             },
             saving = busy,
+        )
+    }
+
+    // Permanent server-side (no trash), so the swipe only opens this prompt.
+    // Yes runs the same delete as before, Undo included; No leaves the row
+    // exactly where it was.
+    val deleteTarget = deleting
+    if (deleteTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete project?") },
+            text = {
+                Text(
+                    "“${deleteTarget.name.ifEmpty { "(untitled)" }}” will be " +
+                        "permanently deleted.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deleting = null
+                        doDelete(deleteTarget)
+                    },
+                    enabled = !busy,
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) { Text("Cancel") }
+            },
         )
     }
 }
@@ -740,7 +773,7 @@ private fun SwipeBackground(state: SwipeToDismissBoxState) {
 }
 
 /** One project card: title + note + timestamp. No menu, no edit button —
- * swipe left edits, swipe right deletes, long press drags (#519). The
+ * swipe left edits, swipe right asks to delete, long press drags (#519). The
  * `resetToken` recreates the swipe state after a failed delete so the row
  * snaps back instead of staying dismissed. */
 @Composable
@@ -787,8 +820,11 @@ internal fun TaskCard(
             confirmValueChange = { target ->
                 when (target) {
                     SwipeToDismissBoxValue.StartToEnd -> {
+                        // Delete is confirmed in a dialog first, so the row
+                        // must not stay dismissed: refusing settles it back
+                        // and Cancel costs nothing.
                         onDelete()
-                        true
+                        false
                     }
                     // Edit must leave the row where it was: refusing
                     // the change settles it back immediately.

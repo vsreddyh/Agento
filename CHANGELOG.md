@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.4.1]
+- **Deleting a project asks first.** Swipe right on the Projects board now
+  opens a **Delete project?** prompt instead of removing the row on the
+  swipe: *Delete* removes it (Undo stays available in the snackbar) and
+  *Cancel* settles the row back untouched, so a mis-swipe costs nothing.
+
 ## [9.4.0]
 - **Money section (read-only).** New Money destination: per-account balances
   plus the active total, with tap-through to recent transactions per account.
