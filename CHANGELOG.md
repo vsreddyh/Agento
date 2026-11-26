@@ -14,9 +14,9 @@ see GitHub Releases for older notes.
   cached), files show name + size with download and delete icon buttons.
   The old `Save` text button is gone — the system downloader owns the
   completion notice. Deletes ask first, then refresh the parent folder.
-  Server side, `DELETE /api/files/delete?path=` removes one file
-  (folders, escapes and missing rows are named refusals). Uploads now
-  land at the exports root.
+  Server side, `DELETE /api/files/delete?path=<relative file>` removes
+  one file (folders, escapes and missing rows are named refusals). Uploads
+  now land at the exports root.
 
 ## [9.5.2]
 - **Projects swipe directions swapped (#579).** Swipe left to edit, swipe

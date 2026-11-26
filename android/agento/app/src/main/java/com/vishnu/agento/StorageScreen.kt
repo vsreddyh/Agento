@@ -50,12 +50,16 @@ internal data class DirListing(
 internal sealed interface TreeRow {
     data class Dir(val path: String, val name: String, val depth: Int) : TreeRow
     data class File(val dir: String, val entry: RemoteEntry, val depth: Int) : TreeRow
+    /** An open folder with nothing in it — drawn so an empty folder does
+     * not read as a failed load. */
+    data class Empty(val dir: String, val depth: Int) : TreeRow
 }
 
 /** Flattens the cached tree into visible rows: every folder lists its
  * subfolders (then its files), and an open folder's rows follow it one
- * level deeper. Folders with no cached listing contribute nothing — the
- * row is only drawn once its list has landed. */
+ * level deeper. An open folder with an empty listing draws one [Empty]
+ * row; folders with no cached listing contribute nothing — the row is
+ * only drawn once its list has landed. */
 internal fun flattenTree(
     tree: Map<String, DirListing>,
     open: Set<String>,
@@ -69,6 +73,13 @@ internal fun flattenTree(
             if (p in open) walk(p, depth + 1)
         }
         listing.files.forEach { f -> out.add(TreeRow.File(path, f, depth)) }
+        // The root's emptiness belongs to the full-screen EmptyState; only
+        // subfolders draw the inline hint.
+        if (path.isNotEmpty() && path in open &&
+            listing.dirs.isEmpty() && listing.files.isEmpty()
+        ) {
+            out.add(TreeRow.Empty(path, depth + 1))
+        }
     }
     walk("", 0)
     return out
@@ -202,7 +213,14 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     loadDir(dir, force = true)
                 },
                 onFailure = { e ->
-                    val fe = friendlyError(e.message ?: "")
+                    val msg = e.message ?: ""
+                    if ("HTTP 404" in msg) {
+                        // Already gone (second client, VPS rm): the row is
+                        // dropped by the refresh; the toast names the loss
+                        // instead of blaming the app version.
+                        loadDir(dir, force = true)
+                    }
+                    val fe = friendlyError(msg)
                     toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
                 },
             )
@@ -370,6 +388,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                         when (it) {
                             is TreeRow.Dir -> "d:${it.path}"
                             is TreeRow.File -> "f:${it.dir}/${it.entry.name}"
+                            is TreeRow.Empty -> "e:${it.dir}"
                         }
                     }) { row ->
                         when (row) {
@@ -450,6 +469,19 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                         }
                                     }
                                 }
+                            }
+                            is TreeRow.Empty -> {
+                                Text(
+                                    "This folder is empty",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.fillMaxWidth()
+                                        .padding(
+                                            start = (row.depth * 20 + 44).dp,
+                                            top = 2.dp,
+                                            bottom = 2.dp,
+                                        ),
+                                )
                             }
                         }
                     }

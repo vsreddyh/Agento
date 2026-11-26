@@ -201,17 +201,21 @@ class StorageApi(context: Context) {
             }
         }
 
-    /** Enqueues a download into public Downloads; returns the system download id. */    fun download(path: String, name: String): Long {
+    /** Enqueues a download into public Downloads, mirroring the exports
+     * path (`sub/report.pdf` lands in `Downloads/sub/`) so same-named
+     * files in different folders never contend; returns the system
+     * download id. */
+    fun download(path: String, name: String): Long {
         val base = base()
+        val rel = (if (path.isEmpty()) "" else "$path/") + name
         val url = "$base/api/files/download?path=" +
-            java.net.URLEncoder.encode(
-                (if (path.isEmpty()) "" else "$path/") + name, "UTF-8")
+            java.net.URLEncoder.encode(rel, "UTF-8")
         val req = DownloadManager.Request(url.toUri())
             .addRequestHeader("Authorization", "Bearer ${password()}")
             .setTitle(name)
             .setNotificationVisibility(
                 DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, rel)
         val dm = appCtx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         return dm.enqueue(req)
     }

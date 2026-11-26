@@ -63,6 +63,33 @@ class StorageTreeTest {
     }
 
     @Test
+    fun `an open empty folder draws one empty hint instead of nothing`() {
+        val tree = mapOf(
+            "" to DirListing(listOf(RemoteEntry("sub", true)), emptyList()),
+            "sub" to DirListing(emptyList(), emptyList()),
+        )
+        assertEquals(
+            listOf(
+                TreeRow.Dir("sub", "sub", 0),
+                TreeRow.Empty("sub", 1),
+            ),
+            flattenTree(tree, setOf("sub")),
+        )
+    }
+
+    @Test
+    fun `a closed empty folder draws no hint`() {
+        val tree = mapOf(
+            "" to DirListing(listOf(RemoteEntry("sub", true)), emptyList()),
+            "sub" to DirListing(emptyList(), emptyList()),
+        )
+        assertEquals(
+            listOf(TreeRow.Dir("sub", "sub", 0)),
+            flattenTree(tree, emptySet()),
+        )
+    }
+
+    @Test
     fun `nesting composes to arbitrary depth`() {
         val tree = mapOf(
             "" to DirListing(listOf(RemoteEntry("a", true)), emptyList()),
