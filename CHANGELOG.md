@@ -8,6 +8,12 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.12.1]
+- **Connection drops the guidance hint (#598).** Settings →
+  Connection no longer shows "Save the server above first, then test the
+  connection" before the first probe — just the fields plus Test
+  connection. The probe result line and failure `ErrorCard` are unchanged.
+
 ## [9.12.0]
 - **About drops widget diagnostics and info tags (#597).** Settings →
   About is just the Version card now — no "Widget diagnostics" card

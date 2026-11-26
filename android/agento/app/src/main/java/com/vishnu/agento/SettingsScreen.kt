@@ -293,8 +293,6 @@ internal fun SettingsScreen(
                         }
                         if (error.isNotEmpty()) {
                             ErrorCard(raw = error)
-                        } else if (report == null && !testing) {
-                            HintLine("Save the server above first, then test the connection.")
                         }
                     }
                     SettingSection.Appearance -> {
