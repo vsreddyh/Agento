@@ -110,9 +110,11 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 onFailure = { e ->
                     val msg = e.message ?: e.javaClass.simpleName
                     // A failed folder keeps its collapsed row in place and
-                    // says so; only a failed root replaces the list with
-                    // the error card.
-                    if (p.isEmpty()) error = msg
+                    // says so out loud. A failed root replaces the list with
+                    // the error card on first load, but toasts once rows are
+                    // already on screen — otherwise a manual refresh on a
+                    // flaky network would fail silently under a stale tree.
+                    if (p.isEmpty() && "" !in tree) error = msg
                     else toasts.toast(friendlyError(msg).title, ToastKind.Error)
                 },
             )
@@ -245,8 +247,16 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                         Icon(Icons.Filled.Upload, contentDescription = "Upload")
                     }
                     IconButton(
-                        onClick = { loadDir("", force = true) },
-                        enabled = !uploading && "" !in loadingDirs,
+                        // Refetches the root and every open folder: cached
+                        // subfolders would otherwise go stale behind a
+                        // fresh root.
+                        onClick = {
+                            loadDir("", force = true)
+                            openDirs.forEach { p ->
+                                if (p.isNotEmpty()) loadDir(p, force = true)
+                            }
+                        },
+                        enabled = !uploading && loadingDirs.isEmpty(),
                     ) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
@@ -259,9 +269,13 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(modifier = Modifier.contentWidth(WindowClass.Compact)) {
-                if (uploading || "" in loadingDirs) {
+                if (uploading || loadingDirs.isNotEmpty()) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
+                HintLine(
+                    "Uploads land in the Exports root.",
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
                 if (error.isNotEmpty() && !rootLoaded) {
                     ErrorCard(raw = error, onRetry = { loadDir("", force = true) },
                         modifier = Modifier.padding(12.dp))
@@ -391,7 +405,13 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
         AlertDialog(
             onDismissRequest = { deleting = null },
             title = { Text("Delete file?") },
-            text = { Text("“${target.second.name}” will be permanently deleted.") },
+            text = {
+                // Names the parent folder: the tree row had indent context,
+                // and IMG_001-style names repeat across folders.
+                val where = if (target.first.isEmpty()) "Exports root"
+                else target.first
+                Text("“${target.second.name}” in $where will be permanently deleted.")
+            },
             confirmButton = {
                 TextButton(onClick = { doDelete(target.first, target.second) }) {
                     Text("Delete")

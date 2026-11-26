@@ -201,7 +201,7 @@ func deleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if info.IsDir() {
-		writeJSON(w, http.StatusBadRequest, bson.M{"detail": "not a file: empty the folder first"})
+		writeJSON(w, http.StatusBadRequest, bson.M{"detail": "not a file: folders are cleared on the VPS, not here"})
 		return
 	}
 	if err := os.Remove(full); err != nil {
