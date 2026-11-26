@@ -165,9 +165,14 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     // refresh on a flaky network would fail silently under
                     // a stale tree.
                     if (p.isNotEmpty() && isGone(msg)) {
-                        dropSubtree(p)
-                        val fe = friendlyError(msg)
-                        toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+                        // Already pruned by a parent's prune (or collapsed
+                        // mid-flight): its rows went with it, so a second
+                        // toast would narrate an invisible path.
+                        if (p in openDirs || p in tree) {
+                            dropSubtree(p)
+                            val fe = friendlyError(msg)
+                            toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+                        }
                     } else if (p.isEmpty() && "" !in tree) error = msg
                     else {
                         val fe = friendlyError(msg)

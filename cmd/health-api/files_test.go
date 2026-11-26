@@ -205,7 +205,8 @@ func TestUploadRejectsEscapes(t *testing.T) {
 		"/api/files/upload?path=&name=evil%0D%0A.txt",
 		"/api/files/upload?path=&name=evil%7F.txt",
 		// The staging prefix is reserved: such a file would store but
-		// never list, with no delete endpoint to reclaim it.
+		// never list — reclaimable only by exact-path DELETE, not from
+		// the Files tab.
 		"/api/files/upload?path=&name=.upload-note.txt",
 	} {
 		req := uploadRequest(t, url, "file", "evil.txt", []byte("x"))
