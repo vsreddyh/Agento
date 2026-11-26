@@ -8,6 +8,11 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.7.5]
+- **Settings hub drops the footer hint (#590).** The hub ends with the
+  section rows; the Connection row's own status already says what needs
+  doing.
+
 ## [9.7.4]
 - **Settings hub drops the Open buttons (#589).** Each section row was
   already fully tappable — the trailing button duplicated it. The row
