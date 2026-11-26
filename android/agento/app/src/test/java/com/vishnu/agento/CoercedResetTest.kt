@@ -686,11 +686,11 @@ class TaskCoercedMessageTest {
         // One row with three bad fields counts once; the diagnostics
         // detail names each field as a sample (#480 review).
         assertEquals(
-            "1 task showed reset values — see Settings → About diagnostics for a sample of what changed.",
+            "1 task showed reset values — see the device log for a sample of what changed.",
             taskCoercedMessage(1),
         )
         assertEquals(
-            "3 tasks showed reset values — see Settings → About diagnostics for a sample of what changed.",
+            "3 tasks showed reset values — see the device log for a sample of what changed.",
             taskCoercedMessage(3),
         )
     }

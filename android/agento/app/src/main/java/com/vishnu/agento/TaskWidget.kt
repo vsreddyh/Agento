@@ -1004,8 +1004,8 @@ class TaskWidget : AppWidgetProvider() {
 
         /** This placement's view, defaulting to Open. A stored name
          * nothing knows resets AND logs once (#437): what key held what
-         * raw value and what it became. The line surfaces in Settings →
-         * About diagnostics, so corruption reads as corruption instead of
+         * raw value and what it became. The line surfaces in the
+         * diagnostics log, so corruption reads as corruption instead of
          * a placement changing for no apparent reason. */
         fun viewFor(context: Context, appWidgetId: Int): TaskWidgetView {
             val key = "task_widget_view_$appWidgetId"
