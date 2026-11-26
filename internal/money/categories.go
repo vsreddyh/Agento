@@ -228,10 +228,13 @@ func (s *Store) UpdateCategory(ctx context.Context, old, new string) (string, in
 // of the named categories.
 func (s *Store) categoryRefCounts(ctx context.Context, names []string) (map[string][2]int64, error) {
 	out := make(map[string][2]int64, len(names))
+	// Live rows only: a row awaiting TTL removal no longer counts as using
+	// the category, so a soft-deleted reference never blocks a delete guard.
+	live := liveFilter()
 	for _, n := range names {
 		var txN, budN int64
 		var err error
-		if txN, err = s.txns.CountDocuments(ctx, bson.M{"category": n}); err != nil {
+		if txN, err = s.txns.CountDocuments(ctx, bson.M{"category": n, "deletedAt": live["deletedAt"]}); err != nil {
 			return nil, err
 		}
 		if budN, err = s.budgets.CountDocuments(ctx, bson.M{"category": n}); err != nil {

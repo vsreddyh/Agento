@@ -50,6 +50,7 @@ func TestToolInputSchemaRequired(t *testing.T) {
 		// without forbidding by-id mode. Enforced server-side.
 		{"query_transactions", queryTransactionsInput{}, nil},
 		{"edit_transaction", editTransactionInput{}, []string{"id"}},
+		{"restore_transactions", restoreTransactionInput{}, []string{"id"}},
 		// "At least one filter required", so no single field can be.
 		{"delete_transactions", deleteTransactionsInput{}, nil},
 		// Analysis tools: windows are required because absent bounds are

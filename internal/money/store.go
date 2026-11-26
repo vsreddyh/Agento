@@ -1,11 +1,12 @@
 // Package money: MongoDB storage with derived balances.
 //
 // Collections: money_accounts + money_transactions + money_budgets +
-// money_categories — all permanent. Rows never expire: the only way a row disappears is a
-// user-initiated delete. There is no stored running total: an account's
-// balance is its opening seed (changeable only via edit_account) plus the
-// signed sum of its ledger legs, computed on read — so a balance can never
-// drift from its rows.
+// money_categories. Unflagged rows are permanent; deletion is a soft flag
+// (deletedAt), and the ttl_deleted_at index removes flagged rows 10 days
+// after flagging — restore works only inside that window. There is no
+// stored running total: an account's balance is its opening seed (changeable
+// only via edit_account) plus the signed sum of its ledger legs, computed on
+// read — so a balance can never drift from its rows.
 package money
 
 import (
@@ -198,11 +199,11 @@ func (s *Store) CreateAccount(ctx context.Context, name, typ string, balancePais
 }
 
 // derivedLegs sums stored transaction legs per account-id hex, in int64
-// paise. Balances are derived from the ledger, never stored: with no expiry
-// the ledger is complete, so the sum is exact. One unbounded read; fine at
-// personal-ledger scale, and the only read path that scans everything.
+// paise. Balances are derived from the ledger, never stored — and only from
+// live rows: soft-deleted rows (deletedAt set, awaiting the 10-day TTL) are
+// excluded, so a delete moves the totals the moment it flags.
 func (s *Store) derivedLegs(ctx context.Context) (map[string]int64, error) {
-	cur, err := s.txns.Find(ctx, bson.M{})
+	cur, err := s.txns.Find(ctx, liveFilter())
 	if err != nil {
 		return nil, err
 	}
@@ -658,6 +659,15 @@ func (s *Store) checkIdempotencyPayload(ctx context.Context, existing bson.M, ke
 			return mismatch("sending_to")
 		}
 	}
+	// A replay of a soft-deleted row is rejected, not returned as a no-op:
+	// the id it would hand back is invisible in every ledger read until
+	// restored, so a silent "success" would read as a write that never
+	// landed. Checked last so a different payload reports the mismatch
+	// (use a new key) instead of sending the caller on a restore detour
+	// that cannot fix the request.
+	if _, flagged := existing["deletedAt"]; flagged {
+		return fail("idempotency_key %q was already used for a transaction that has since been deleted — restore it with restore_transactions to replay", key)
+	}
 	return nil
 }
 
@@ -702,6 +712,16 @@ func (s *Store) Match(ctx context.Context, filt map[string]any) ([]bson.M, error
 	return rows, nil
 }
 
+// liveFilter excludes soft-deleted rows from the ledger read paths: Match,
+// Query, window scans, derived legs and balances all build on it, so a
+// flagged row vanishes from every aggregate the moment it is flagged and
+// returns only via restore — until the 10-day TTL removes it for good. The
+// by-id verbs (edit, restore, delete-by-id, idempotency replay) read the
+// flag explicitly to reject or restore instead of matching through it.
+func liveFilter() bson.M {
+	return bson.M{"deletedAt": bson.M{"$exists": false}}
+}
+
 // accountNames maps account-id hex -> name, for annotating transaction rows.
 func (s *Store) accountNames(ctx context.Context) (map[string]string, error) {
 	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"name": 1}))
@@ -719,9 +739,12 @@ func (s *Store) accountNames(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-// Delete by app-level filter; rows are removed outright. Balances need no
-// adjustment: they are derived from the surviving rows, so the total follows
-// automatically.
+// Delete flags matching rows with deletedAt instead of removing them: the
+// rows vanish from every ledger read the moment they flag (all ledger reads
+// build on liveFilter) and the 10-day TTL index removes them for good. A second delete
+// of an already-flagged row matches nothing — like an unknown id, it reports
+// 0 rather than deleting twice. Balances need no adjustment: they are derived
+// from the surviving rows, so the total follows automatically.
 func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 	if len(filt) == 0 {
 		return 0, fail("refusing to delete without a filter")
@@ -730,25 +753,66 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	cur, err := s.txns.Find(ctx, mongoFilt)
+	res, err := s.txns.UpdateMany(ctx, mongoFilt,
+		bson.M{"$set": bson.M{"deletedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}})
 	if err != nil {
 		return 0, err
 	}
-	var matched []bson.M
-	if err := cur.All(ctx, &matched); err != nil {
-		return 0, err
+	return int(res.ModifiedCount), nil
+}
+
+// CheckID resolves one transaction id for the by-id verbs: malformed ids
+// fail, unknown ids fail like everywhere else, and flagged (soft-deleted)
+// ids fail as already-deleted — naming restore_transactions instead of
+// reading as a typo'd unknown id. Live rows return deleted=false.
+func (s *Store) CheckID(ctx context.Context, id string) (bool, error) {
+	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
+	if err != nil {
+		return false, fail("'%s' is not a transaction id", id)
 	}
-	if len(matched) == 0 {
-		return 0, nil
+	var existing bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"_id": oid}).Decode(&existing); err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return false, fail("unknown transaction id '%s'", strings.TrimSpace(id))
+		}
+		return false, err
 	}
-	ids := make([]any, 0, len(matched))
-	for _, d := range matched {
-		ids = append(ids, d["_id"])
+	if _, flagged := existing["deletedAt"]; flagged {
+		return true, fail("transaction id '%s' is already deleted — restore it with restore_transactions to see it again", strings.TrimSpace(id))
 	}
-	if _, err := s.txns.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": ids}}); err != nil {
-		return 0, err
+	return false, nil
+}
+
+// RestoreTransaction clears deletedAt on one flagged row, returning it to
+// every read path with no other write. An unknown id fails like delete and
+// edit by id; a live (never-flagged) row fails as not deleted rather than
+// reporting a no-op success.
+func (s *Store) RestoreTransaction(ctx context.Context, id string) (bson.M, error) {
+	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
+	if err != nil {
+		return nil, fail("'%s' is not a transaction id", id)
 	}
-	return len(matched), nil
+	var existing bson.M
+	if err := s.txns.FindOne(ctx, bson.M{"_id": oid}).Decode(&existing); err != nil {
+		if err == mongoDrv.ErrNoDocuments {
+			return nil, fail("unknown transaction id '%s'", strings.TrimSpace(id))
+		}
+		return nil, err
+	}
+	if _, flagged := existing["deletedAt"]; !flagged {
+		return nil, fail("transaction id '%s' is not deleted", strings.TrimSpace(id))
+	}
+	if _, err := s.txns.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$unset": bson.M{"deletedAt": ""}}); err != nil {
+		return nil, err
+	}
+	rows, err := s.Match(ctx, map[string]any{"id": strings.TrimSpace(id)})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 {
+		return nil, fail("restored row %s reads back %d rows", strings.TrimSpace(id), len(rows))
+	}
+	return rows[0], nil
 }
 
 // EditTransaction updates one row by id; the row changes in place and
@@ -761,7 +825,7 @@ func (s *Store) Delete(ctx context.Context, filt map[string]any) (int, error) {
 // type/category, resolved accounts, transfer rules, real calendar
 // dates. A type/account/amount move changes the row; derived balances follow,
 // so a move can never half-land — there is no second write to fail. A date
-// change just moves the row's date — rows never expire, so any past date
+// change just moves the row's date — unflagged rows never expire, so any past date
 // stays put. Note is truncated like a write. Moving a leg TO an archived
 // account rejects, like a new log; resupplying the leg already on the row
 // does not (it is not a move, so the read-then-edit flow keeps working —
@@ -780,6 +844,12 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amountPaise *int
 			return false, fail("unknown transaction id '%s'", strings.TrimSpace(id))
 		}
 		return false, err
+	}
+	// Flagged rows are invisible on every ledger read: editing one must fail
+	// upfront like restore's guards do, not succeed-and-stay-flagged (the
+	// handler's readback would then report 0 rows as a fake glitch).
+	if _, flagged := old["deletedAt"]; flagged {
+		return false, fail("transaction id '%s' is deleted — restore it with restore_transactions first", strings.TrimSpace(id))
 	}
 	newPaise := paiseOf(old["amount"])
 	newType := fmt.Sprint(old["type"])
@@ -930,7 +1000,7 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amountPaise *int
 // queryFilter builds the normalized Mongo filter Query scans: date range plus optional type/category/account (either side of a
 // transfer). Normalization and membership checks live here, once.
 func (s *Store) queryFilter(ctx context.Context, start, end string, typ, category, account *string) (bson.M, error) {
-	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}}
+	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}, "deletedAt": bson.M{"$exists": false}}
 	if typ != nil {
 		t := strings.ToLower(strings.TrimSpace(*typ))
 		if !contains(txTypes, t) {
@@ -955,6 +1025,17 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 	return filt, nil
 }
 
+// CountRange counts the rows a window query would match, for callers that
+// need the total before fetching a page (newest-first paging anchors its
+// slice at the total). Same filters as Query, no rows read.
+func (s *Store) CountRange(ctx context.Context, start, end string, account *string) (int64, error) {
+	filt, err := s.queryFilter(ctx, start, end, nil, nil, account)
+	if err != nil {
+		return 0, err
+	}
+	return s.txns.CountDocuments(ctx, filt)
+}
+
 // Query date-range scan; account filter matches either side of transfers.
 // Type/category filters are normalized exactly like writes (lowercase + trim),
 // so `Groceries` finds what was logged as `groceries` — and unknown values are
@@ -965,8 +1046,11 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 // `delete by id` workflow is unreachable from a query — the caller would hold a
 // row with no id to delete it by.
 //
-// Pagination: limit==0 means no cap (direct store use only — the handler
-// maps <=0 to 100 and caps >500 at 500, so MCP has no unlimited page); limits below zero are
+// Pagination: limit==0 means no cap (direct store use only — the MCP
+// handler maps <=0 to 100 and caps >500 at 500, so MCP has no unlimited
+// page; the HTTP /api/money/transactions surface instead rejects an
+// explicit limit=0 with 422, so 0 never silently means 100 there).
+// Limits below zero are
 // rejected like negative offsets, since an unbounded dump must never be the
 // result of a typo. When limit>0, at most `limit` rows starting at `offset`;
 // when limit==0, all rows from `offset` (no cap). `total`
@@ -1056,7 +1140,7 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 	// silently miss post-migration (stored 1010 vs filter 10.1), the
 	// silent-zero-match class of bug. Non-numerics fail instead of matching
 	// nothing.
-	out := bson.M{}
+	out := bson.M{"deletedAt": bson.M{"$exists": false}}
 	for k, v := range filt {
 		switch k {
 		case "amount":
@@ -1247,10 +1331,12 @@ func (s *Store) migrateStoredBalances(ctx context.Context) error {
 // Also migrates legacy float rupees to int64 paise (see ToPaise) — new code
 // writes longs only, so the migration converges on first boot.
 //
-// Expiry is gone: rows are permanent unless deleted. A database created by
-// an older build still carries the ttl_expiresAt index (which would keep
-// deleting) and inert expiresAt fields, so both are removed here,
-// idempotently — after the first boot there is nothing left to remove.
+// The legacy 90-day expiry is gone: unflagged rows are permanent. A database
+// created by an older build still carries the ttl_expiresAt index (which
+// would keep deleting) and inert expiresAt fields, so both are removed here,
+// idempotently — after the first boot there is nothing left to remove. (The
+// ttl_deleted_at index created just below is the current expiry: flagged
+// rows only, 10 days after flagging — not legacy, do not drop it.)
 func (s *Store) EnsureSchema(ctx context.Context) error {
 	if err := s.dropLegacyExpiry(ctx); err != nil {
 		return err
@@ -1267,6 +1353,11 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		{transactions, bson.D{{Key: "sending_to", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("sendingto_date").SetSparse(true)},
 		{transactions, bson.D{{Key: "date", Value: 1}, {Key: "type", Value: 1}}, options.Index().SetName("date_type")},
 		{transactions, bson.D{{Key: "category", Value: 1}, {Key: "date", Value: 1}}, options.Index().SetName("cat_date")},
+		// Soft-delete TTL (#570): flagged rows are removed 10 days after
+		// flagging. The TTL clock runs on deletedAt (flag time), never on
+		// the transaction date — money is still permanent until deleted.
+		{transactions, bson.D{{Key: "deletedAt", Value: 1}},
+			options.Index().SetName("ttl_deleted_at").SetExpireAfterSeconds(864000)},
 		{budgets, bson.D{{Key: "category", Value: 1}, {Key: "month", Value: 1}},
 			options.Index().SetName("uniq_budget_category_month").SetUnique(true)},
 	} {

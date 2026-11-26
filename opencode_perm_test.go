@@ -52,6 +52,7 @@ var expectedAsk = []string{
 	"*log_transaction*",
 	"*modify_gmail_message_labels*",
 	"*prune_old*",
+	"*restore_transactions*",
 	"*update_budget*",
 	"*update_category*",
 }

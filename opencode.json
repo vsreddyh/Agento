@@ -47,6 +47,7 @@
     "*fix_last*": "ask",
     "*prune_old*": "ask",
     "*log_transaction*": "ask",
+    "*restore_transactions*": "ask",
     "*update_budget*": "ask",
     "*update_category*": "ask",
     "*modify_gmail_message_labels*": "ask",

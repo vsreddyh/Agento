@@ -506,3 +506,95 @@ func TestEditTransactionNoteNullVsEmpty(t *testing.T) {
 		t.Fatalf("empty note did not clear the stored note: %q", n)
 	}
 }
+
+// restore_transactions validates before any store touch: a blank id is
+// rejected with nil store.
+func TestRestoreTransactionRejectsBlankId(t *testing.T) {
+	_, errMsg := callTool(t, "restore_transactions", map[string]any{"id": "   "})
+	if errMsg == "" {
+		t.Fatal("a blank id was accepted; expected the id requirement")
+	}
+}
+
+// Unknown ids and live rows are rejected, not silent no-ops — through a
+// test store, since existence is data-dependent.
+func TestRestoreTransactionRejectsUnknownAndLive(t *testing.T) {
+	withTestStore(t)
+	_, errMsg := callTool(t, "restore_transactions", map[string]any{"id": "000000000000000000000000"})
+	if errMsg == "" {
+		t.Fatal("an unknown id was accepted")
+	}
+	text, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount_paise": 10000, "account": "Cash",
+	})
+	if errMsg != "" {
+		t.Fatalf("log: %s", errMsg)
+	}
+	var logged struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(text), &logged); err != nil || logged.ID == "" {
+		t.Fatalf("log result has no id: %v (%s)", err, text)
+	}
+	_, errMsg = callTool(t, "restore_transactions", map[string]any{"id": logged.ID})
+	if errMsg == "" {
+		t.Fatal("restoring a live row was accepted; expected the not-deleted rejection")
+	}
+	if !strings.Contains(errMsg, "not deleted") {
+		t.Errorf("error %q does not say the row is not deleted", errMsg)
+	}
+}
+
+// A soft-deleted id is already deleted, not unknown — both dry-run and live
+// delete name restore_transactions instead of reading as a typo.
+func TestDeleteFlagsDeletedIdAsAlreadyDeleted(t *testing.T) {
+	withTestStore(t)
+	text, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount_paise": 10000, "account": "Cash",
+	})
+	if errMsg != "" {
+		t.Fatalf("log: %s", errMsg)
+	}
+	var logged struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(text), &logged); err != nil || logged.ID == "" {
+		t.Fatalf("log result has no id: %v (%s)", err, text)
+	}
+	if _, err := store.Delete(context.Background(), map[string]any{"id": logged.ID}); err != nil {
+		t.Fatalf("flag: %v", err)
+	}
+	_, errMsg = callTool(t, "delete_transactions", map[string]any{"id": logged.ID, "dry_run": true})
+	if errMsg == "" || !strings.Contains(errMsg, "already deleted") {
+		t.Fatalf("dry-run re-delete: %q, want the already-deleted error", errMsg)
+	}
+	_, errMsg = callTool(t, "delete_transactions", map[string]any{"id": logged.ID, "dry_run": false})
+	if errMsg == "" || !strings.Contains(errMsg, "already deleted") {
+		t.Fatalf("live re-delete: %q, want the already-deleted error", errMsg)
+	}
+}
+
+// A soft-deleted id reads as already-deleted on by-id query too — not as
+// unknown (Match is live-only and would report 0 rows either way).
+func TestQueryByIdFlagsDeletedIdAsAlreadyDeleted(t *testing.T) {
+	withTestStore(t)
+	text, errMsg := callTool(t, "log_transaction", map[string]any{
+		"type": "expense", "amount_paise": 10000, "account": "Cash",
+	})
+	if errMsg != "" {
+		t.Fatalf("log: %s", errMsg)
+	}
+	var logged struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(text), &logged); err != nil || logged.ID == "" {
+		t.Fatalf("log result has no id: %v (%s)", err, text)
+	}
+	if _, err := store.Delete(context.Background(), map[string]any{"id": logged.ID}); err != nil {
+		t.Fatalf("flag: %v", err)
+	}
+	_, errMsg = callTool(t, "query_transactions", map[string]any{"id": logged.ID})
+	if errMsg == "" || !strings.Contains(errMsg, "already deleted") {
+		t.Fatalf("query by flagged id: %q, want the already-deleted error", errMsg)
+	}
+}

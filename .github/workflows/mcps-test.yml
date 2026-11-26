@@ -48,11 +48,14 @@ jobs:
       # `ci_test` in CI — so this never touches `hermes`.
       # MONGODB_DB is still mandatory: internal/reports falls back to `hermes`
       # when it is unset, which is the production database.
+      # The 15m timeout is load-bearing, not generous: the Atlas-backed
+      # internal/money suite takes ~10 minutes (each test drops + re-seeds
+      # its database), so the 10m go-test default would kill a passing suite.
       - name: Run tests (DB tests skip without MONGODB_URI)
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: ci_test
-        run: go test ./...
+        run: go test -timeout 15m ./...
 
   # scripts/hermes.sh and friends are the documented entry point for the whole
   # stack, and the repo's own convention is "verify shell with `bash -n
