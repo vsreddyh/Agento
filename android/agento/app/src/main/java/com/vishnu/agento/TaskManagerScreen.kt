@@ -15,8 +15,10 @@ import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -51,12 +53,12 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.Saver
@@ -64,6 +66,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -192,9 +195,9 @@ internal fun TaskManagerScreen(
     // loader, so it can only ever describe the run it was set for; the next
     // bump defaults back to a visible reload.
     var silentRefresh by remember { mutableStateOf(false) }
-    // True while a background refresh is in flight; drives the thin bar that
-    // stands in for the spinner on those runs.
-    var refreshing by remember { mutableStateOf(false) }
+    // True while any list fetch is in flight; spins the top-bar sync
+    // button (#578) instead of the old thin progress bar.
+    var syncing by remember { mutableStateOf(false) }
     // Rows playing their leave animation (#308), each mapped to the filter it
     // is leaving UNDER. A completed row stays in `tasks` until its animation
     // reports it has finished leaving, and a fetch that lands meanwhile
@@ -313,7 +316,7 @@ internal fun TaskManagerScreen(
         //
         // Both flags are written at the top of every run rather than only at
         // the end: a run cancelled by a newer one (they share the tick as a
-        // key) must not leave a spinner or a progress bar behind.
+        // key) must not leave a spinner or a spinning sync button behind.
         val background = silentRefresh
         silentRefresh = false
         // A background run assumes there are rows on screen for it to protect,
@@ -324,7 +327,7 @@ internal fun TaskManagerScreen(
         // of a repeat — should settle to the empty state, not blink through a
         // spinner to get back to it.
         loading = !background || !hasLoaded
-        refreshing = background && hasLoaded
+        syncing = true
         if (!background) error = ""
         // fold's lambdas are not suspend, so the cursor read below runs after
         // the fold, not inside onSuccess.
@@ -404,7 +407,7 @@ internal fun TaskManagerScreen(
             }
         }
         loading = false
-        refreshing = false
+        syncing = false
         hasLoaded = true
     }
 
@@ -1033,6 +1036,9 @@ internal fun TaskManagerScreen(
 
     // The toast card floats top-end over the content (Box overlay, not
     // the bottom-anchored Scaffold slot) so it never shifts the layout.
+    // Any fetch or any mutation write in flight spins the top-bar sync
+    // button (#578): one affordance for every run, silent or not.
+    val syncActive = syncing || busyIds.isNotEmpty()
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
@@ -1095,13 +1101,13 @@ internal fun TaskManagerScreen(
                             Icon(Icons.Filled.Add, contentDescription = "New task")
                         }
                         IconButton(onClick = {
-                            // Backgrounded (#308): an explicit refresh should
-                            // not blank the list either — the thin bar above
-                            // the rows reports that it is working.
+                            // Backgrounded (#308): an explicit sync should
+                            // not blank the list either — the button itself
+                            // spins until the fresh rows land (#578).
                             silentRefresh = true
                             refreshTick++
                         }) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                            SyncButtonIcon(spinning = syncActive)
                         }
                         },
                     )
@@ -1112,10 +1118,9 @@ internal fun TaskManagerScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Background refresh (#308): a thin bar instead of the full-list
-            // spinner, above the content so it never displaces the rows the
-            // user is reading while the fresh list arrives.
-            RefreshBar(refreshing = refreshing)
+            // Sync state lives on the top-bar button (#578): it spins while
+            // any fetch or mutation write is in flight, and rests idle
+            // otherwise. No toast, no linear bar.
             Column(
                 modifier = Modifier.contentWidth(wc)
                     .verticalScroll(rememberScrollState())
@@ -1736,31 +1741,29 @@ private const val ROW_ANIM_MS = 220
 private const val ROW_EXIT_FALLBACK_MS = 500L
 
 /**
- * The slim bar that stands in for the full-list spinner while a background
- * refresh is in flight (#308).
- *
- * It is a sibling of the scrolling list rather than an item inside it, so it
- * costs no item spacing, and its height animates from nothing so an idle
- * screen is exactly as tall as it was before the bar existed.
+ * The top-bar sync button's icon (#578): a plain sync glyph at rest, a
+ * continuously rotating one while any fetch or mutation write is in
+ * flight. TalkBack names the state, not just the button.
  */
 @Composable
-private fun RefreshBar(refreshing: Boolean) {
-    // The height animates 0 -> 4 and back rather than reserving a permanent
-    // slot: an idle screen should carry no gap for a bar that is not there,
-    // and starting a refresh eases the list down instead of jumping it.
-    val height by animateDpAsState(
-        targetValue = if (refreshing) 4.dp else 0.dp,
-        animationSpec = tween(ROW_ANIM_MS),
-        label = "refreshBarHeight",
-    )
-    Box(modifier = Modifier.fillMaxWidth().height(height)) {
-        // Composed until the height is back to nothing rather than tied to
-        // `refreshing`: tying it to the flag popped the bar out of existence
-        // the moment the refresh finished, while the height it was sitting in
-        // was still animating away.
-        if (height > 0.dp) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
+private fun SyncButtonIcon(spinning: Boolean) {
+    if (spinning) {
+        val transition = rememberInfiniteTransition(label = "syncSpin")
+        val angle by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = LinearEasing),
+            ),
+            label = "syncAngle",
+        )
+        Icon(
+            Icons.Filled.Sync,
+            contentDescription = "Syncing",
+            modifier = Modifier.rotate(angle),
+        )
+    } else {
+        Icon(Icons.Filled.Sync, contentDescription = "Sync")
     }
 }
 

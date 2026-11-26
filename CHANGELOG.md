@@ -8,6 +8,14 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.6.0]
+- **Sync state moves onto the sync button (#578).** The top bar's Refresh
+  becomes Sync: it rotates while any fetch or mutation write is in flight
+  and rests idle otherwise. The thin linear progress bar is gone, and no
+  toast is shown for syncing state or a clean sync — the list just updates
+  in place and the "synced x ago" stamp moves on. Failures still toast,
+  and the old rows stay up.
+
 ## [9.5.0]
 - **Task rows swipe (#576).** Swipe right to skip an open task, swipe left
   to duplicate it — both settle straight back and reuse the sheet's own
