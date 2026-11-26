@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- In-app updater (Settings → App updates): fires the platform package
+    <!-- In-app updater (Settings → About → Version): fires the platform package
          installer for a downloaded release APK (issue #6). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 

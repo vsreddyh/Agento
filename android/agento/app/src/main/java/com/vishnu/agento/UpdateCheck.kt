@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  * the *policy*: when a check runs, what the last one found, and whether a
  * newer release is worth a notification. Every path — the manual button,
  * the startup one-shot and the periodic worker — funnels through [run], so
- * the App updates section and the notification can never disagree about
+ * the About Version card and the notification can never disagree about
  * what the last check saw.
  *
  * The last result is persisted, not held in memory: the worker usually runs
@@ -151,7 +151,7 @@ object UpdateCheck {
     }
 
     /**
-     * Pure notification gate. Foreground means the App updates section is
+     * Pure notification gate. Foreground means the About Version card is
      * one tap away (or already open), and an already-posted tag must not
      * be repeated every cadence tick — the notification is a nudge for a
      * new release, not a heartbeat.
@@ -166,7 +166,7 @@ object UpdateCheck {
     ): Boolean = newer && enabled && canPost && !inForeground && tag.isNotBlank() &&
         alreadyPostedTag != tag
 
-    /** Short status line for the App updates card; pure, JVM-pinned. No UI
+    /** Short status line for the About Version card; pure, JVM-pinned. No UI
      * caller since #597 (About shows no status line) — kept for the
      * backend and tests, like `diagnostics()`/`buildReport`. A
      * failed check never hides a known pending release: the download stays
@@ -251,8 +251,8 @@ object UpdateCheck {
 
     private fun post(ctx: Context, rel: AppRelease) {
         ensureChannel(ctx)
-        // Deep link into Settings → About (where App updates lives); the
-        // activity consumes ACTION_UPDATE and opens that section.
+        // Deep link into Settings → About (where the Version card lives);
+        // the activity consumes ACTION_UPDATE and opens that section.
         val open = PendingIntent.getActivity(
             ctx, NOTIFICATION_ID,
             Intent(ctx, MainActivity::class.java).setAction(ACTION_UPDATE),
@@ -261,7 +261,7 @@ object UpdateCheck {
         val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("Agento ${rel.name} is available")
-            .setContentText("Tap to open App updates.")
+            .setContentText("Tap to open About → Version.")
             .setContentIntent(open)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

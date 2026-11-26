@@ -17,7 +17,7 @@ class FriendlyErrorTest {
             "The server sent a response this app doesn't understand",
             friendlyError("Unexpected response shape").title,
         )
-        assertTrue(friendlyError("Unexpected response shape").nextStep.contains("App updates"))
+        assertTrue(friendlyError("Unexpected response shape").nextStep.contains("About → Version"))
     }
 
     @Test
@@ -29,8 +29,8 @@ class FriendlyErrorTest {
     }
 
     @Test
-    fun `drop next step points at app updates`() {
-        assertTrue(friendlyError(taskDropMessage(2)).nextStep.contains("App updates"))
+    fun `drop next step points at the Version card`() {
+        assertTrue(friendlyError(taskDropMessage(2)).nextStep.contains("About → Version"))
     }
 
     @Test
@@ -56,9 +56,9 @@ class FriendlyErrorTest {
     }
 
     @Test
-    fun `unknown routes still point at app updates`() {
+    fun `unknown routes still point at the Version card`() {
         val route = friendlyError("HTTP 404: 404 page not found")
-        assertTrue(route.nextStep.contains("App updates"))
+        assertTrue(route.nextStep.contains("About → Version"))
     }
 
     @Test

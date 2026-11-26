@@ -7,8 +7,8 @@ import org.junit.Test
 
 /**
  * Pure policy of the automatic update checks (#366): when a startup check
- * is due, when a notification fires, and what the App updates section
- * prints. Notification posting itself needs a Context and stays with the
+ * is due, when a notification fires, and what the status line
+ * computes. Notification posting itself needs a Context and stays with the
  * platform path; the gate it consults is pinned here.
  */
 class UpdateCheckTest {
