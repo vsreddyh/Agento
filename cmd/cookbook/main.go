@@ -1,7 +1,7 @@
 // Command cookbook is the recipe + ingredient book MCP server (#600).
 // Storage: MongoDB (cookbook_ingredients, cookbook_recipes). Both books
-// hold name + note only — no quantities, servings, macros, tags on
-// ingredients, or cook log. Permanent — never pruned. Runs over stdio
+// hold name + note (+tags on recipes) — no quantities, servings, macros
+// or cook log. Permanent — never pruned. Runs over stdio
 // for MCP clients.
 package main
 
@@ -143,7 +143,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_ingredient",
-		Description: "Patch an ingredient's name or note. Empty args are left unchanged."},
+		Description: "Patch an ingredient's name or note (at least one required). Empty args are left unchanged; notes cannot be cleared to empty."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
@@ -206,7 +206,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
-		Description: "Patch a recipe's name, note or tags. Empty args are left unchanged."},
+		Description: "Patch a recipe's name, note or tags (at least one required). Empty args are left unchanged; note/tags cannot be cleared to empty."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {

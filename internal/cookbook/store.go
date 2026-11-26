@@ -57,6 +57,15 @@ func docOut(d bson.M) bson.M {
 			out[k] = fmt.Sprint(v)
 		}
 	}
+	// Retired recipe fields (#600): pre-trim rows still carry servings,
+	// macros, quantities and source in Atlas. Reads strip them so callers
+	// never see fields the tools can no longer write or clear — an old
+	// recipe that still returned `quantities` would invite an update the
+	// patch path silently drops.
+	for _, k := range []string{"servings", "quantities", "source",
+		"kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"} {
+		delete(out, k)
+	}
 	return out
 }
 
@@ -151,16 +160,20 @@ func (s *Store) UpdateIngredient(ctx context.Context, nameOrID string, patch map
 	if err != nil || ing == nil {
 		return nil, err
 	}
-	upd := bson.M{"updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
-	if v, ok := patch["name"].(string); ok && v != "" {
+	upd := bson.M{}
+	if v, ok := patch["name"].(string); ok && strings.TrimSpace(v) != "" {
 		upd["name"] = strings.TrimSpace(v)
 	}
-	if v, ok := patch["note"].(string); ok {
+	if v, ok := patch["note"].(string); ok && v != "" {
 		if len(v) > maxNoteLen {
 			v = v[:maxNoteLen]
 		}
 		upd["note"] = v
 	}
+	if len(upd) == 0 {
+		return nil, fail("nothing to update — pass a new name or note")
+	}
+	upd["updatedAt"] = primitive.NewDateTimeFromTime(time.Now().UTC())
 	rawID := idstr(ing["_id"])
 	oid, _ := primitive.ObjectIDFromHex(rawID)
 	if _, err := s.ings.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": upd}); err != nil {
@@ -173,8 +186,10 @@ func (s *Store) UpdateIngredient(ctx context.Context, nameOrID string, patch map
 }
 
 func (s *Store) DeleteIngredient(ctx context.Context, nameOrID string) (bool, error) {
-	ing, err := s.findIng(ctx, nameOrID)
-	if err != nil {
+	// Unknown reads back as not-deleted, like DeleteRecipe: deletes are
+	// idempotent, while gets/updates report unknown targets as ok:false.
+	ing, err := s.GetIngredient(ctx, nameOrID)
+	if err != nil || ing == nil {
 		return false, err
 	}
 	res, err := s.ings.DeleteOne(ctx, bson.M{"_id": ing["_id"]})
@@ -253,17 +268,17 @@ func (s *Store) UpdateRecipe(ctx context.Context, nameOrID string, patch map[str
 	if err != nil || r == nil {
 		return nil, err
 	}
-	upd := bson.M{"updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
-	if v, ok := patch["name"].(string); ok && v != "" {
+	upd := bson.M{}
+	if v, ok := patch["name"].(string); ok && strings.TrimSpace(v) != "" {
 		upd["name"] = strings.TrimSpace(v)
 	}
-	if v, ok := patch["note"].(string); ok {
+	if v, ok := patch["note"].(string); ok && v != "" {
 		if len(v) > maxNoteLen {
 			v = v[:maxNoteLen]
 		}
 		upd["note"] = v
 	}
-	if v, ok := patch["tags"].([]any); ok {
+	if v, ok := patch["tags"].([]any); ok && len(v) > 0 {
 		capped := []string{}
 		for _, t := range v {
 			ts := fmt.Sprint(t)
@@ -277,6 +292,10 @@ func (s *Store) UpdateRecipe(ctx context.Context, nameOrID string, patch map[str
 		}
 		upd["tags"] = capped
 	}
+	if len(upd) == 0 {
+		return nil, fail("nothing to update — pass a new name, note or tags")
+	}
+	upd["updatedAt"] = primitive.NewDateTimeFromTime(time.Now().UTC())
 	rawID := idstr(r["_id"])
 	oid, _ := primitive.ObjectIDFromHex(rawID)
 	if _, err := s.recipes.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": upd}); err != nil {

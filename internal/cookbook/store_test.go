@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 func testStore(t *testing.T) *Store {
@@ -105,5 +107,74 @@ func TestRecipeCRUD(t *testing.T) {
 	deleted, err := s.DeleteRecipe(ctx, idstr(r["_id"]))
 	if err != nil || !deleted {
 		t.Fatalf("got %v %v", deleted, err)
+	}
+}
+
+func TestDeleteUnknownReadsNotDeleted(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Deletes are idempotent across both books: unknown targets read back
+	// as not-deleted, while gets/updates report them as ok:false.
+	done, err := s.DeleteIngredient(ctx, "gotest-no-such-ingredient")
+	if err != nil || done {
+		t.Fatalf("got %v %v", done, err)
+	}
+	done, err = s.DeleteRecipe(ctx, "gotest-no-such-recipe")
+	if err != nil || done {
+		t.Fatalf("got %v %v", done, err)
+	}
+}
+
+func TestEmptyPatchIsRejected(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, _ = s.DeleteIngredient(ctx, "gotest-patch")
+	if _, err := s.AddIngredient(ctx, "gotest-patch", "keep"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	defer func() { _, _ = s.DeleteIngredient(ctx, "gotest-patch") }()
+	if _, err := s.UpdateIngredient(ctx, "gotest-patch", map[string]any{}); err == nil {
+		t.Fatal("expected nothing-to-update error")
+	}
+	// Whitespace-only renames are dropped, which also leaves nothing.
+	if _, err := s.UpdateIngredient(ctx, "gotest-patch", map[string]any{"name": "   "}); err == nil {
+		t.Fatal("expected nothing-to-update error")
+	}
+	got, err := s.GetIngredient(ctx, "gotest-patch")
+	if err != nil || got == nil || got["name"] != "gotest-patch" {
+		t.Fatalf("got %v %v", got, err)
+	}
+}
+
+func TestLegacyRecipeFieldsStrippedOnRead(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, _ = s.DeleteRecipe(ctx, "gotest-legacy")
+	legacy := bson.M{"name": "gotest-legacy", "servings": 2.0,
+		"kcal": 100.0, "protein_g": 5.0, "carbs_g": 1.0, "fat_g": 2.0, "fiber_g": 3.0,
+		"quantities": []bson.M{{"ingredient_id": "abc", "name": "salt", "qty": "2"}},
+		"source":     "mcp", "note": "old", "tags": []string{"t"}}
+	if _, err := s.recipes.InsertOne(ctx, legacy); err != nil {
+		t.Fatalf("insert legacy: %v", err)
+	}
+	defer func() { _, _ = s.DeleteRecipe(ctx, "gotest-legacy") }()
+	r, err := s.GetRecipe(ctx, "gotest-legacy")
+	if err != nil || r == nil {
+		t.Fatalf("got %v %v", r, err)
+	}
+	for _, k := range []string{"servings", "quantities", "source",
+		"kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"} {
+		if _, ok := r[k]; ok {
+			t.Fatalf("legacy key %q still returned: %v", k, r)
+		}
+	}
+	if r["note"] != "old" {
+		t.Fatalf("got %v", r)
 	}
 }
