@@ -394,7 +394,7 @@ private fun hasNotifPermission(appCtx: Context): Boolean =
 
 /** One labelled switch row, the Notifications section's shape reused. */
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     text: String,
     sub: String,
     checked: Boolean,

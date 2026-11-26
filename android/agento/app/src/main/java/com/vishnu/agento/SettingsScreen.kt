@@ -465,52 +465,54 @@ internal fun SettingsScreen(
                                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                                     }
                                 }
-                                // Health sync cadence (#588): the interval,
-                                // Wi-Fi-only and pause controls live with the
-                                // Sync card, not in Behaviour.
-                                SectionCard(
-                                    title = "Health sync cadence",
-                                    subtitle = "How often health data pushes while the app is idle. Changes apply from the next scheduled run.",
-                                ) {
-                                    OptionMenu(
-                                        label = "Sync every",
-                                        shown = BehaviourSettings.intervalChoiceLabel(syncHours),
-                                        options = BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS.map {
-                                            it.toString() to BehaviourSettings.intervalChoiceLabel(it)
-                                        },
-                                        onPick = {
-                                            it.toLongOrNull()?.let { h ->
-                                                BehaviourSettings.setSyncIntervalHours(context, h)
-                                                syncHours = BehaviourSettings.syncIntervalHours(context)
-                                            }
-                                        },
-                                    )
-                                    SwitchRow(
-                                        text = "Wi-Fi only",
-                                        sub = "Sync on unmetered Wi-Fi; mobile data never syncs.",
-                                        checked = wifiOnly,
-                                        onChange = {
-                                            BehaviourSettings.setSyncWifiOnly(context, it)
-                                            wifiOnly = it
-                                        },
-                                    )
-                                    SwitchRow(
-                                        text = "Pause sync",
-                                        sub = "Stops health sync entirely until resumed (task refresh keeps running).",
-                                        checked = paused,
-                                        onChange = {
-                                            BehaviourSettings.setSyncPaused(context, it)
-                                            paused = it
-                                        },
-                                    )
-                                    HintLine(BehaviourSettings.syncCadenceLine(syncHours, wifiOnly, paused))
-                                    if (syncHours !in BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS) {
-                                        HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
-                                    }
-                                }
                             }
                         }
 
+                        // Health sync cadence (#588): the interval, Wi-Fi-only
+                        // and pause controls live with the Sync card, not in
+                        // Behaviour — and outside the readiness gate above,
+                        // so cadence stays configurable before Health
+                        // Connect is installed or granted.
+                        SectionCard(
+                            title = "Health sync cadence",
+                            subtitle = "How often health data pushes while the app is idle. Changes apply from the next scheduled run.",
+                        ) {
+                            OptionMenu(
+                                label = "Sync every",
+                                shown = BehaviourSettings.intervalChoiceLabel(syncHours),
+                                options = BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS.map {
+                                    it.toString() to BehaviourSettings.intervalChoiceLabel(it)
+                                },
+                                onPick = {
+                                    it.toLongOrNull()?.let { h ->
+                                        BehaviourSettings.setSyncIntervalHours(context, h)
+                                        syncHours = BehaviourSettings.syncIntervalHours(context)
+                                    }
+                                },
+                            )
+                            SwitchRow(
+                                text = "Wi-Fi only",
+                                sub = "Sync on unmetered Wi-Fi; mobile data never syncs.",
+                                checked = wifiOnly,
+                                onChange = {
+                                    BehaviourSettings.setSyncWifiOnly(context, it)
+                                    wifiOnly = it
+                                },
+                            )
+                            SwitchRow(
+                                text = "Pause sync",
+                                sub = "Stops health sync entirely until resumed (task refresh keeps running).",
+                                checked = paused,
+                                onChange = {
+                                    BehaviourSettings.setSyncPaused(context, it)
+                                    paused = it
+                                },
+                            )
+                            HintLine(BehaviourSettings.syncCadenceLine(syncHours, wifiOnly, paused))
+                            if (syncHours !in BehaviourSettings.SYNC_INTERVAL_OPTIONS_HOURS) {
+                                HintLine("Kept from an import: this cadence isn't offered above, but it still applies.")
+                            }
+                        }
 
                         if (state.lastSyncAt.isNotEmpty()) {
                             HintLine("Last sync: ${formatSyncTime(state.lastSyncAt)}")

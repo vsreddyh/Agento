@@ -142,9 +142,6 @@ class BehaviourSettingsTest {
     @Test
     fun `custom count pins every knob`() {
         fun all(
-            syncHours: Long = 1L,
-            wifiOnly: Boolean = false,
-            paused: Boolean = false,
             taskMinutes: Long = 30L,
             leadMinutes: Long = 5L,
             voice: String = "",
@@ -152,27 +149,19 @@ class BehaviourSettingsTest {
             pitchPct: Long = 100L,
             remindersOn: Boolean = false,
         ) = BehaviourSettings.customCount(
-            syncHours, wifiOnly, paused, taskMinutes, leadMinutes, voice,
+            taskMinutes, leadMinutes, voice,
             ratePct, pitchPct,
             remindersOn,
         )
         assertEquals(0, all())
-        assertEquals(1, all(syncHours = 2L))
-        assertEquals(1, all(paused = true))
         assertEquals(1, all(leadMinutes = 15L))
         assertEquals(1, all(voice = "en-x"))
         assertEquals(1, all(ratePct = 150L))
         assertEquals(1, all(remindersOn = true))
-        assertEquals(2, all(syncHours = 2L, remindersOn = true))
-        // wifiOnly is moot while paused: one effective change, not two.
-        assertEquals(1, all(wifiOnly = true, paused = true))
-        assertEquals(1, all(wifiOnly = true))
-        // The interval is moot while paused for the same reason.
-        assertEquals(1, all(syncHours = 2L, paused = true))
+        assertEquals(2, all(leadMinutes = 15L, remindersOn = true))
         // Pure overload coerces like the getters: out-of-floor inputs read
         // as their defaults, so both overloads agree on effective state.
         // (Coerced-to-floor need not be default: 5min reads as 15, custom.)
-        assertEquals(0, all(syncHours = 0L))
         assertEquals(1, all(taskMinutes = 5L))
         assertEquals(1, all(ratePct = 0L))
     }
@@ -333,9 +322,6 @@ class BehaviourSettingsTest {
     @Test
     fun `update knobs count in the hub`() {
         fun all(
-            syncHours: Long = 1L,
-            wifiOnly: Boolean = false,
-            paused: Boolean = false,
             taskMinutes: Long = 30L,
             leadMinutes: Long = 5L,
             voice: String = "",
@@ -346,7 +332,7 @@ class BehaviourSettingsTest {
             updateStartup: Boolean = true,
             updateNotify: Boolean = false,
         ) = BehaviourSettings.customCount(
-            syncHours, wifiOnly, paused, taskMinutes, leadMinutes, voice,
+            taskMinutes, leadMinutes, voice,
             ratePct, pitchPct,
             remindersOn, updateHours, updateStartup, updateNotify,
         )
