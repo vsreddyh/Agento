@@ -3,8 +3,8 @@
 package com.vishnu.agento
 
 /**
- * Projects board (#519): collapsible status sections, swipe left to edit,
- * swipe right to ask before deleting (confirm dialog, then Undo), long-press
+ * Projects board (#519): collapsible status sections, swipe right to edit,
+ * swipe left to ask before deleting (confirm dialog, then Undo), long-press
  * drag to reorder inside a section. Ordering is persisted server-side
  * (`position`, see [ProjectsApi.reorder]).
  *
@@ -247,9 +247,9 @@ internal fun TasksScreen(wc: WindowClass, onMenu: () -> Unit = {}) {
         loading = false
     }
 
-    // Swipe right = delete (#519), but only after the confirmation dialog:
-    // the swipe settles the row back while it is open, and Cancel leaves
-    // everything untouched. A confirmed delete runs here; Undo recreates
+    // Swipe left = delete (#519, confirmed first), swipe right = edit. Both
+    // gestures settle the row back: the delete dialog decides, and editing
+    // never moves the card. A confirmed delete runs here; Undo recreates
     // the row from the cached fields. It is a new row, so it comes back at
     // the end of its section (id and position are server-assigned). A
     // failure bumps refreshTick so TaskCard's resetToken snaps the row back.
@@ -732,14 +732,14 @@ private fun SectionHeader(
     }
 }
 
-/** What sits behind the card while it swipes: delete on a right swipe,
- * edit on a left swipe. */
+/** What sits behind the card while it swipes: edit on a right swipe,
+ * delete on a left swipe. */
 @Composable
 private fun SwipeBackground(state: SwipeToDismissBoxState) {
     val direction = state.dismissDirection
     val container = when (direction) {
-        SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.errorContainer
-        SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.secondaryContainer
+        SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.secondaryContainer
+        SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.errorContainer
         SwipeToDismissBoxValue.Settled -> Color.Transparent
     }
     Row(
@@ -753,18 +753,18 @@ private fun SwipeBackground(state: SwipeToDismissBoxState) {
     ) {
         if (direction == SwipeToDismissBoxValue.StartToEnd) {
             Icon(
-                Icons.Filled.Delete,
-                contentDescription = "Delete",
-                tint = MaterialTheme.colorScheme.onErrorContainer,
+                Icons.Filled.Edit,
+                contentDescription = "Edit",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
             )
         } else {
             Spacer(modifier = Modifier.width(24.dp))
         }
         if (direction == SwipeToDismissBoxValue.EndToStart) {
             Icon(
-                Icons.Filled.Edit,
-                contentDescription = "Edit",
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                Icons.Filled.Delete,
+                contentDescription = "Delete",
+                tint = MaterialTheme.colorScheme.onErrorContainer,
             )
         } else {
             Spacer(modifier = Modifier.width(24.dp))
@@ -773,7 +773,7 @@ private fun SwipeBackground(state: SwipeToDismissBoxState) {
 }
 
 /** One project card: title + note + timestamp. No menu, no edit button —
- * swipe left edits, swipe right asks to delete, long press drags (#519). The
+ * swipe right edits, swipe left asks to delete, long press drags (#519). The
  * `resetToken` recreates the swipe state after a failed delete so the row
  * snaps back instead of staying dismissed. */
 @Composable
@@ -820,16 +820,16 @@ internal fun TaskCard(
             confirmValueChange = { target ->
                 when (target) {
                     SwipeToDismissBoxValue.StartToEnd -> {
+                        // Edit must leave the row where it was: refusing
+                        // the change settles it back immediately.
+                        onEdit()
+                        false
+                    }
+                    SwipeToDismissBoxValue.EndToStart -> {
                         // Delete is confirmed in a dialog first, so the row
                         // must not stay dismissed: refusing settles it back
                         // and Cancel costs nothing.
                         onDelete()
-                        false
-                    }
-                    // Edit must leave the row where it was: refusing
-                    // the change settles it back immediately.
-                    SwipeToDismissBoxValue.EndToStart -> {
-                        onEdit()
                         false
                     }
                     SwipeToDismissBoxValue.Settled -> true
