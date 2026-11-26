@@ -91,6 +91,12 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
     // (dir, file) awaiting delete confirmation.
     var deleting by remember { mutableStateOf<Pair<String, RemoteEntry>?>(null) }
 
+    // Folders whose listing changed while a fetch was in flight (a delete
+    // or upload landing mid-load): the in-flight list was snapshotted
+    // before the change, so it is refetched once it lands instead of
+    // settling stale.
+    var pendingReload by remember { mutableStateOf(setOf<String>()) }
+
     fun loadDir(p: String, force: Boolean = false) {
         // A cached folder opens without refetching; a refresh passes force
         // (delete, upload, manual refresh).
@@ -98,7 +104,13 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
             openDirs = openDirs + p
             return
         }
-        if (p in loadingDirs) return
+        // A forced refresh that arrives mid-load is queued, not dropped:
+        // dropping it would land the pre-change snapshot as the settled
+        // list (a deleted file reappearing, an upload missing).
+        if (p in loadingDirs) {
+            if (force) pendingReload = pendingReload + p
+            return
+        }
         loadingDirs = loadingDirs + p
         if (p.isEmpty()) error = ""
         scope.launch {
@@ -119,6 +131,10 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 },
             )
             loadingDirs = loadingDirs - p
+            if (p in pendingReload) {
+                pendingReload = pendingReload - p
+                loadDir(p, force = true)
+            }
         }
     }
 

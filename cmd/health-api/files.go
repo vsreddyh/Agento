@@ -172,9 +172,9 @@ func sanitizeHeaderName(name string) string {
 }
 
 // deleteFile handles DELETE /api/files/delete?path=<relative file> (#583):
-// one file only, never a folder — clearing a folder is emptying it first,
-// so a stray tap cannot remove a whole subtree. Confinement runs through
-// the same resolveExport rules as reads and uploads.
+// one file only, never a folder — folders are cleared on the VPS, not
+// here — so a stray tap cannot remove a whole subtree. Confinement runs
+// through the same resolveExport rules as reads and uploads.
 func deleteFile(w http.ResponseWriter, r *http.Request) {
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
