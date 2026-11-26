@@ -3,8 +3,7 @@
 package com.vishnu.agento
 
 /**
- * Settings UI: the hub, every section, and the widget diagnostics (#163,
- * third of four moves).
+ * Settings UI: the hub and every section (#163, third of four moves).
  *
  * Moved verbatim out of MainActivity.kt; the only changes are visibility
  * (`private` to `internal`, same package, so every caller keeps working)
@@ -13,7 +12,6 @@ package com.vishnu.agento
 import android.Manifest
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -28,7 +26,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -46,10 +43,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -329,8 +324,7 @@ internal fun SettingsScreen(
                         }
                     }
                     SettingSection.About -> {
-                        AppUpdateSection()
-                        WidgetDiagnosticsCard()
+                        AppUpdateSection(toasts)
                     }
                     SettingSection.Health -> {
                         HealthStatusCard(state)
@@ -1030,11 +1024,15 @@ internal fun SettingsBackupSection(
  *
  * Issue #366: the manual button now funnels through [UpdateCheck.run], so
  * this section, the startup one-shot and the periodic worker all read and
- * write the same persisted snapshot — the status line below can never
+ * write the same persisted snapshot — the pending release below can never
  * disagree with a completed automatic check.
+ *
+ * About stays HintLine-free (#597): transient successes toast (the
+ * section-wide [ToastHost] is the record for a tap that worked), while
+ * failures — fresh or persisted — surface via [ErrorCard].
  */
 @Composable
-internal fun AppUpdateSection() {
+internal fun AppUpdateSection(toasts: ToastCenter) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Re-read on resume: an automatic check can land while the user is
@@ -1042,17 +1040,17 @@ internal fun AppUpdateSection() {
     var tick by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { tick++ }
 
-    // Keyed like the snapshot below: an in-place update + return changes
-    // what "installed" means, and a stale pair would disagree with the
-    // pending check until process restart.
+    // Keyed like the pending release below: an in-place update + return
+    // changes what "installed" means, and a stale pair would disagree with
+    // the pending check until process restart.
     var checkSeq by remember { mutableIntStateOf(0) }
     val (installedName, installedCode) = remember(context, tick, checkSeq) {
         UpdateManager.currentVersion(context)
     }
     // The persisted outcome of the latest completed check (manual or
     // automatic). `checkSeq` re-derives it after our own manual check
-    // finishes, so the button, status line and download target always
-    // agree without refetching.
+    // finishes, so the pending release and the persisted failure below
+    // always agree without refetching.
     val snapshot = remember(context, tick, checkSeq) { UpdateCheck.snapshot(context) }
     val pending = remember(context, tick, checkSeq) { UpdateCheck.pendingRelease(context) }
     var status by remember { mutableStateOf("") }
@@ -1081,8 +1079,7 @@ internal fun AppUpdateSection() {
         ActivityResultContracts.StartActivityForResult()
     ) {
         if (UpdateManager.canInstallUnknownApps(context)) {
-            failed = false
-            status = "Allowed — tap Download & install again."
+            toasts.toast("Allowed — tap Download & install again.")
         } else {
             failed = true
             status = "Install permission still off. Turn on “Allow from this source”, then retry."
@@ -1107,9 +1104,9 @@ internal fun AppUpdateSection() {
                         UpdateCheck.run(context, notify = false)
                             .onSuccess { rel ->
                                 if (UpdateManager.isNewer(rel.tag, installedName, installedCode)) {
-                                    status = "Update available: ${rel.name}"
+                                    toasts.toast("Update available: ${rel.name}")
                                 } else {
-                                    status = Toasts.UP_TO_DATE
+                                    toasts.toast(Toasts.UP_TO_DATE, ToastKind.Success)
                                 }
                                 checkSeq++
                             }
@@ -1146,7 +1143,7 @@ internal fun AppUpdateSection() {
                         )
                         UpdateManager.download(rel.apkUrl, dest) { p -> progress = p }
                             .onSuccess { apk ->
-                                status = "Downloaded — opening the installer…"
+                                toasts.toast("Downloaded — opening the installer…")
                                 runCatching {
                                     context.startActivity(UpdateManager.installIntent(context, apk))
                                 }.onFailure { e ->
@@ -1186,20 +1183,18 @@ internal fun AppUpdateSection() {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        // Manual-check feedback takes precedence while fresh; the
-        // persisted status line below is the standing record.
-        if (status.isNotEmpty()) {
-            if (failed) ErrorCard(raw = status) else HintLine(status)
+        // Failures surface via ErrorCard, fresh or persisted: `status`
+        // carries the manual result (cleared on resume), while
+        // `snapshot.error` carries the last failed check until a later
+        // success clears it — a failed background poll still shows after
+        // reopening Settings. Success needs no line: the pending release
+        // above (or its absence, confirmed by toast) already says what a
+        // fresh check found.
+        if (failed && status.isNotEmpty()) {
+            ErrorCard(raw = status)
+        } else if (snapshot.error.isNotBlank()) {
+            ErrorCard(raw = "Last check failed: ${snapshot.error}")
         }
-        HintLine(UpdateCheck.statusLine(snapshot, System.currentTimeMillis(), pending != null))
-        // No "Automatic checks: " prefix: the cadence line is a complete
-        // sentence in every branch, and prefixing it would stutter.
-        HintLine(
-            BehaviourSettings.updateCadenceLine(
-                BehaviourSettings.updateIntervalHours(context),
-                BehaviourSettings.updateStartup(context),
-            ),
-        )
     }
 }
 
@@ -1323,166 +1318,6 @@ internal fun WidgetSettingsSection(refreshTick: Int = 0) {
             },
         )
     }
-}
-
-/** Task-widget health + one-tap log copy (Settings → About), so a broken
- * widget can be diagnosed without adb: placements, cached counts, last
- * fetch errors, plus recent log lines from our own process. */
-@Composable
-internal fun WidgetDiagnosticsCard() {
-    val context = LocalContext.current
-    // Application context for the diagnostics reads: they run on IO and may
-    // outlive the screen; the chooser stays on the Activity.
-    val appContext = context.applicationContext
-    val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    var summary by remember { mutableStateOf("") }
-    // Read once per entry: prefs only, so it is cheap and safe on Main.
-    var budget by remember { mutableStateOf<TaskReminders.Budget?>(null) }
-    var copying by remember { mutableStateOf(false) }
-    var copied by remember { mutableStateOf(false) }
-    var saving by remember { mutableStateOf(false) }
-    var saved by remember { mutableStateOf("") }
-    var clearing by remember { mutableStateOf(false) }
-    var cleared by remember { mutableStateOf("") }
-    // Prefs/AppWidgetManager reads stay off Main (same as the log dump).
-    LaunchedEffect(Unit) {
-        summary = withContext(Dispatchers.IO) { TaskWidget.diagnostics(appContext) }
-        budget = TaskReminders.budget(context)
-    }
-    SectionCard(
-        title = "Widget diagnostics",
-        subtitle = "Task-widget state, the reminder budget, and recent log. If the home-screen widget errors, save the report and upload it — it includes system log, where a host-side widget failure shows up.",
-    ) {
-        // The one thing in here that changes what the user should do: an
-        // exhausted budget means some tasks have no alert armed at all, and
-        // nothing else in the app would tell them (#165).
-        budget?.let { b ->
-            if (b.dropped > 0) {
-                Text(
-                    "Reminder budget exceeded — ${b.dropped} reminder(s) are not " +
-                        "armed, so those tasks will not alert. ${b.armed} of " +
-                        "${b.cap} slots used by ${b.tasks} timed task(s).",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-        if (summary.isNotEmpty()) {
-            SelectionContainer {
-                Text(summary, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        Button(
-            onClick = {
-                copying = true
-                copied = false
-                scope.launch {
-                    try {
-                        val fresh = withContext(Dispatchers.IO) { TaskWidget.diagnostics(appContext) }
-                        summary = fresh
-                        // Re-read with it: the banner above is derived from
-                        // the same prefs, and a copy is a refresh.
-                        budget = TaskReminders.budget(context)
-                        // Same content as the file export (minus the long
-                        // log tail): copying must not silently miss the
-                        // host-side lines the subtitle promises.
-                        val mine = withContext(Dispatchers.IO) {
-                            TaskWidget.dumpLog(interestingLines = 60, tailLines = 15)
-                        }
-                        val sys = withContext(Dispatchers.IO) {
-                            TaskWidget.dumpLog(
-                                allProcesses = true,
-                                interestingLines = 120, tailLines = 0)
-                        }
-                        clipboard.setText(
-                            AnnotatedString(
-                                ("$fresh\n--- log (this app) ---\n$mine\n" +
-                                    "--- log (system, recent) ---\n$sys").take(6000)
-                            )
-                        )
-                        copied = true
-                    } catch (e: Exception) {
-                        summary = "diagnostics failed: ${e.message ?: e.javaClass.simpleName}"
-                    } finally {
-                        copying = false
-                    }
-                }
-            },
-            enabled = !copying && !saving && !clearing,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (copying) "Copying…" else "Copy diagnostics")
-        }
-        OutlinedButton(
-            onClick = {
-                saving = true
-                saved = ""
-                scope.launch {
-                    runCatching {
-                        val report = withContext(Dispatchers.IO) { TaskWidget.buildReport(appContext) }
-                        val file = withContext(Dispatchers.IO) {
-                            saveDiagnosticsFile(appContext, report)
-                        }
-                        val uri = androidx.core.content.FileProvider.getUriForFile(
-                            context, "${context.packageName}.fileprovider", file)
-                        // Grant via ClipData on both intents: the flag on the
-                        // inner intent alone isn't reliably forwarded.
-                        val share = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            clipData = android.content.ClipData.newUri(
-                                context.contentResolver, "diagnostics", uri)
-                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
-                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        val chooser = android.content.Intent.createChooser(share, "Share diagnostics").apply {
-                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(chooser)
-                        saved = "Saved ${file.name} — share it to upload."
-                    }.onFailure { e ->
-                        saved = "Save failed: ${e.message ?: e.javaClass.simpleName}"
-                    }
-                    saving = false
-                }
-            },
-            enabled = !copying && !saving && !clearing,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (saving) "Saving…" else "Save report to file")
-        }
-        OutlinedButton(
-            onClick = {
-                clearing = true
-                scope.launch {
-                    cleared = withContext(Dispatchers.IO) { TaskWidget.clearSystemLog() }
-                    clearing = false
-                }
-            },
-            enabled = !copying && !saving && !clearing,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (clearing) "Clearing…" else "Clear system log")
-        }
-        if (copied) HintLine("Copied.")
-        if (saved.isNotEmpty()) HintLine(saved)
-        if (cleared.isNotEmpty()) HintLine(cleared)
-    }
-}
-
-/** Writes a diagnostics report under cache/diagnostics for upload.
- * Millis-precision names avoid same-second collisions; only the newest
- * 5 are kept so retries never grow the cache unbounded. */
-internal fun saveDiagnosticsFile(context: Context, text: String): java.io.File {
-    val dir = java.io.File(context.cacheDir, "diagnostics").apply { mkdirs() }
-    val stamp = java.time.LocalDateTime.now(IST)
-        .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"))
-    val file = java.io.File(dir, "agento-diagnostics-$stamp.txt").apply { writeText(text) }
-    dir.listFiles()
-        ?.sortedByDescending { it.lastModified() }
-        ?.drop(5)
-        ?.forEach { runCatching { it.delete() } }
-    return file
 }
 
 /** Settings Health card headline (#435 review): update-required outranks

@@ -192,7 +192,7 @@ fun friendlyError(raw: String): FriendlyError {
         )
         has("http 404", "not found") -> FriendlyError(
             "Server didn't recognise that request",
-            "The app may be outdated — check Settings → App updates, then retry.",
+            "The app may be outdated — check Settings → About → Version, then retry.",
         )
         has("http 429", "rate limit", "too many requests") -> FriendlyError(
             "Server is busy",
@@ -245,7 +245,7 @@ fun friendlyError(raw: String): FriendlyError {
         )
         has("unexpected response shape") -> FriendlyError(
             "The server sent a response this app doesn't understand",
-            "Check Settings → App updates for a newer app, then retry. " +
+            "Check Settings → About → Version for a newer app, then retry. " +
                 "Details below carry the raw error.",
         )
         has("could not be parsed") -> {
@@ -256,7 +256,7 @@ fun friendlyError(raw: String): FriendlyError {
             FriendlyError(
                 r.substringBefore(" — "),
                 "The server sent rows this app doesn't understand. " +
-                    "Check Settings → App updates for a newer app, then retry.",
+                    "Check Settings → About → Version for a newer app, then retry.",
             )
         }
         else -> FriendlyError(

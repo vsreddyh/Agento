@@ -422,9 +422,10 @@ internal fun goneTaskIds(
  * tasks are cancelled via the persisted key set. Exact alarms are used when
  * the OS grants them, inexact otherwise.
  *
- * What the cap had to leave out is recorded in [Budget] and reported by
- * the diagnostics card — over the cap is a condition the user can see,
- * not one they infer from a reminder that never came (#165).
+ * What the cap had to leave out is recorded in [Budget] for the
+ * diagnostics log (#165): with no in-app surface since #597, an over-cap
+ * task's missing alarm is silent on the device — this record is what an
+ * adb reader has to go on, not a notice the user ever sees.
  */
 object TaskReminders {
 
@@ -874,7 +875,7 @@ object TaskReminders {
     ) {
         val dropped: Int get() = droppedOneShots + droppedNags
 
-        /** One line, for the diagnostics card and the exported report. */
+        /** One line, for the diagnostics log via `diagnostics()`/`buildReport`. */
         fun line(): String {
             // Only the non-zero counts: "dropped 0 alert(s) and 3 nag(s)"
             // reads as a bug in the counter rather than as a fact.

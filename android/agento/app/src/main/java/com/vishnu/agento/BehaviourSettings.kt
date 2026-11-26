@@ -288,7 +288,7 @@ object BehaviourSettings {
         }
     }
 
-    /** Cadence line for the App updates card; total like its siblings. */
+    /** Cadence line for the App update checks card; total like its siblings. */
     fun updateCadenceLine(hours: Long, startup: Boolean): String {
         val h = coerceImport(KEY_UPDATE_INTERVAL_HOURS, hours)
         val periodic = when {

@@ -8,6 +8,18 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.12.0]
+- **About drops widget diagnostics and info tags (#597).** Settings →
+  About is just the Version card now — no "Widget diagnostics" card
+  (copy/save/clear report buttons, reminder-budget banner) and no info
+  `HintLine`s (manual-check result, update-check status, update cadence).
+  Check for updates, Download & install, the progress bar and release
+  notes work as before; transient confirmations arrive as toasts, and
+  failures — fresh or persisted from a background check — surface via
+  `ErrorCard`.
+  The diagnostics backend (`TaskWidget.diagnostics`/`buildReport`/
+  `dumpLog`) stays in place.
+
 ## [9.11.0]
 - **Speech section removed from settings (#596).** Settings → Behaviour
   no longer has a Speech card — no voice, rate, or pitch controls.

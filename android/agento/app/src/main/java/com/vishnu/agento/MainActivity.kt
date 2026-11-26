@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
     /**
      * Update-available notification tap (#366). Generation counter like
      * tasksGen so retaps renavigate; lands on Settings → About (where
-     * the App updates section lives).
+     * the Version card lives).
      */
     private val updateGen = mutableIntStateOf(0)
 
@@ -154,7 +154,7 @@ class MainActivity : ComponentActivity() {
                     // section opens that subsection directly.
                     var section by remember { mutableStateOf<SettingSection?>(null) }
                     // Update-available notification tap (#366): land on
-                    // Settings → About, where the App updates section lives.
+                    // Settings → About, where the Version card lives.
                     // After `section` is declared: the effect assigns it.
                     LaunchedEffect(updateGen.intValue) {
                         if (updateGen.intValue > 0) {

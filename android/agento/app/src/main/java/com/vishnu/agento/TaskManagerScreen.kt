@@ -112,7 +112,7 @@ internal fun TaskManagerScreen(
     // Rows that parsed only by resetting a mistyped numeric field to its
     // default (#437): shown, not dropped — but the reset must be visible,
     // so its count rides with the page like droppedCount and the key/raw/
-    // became detail rides the log line into Settings → About diagnostics.
+    // became detail rides the log line into the diagnostics log.
     var coercedCount by remember { mutableStateOf(0) }
     // Persisted by enum name (enums have no default Saveable saver);
     // rotation used to reset these while the search query survived.
@@ -2848,17 +2848,14 @@ internal fun taskDropMessage(dropped: Int): String =
 
 /** Shared copy for reset task values (#437): rows that parsed only by
  * resetting a mistyped value to its default. Counts ROWS with resets,
- * not reset values: one row with three bad fields counts once, while the
- * diagnostics detail names each field — the capped note slice reads as a
- * sample of the rows, not the total (#480 review). The count sits in the
- * list; the key, raw value and reset value ride the log line, which
- * surfaces in Settings → About diagnostics (first 500 chars, so the hint
- * promises a sample, not the full text). */
+ * not reset values: one row with three bad fields counts once (#480
+ * review). The count sits in the list; the key, raw value and reset
+ * value ride the diagnostics log line for adb readers. */
 internal fun taskCoercedMessage(coerced: Int): String =
     if (coerced == 1) {
-        "1 task showed reset values — see Settings → About diagnostics for a sample of what changed."
+        "1 task showed reset values."
     } else {
-        "$coerced tasks showed reset values — see Settings → About diagnostics for a sample of what changed."
+        "$coerced tasks showed reset values."
     }
 
 /**

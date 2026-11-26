@@ -780,8 +780,8 @@ class TaskWidget : AppWidgetProvider() {
         @Volatile private var lastErrors: Map<String, String> = emptyMap()
 
         // Last RemoteViewsFactory failure (same process — the service has
-        // no android:process). Surfaced in diagnostics so an on-device
-        // widget crash names itself without adb.
+        // no android:process). Surfaced in the diagnostics log so an
+        // on-device widget crash names itself for an adb reader.
         @Volatile var lastFactoryError: String? = null
             private set
 
@@ -800,8 +800,8 @@ class TaskWidget : AppWidgetProvider() {
             return "seen v$seen, app speaks v$TASK_CONTRACT_VERSION"
         }
 
-        /** One-screen widget health summary for Settings → About, so
-         * widget failures can be diagnosed without adb. Never throws
+        /** Widget health summary for the diagnostics log, so widget
+         * failures leave a record an adb reader can pull. Never throws
          * (a diagnostics call must not become a second crash). */
         fun diagnostics(appCtx: Context): String = runCatching {
             val ctx = appCtx.applicationContext
@@ -832,7 +832,7 @@ class TaskWidget : AppWidgetProvider() {
                 }
                 // Task rows that parsed only by resetting a mistyped number
                 // (#437): the latest notes per fetched state, so each
-                // screen's hint points at its own rows' detail (#480).
+                // fetch's entry points at its own rows' detail (#480).
                 val taskCoerced = TasksApi.lastCoercedNotes
                 if (taskCoerced.isNotEmpty()) {
                     appendLine("taskCoerced=" + taskCoerced.toSortedMap()
@@ -851,16 +851,15 @@ class TaskWidget : AppWidgetProvider() {
                 // Highest task contract this install has spoken, and the one
                 // it speaks (#185). A value nothing reads is not
                 // diagnosability, it is a write — so it lives here, in the
-                // report a user can copy out of Settings → About.
+                // report a diagnostics-log reader can pull via adb.
                 appendLine("taskContract=" + taskContractLine(ctx))
             }.trim()
         }.getOrDefault("(diagnostics unavailable)")
 
-        /** Full diagnostics report for file export: health summary plus
-         * a larger redacted log slice than the clipboard variant. The
-         * file variant captures system-wide logs: a host-side widget
-         * failure is thrown in the LAUNCHER's process, so our own log
-         * never contains the reason (#137). */
+        /** Full diagnostics report for adb pull: health summary plus a
+         * redacted system-wide log slice — a host-side widget failure is
+         * thrown in the LAUNCHER's process, so our own log never
+         * contains the reason (#137). Crash logs are bundled too. */
         fun buildReport(appCtx: Context): String {
             val head = diagnostics(appCtx)
             val mine = dumpLog(interestingLines = 100, tailLines = 30)
@@ -901,13 +900,13 @@ class TaskWidget : AppWidgetProvider() {
             }
         }.getOrDefault("logcat unavailable")
 
-        /** Recent log lines, self-read so no adb is needed. Self-process
-         * only by default (light, privacy-safe). [allProcesses] widens to
+        /** Recent log lines, self-read for the diagnostics log (adb pull).
+         * Self-process only by default (light, privacy-safe). [allProcesses] widens to
          * the whole system buffer at Warn+, which is what a HOST-side
          * widget failure looks like: the launcher throws in its own
          * process, so our pid's log never shows it (issue #137).
-         * Privacy: output is user-initiated and shared, so bearer secrets
-         * are redacted before it leaves the device (see [redactSecrets]). */
+         * Privacy: output leaves the device only via adb pull, so bearer
+         * secrets are redacted beforehand (see [redactSecrets]). */
         fun dumpLog(
             allProcesses: Boolean = false,
             interestingLines: Int = 40,
@@ -1004,8 +1003,8 @@ class TaskWidget : AppWidgetProvider() {
 
         /** This placement's view, defaulting to Open. A stored name
          * nothing knows resets AND logs once (#437): what key held what
-         * raw value and what it became. The line surfaces in Settings →
-         * About diagnostics, so corruption reads as corruption instead of
+         * raw value and what it became. The line surfaces in the
+         * diagnostics log, so corruption reads as corruption instead of
          * a placement changing for no apparent reason. */
         fun viewFor(context: Context, appWidgetId: Int): TaskWidgetView {
             val key = "task_widget_view_$appWidgetId"
@@ -1077,9 +1076,9 @@ class TaskWidget : AppWidgetProvider() {
          * Drops every diagnostics + log-dedupe entry for one placement's
          * display keys (#480 review): deletion is the ultimate fix, and
          * the clean-read clear never fires for a gone id — without this
-         * the About screen would name resets for widgets that no longer
-         * exist. Clearing the seen-set too, so a later placement reusing
-         * the id re-logs a real corruption.
+         * the diagnostics log would keep naming resets for widgets that no
+         * longer exist. Clearing the seen-set too, so a later placement
+         * reusing the id re-logs a real corruption.
          */
         internal fun pruneCoercionsFor(appWidgetId: Int) {
             synchronized(coercionLock) {

@@ -12,8 +12,8 @@ import java.util.Locale
 /**
  * Fatal-crash logs (#290): crash logs only, not every error. Client and
  * server, 5-day TTL everywhere, saved on the device; the user retrieves the
- * files by hand (adb / Device File Explorer) or through the Settings → About
- * diagnostics export, which appends them.
+ * files by hand (adb / Device File Explorer). TaskWidget.buildReport also
+ * bundles them for adb pull.
  *
  * One file per crash under `filesDir/crashlogs/`, written by a
  * `Thread.setDefaultUncaughtExceptionHandler` that chains to the previous
@@ -37,7 +37,7 @@ object CrashLogs {
     /** 5 days: crash files older than this are deleted on prune. */
     const val TTL_MS = 5L * 24 * 60 * 60 * 1000
 
-    /** Cap for the diagnostics-export section below. */
+    /** Cap for the buildReport crash-log section below. */
     const val REPORT_MAX_CHARS = 60_000
 
     /** Install the handler; safe to call on every cold start. */

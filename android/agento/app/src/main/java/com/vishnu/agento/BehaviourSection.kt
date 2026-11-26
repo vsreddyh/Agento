@@ -234,7 +234,7 @@ internal fun BehaviourSection(refreshTick: Int = 0) {
         title = "App update checks",
         subtitle = "Automatic checks for newer Agento releases. Checking " +
             "never downloads anything — install stays a tap in " +
-            "Settings → About → App updates.",
+            "Settings → About → Version.",
     ) {
         SwitchRow(
             text = "Check on startup",

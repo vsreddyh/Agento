@@ -82,7 +82,7 @@ data class ServerTask(
  * silently. A nonzero [coerced] means some rows ARE shown but with a
  * reset value (e.g. `estimated_minutes: "abc"` read as 0) — the list
  * surfaces that count too, and the key, raw value and reset value ride
- * the log line so Settings → About diagnostics names them. */
+ * the log line so the diagnostics log names them. */
 data class TaskList(
     val tasks: List<ServerTask>,
     val truncated: Boolean = false,
@@ -781,7 +781,7 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
     if (dropped > 0) {
         // Diagnostics for the readers with no screen: the widget and
         // reminder paths take `.tasks` and never see the count, but
-        // their log lines surface in Settings → About diagnostics.
+        // their log lines surface in the diagnostics log.
         // runCatching: Log is stubbed (throws) on the JVM unit-test
         // classpath, same guard as every other API client.
         runCatching {
@@ -800,9 +800,9 @@ internal fun parseTaskListPage(body: String, state: String = "", source: String 
                 coercedNotes.take(3).joinToString("; ").take(400))
         }
     }
-    // The diagnostics screen reads this per fetch, so one screen's
-    // hint points at its own rows — and a clean page clears only its own
-    // fetch's entry, never another screen's (#480 review). The full
+    // The diagnostics log reads this per fetch, so each fetch's notes
+    // point at their own rows — and a clean page clears only its own
+    // fetch's entry, never another fetch's (#480 review). The full
     // note list lands here (page-bounded: at most one page of rows, replaced
     // wholesale per fetch), while the log line above and [TaskList.coercedNotes]
     // keep the first-3 sample — so evicting the single entries never deletes
@@ -912,8 +912,7 @@ class TasksApi(context: Context) {
          * single slot lets one fetch clobber or clear another's detail
          * — including same-state
          * fetches at different limits. Read by [TaskWidget.diagnostics]
-         * so each screen's hint points at detail that is actually on that
-         * screen. A clean page clears only its own entry; sibling states
+         * so each fetch's entry points at detail from that fetch. A clean page clears only its own entry; sibling states
          * under one source survive parallel writes, and each surface that
          * switches states (manager, widget factory) prunes its stale
          * siblings explicitly ([clearCoercedNotesExcept]); when a source's
@@ -998,7 +997,7 @@ class TasksApi(context: Context) {
      * of a contract mismatch is "the app is wrong", not "the versions
      * disagree". The stored max says which contracts this install has actually
      * spoken, without a new endpoint to ask — and it is surfaced in
-     * Settings → About diagnostics, because a value nothing reads is not
+     * the diagnostics log, because a value nothing reads is not
      * diagnosability, it is a write. Zeros are not recorded — absent is
      * "unknown", not a version.
      *
