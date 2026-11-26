@@ -205,7 +205,8 @@ func TestUploadRejectsEscapes(t *testing.T) {
 		"/api/files/upload?path=&name=evil%0D%0A.txt",
 		"/api/files/upload?path=&name=evil%7F.txt",
 		// The staging prefix is reserved: such a file would store but
-		// never list, with no delete endpoint to reclaim it.
+		// never list — reclaimable only by exact-path DELETE, not from
+		// the Files tab.
 		"/api/files/upload?path=&name=.upload-note.txt",
 	} {
 		req := uploadRequest(t, url, "file", "evil.txt", []byte("x"))
@@ -352,5 +353,70 @@ func TestDownloadSanitizesStoredName(t *testing.T) {
 		if !strings.Contains(cd, "filename=") {
 			t.Fatalf("no filename in header: %q", cd)
 		}
+	}
+}
+
+func TestDeleteFile(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("EXPORTS_DIR", root)
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	auth := "Bearer test-secret-12345678"
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "gone.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	del := func(method, path string, withAuth bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/api/files/delete?path="+url.QueryEscape(path), nil)
+		if withAuth {
+			req.Header.Set("Authorization", auth)
+		}
+		w := httptest.NewRecorder()
+		deleteFile(w, req)
+		return w
+	}
+
+	// Wrong method first: the file must survive it.
+	if w := del(http.MethodGet, "sub/gone.txt", true); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("method: %d %s", w.Code, w.Body.String())
+	}
+	if w := del(http.MethodDelete, "sub/gone.txt", false); w.Code != http.StatusUnauthorized {
+		t.Fatalf("no-auth: %d %s", w.Code, w.Body.String())
+	}
+	for _, bad := range []string{"", "../x", "sub/../../x", "/absolute"} {
+		if w := del(http.MethodDelete, bad, true); w.Code != http.StatusBadRequest {
+			t.Fatalf("escape %q: %d %s", bad, w.Code, w.Body.String())
+		}
+	}
+	if w := del(http.MethodDelete, "sub", true); w.Code != http.StatusBadRequest {
+		t.Fatalf("dir: %d %s", w.Code, w.Body.String())
+	}
+	if w := del(http.MethodDelete, "missing.txt", true); w.Code != http.StatusNotFound {
+		t.Fatalf("missing: %d %s", w.Code, w.Body.String())
+	}
+
+	if w := del(http.MethodDelete, "sub/gone.txt", true); w.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+	} else if !contains(w.Body.String(), "gone.txt") {
+		t.Fatalf("response names nothing: %s", w.Body.String())
+	}
+	if _, err := os.Lstat(filepath.Join(root, "sub", "gone.txt")); !os.IsNotExist(err) {
+		t.Fatalf("file still on disk")
+	}
+	// The sibling and the now-empty folder survive.
+	if _, err := os.Lstat(filepath.Join(root, "keep.txt")); err != nil {
+		t.Fatalf("sibling gone: %v", err)
+	}
+	if info, err := os.Lstat(filepath.Join(root, "sub")); err != nil || !info.IsDir() {
+		t.Fatalf("folder gone: %v", err)
+	}
+	// Deleting twice is 404, not 500.
+	if w := del(http.MethodDelete, "sub/gone.txt", true); w.Code != http.StatusNotFound {
+		t.Fatalf("repeat: %d %s", w.Code, w.Body.String())
 	}
 }

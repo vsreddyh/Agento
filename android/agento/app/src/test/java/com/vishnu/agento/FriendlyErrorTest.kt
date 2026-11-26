@@ -40,4 +40,31 @@ class FriendlyErrorTest {
             friendlyError("weird opaque failure").title,
         )
     }
+
+    @Test
+    fun `gone paths read as gone, not as an outdated app`() {
+        val gone = friendlyError("HTTP 404: not found")
+        assertEquals("That is no longer on the server", gone.title)
+        assertTrue(gone.nextStep.contains("Refresh"))
+    }
+
+    @Test
+    fun `broken parent chain reads as gone too`() {
+        val gone = friendlyError("HTTP 400: invalid path")
+        assertEquals("That is no longer on the server", gone.title)
+        assertTrue(gone.nextStep.contains("Refresh"))
+    }
+
+    @Test
+    fun `unknown routes still point at app updates`() {
+        val route = friendlyError("HTTP 404: 404 page not found")
+        assertTrue(route.nextStep.contains("App updates"))
+    }
+
+    @Test
+    fun `folder delete refusal keeps its VPS guidance`() {
+        val folder = friendlyError("HTTP 400: not a file: folders are cleared on the VPS, not here")
+        assertEquals("Folders can't be deleted here", folder.title)
+        assertTrue(folder.nextStep.contains("VPS"))
+    }
 }

@@ -273,7 +273,7 @@ The custom Android app (`android/agento/`) uses ONE Server URL + Password — th
 | `POST /api/health/sync` | Health Connect batch upsert |
 | `/api/tasks`, `/api/tasks/batch`, `/api/tasks/mutations`, `/api/tasks/changes` | Task CRUD, batch, audit log and change counter |
 | `/api/projects`, `POST /api/projects/reorder`, `POST /api/projects/move` | Project board CRUD + manual order (full-section rewrite, single-row move). health-api also runs the snooze ticker: every 30s it flips due `Paused` rows (`snoozeAt - 1m`) to `Ongoing` and clears `snoozeAt`, so the transition is server-owned and shared by every client |
-| `/api/files`, `/api/files/upload`, `/api/files/download` | The Files tab shelf over `exports/` |
+| `/api/files`, `/api/files/upload`, `/api/files/download`, `DELETE /api/files/delete?path=<relative file>` | The Files tab shelf over `exports/` (delete removes one file; folders, escapes and missing rows are named refusals) |
 | `/api/reports` | ∃-Mail inbox (markdown + LaTeX) |
 | `/api/money/balances`, `/api/money/transactions` | Money read surface for the app (derived per-account `balance_paise` + total; paged `amount_paise` rows, `order=asc` oldest-first default, `desc` newest-first). `start`/`end` (YYYY-MM-DD) are required; `limit` defaults 100, clamped to 500 (an explicit `limit=0` is rejected — unlike MCP); optional `account` (name or id hex, matches either side of a transfer); `total` counts the window (not the balances total, which has no date cap); page with `offset` (default 0) = `next_offset` until `truncated` is false (`next_offset` is null when done — never send `offset=null`) |
 | `/health`, `/health/` | Liveness probe (unauthenticated) |

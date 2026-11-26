@@ -170,18 +170,52 @@ class StorageApi(context: Context) {
             }
         }
 
-    /** Enqueues a download into public Downloads; returns the system download id. */
+    /** Deletes one file (`dir` + `name`, both server-confined); the server
+     * refuses folders, escapes and missing rows with named errors. Returns
+     * the deleted name on success. */
+    suspend fun delete(dir: String, name: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            val base = base()
+            if (base.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException(ServerEndpoint.UNCONFIGURED))
+            }
+            val url = "$base/api/files/delete?path=" +
+                java.net.URLEncoder.encode(
+                    (if (dir.isEmpty()) "" else "$dir/") + name, "UTF-8")
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer ${password()}")
+                .delete()
+                .build()
+            runCatching {
+                http.newCall(request).execute().use { response ->
+                    val raw = response.body?.string() ?: ""
+                    if (!response.isSuccessful) {
+                        val detail = runCatching {
+                            JSONObject(raw).optString("detail", raw)
+                        }.getOrDefault(raw).ifEmpty { raw }
+                        throw RuntimeException("HTTP ${response.code}: ${detail.take(300)}")
+                    }
+                    JSONObject(raw).optString("name", name)
+                }
+            }
+        }
+
+    /** Enqueues a download into public Downloads, mirroring the exports
+     * path (`sub/report.pdf` lands in `Downloads/sub/`) so same-named
+     * files in different folders never contend; returns the system
+     * download id. */
     fun download(path: String, name: String): Long {
         val base = base()
+        val rel = (if (path.isEmpty()) "" else "$path/") + name
         val url = "$base/api/files/download?path=" +
-            java.net.URLEncoder.encode(
-                (if (path.isEmpty()) "" else "$path/") + name, "UTF-8")
+            java.net.URLEncoder.encode(rel, "UTF-8")
         val req = DownloadManager.Request(url.toUri())
             .addRequestHeader("Authorization", "Bearer ${password()}")
             .setTitle(name)
             .setNotificationVisibility(
                 DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, rel)
         val dm = appCtx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         return dm.enqueue(req)
     }

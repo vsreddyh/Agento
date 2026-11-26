@@ -171,6 +171,46 @@ func sanitizeHeaderName(name string) string {
 	return b.String()
 }
 
+// deleteFile handles DELETE /api/files/delete?path=<relative file> (#583):
+// one file only, never a folder — folders are cleared on the VPS, not
+// here — so a stray tap cannot remove a whole subtree. Confinement runs
+// through the same resolveExport rules as reads and uploads.
+func deleteFile(w http.ResponseWriter, r *http.Request) {
+	if code, detail := authorize(r); code != 0 {
+		writeJSON(w, code, bson.M{"detail": detail})
+		return
+	}
+	if r.Method != http.MethodDelete {
+		w.Header().Set("Allow", http.MethodDelete)
+		writeJSON(w, http.StatusMethodNotAllowed, bson.M{"detail": "DELETE only"})
+		return
+	}
+	rel := strings.TrimSpace(r.URL.Query().Get("path"))
+	if rel == "" {
+		writeJSON(w, http.StatusBadRequest, bson.M{"detail": "invalid path"})
+		return
+	}
+	full, err := resolveExport(rel)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, bson.M{"detail": "invalid path"})
+		return
+	}
+	info, err := os.Lstat(full)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, bson.M{"detail": "not found"})
+		return
+	}
+	if info.IsDir() {
+		writeJSON(w, http.StatusBadRequest, bson.M{"detail": "not a file: folders are cleared on the VPS, not here"})
+		return
+	}
+	if err := os.Remove(full); err != nil {
+		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "cannot delete file"})
+		return
+	}
+	writeJSON(w, http.StatusOK, bson.M{"name": info.Name()})
+}
+
 // registerFiles wires this domain's routes. One function per file so main stays a
 // list of domains, not a list of paths (#171).
 //
@@ -194,6 +234,7 @@ func registerFiles(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files", listFiles)
 	mux.HandleFunc("/api/files/download", downloadFile)
 	mux.HandleFunc("/api/files/upload", uploadFile)
+	mux.HandleFunc("/api/files/delete", deleteFile)
 }
 
 // cleanFileName validates a user-supplied file name: a bare base name, no
@@ -218,8 +259,9 @@ func cleanFileName(name string) (string, error) {
 		}
 	}
 	// The staging prefix is reserved: a file literally named .upload-*
-	// would store fine but never list (listFiles filters the prefix), with
-	// no delete endpoint to reclaim it.
+	// would store fine but never list (listFiles filters the prefix), so
+	// the Files tab still cannot reach it without its exact name — clear
+	// strays on the VPS itself.
 	if strings.HasPrefix(name, uploadTempPrefix) {
 		return "", errBadName
 	}
@@ -232,9 +274,10 @@ func cleanFileName(name string) (string, error) {
 var errBadName = errText("invalid_name: pick a plain file name without folders")
 
 // uploadFile handles POST /api/files/upload?path=<dir> with the file bytes
-// as multipart field "file" and the file name as ?name=. The dir is the
-// Files tab's current folder and must already exist; the write is atomic
-// (temp file + rename) and refused — never replaced — when the name exists.
+// as multipart field "file" and the file name as ?name=. The dir is
+// caller-supplied and must already exist (the app currently always pins it
+// to the exports root); the write is atomic (temp file + rename) and
+// refused — never replaced — when the name exists.
 func uploadFile(w http.ResponseWriter, r *http.Request) {
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})
