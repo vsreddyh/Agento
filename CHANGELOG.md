@@ -14,13 +14,15 @@ see GitHub Releases for older notes.
   button is the feedback; failures revert and log with the failing item
   named. Invalid estimates keep Save disabled with the form's own hint.
   An edit conflict reloads silently and reopens the draft once the fresh
-  rows land — stamped with the fresh revision, so typed input is never
-  lost and re-saves guard against the new server state instead of 409ing
-  again. Bulk Skip/Complete disable when nothing is actionable and
-  stay icon buttons like Move/Duplicate; a stale move leaves the date
-  dialog open. Long-press is the only way into multi-select (the top-bar
-  Select button is gone), and deselecting the last row exits selection
-  instead of leaving an empty bar.
+  rows land — stamped with the fresh revision, so typed input survives
+  the reload and re-saves guard against the new server state (unless
+  you've opened another editor in the meantime, in which case the
+  conflicted draft is dropped with a log line). Bulk Skip/Complete
+  disable when nothing is actionable and stay icon buttons like
+  Move/Duplicate; a stale move leaves the date dialog open. Long-press
+  is the only way into multi-select (the top-bar Select button is
+  gone), and deselecting the last row exits selection instead of
+  leaving an empty bar.
 
 ## [9.12.1]
 - **Connection drops the guidance hint (#598).** Settings →

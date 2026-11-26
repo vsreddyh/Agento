@@ -376,6 +376,9 @@ internal fun TaskManagerScreen(
                     pendingReopen = null
                     if (editing == null) {
                         val fresh = tasks.firstOrNull { it.id == draft.id }
+                        // Missing row (deleted elsewhere): open the draft
+                        // as-is — the save fails as unknown, but the input
+                        // is still on screen to copy out.
                         editing = if (fresh != null) draft.copy(revision = fresh.revision) else draft
                     } else {
                         runCatching {
@@ -603,7 +606,8 @@ internal fun TaskManagerScreen(
         // The server filters by state: on the Done filter an open copy
         // belongs nowhere visible, so skip the placeholder there (success
         // still pokes; the row appears on the next reload only
-        // if the filter would carry it).
+        // if the filter would carry it). Success and failure look the same
+        // here (spin only, #603) — switch filters to verify.
         tasks = if (filter == ServerTaskFilter.Done) prev else listOf(placeholder) + prev
         // Busy only what is shown: on Done the placeholder never renders, so
         // an orphan tempId would sit in the set for the whole request.
@@ -886,8 +890,13 @@ internal fun TaskManagerScreen(
         // Re-checked here, not just on the button: recomposition lags a
         // frame, so two taps in the same frame would both pass a stale
         // enabled=true and send two batches (a duplicate batch copies
-        // twice). The button state is only the visual hint.
-        if (!bulkActionsLive(ids.toSet(), busyIds)) return
+        // twice). The button state is only the visual hint. Dropped taps
+        // are logged like the over-cap guard above: nothing was sent and
+        // no sync runs, so the log is the only record.
+        if (!bulkActionsLive(ids.toSet(), busyIds)) {
+            runCatching { Log.w("TaskManager", "bulk batch dropped: selection busy or empty") }
+            return
+        }
         ids.forEach(::markBusy)
         // Pre-batch rows for the update-purge gate below: read now, not on
         // success — a background refresh in between would compare against
@@ -1492,7 +1501,9 @@ internal fun TaskManagerScreen(
                     val prev = tasks
                     // Open task on the Done filter: nothing visible to patch
                     // (see doDuplicate); the reload on the next resume
-                    // converges.
+                    // converges. Success and failure look the same here
+                    // (spin only, #603) — the row cannot render under this
+                    // filter, so switch filters to verify.
                     tasks = if (filter == ServerTaskFilter.Done) {
                         prev
                     } else {
