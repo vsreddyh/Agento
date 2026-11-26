@@ -60,9 +60,11 @@ internal val LIST_TAP_IDS = listOf(
 
 /**
  * Compact-layout chrome (#532). The compact placement shows the next task
- * as two plain text lines rather than collection rows, so those lines join
+ * as two plain text lines rather than collection rows. Those lines join
  * the background in opening the Task Manager — a dead label reads as a
- * broken widget.
+ * broken widget — but when a next task is showing they carry its own open
+ * intent, so the tap lands on its detail sheet like a notification tap
+ * (#586); render() overrides the shared openPending below with it.
  */
 internal val SMALL_TAP_IDS = listOf(
     R.id.task_widget_body,
@@ -1506,6 +1508,22 @@ class TaskWidget : AppWidgetProvider() {
                             R.id.task_widget_next_due,
                             if (line.isEmpty()) View.GONE else View.VISIBLE,
                         )
+                        // The tap opens the task itself, not just the list
+                        // (#586): same open intent buildRowWithIntents puts
+                        // on full-size rows, overriding the shared
+                        // openPending the tap contract installed above.
+                        // Per-task data URI, so this never shares a
+                        // PendingIntent with another task's row.
+                        val openNext = PendingIntent.getActivity(
+                            context, ROW_OPEN_CODE,
+                            Intent(context, MainActivity::class.java)
+                                .setAction(ACTION_TASKS)
+                                .putExtra(EXTRA_TASK_ID, next.id)
+                                .setData("agento://task/${next.id}".toUri()),
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                        )
+                        setOnClickPendingIntent(R.id.task_widget_next, openNext)
+                        setOnClickPendingIntent(R.id.task_widget_next_due, openNext)
                     } else {
                         setViewVisibility(R.id.task_widget_next, View.GONE)
                         setViewVisibility(R.id.task_widget_next_due, View.GONE)
