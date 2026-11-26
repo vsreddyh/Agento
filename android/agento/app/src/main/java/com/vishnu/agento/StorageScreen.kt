@@ -174,7 +174,10 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
             loadingDirs = loadingDirs - p
             if (p in pendingReload) {
                 pendingReload = pendingReload - p
-                loadDir(p, force = true)
+                // Only if still open (the root always is): a collapse
+                // mid-flight must not be undone by the queued refetch,
+                // which would repopulate the cache Refresh just evicted.
+                if (p.isEmpty() || p in openDirs) loadDir(p, force = true)
             }
         }
     }
@@ -218,12 +221,11 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                 },
                 onFailure = { e ->
                     val msg = e.message ?: ""
-                    if ("HTTP 404" in msg) {
-                        // Already gone (second client, VPS rm): the row is
-                        // dropped by the refresh; the toast names the loss
-                        // instead of blaming the app version.
-                        loadDir(dir, force = true)
-                    }
+                    // Already gone (second client, VPS rm, or a VPS-deleted
+                    // parent, which answers 400, not 404): the rows are
+                    // dropped by the refresh; the toast names the loss
+                    // instead of blaming the app version.
+                    if (isGone(msg)) loadDir(dir, force = true)
                     val fe = friendlyError(msg)
                     toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
                 },
