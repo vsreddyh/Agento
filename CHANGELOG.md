@@ -8,6 +8,15 @@ or the release job fails.
 Entries before 3.12.1 are partial (the changelog was introduced in 3.12.1);
 see GitHub Releases for older notes.
 
+## [9.13.0]
+- **Task Manager drops all toasts and the Select button (#603).** Every
+  action and result toast is gone — the list updating in place plus the
+  spinning sync button is the feedback; failures revert and log. Long-press
+  is the only way into multi-select (the top-bar Select button is gone).
+  In multi-select, Skip and Complete are icon buttons like Move and
+  Duplicate, and deselecting the last row exits selection instead of
+  leaving an empty bar.
+
 ## [9.12.1]
 - **Connection drops the guidance hint (#598).** Settings →
   Connection no longer shows "Save the server above first, then test the

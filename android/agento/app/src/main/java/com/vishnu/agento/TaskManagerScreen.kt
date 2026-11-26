@@ -38,6 +38,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -92,9 +93,6 @@ internal fun TaskManagerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    // Non-suspending queued toasts (#288): toast() enqueues and returns,
-    // so plain callbacks call it directly with no scope.launch dance.
-    val toasts = remember(scope) { ToastCenter(scope) }
 
     // One client for the screen (its OkHttpClient is shared process-wide).
     val api = remember(context) { TasksApi(context) }
@@ -126,13 +124,13 @@ internal fun TaskManagerScreen(
     var sortName by rememberSaveable { mutableStateOf(ServerTaskSort.Start.name) }
     val sort = sortForName(sortName)
     // A corrupt or version-skewed saved value resets to the default above
-    // (#437) — and that reset toasts once per distinct raw value per
+    // (#437) — and that reset logs once per distinct raw value per
     // vintage, naming what was stored and what it became, instead of the
     // view changing for no apparent reason. A clean read re-arms the
-    // dedupe, so a fix-then-rebreak notifies again like the widget path
+    // dedupe, so a fix-then-rebreak logs again like the widget path
     // (#480 review). Saveable like the names themselves: a plain
     // remember would reset on rotation while the corrupt name survives,
-    // re-toasting the same value (#437 review). Lists, not sets — a Set
+    // re-logging the same value (#437 review). Lists, not sets — a Set
     // is not Bundle-saveable (see BulkSelectionSaver below).
     var filterCoercionNoted by rememberSaveable { mutableStateOf(listOf<String>()) }
     var sortCoercionNoted by rememberSaveable { mutableStateOf(listOf<String>()) }
@@ -151,7 +149,6 @@ internal fun TaskManagerScreen(
         } else if (filterName !in filterCoercionNoted) {
             filterCoercionNoted = filterCoercionNoted + filterName
             runCatching { Log.w("TaskManager", "coerced filter $filterMsg") }
-            toasts.toast(filterMsg, ToastKind.Error)
         }
     }
     LaunchedEffect(sortName) {
@@ -163,14 +160,13 @@ internal fun TaskManagerScreen(
         } else if (sortName !in sortCoercionNoted) {
             sortCoercionNoted = sortCoercionNoted + sortName
             runCatching { Log.w("TaskManager", "coerced sort $sortMsg") }
-            toasts.toast(sortMsg, ToastKind.Error)
         }
     }
     var query by rememberSaveable { mutableStateOf("") }
     var sortMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ServerTask?>(null) }
-    // Bulk selection (#345): entered via long-press or the Select action,
-    // with checkboxes on rows and tap-to-toggle while active. Capped at
+    // Bulk selection (#345): entered via long-press only, with checkboxes
+    // on rows and tap-to-toggle while active. Capped at
     // MAX_BULK_SELECT so every bulk run fits in one atomic batch; exiting
     // clears the selection, and there is deliberately no select-all (the
     // list is truncated past the server cap, so "all" would act on rows
@@ -244,20 +240,22 @@ internal fun TaskManagerScreen(
     LaunchedEffect(Unit) {
         ContractWarnings.mismatched.collect { mismatch ->
             if (mismatch == null) return@collect
-            // Refresh FIRST, then toast: the message says the list holds
-            // what was actually stored, and the detail sheet reads from
+            // Refresh FIRST, then drop the report: the message said the list
+            // holds what was actually stored, and the detail sheet reads from
             // the cached list — so the user must not keep looking at the
-            // stale row. toast() does not suspend (unlike the old
-            // showSnackbar, which held this collector for ~10s), so no
-            // generation dance is needed around it.
-            // Backgrounded (#308): the list is swapped under the toast
+            // stale row. The refresh is silent (no toast, #603) and the
+            // mismatch detail rides the log line, so no generation dance is
+            // needed around it.
+            // Backgrounded (#308): the list is swapped under the user
             // rather than blanked to a spinner.
             silentRefresh = true
             refreshTick++
-            toasts.toast(
-                ContractWarnings.message(mismatch.fields, mismatch.taskName),
-                ToastKind.Error,
-            )
+            runCatching {
+                Log.w(
+                    "TaskManager",
+                    "contract mismatch: ${ContractWarnings.message(mismatch.fields, mismatch.taskName)}",
+                )
+            }
             // Clear by GENERATION, not by the field list: another report
             // can land while this one is up, and matching on the list
             // would wipe that one whenever the fields happen to be the
@@ -370,15 +368,11 @@ internal fun TaskManagerScreen(
             onFailure = { e ->
                 if (background) {
                     // A silent refresh that fails keeps the rows on screen
-                    // (#308) and says so out loud: replacing a list the user
-                    // is reading with an error card because a refetch missed
-                    // would be the worse surprise, and the toast is the "what
-                    // you are looking at may be older" signal the spinner
-                    // used to give.
-                    toasts.toast(
-                        serverDetail(e.message ?: e.javaClass.simpleName),
-                        ToastKind.Error,
-                    )
+                    // (#308): replacing a list the user is reading with an
+                    // error card because a refetch missed would be the worse
+                    // surprise. The sync button stopping is the only signal —
+                    // no toast (#603).
+                    runCatching { Log.w("TaskManager", "background refresh failed", e) }
                 } else {
                     error = serverDetail(e.message ?: e.javaClass.simpleName)
                     // Kept with the rows, like the background path: a failed
@@ -496,8 +490,11 @@ internal fun TaskManagerScreen(
         }
     }
 
+    // Mutation failures revert in place and log (#603): with no toasts,
+    // the list updating (or pointedly not updating) plus the sync button
+    // stopping is the feedback; the log line keeps the reason.
     fun fail(e: Throwable) {
-        toasts.toast(serverDetail(e.message ?: e.javaClass.simpleName), ToastKind.Error)
+        runCatching { Log.w("TaskManager", serverDetail(e.message ?: e.javaClass.simpleName)) }
     }
 
     // Push fresh counts to the home-screen widget (#101) after mutations,
@@ -576,7 +573,7 @@ internal fun TaskManagerScreen(
         val placeholder = t.copy(id = tempId)
         // The server filters by state: on the Done filter an open copy
         // belongs nowhere visible, so skip the placeholder there (success
-        // still pokes and toasts; the row appears on the next reload only
+        // still pokes; the row appears on the next reload only
         // if the filter would carry it).
         tasks = if (filter == ServerTaskFilter.Done) prev else listOf(placeholder) + prev
         // Busy only what is shown: on Done the placeholder never renders, so
@@ -590,7 +587,7 @@ internal fun TaskManagerScreen(
                         val copy = items.firstOrNull()?.task
                         if (copy == null) {
                             tasks = prev
-                            toasts.toast("Duplicate failed.", ToastKind.Error)
+                            fail(IllegalStateException("Duplicate failed."))
                         } else {
                             editing = null
                             // Only when the placeholder is still there to be replaced:
@@ -599,7 +596,6 @@ internal fun TaskManagerScreen(
                             if (tasks.any { it.id == tempId }) noteRowShown(copy.id)
                             tasks = tasks.map { if (it.id == tempId) copy else it }
                             pokeWidget()
-                            toasts.toast("Duplicated \u201c${copy.name}\u201d.", ToastKind.Success)
                         }
                     },
                     onFailure = { e ->
@@ -617,8 +613,8 @@ internal fun TaskManagerScreen(
     /**
      * Marks [t] resolved via [verb] ("complete" or "skip", #345): same leave
      * animation, same silent-refetch-on-rollover, same custom-repeat recreate
-     * draft — only the verb and the toast wording differ, so the two stay in
-     * step by sharing this body instead of being two near-copies.
+     * draft — only the verb differs, so the two stay in step by sharing
+     * this body instead of being two near-copies.
      */
     fun doResolve(t: ServerTask, verb: String) {
         // Already on its way out, or still in flight (#308): the exit
@@ -664,7 +660,6 @@ internal fun TaskManagerScreen(
             tasks = prev.map { if (it.id == t.id) it.copy(completedAt = "__pending__") else it }
         }
         markBusy(t.id)
-        val doneWord = if (verb == "skip") "Task skipped" else "Task completed"
         scope.launch {
             try {
                 val finish = if (verb == "skip") api.skip(t.id) else api.complete(t.id)
@@ -693,10 +688,6 @@ internal fun TaskManagerScreen(
                             // the loader never pokes, and the new occurrence's
                             // reminders are not armed until it does.
                             pokeWidget()
-                            // "Tomorrow" / "2 Oct" rather than a raw ISO date.
-                            val when2 = friendlyDue(
-                                next, "", java.time.LocalDate.now(IST)).ifEmpty { next }
-                            toasts.toast("$doneWord — next one set for $when2.")
                         } else if (filter == ServerTaskFilter.Open) {
                             pokeWidget()
                             // A custom condition is nobody's to compute but
@@ -725,23 +716,10 @@ internal fun TaskManagerScreen(
                                     repeatRule = t.repeatRule,
                                     parallelable = t.parallelable,
                                 )
-                                // Legacy tasks (created before due_time was
-                                // required) have no time to keep — don't claim
-                                // there is one.
-                                toasts.toast(
-                                    if (t.dueTime.isBlank()) {
-                                        "$doneWord — pick a new date and time to recreate it."
-                                    } else {
-                                        "$doneWord — pick a new date to recreate it (time kept)."
-                                    },
-                                )
-                            } else {
-                                toasts.toast("$doneWord.", ToastKind.Success)
                             }
                         } else {
                             tasks = tasks.map { if (it.id == t.id) done else it }
                             pokeWidget()
-                            toasts.toast("$doneWord.", ToastKind.Success)
                         }
                     },
                     onFailure = { e ->
@@ -826,7 +804,6 @@ internal fun TaskManagerScreen(
                         TaskReminders.cancelPosted(context, t.id)
                         ReminderTts.dropTask(context, t.id)
                         pokeWidget()
-                        toasts.toast("Task deleted.", ToastKind.Success)
                     },
                     onFailure = { e ->
                         tasks = prev
@@ -841,15 +818,14 @@ internal fun TaskManagerScreen(
 
     /**
      * Toggles [id] in the bulk selection (#345): the cap refuses a new id
-     * with a toast instead of silently ignoring the tap.
+     * silently — the bar count not moving is the signal. Deselecting the
+     * last row exits selection instead of leaving an empty bar (#603).
      */
     fun toggleBulk(id: String) {
-        val next = toggleBulkId(bulkSelected, id)
-        if (next == null) {
-            toasts.toast("You can select up to $MAX_BULK_SELECT tasks.", ToastKind.Error)
-        } else {
-            bulkSelected = next
-        }
+        val before = bulkSelected
+        val next = toggleBulkId(before, id) ?: return
+        bulkSelected = next
+        if (next.isEmpty() && before.isNotEmpty()) bulkMode = false
     }
 
     fun exitBulk() {
@@ -859,20 +835,20 @@ internal fun TaskManagerScreen(
 
     /**
      * Runs one atomic bulk batch (#345): one background refresh in, one
-     * toast out, one widget/alarm poke. Success clears the selection and
-     * leaves bulk mode; failure keeps the selection for retry after the
-     * reload and names the failing item.
+     * widget/alarm poke. Success clears the selection and leaves bulk
+     * mode; failure keeps the selection for retry after the reload lands.
+     * No toasts either way (#603): the swapped-in list is the record.
      */
-    fun runBulkOps(ops: List<BulkOp>, success: String) {
+    fun runBulkOps(ops: List<BulkOp>) {
         // Ops carry normalized ids (BulkOp trims at construction), so the
         // busy set keys exactly what the wire sends and the error names.
         val ids = ops.map { it.id }
         // Cap guard, like the 50-cap on selection: unreachable via the UI
         // (toggleBulkId refuses over-cap adds), but a future direct caller
-        // building BulkOp lists by hand must fail here, not with a server
-        // 422 mid-flow.
+        // building BulkOp lists by hand must stop here, not with a server
+        // 422 mid-flow. Silent, like the selection cap: the bar not moving
+        // is the signal.
         if (ops.size > MAX_BULK_SELECT) {
-            toasts.toast("You can send up to $MAX_BULK_SELECT tasks in one batch.", ToastKind.Error)
             return
         }
         // Re-checked here, not just on the button: recomposition lags a
@@ -916,24 +892,18 @@ internal fun TaskManagerScreen(
                         refreshTick++
                         pokeWidget()
                         exitBulk()
-                        toasts.toast(success, ToastKind.Success)
                     },
                     onFailure = { e ->
                         // The selection is kept: the batch changed nothing, so
                         // the same set is still the right one to retry once the
-                        // reload underneath lands. The failure names the task,
-                        // falling back to the stable id and only then to the
-                        // position: the sent order is the set order, which the
-                        // user never sees.
+                        // reload underneath lands. The failure is logged, not
+                        // toasted (#603): the unchanged list plus the idle
+                        // sync button is the whole signal.
                         silentRefresh = true
                         refreshTick++
-                        val named = e.message?.let(::parseBatchError)
-                        val target = named?.id?.takeIf { it.isNotEmpty() }?.let { id ->
-                            tasks.firstOrNull { it.id == id }?.name?.ifEmpty { null } ?: id
-                        } ?: named?.let { if (it.index >= 0) "item ${it.index + 1}" else null }
-                        val detail = (named?.detail ?: serverDetail(e.message ?: e.javaClass.simpleName)) +
-                            (target?.let { " — $it" } ?: "")
-                        toasts.toast(detail, ToastKind.Error)
+                        runCatching {
+                            Log.w("TaskManager", "bulk ${ops.firstOrNull()?.op} failed", e)
+                        }
                     },
                 )
             } finally {
@@ -950,36 +920,19 @@ internal fun TaskManagerScreen(
     fun doBulkResolve(verb: String) {
         val ids = bulkSelected.toList()
         if (ids.isEmpty()) return
-        val doneWord = if (verb == "skip") "Skipped" else "Completed"
         val byId = tasks.associateBy { it.id }
         // Act on what's actionable: only open rows in the fetched page can
         // resolve. Rows that left the page (filter switch) or are already
-        // resolved are set aside with a count instead of failing the whole
-        // atomic batch on one stale row — or going out unguarded. Nothing
-        // here needs a refresh: the list is already current for this filter.
+        // resolved are set aside instead of failing the whole atomic batch
+        // on one stale row — or going out unguarded. Nothing here needs a
+        // refresh: the list is already current for this filter. An
+        // all-set-aside tap is a silent no-op: the unchanged selection is
+        // the whole signal.
         val actionable = ids.filter { byId[it]?.isOpen() == true }
-        val skipped = ids.size - actionable.size
         if (actionable.isEmpty()) {
-            toasts.toast(
-                "Nothing to $verb — selected tasks are already resolved or not in view.",
-                ToastKind.Error,
-            )
             return
         }
-        // A custom repeat has no next occurrence until somebody picks a
-        // date: the single-task flow opens a recreate draft, which cannot
-        // scale to N tasks, so the bulk toast says where to recreate them
-        // instead — for skips exactly like completes, since skipping a
-        // custom occurrence also ends it without a successor. Counted over
-        // the actionable set only: set-aside rows were not touched, so they
-        // need no recreation guidance.
-        val customs = actionable.count { byId[it]?.repeatCustom == true }
-        runBulkOps(
-            actionable.map { BulkOp(verb, it) },
-            "$doneWord ${actionable.size} task${if (actionable.size == 1) "" else "s"}." +
-                (if (skipped > 0) " ($skipped skipped.)" else "") +
-                (if (customs > 0) " Recreate custom repeats from Done." else ""),
-        )
+        runBulkOps(actionable.map { BulkOp(verb, it) })
     }
 
     /** One atomic bulk move (#345): one date for the whole selection.
@@ -990,13 +943,13 @@ internal fun TaskManagerScreen(
         if (dueDate.isBlank()) return
         val ids = bulkSelected.toList()
         if (ids.isEmpty()) return
-        val whenText = friendlyDue(dueDate, "", java.time.LocalDate.now(IST)).ifEmpty { dueDate }
         // Guarded like the single-task edit: each op carries the revision
         // the list showed, so a task changed elsewhere fails the whole batch
         // instead of overwriting. Complete/skip stay unguarded by design —
         // the single verbs are last-write-wins too, with no revision to
         // guard on. Only fetched rows move: rows that left the page are set
-        // aside with a count, since there is no revision to guard them with.
+        // aside, since there is no revision to guard them with. An empty
+        // op set is a silent no-op.
         val byId = tasks.associateBy { it.id }
         val ops = ids.mapNotNull { id ->
             byId[id]?.let { t ->
@@ -1006,15 +959,9 @@ internal fun TaskManagerScreen(
             }
         }
         if (ops.isEmpty()) {
-            toasts.toast("Selected tasks aren't in this view.", ToastKind.Error)
             return
         }
-        val skipped = ids.size - ops.size
-        runBulkOps(
-            ops,
-            "Moved ${ops.size} task${if (ops.size == 1) "" else "s"} to $whenText, times kept." +
-                (if (skipped > 0) " ($skipped not in view skipped.)" else ""),
-        )
+        runBulkOps(ops)
     }
 
     /** One atomic bulk duplicate (#345): one canonical server copy each.
@@ -1023,14 +970,9 @@ internal fun TaskManagerScreen(
     fun doBulkDuplicate() {
         val ids = bulkSelected.toList()
         if (ids.isEmpty()) return
-        runBulkOps(
-            ids.map { BulkOp("duplicate", it) },
-            "Duplicated ${ids.size} task${if (ids.size == 1) "" else "s"}.",
-        )
+        runBulkOps(ids.map { BulkOp("duplicate", it) })
     }
 
-    // The toast card floats top-end over the content (Box overlay, not
-    // the bottom-anchored Scaffold slot) so it never shifts the layout.
     // Any fetch or any mutation write in flight spins the top-bar sync
     // button (#578): one affordance for every run, silent or not.
     val syncActive = syncing || busyIds.isNotEmpty()
@@ -1052,10 +994,15 @@ internal fun TaskManagerScreen(
                             // a second tap would send a second batch, and a
                             // duplicate batch copies twice.
                             val bulkLive = bulkActionsLive(bulkSelected, busyIds)
-                            TextButton(
+                            IconButton(
                                 onClick = { doBulkResolve("skip") },
                                 enabled = bulkLive,
-                            ) { Text("Skip") }
+                            ) {
+                                Icon(
+                                    Icons.Filled.SkipNext,
+                                    contentDescription = "Skip selected",
+                                )
+                            }
                             IconButton(
                                 onClick = { bulkMoveOpen = true },
                                 enabled = bulkLive,
@@ -1074,10 +1021,15 @@ internal fun TaskManagerScreen(
                                     contentDescription = "Duplicate selected",
                                 )
                             }
-                            TextButton(
+                            IconButton(
                                 onClick = { doBulkResolve("complete") },
                                 enabled = bulkLive,
-                            ) { Text("Complete") }
+                            ) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = "Complete selected",
+                                )
+                            }
                             // The same sync affordance as the normal bar
                             // (#578): a bulk batch is the longest run on
                             // this screen, so the spin must live here too.
@@ -1098,10 +1050,9 @@ internal fun TaskManagerScreen(
                         }
                     },
                     title = { Text("Task Manager") },
-                    // Never gated: mutations are per-row now, so the Select,
-                    // New and Sync stay live while a request runs.
+                    // Never gated: mutations are per-row now, so New and Sync
+                    // stay live while a request runs.
                     actions = {
-                        TextButton(onClick = { bulkMode = true }) { Text("Select") }
                         IconButton(onClick = { editing = ServerTaskDraft() }) {
                             Icon(Icons.Filled.Add, contentDescription = "New task")
                         }
@@ -1456,7 +1407,6 @@ internal fun TaskManagerScreen(
                 }
             }
         }
-        ToastHost(center = toasts, modifier = Modifier.fillMaxWidth())
     }
 
     val draft = editing
@@ -1471,11 +1421,10 @@ internal fun TaskManagerScreen(
             }),
             onSave = { next ->
                 val mins = next.estimatedMinutes.trim().toIntOrNull()
+                // Invalid estimate refuses silently (#603): the dialog stays
+                // open on the bad value instead of dismissing into an error
+                // toast, so the user fixes it in place.
                 if (mins == null || mins < 0) {
-                    toasts.toast(
-                        "Estimated minutes is required (a number 0 or above).",
-                        ToastKind.Error,
-                    )
                     return@ServerTaskDialog
                 }
                 // Optimistic (#288): the dialog dismisses and the list
@@ -1633,20 +1582,13 @@ internal fun TaskManagerScreen(
                                 onFailure = { e ->
                                     tasks = prev
                                     if (isConflict(e)) {
-                                        // Someone else wrote first: reload and
-                                        // say so, rather than silently holding
-                                        // the reverted row. Backgrounded (#308):
-                                        // the toast is the message, and a spinner
-                                        // over the list would fight it.
+                                        // Someone else wrote first: reload silently
+                                        // and hold the reverted row — a toast would
+                                        // fight the list it is describing (#603).
                                         silentRefresh = true
                                         refreshTick++
-                                        toasts.toast(
-                                            "That task changed elsewhere — reloaded. Reapply your edit.",
-                                            ToastKind.Error,
-                                        )
-                                    } else {
-                                        fail(e)
                                     }
+                                    fail(e)
                                 },
                             )
                         } finally {
@@ -2893,7 +2835,7 @@ internal fun bulkActionsLive(selected: Set<String>, busyIds: Set<String>): Boole
  * Toggles [id] in a bulk selection: trims it first, so the set, the wire,
  * and any error all name the same id; removes it when present, adds it when
  * there is room, and returns null when the cap refuses a new id (the caller
- * toasts instead of silently ignoring the tap). Blank ids never enter the
+ * leaves the selection alone). Blank ids never enter the
  * set: one would ride out as an unguarded op and 422 the whole atomic batch.
  */
 internal fun toggleBulkId(selected: Set<String>, id: String): Set<String>? {
