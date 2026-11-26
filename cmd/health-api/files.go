@@ -274,9 +274,10 @@ func cleanFileName(name string) (string, error) {
 var errBadName = errText("invalid_name: pick a plain file name without folders")
 
 // uploadFile handles POST /api/files/upload?path=<dir> with the file bytes
-// as multipart field "file" and the file name as ?name=. The dir is the
-// Files tab's current folder and must already exist; the write is atomic
-// (temp file + rename) and refused — never replaced — when the name exists.
+// as multipart field "file" and the file name as ?name=. The dir is
+// caller-supplied and must already exist (the app currently always pins it
+// to the exports root); the write is atomic (temp file + rename) and
+// refused — never replaced — when the name exists.
 func uploadFile(w http.ResponseWriter, r *http.Request) {
 	if code, detail := authorize(r); code != 0 {
 		writeJSON(w, code, bson.M{"detail": detail})

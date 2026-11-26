@@ -127,7 +127,10 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     // already on screen — otherwise a manual refresh on a
                     // flaky network would fail silently under a stale tree.
                     if (p.isEmpty() && "" !in tree) error = msg
-                    else toasts.toast(friendlyError(msg).title, ToastKind.Error)
+                    else {
+                        val fe = friendlyError(msg)
+                        toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
+                    }
                 },
             )
             loadingDirs = loadingDirs - p
@@ -147,10 +150,8 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     loadDir(dir, force = true)
                 },
                 onFailure = { e ->
-                    toasts.toast(
-                        friendlyError(e.message ?: "").title,
-                        ToastKind.Error,
-                    )
+                    val fe = friendlyError(e.message ?: "")
+                    toasts.toast("${fe.title} — ${fe.nextStep}", ToastKind.Error)
                 },
             )
         }
@@ -265,8 +266,11 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                     IconButton(
                         // Refetches the root and every open folder: cached
                         // subfolders would otherwise go stale behind a
-                        // fresh root.
+                        // fresh root. Closed folders drop their listings,
+                        // so the next expansion refetches instead of
+                        // serving a cache the VPS may have changed.
                         onClick = {
+                            tree = tree.filterKeys { it.isEmpty() || it in openDirs }
                             loadDir("", force = true)
                             openDirs.forEach { p ->
                                 if (p.isNotEmpty()) loadDir(p, force = true)
@@ -385,15 +389,16 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                                 StorageApi(context).download(
                                                     row.dir, row.entry.name)
                                             }.onFailure { e ->
+                                                val fe = friendlyError(e.message ?: "")
                                                 toasts.toast(
-                                                    friendlyError(e.message ?: "").title,
+                                                    "${fe.title} — ${fe.nextStep}",
                                                     ToastKind.Error,
                                                 )
                                             }
                                         }) {
                                             Icon(
                                                 Icons.Filled.CloudDownload,
-                                                contentDescription = "Download",
+                                                contentDescription = "Download ${row.entry.name}",
                                             )
                                         }
                                         IconButton(onClick = {
@@ -401,7 +406,7 @@ internal fun StorageScreen(onMenu: () -> Unit = {}) {
                                         }) {
                                             Icon(
                                                 Icons.Filled.Delete,
-                                                contentDescription = "Delete",
+                                                contentDescription = "Delete ${row.entry.name}",
                                             )
                                         }
                                     }

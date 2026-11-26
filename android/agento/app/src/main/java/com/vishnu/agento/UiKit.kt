@@ -175,7 +175,7 @@ fun friendlyError(raw: String): FriendlyError {
         )
         has("folder not found") -> FriendlyError(
             "That folder no longer exists",
-            "Go Up and pick the destination again, then retry.",
+            "Tap Refresh to reload the listing, then retry.",
         )
         has("http 404", "not found") -> FriendlyError(
             "Server didn't recognise that request",
