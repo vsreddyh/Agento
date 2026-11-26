@@ -642,6 +642,8 @@ class TaskWidget : AppWidgetProvider() {
                 remove("task_widget_density_$id")
                 remove("task_widget_sort_$id")
                 remove("task_widget_due_$id")
+                remove("task_widget_due_date_$id")
+                remove("task_widget_due_time_$id")
                 remove("task_widget_repeat_$id")
                 remove("task_widget_parallel_$id")
                 remove("task_widget_sections_$id")

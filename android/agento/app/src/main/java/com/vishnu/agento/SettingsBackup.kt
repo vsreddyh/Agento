@@ -106,8 +106,8 @@ object SettingsBackup {
 
     /**
      * Per-widget display settings, keyed by the widget id the user configured:
-     * `task_widget_{view,density,sort,title,static_rows,due,repeat,parallel,
-     * sections,count,show_title,scroll}_<appWidgetId>`, written by
+     * `task_widget_{view,density,sort,title,static_rows,due,due_date,due_time,
+     * repeat,parallel,sections,count,show_title,scroll}_<appWidgetId>`, written by
      * `TaskWidgetConfigActivity.onSave` and read by the widget rows
      * (#169, #532, #536).
      *
