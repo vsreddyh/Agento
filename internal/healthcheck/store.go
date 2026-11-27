@@ -1189,9 +1189,9 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 }
 
 // CorrectWorkout patches one workout by id: supplied fields replace,
-// omitted keep. Changing type/minutes/kcal recomputes the hash; colliding
-// with a sibling fails instead of merging.
-func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minutes, kcal *float64) (bson.M, error) {
+// omitted keep; clearKcal removes kcal. Changing type/minutes/kcal
+// recomputes the hash; colliding with a sibling fails instead of merging.
+func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minutes, kcal *float64, clearKcal bool) (bson.M, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
 		return nil, fail("'%s' is not a workout id", id)
@@ -1205,6 +1205,7 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 	}
 	day, _ := doc["day"].(string)
 	set := bson.M{}
+	unset := bson.M{}
 	newType, _ := doc["type"].(string)
 	newMin, _ := validate.ToFloat(doc["minutes"])
 	var newKcal *float64
@@ -1234,6 +1235,9 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 		newMin = round1(*minutes)
 		set["minutes"] = newMin
 	}
+	if kcal != nil && clearKcal {
+		return nil, fail("workout kcal is both set and cleared — pick one")
+	}
 	if kcal != nil {
 		if *kcal < 0 {
 			return nil, fail("workout kcal must be >= 0")
@@ -1245,11 +1249,19 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 		newKcal = &rounded
 		set["kcal"] = rounded
 	}
-	if len(set) == 0 {
+	if clearKcal {
+		unset["kcal"] = ""
+		newKcal = nil
+	}
+	if len(set) == 0 && len(unset) == 0 {
 		return nil, fail("correct_workout needs at least one field to change")
 	}
 	set["hash"] = contentHash(day, newType, fmt.Sprint(newMin), kcalHashKey(newKcal))
-	_, err = s.workouts.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": set})
+	update := bson.M{"$set": set}
+	if len(unset) > 0 {
+		update["$unset"] = unset
+	}
+	_, err = s.workouts.UpdateOne(ctx, bson.M{"_id": oid}, update)
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
 			return nil, fail("that workout is already recorded for %s", day)

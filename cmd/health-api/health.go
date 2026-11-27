@@ -10,6 +10,7 @@ import (
 	"errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	stdsync "sync"
@@ -61,15 +62,17 @@ func localDate(iso string) string {
 }
 
 // minutesBetween returns whole-minute duration; ok=false when unparseable
-// or non-positive (an end before/at the start is corrupt data, not a
-// 1-minute workout — skipped like unparseable timestamps).
+// or non-positive. Fractional minutes round to nearest (90s -> 2, 20s ->
+// invalid), matching the manual path's whole-minutes-only rule in both
+// directions: sync never stores a fraction and never invents a 1-minute
+// workout from a sub-minute interval.
 func minutesBetween(startISO, endISO string) (dur int, ok bool) {
 	s, ok1 := parseSyncTime(startISO)
 	e, ok2 := parseSyncTime(endISO)
 	if !ok1 || !ok2 {
 		return 0, false
 	}
-	m := int(e.Sub(s).Minutes())
+	m := int(math.Round(e.Sub(s).Minutes()))
 	if m < 1 {
 		return 0, false
 	}
@@ -167,10 +170,10 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		// while the dedup hash keys on the real start. Sleep uses the
 		// device-reported minutes (awake time excluded), NOT the
 		// start/end interval — workouts instead use the interval
-		// duration. An unparseable end timestamp skips-and-counts
-		// (invalid, not a session on the sync date); an unparseable
-		// start still syncs (minutes only), like a manual log_sleep.
-		// Naive timestamps parse as UTC.
+		// duration. An unparseable end OR start skips-and-counts as
+		// invalid: a corrupt start must not land on the manual key
+		// ("day|manual"), or a retried payload collides with a genuine
+		// manual log of the same minutes. Naive timestamps parse as UTC.
 		if _, ok := parseSyncTime(s.EndISO); !ok {
 			log.Printf("skipping sleep with unparseable end timestamp: %q (minutes=%d)", s.EndISO, s.TotalMinutes)
 			tsInvalidSleeps++
@@ -178,13 +181,14 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		}
 		day := localDate(s.EndISO)
 		start, ok := parseSyncTime(s.StartISO)
-		var startPtr *time.Time
-		if ok {
-			startPtr = &start
+		if !ok {
+			log.Printf("skipping sleep with unparseable start timestamp: %q (minutes=%d)", s.StartISO, s.TotalMinutes)
+			tsInvalidSleeps++
+			continue
 		}
 		rec.Sleeps = append(rec.Sleeps, healthcheck.SleepIn{
 			Day:     day,
-			Start:   startPtr,
+			Start:   &start,
 			Minutes: s.TotalMinutes,
 		})
 	}

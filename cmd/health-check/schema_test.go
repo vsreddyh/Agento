@@ -82,7 +82,7 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"delete_sleep":    {"dry_run"},
 		"log_workout":     {"type", "kcal", "date"},
 		"list_workouts":   {"sort_by", "sort", "type"},
-		"correct_workout": {"type", "minutes", "kcal"},
+		"correct_workout": {"type", "minutes", "kcal", "clear_kcal"},
 		"delete_workout":  {"dry_run"},
 		"daily_summary":   {"date"},
 	}

@@ -8,11 +8,11 @@ prune tool, retention is a no-op for all five collections.
   `qty` free-text, `kcal/protein/carbs/fat/fiber` (optional 1-decimal, >= 0,
   absent means unknown; absurd values fail: kcal>100000, others>10000),
   `note?`, `createdAt`. One row = one thing eaten. No meals, no totals.
-- `hc_weight`: `date` (unique), `kg`, `createdAt` (set once on insert, never rewritten by re-logs). Re-logging overwrites `kg` only.
-- `hc_days`: `date` (unique), `steps` (0–500000), `active_kcal` (0–100000),
+- `hc_weight`: `date` (unique), `kg` (0 < kg <= 500), `createdAt` (set once on insert, never rewritten by re-logs). Re-logging overwrites `kg` only.
+- `hc_days`: `date` (unique), `steps` (0–1000000), `active_kcal` (0–100000),
   `updatedAt` (always Date) — scalars only, written through the single
   `RecordSync` path the MCP and `health-api/sync` share.
-- `hc_sleep`: `day` (indexed), `start?` (Date), `minutes`, `hash` (content
+- `hc_sleep`: `day` (indexed), `start?` (Date), `minutes` (whole, 1-1440), `hash` (content
   dedup, unique), `createdAt`. Sleep hours are always derived from sessions.
 - `hc_workouts`: `day` (indexed), `type` (lowercased on write, empty → `other`,
   max 60 runes), `minutes` (whole), `kcal?` (absent means unknown, never

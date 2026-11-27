@@ -409,7 +409,8 @@ func TestSync422CarriesSkipCounts(t *testing.T) {
 	t.Setenv("PASSWORD", "test-secret-12345678")
 	body := `{"device":"test","syncedAtIso":"2026-11-27T10:00:00Z",` +
 		`"steps":-5,` +
-		`"sleep":[{"startIso":"2026-11-26T22:00:00Z","endIso":"not-a-date","totalMinutes":400}]}`
+		`"sleep":[{"startIso":"2026-11-26T22:00:00Z","endIso":"not-a-date","totalMinutes":400},` +
+		`{"startIso":"bogus","endIso":"2026-11-26T07:00:00Z","totalMinutes":60}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/health/sync", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-secret-12345678")
 	w := httptest.NewRecorder()
@@ -417,7 +418,9 @@ func TestSync422CarriesSkipCounts(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("bad scalars: got %d (%s), want 422", w.Code, w.Body.String())
 	}
-	for _, want := range []string{`"sessions_invalid":1`, `"workouts_invalid":0`} {
+	// Bad end (unparseable) + bad start (unparseable) both count; the
+	// negative steps 422 the batch.
+	for _, want := range []string{`"sessions_invalid":2`, `"workouts_invalid":0`} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("422 must carry skip counts, got %s", w.Body.String())
 		}

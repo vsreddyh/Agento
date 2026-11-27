@@ -261,6 +261,23 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if err != nil || len(wodays) != 0 {
 		t.Fatalf("unmatched type must be empty, got %v %v", wodays, err)
 	}
+	// A day whose workouts carry no kcal reports null, not 0.
+	nokDay := "2026-09-15"
+	cleanDay(t, s, ctx, nokDay)
+	if _, err := s.LogWorkout(ctx, nokDay, "yoga", 20, nil); err != nil {
+		t.Fatal(err)
+	}
+	nokSum, err := s.DailySummary(ctx, nokDay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nokSum["workout_kcal"] != nil {
+		t.Fatalf("workout_kcal without kcal: %v", nokSum)
+	}
+	if wos, _ := nokSum["workouts"].([]bson.M); len(wos) != 1 {
+		t.Fatalf("workouts: %v", nokSum)
+	}
+	cleanDay(t, s, ctx, nokDay)
 	allDays, _, _ := s.ListWorkouts(ctx, day, day, "", "", "")
 	first := allDays[0]["workouts"].([]bson.M)[0]
 	if _, ok := first["kcal"]; !ok {
@@ -278,25 +295,35 @@ func TestSleepWorkoutDedup(t *testing.T) {
 		t.Fatal(err)
 	}
 	woid, _ := first["id"].(string)
-	if _, err := s.CorrectWorkout(ctx, woid, nil, nil, nil); err == nil {
+	if _, err := s.CorrectWorkout(ctx, woid, nil, nil, nil, false); err == nil {
 		t.Fatal("expected empty-patch error")
 	}
 	empty := ""
-	if _, err := s.CorrectWorkout(ctx, woid, &empty, nil, nil); err == nil {
+	if _, err := s.CorrectWorkout(ctx, woid, &empty, nil, nil, false); err == nil {
 		t.Fatal("expected empty-type error")
 	}
 	huge := 2000.0
-	if _, err := s.CorrectWorkout(ctx, woid, nil, &huge, nil); err == nil {
+	if _, err := s.CorrectWorkout(ctx, woid, nil, &huge, nil, false); err == nil {
 		t.Fatal("expected over-24h error")
 	}
-	if _, err := s.CorrectWorkout(ctx, woid, strptr("lift"), nil, nil); err != nil {
+	if _, err := s.CorrectWorkout(ctx, woid, strptr("lift"), nil, nil, false); err != nil {
 		t.Fatalf("correct: %v", err)
 	}
-	corrW, err := s.CorrectWorkout(ctx, woid, nil, nil, fptr(310))
+	corrW, err := s.CorrectWorkout(ctx, woid, nil, nil, fptr(310), false)
 	if err != nil || corrW["createdAt"] == nil || corrW["day"] != day {
 		t.Fatalf("correct should return the full workout: %v %v", corrW, err)
 	}
-	if _, err := s.CorrectWorkout(ctx, "nonexistent", nil, nil, nil); err == nil {
+	clearedW, err := s.CorrectWorkout(ctx, woid, nil, nil, nil, true)
+	if err != nil {
+		t.Fatalf("clear kcal %v", err)
+	}
+	if _, ok := clearedW["kcal"]; ok {
+		t.Fatalf("kcal not cleared: %v", clearedW)
+	}
+	if _, err := s.CorrectWorkout(ctx, woid, nil, nil, fptr(1), true); err == nil {
+		t.Fatal("expected set+clear overlap error")
+	}
+	if _, err := s.CorrectWorkout(ctx, "nonexistent", nil, nil, nil, false); err == nil {
 		t.Fatal("expected unknown-id error")
 	}
 	if _, err := s.DeleteWorkout(ctx, woid, false); err != nil {

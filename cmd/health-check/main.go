@@ -166,10 +166,11 @@ type workoutIDInput struct {
 }
 
 type correctWorkoutInput struct {
-	ID      string   `json:"id"`
-	Type    *string  `json:"type,omitempty"`
-	Minutes *float64 `json:"minutes,omitempty"`
-	Kcal    *float64 `json:"kcal,omitempty"`
+	ID        string   `json:"id"`
+	Type      *string  `json:"type,omitempty"`
+	Minutes   *float64 `json:"minutes,omitempty"`
+	Kcal      *float64 `json:"kcal,omitempty"`
+	ClearKcal *bool    `json:"clear_kcal,omitempty"`
 }
 
 type deleteWorkoutInput struct {
@@ -286,7 +287,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_weight",
-		Description: "Log body weight in kg (upserts one row per date). Re-logging is the correction."},
+		Description: "Log body weight in kg (0 < kg <= 500; upserts one row per date). Re-logging is the correction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			w, err := store.LogWeight(ctx, dayOf(in.Date), in.Kg)
 			if err != nil {
@@ -322,7 +323,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_sleep",
-		Description: "Log a manual sleep (hours, no start time — sync sessions carry starts). Date = morning of wake-up."},
+		Description: "Log a manual sleep in hours (0 < hours <= 24, no start time — sync sessions carry starts). Date = morning of wake-up."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogSleep(ctx, dayOf(in.Date), in.Hours)
 			if err != nil {
@@ -404,9 +405,9 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_workout",
-		Description: "Patch one workout by entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty; minutes must be whole. Ask-gated."},
+		Description: "Patch one workout by entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty; kcal clears with clear_kcal:true (setting both fails); minutes must be whole. Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
-			row, err := store.CorrectWorkout(ctx, in.ID, in.Type, in.Minutes, in.Kcal)
+			row, err := store.CorrectWorkout(ctx, in.ID, in.Type, in.Minutes, in.Kcal, in.ClearKcal != nil && *in.ClearKcal)
 			if err != nil {
 				return fail(err)
 			}
