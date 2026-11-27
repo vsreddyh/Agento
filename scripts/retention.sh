@@ -13,7 +13,7 @@ set -euo pipefail
 #   resumes     git repo (workspace/portfolio-resume) — no-op
 #   money       soft-deleted — no-op (flagged rows vanish from ledger reads at once;
 #               the ttl_deleted_at index removes them 10 days after flagging)
-#   health-check hc_meals + hc_days pruned after 30 days; hc_weight is NEVER touched
+#   health-check is permanent — no-op (all five collections; no TTL, no prune tool)
 #   cookbook    permanent — no-op
 #   #584 TEMP-REMOVE (∃-Mail): reports pruning is DISABLED, stored reports
 #   are left as-is (growth is no longer 7-day bounded). Restore the block

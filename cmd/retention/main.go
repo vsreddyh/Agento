@@ -2,7 +2,7 @@
 //
 //	money         soft-deleted — no-op (flagged rows vanish from ledger reads at once;
 //	              the ttl_deleted_at index removes them 10 days after flagging)
-//	health-check  hc_meals + hc_days pruned after 30 days; hc_weight NEVER touched
+//	health-check  permanent — no-op (all five collections; no TTL, no prune tool)
 //	cookbook      permanent — no-op
 //	#584 TEMP-REMOVE (∃-Mail): reports read+unstarred pruning disabled,
 //	stored reports left as-is; restore on revert
@@ -49,22 +49,8 @@ func run() int {
 		prefix = "[retention] DRY-RUN: "
 	}
 
-	foodCutoff := today.AddDate(0, 0, -30).Format("2006-01-02")
-	for _, c := range []string{"hc_meals", "hc_days"} {
-		filt := bson.M{"date": bson.M{"$lt": foodCutoff}}
-		n, err := d.Collection(c).CountDocuments(ctx, filt)
-		if err != nil {
-			fmt.Printf("[retention] %s count failed: %v\n", c, err)
-			return 1
-		}
-		if !*dry {
-			if _, err := d.Collection(c).DeleteMany(ctx, filt); err != nil {
-				fmt.Printf("[retention] %s prune failed: %v\n", c, err)
-				return 1
-			}
-		}
-		fmt.Printf("%shealth-check: would remove %d from %s older than %s\n", prefix, n, c, foodCutoff)
-	}
+	// Health-check is permanent since the v2 rewrite (flat food log, no
+	// prune tool): nothing to count or delete here.
 
 	// #584 TEMP-REMOVE (∃-Mail): retention pruning disabled. Stored report
 	// documents are left as-is; restore by uncommenting this block.
@@ -127,7 +113,7 @@ func run() int {
 			prefix, auditN, logCutoff.Time().UTC().Format("2006-01-02"))
 	}
 
-	fmt.Println("[retention] story/resumes/cookbook/projects: no retention policy (git repos / permanent); money: soft-deleted rows TTL away 10 days after flagging (unflagged rows permanent).")
+	fmt.Println("[retention] story/resumes/cookbook/projects/health-check: no retention policy (git repos / permanent); money: soft-deleted rows TTL away 10 days after flagging (unflagged rows permanent).")
 	return 0
 }
 
@@ -136,8 +122,8 @@ func run() int {
 // Two deliberate choices, both about not letting a *report* break a job:
 //
 //   - Its OWN timeout, not the caller's — genuinely own, see the WithoutCancel note
-//     below. Retention's 60s context is already eaten into by the health
-//     deletes, and this pass walks up to ReconcileLimit candidates. Inheriting the
+//     below. Retention's 60s context is already eaten into by the mutation
+//     deletes above, and this pass walks up to ReconcileLimit candidates. Inheriting the
 //     remainder meant a slow night produced "context deadline exceeded", so a problem
 //     REPORT would have stopped tasks being pruned — and, since the reconciler was
 //     read-only by design, it reported nothing at all rather than something partial.
@@ -169,7 +155,7 @@ func reconcileTasks(parent context.Context) {
 	// has left".
 	//
 	// It was WithTimeout(parent, 45s), which sounds like an own budget and is not:
-	// the parent is retention's 60s, already partly spent on the health
+	// the parent is retention's 60s, already partly spent on the mutation
 	// deletes. On a slow night the reconciler inherited whatever was left — possibly
 	// a second or nothing — and produced "context deadline exceeded", i.e. the exact
 	// silent night this job exists to prevent, after the comment above already

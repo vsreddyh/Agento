@@ -52,7 +52,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 |---|---|---|
 | Money | `money_transactions` | **Permanent** — rows never expire; only `delete_transactions` removes them |
 | Cookbook | `cookbook_*` | **Permanent** |
-| Health tracking | `hc_meals`, `hc_days`, `hc_weight` + Health Connect sync via `health-api` | `hc_meals`/`hc_days` >30d; `hc_weight` **never pruned** |
+| Health tracking | `hc_food_log`, `hc_days`, `hc_sleep`, `hc_workouts`, `hc_weight` + Health Connect sync via `health-api` | **Permanent** — no prune, no TTL |
 | Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |
 <!-- #584 TEMP-REMOVE (∃-Mail): retention row.
 | ∃-Mail | `reports` | Read + unstarred >7d; unread and starred are never pruned |
@@ -187,8 +187,7 @@ go run ./cmd/mongo aggregate money_transactions '[{"$group":{"_id":"$category","
 
 Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`, `scripts/retention.sh run`):
 - `money_transactions`: **Permanent retention** (never expires; only `delete_transactions` removes rows).
-- `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
-- `hc_weight`: **Permanent retention** (never pruned).
+- `hc_food_log`, `hc_days`, `hc_sleep`, `hc_workouts`, `hc_weight`: **Permanent retention** (never expires, never pruned; only explicit `delete_*` by id removes rows).
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).
 <!-- #584 TEMP-REMOVE (∃-Mail): reports retention bullet.
 - `reports` (∃-Mail): purges records where `createdAt < today - 7d AND read AND NOT starred` — unread and starred are never pruned.

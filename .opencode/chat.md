@@ -54,14 +54,21 @@ instead of round-tripping one at a time.
   `add_recipe`, `get_recipe`, `list_recipes`, `update_recipe`,
   `delete_recipe` — recipe + ingredient books with notes (no quantities,
   servings, macros or cook log).
-- **health-check** (9): `log_meal` takes user-supplied macros only —
-  `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, never estimate, ask
-  for whatever is missing. At least one item, each with a non-blank name;
-  all five macros required on every item, numeric and >= 0 — the server
-  rejects missing/non-numeric/negative macros and empty/unnamed items.
-  `log_weight` (never pruned), `log_sleep`,
-  `log_workout`, `daily_summary`, `query_meals`, `fix_last_meal`,
-  `delete_meals`, `prune_old`.
+- **health-check** (17, all permanent — no prune, no TTL): flat food log, not
+  meals — `log_food` takes `what` (required) + free-text `qty`, optional
+  estimated macros (`kcal/protein/carbs/fat/fiber`, absent means unknown, never
+  zero), `note?`, `datetime?` (=now); `list_food` / `get_food` / `correct_food`
+  (patch by id, ask-gated) / `delete_food` (dry-runs by default, hard delete).
+  `log_weight` (upsert per date; re-logging is the correction) / `list_weight` /
+  `delete_weight`. `log_sleep` (manual hours) / `list_sleep` (per-day derived
+  hours + sessions) / `correct_sleep` / `delete_sleep`. `log_workout`
+  (free-text type, lowercased on write) / `list_workouts` / `correct_workout` /
+  `delete_workout`. `daily_summary` (food-derived cal-in; `workout_kcal` +
+  `active_kcal` as separate cal-out lines, no single net).
+  Every `list_*` takes `sort_by` (names only its own fields) + `sort`
+  (`asc|desc`) as real schema enums — unknown values return errors on both
+  layers. Filters (`what`, `type`) are exact match on the lowered text and
+  return the empty page when nothing matches; bad dates/ids return errors.
 - **task-manager** (10): `create_task`, `list_tasks`, `get_task`,
   `update_task`, `complete_task`, `skip_task`, `reopen_task`, `delete_task`,
   `duplicate_task`, `task_history` (the change log: what changed, who changed it, when — it
@@ -110,9 +117,11 @@ does not resolve, trust the server's tool list over this file.
 
 Destructive tools ask first through the harness permission prompt
 (`opencode.json`); state the scope when it asks: `delete_transactions`,
-`delete_meals`, `prune_old` (health-check only — miser-money has no prune
-tool; flagged rows TTL away 10 days after flagging, unflagged rows are
-permanent), `archive_account`, `delete_budget`
+`delete_food`, `delete_weight`, `delete_sleep`, `delete_workout`
+(dry-run by default like `delete_transactions`, except the delete is hard —
+health-check has no soft delete, no TTL, no restore; show the dry-run row,
+then delete only once the user confirms),
+`archive_account`, `delete_budget`
 (dry-runs by default like `delete_transactions`), `delete_category`
 (dry-runs by default too; with references it needs `reassign_to`),
 `delete_recipe`, `delete_ingredient`,
@@ -133,13 +142,11 @@ the `*archive_account*` pattern) even though it restores rather than
 destroys.
 
 Reads (`list_*`, `get_*`, `query_*`, `daily_summary`,
-`get_balances`, `money_*`, `budget_status`) need no confirmation. `fix_last_meal` updates
-the most recently *recorded* meal in place (insertion order, not date
-order — meals sort by `createdAt`, so after a backfill the fix hits the
-backfilled meal, not the date-latest one): do it when the user just asked
-for a correction, without re-asking. Money corrections are not that: they
-name the row through `edit_transaction` by id, since money has no
-`fix_last_*` any more.
+`get_balances`, `money_*`, `budget_status`) need no confirmation. Food/sleep/
+workout corrections name the row through `correct_food`/`correct_sleep`/
+`correct_workout` by id (ask-gated, like `edit_transaction`) — there is no
+`fix_last_*` any more: every correction addresses its row, never "the most
+recent whatever".
 
 ## Delegation and questions
 

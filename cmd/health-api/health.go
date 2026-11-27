@@ -4,14 +4,14 @@ package main
 
 import (
 	"agento/internal/crashlog"
-	"agento/internal/mongo"
+	"agento/internal/healthcheck"
 	"context"
 	"encoding/json"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
 	"net/http"
 	"strings"
+	stdsync "sync"
 	"time"
 )
 
@@ -93,6 +93,22 @@ func health(w http.ResponseWriter, r *http.Request) {
 // exportsRoot is the VPS folder exposed for mobile downloads (#26).
 // Override with EXPORTS_DIR; served read-only, subfolders allowed.
 
+// hcStore is the shared healthcheck backend. Both the MCP server and this
+// sync endpoint write through it, so hc_days/hc_sleep/hc_workouts have one
+// write path and one updatedAt shape (BSON Date, never a string).
+var (
+	hcStore     *healthcheck.Store
+	hcStoreOnce stdsync.Once
+	hcStoreErr  error
+)
+
+func healthStore() (*healthcheck.Store, error) {
+	hcStoreOnce.Do(func() {
+		hcStore, hcStoreErr = healthcheck.FromEnv()
+	})
+	return hcStore, hcStoreErr
+}
+
 func sync(w http.ResponseWriter, r *http.Request) {
 	// Auth first, like every other authed verb in this binary (list,
 	// item, fallback): an unauthenticated mistype 401s instead of
@@ -125,47 +141,41 @@ func sync(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	d, err := mongo.DB()
+	hcs, err := healthStore()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "MONGODB_URI not set"})
+		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "health store unavailable"})
 		return
 	}
-	days := d.Collection("hc_days")
-	now := time.Now().UTC().Format(time.RFC3339)
-	statsDate := localDate(p.SyncedAtISO)
+	now := time.Now().UTC()
 
-	update := bson.M{"updatedAt": now}
+	// Steps and active calories overwrite the day's scalars when present;
+	// a payload without them (sleep/workout-only backfill) leaves the
+	// scalars alone instead of zeroing the day.
+	rec := healthcheck.SyncRecord{Date: localDate(p.SyncedAtISO)}
 	if p.Steps != nil {
-		update["steps"] = *p.Steps
+		steps := *p.Steps
+		rec.Steps = &steps
 	}
 	if p.ActiveCaloriesKcal != nil {
-		update["active_kcal"] = *p.ActiveCaloriesKcal
-	}
-	if len(update) > 1 {
-		if _, err := days.UpdateOne(ctx, bson.M{"date": statsDate}, bson.M{"$set": update}, upsert()); err != nil {
-			// Scrubbed + bounded, never the raw driver text (topology/
-			// dial internals the app would render and triage would miss).
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
-			return
-		}
+		kcal := *p.ActiveCaloriesKcal
+		rec.ActiveKcal = &kcal
 	}
 
 	for _, s := range p.Sleep {
-		wakeDate := localDate(s.EndISO)
-		var dup bson.M
-		if err := days.FindOne(ctx, bson.M{"date": wakeDate, "sleep_sessions.start": s.StartISO}).Decode(&dup); err == nil {
-			continue
+		// Sessions bucket by wake date but carry their own start, so a
+		// night crossing midnight still attributes to the morning —
+		// while the dedup hash keys on the real start. An unparseable
+		// start still syncs (minutes only), like a manual log_sleep.
+		start, perr := time.Parse(time.RFC3339, strings.Replace(s.StartISO, "Z", "+00:00", 1))
+		var startPtr *time.Time
+		if perr == nil {
+			startPtr = &start
 		}
-		hours := float64(s.TotalMinutes) / 60.0
-		hours = float64(int(hours*100+0.5)) / 100
-		if _, err := days.UpdateOne(ctx, bson.M{"date": wakeDate}, bson.M{
-			"$inc":  bson.M{"sleep_hours": hours},
-			"$push": bson.M{"sleep_sessions": bson.M{"start": s.StartISO, "minutes": s.TotalMinutes}},
-			"$set":  bson.M{"updatedAt": now},
-		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
-			return
-		}
+		rec.Sleeps = append(rec.Sleeps, healthcheck.SleepIn{
+			Day:     localDate(s.EndISO),
+			Start:   startPtr,
+			Minutes: s.TotalMinutes,
+		})
 	}
 
 	for _, wo := range p.Workouts {
@@ -178,22 +188,18 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		if wo.CaloriesKcal != nil {
 			kcal = *wo.CaloriesKcal
 		}
-		kcal = float64(int(kcal*10+0.5)) / 10
-		wdoc := bson.M{"type": wo.Type, "minutes": duration, "kcal": kcal}
-		var dup bson.M
-		if err := days.FindOne(ctx, bson.M{
-			"date":     localDate(wo.StartISO),
-			"workouts": bson.M{"$elemMatch": wdoc},
-		}).Decode(&dup); err == nil {
-			continue
-		}
-		if _, err := days.UpdateOne(ctx, bson.M{"date": localDate(wo.StartISO)}, bson.M{
-			"$push": bson.M{"workouts": wdoc},
-			"$set":  bson.M{"updatedAt": now},
-		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
-			return
-		}
+		rec.Workouts = append(rec.Workouts, healthcheck.WorkoutIn{
+			Day:     localDate(wo.StartISO),
+			Type:    wo.Type,
+			Minutes: float64(duration),
+			Kcal:    kcal,
+		})
+	}
+
+	syncRes, err := hcs.RecordSync(ctx, rec)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
+		return
 	}
 
 	steps, kcal := 0, 0.0
@@ -203,13 +209,10 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	if p.ActiveCaloriesKcal != nil {
 		kcal = *p.ActiveCaloriesKcal
 	}
-	log.Printf("synced device=%s steps=%d calories=%v sleep=%d workouts=%d",
-		p.Device, steps, kcal, len(p.Sleep), len(p.Workouts))
-	writeJSON(w, http.StatusOK, bson.M{"status": "ok", "synced_at": now})
-}
-
-func upsert() *options.UpdateOptions {
-	return options.Update().SetUpsert(true)
+	log.Printf("synced device=%s steps=%d calories=%v sleep=%d workouts=%d (+%d sessions +%d workouts, %d+%d skipped)",
+		p.Device, steps, kcal, len(p.Sleep), len(p.Workouts),
+		syncRes.SessionsAdded, syncRes.WorkoutsAdded, syncRes.SessionsSkipped, syncRes.WorkoutsSkipped)
+	writeJSON(w, http.StatusOK, bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339)})
 }
 
 // registerHealth wires this domain's routes. One function per file so main stays a

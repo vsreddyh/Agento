@@ -66,7 +66,8 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
    installed by `init`, also runs on every `start`. money is soft-deleted (flagged
    rows vanish from ledger reads at once; the `ttl_deleted_at` index removes them 10
    days after flagging; unflagged rows are permanent);
-   health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
+   health-check is fully permanent (all five collections — no prune tool,
+   no TTL, retention is a no-op); cookbook is
    permanent;<!-- #584 TEMP-REMOVE (∃-Mail): reports pruning disabled, data left as-is — reports (∃-Mail) pruned read+unstarred >7d (never unread/starred); -->
    task_mutations prunes entries >90d.
    It also **reconciles** tasks: completed structured repeats with no successor
