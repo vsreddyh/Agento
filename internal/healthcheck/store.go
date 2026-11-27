@@ -182,7 +182,7 @@ func (s *Store) dropLegacyMeals(ctx context.Context) error {
 		return err
 	}
 	if n > 0 {
-		return fail("hc_meals still holds %d frozen meal rows — back it up or wipe it (mongo delete hc_meals '{}'), then restart", n)
+		return fail("hc_meals still holds %d frozen meal rows — back it up or wipe it (go run ./cmd/mongo delete hc_meals '{}'), then restart", n)
 	}
 	return s.db.Collection("hc_meals").Drop(ctx)
 }

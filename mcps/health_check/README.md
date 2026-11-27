@@ -64,6 +64,7 @@ T3 through `./scripts/mcp-run.sh health-check` — there is no health-check
 container in the stack, so never `exec` into one for it.
 
 Upgrading from the meals era is gated: `EnsureSchema` refuses to boot with
-a non-empty frozen `hc_meals` (back it up or wipe it with `mongo delete
-hc_meals '{}'`); an empty one is dropped quietly. "Permanent" below means no
-TTL/prune going forward, not that the pre-v2 shape is preserved.
+a non-empty frozen `hc_meals` (back it up or wipe it with
+`go run ./cmd/mongo delete hc_meals '{}'`); an empty one is dropped
+quietly. "Permanent" below means no TTL/prune going forward, not that the
+pre-v2 shape is preserved.
