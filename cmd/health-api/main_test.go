@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -126,6 +127,9 @@ func TestMinutesBetween(t *testing.T) {
 	}
 	if _, ok := minutesBetween("bogus", "2026-09-20T08:30:00+05:30"); ok {
 		t.Fatal("expected failure")
+	}
+	if _, ok := minutesBetween("2026-09-20T08:30:00+05:30", "2026-09-20T08:00:00+05:30"); ok {
+		t.Fatal("expected failure on reversed interval, not a 1-minute workout")
 	}
 }
 
@@ -391,6 +395,32 @@ func TestSyncInvalidJSONScrubbed(t *testing.T) {
 	}
 	if body := w.Body.String(); !strings.Contains(body, "invalid JSON") {
 		t.Fatalf("422 must name invalid JSON, got %s", body)
+	}
+}
+
+// A 422 still reports what was countable: timestamp skips are tallied
+// before validation fails, so the payload debugger sees invalid counts
+// instead of just a detail string. Needs MongoDB; skipped without it.
+func TestSync422CarriesSkipCounts(t *testing.T) {
+	if os.Getenv("MONGODB_URI") == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	t.Setenv("MONGODB_DB", "healthapi_sync_test")
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	body := `{"device":"test","syncedAtIso":"2026-11-27T10:00:00Z",` +
+		`"steps":-5,` +
+		`"sleep":[{"startIso":"2026-11-26T22:00:00Z","endIso":"not-a-date","totalMinutes":400}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/health/sync", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad scalars: got %d (%s), want 422", w.Code, w.Body.String())
+	}
+	for _, want := range []string{`"sessions_invalid":1`, `"workouts_invalid":0`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("422 must carry skip counts, got %s", w.Body.String())
+		}
 	}
 }
 

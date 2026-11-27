@@ -201,7 +201,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "health-check", Version: "2.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_food",
-		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero. datetime is RFC3339 (naive read as UTC), =now when absent."},
+		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero; implausible values fail (kcal>100000, others>10000). datetime is RFC3339 (naive read as UTC), =now when absent."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			dt := time.Now().UTC()
 			if in.Datetime != "" {
@@ -380,7 +380,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_workout",
-		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes required; kcal optional, absent means unknown never 0). Sync workouts arrive deduplicated through the same store."},
+		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes required; kcal optional, absent means unknown never 0, max 100000). Sync workouts arrive deduplicated through the same store."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogWorkout(ctx, dayOf(in.Date), in.Type, in.Minutes, in.Kcal)
 			if err != nil {

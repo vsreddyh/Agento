@@ -401,8 +401,25 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if ghost["cal_in"] != nil || ghost["workout_kcal"] != nil || ghost["totals"] != nil || ghost["macro_counts"] != nil {
 		t.Fatalf("ghost totals: %v", ghost)
 	}
-	// Partial macros: one row with kcal, one without — totals are lower
-	// bounds, and macro_counts says so.
+	// Partial-macro day: foods exist but none carries kcal — cal_in and
+	// totals.kcal read null (unknown), not a measured zero.
+	teaDay := "2026-09-04"
+	cleanDay(t, s, ctx, teaDay)
+	teaDT, _ := time.Parse(time.RFC3339, "2026-09-04T08:00:00Z")
+	if _, err := s.LogFood(ctx, teaDay, teaDT, "tea", "", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	partial, err := s.DailySummary(ctx, teaDay)
+	if err != nil {
+		t.Fatalf("partial summary: %v", err)
+	}
+	if partial["cal_in"] != nil {
+		t.Fatalf("cal_in without kcal rows: %v", partial)
+	}
+	if pt, _ := partial["totals"].(map[string]any); pt["kcal"] != nil || pt["protein"] != nil {
+		t.Fatalf("totals without kcal rows: %v", pt)
+	}
+	cleanDay(t, s, ctx, teaDay)
 	dt, _ := time.Parse(time.RFC3339, "2026-09-03T08:00:00Z")
 	if _, err := s.LogFood(ctx, day, dt, "rice", "", map[string]float64{"kcal": 200}, ""); err != nil {
 		t.Fatal(err)

@@ -221,12 +221,17 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Domain errors (bad date, implausible minutes/kcal) are the
 		// client's malformed payload: 422 like the batch-size guards
-		// above, not a 500 server bug. Anything else is ours.
+		// above, not a 500 server bug. Anything else is ours. Either way
+		// the skip/invalid breakdown rides along — a 422 with counts
+		// debugs like a 200.
+		body := bson.M{"sessions_invalid": syncRes.SessionsInvalid, "workouts_invalid": syncRes.WorkoutsInvalid}
 		var se *healthcheck.StoreError
 		if errors.As(err, &se) {
-			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": se.Error()})
+			body["detail"] = se.Error()
+			writeJSON(w, http.StatusUnprocessableEntity, body)
 		} else {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
+			body["detail"] = boundedDetail(err)
+			writeJSON(w, http.StatusInternalServerError, body)
 		}
 		return
 	}

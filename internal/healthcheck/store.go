@@ -358,12 +358,11 @@ func sumTenths(vals []float64) float64 {
 	return float64(t) / 10
 }
 
-// foodTotals derives a day's macro totals from its rows, plus how many
-// rows carried each macro. Totals live only in responses, never in
-// storage — a correction shows up on the next read. Counts matter because
-// macros are optional (#601): a total over 2 of 5 rows is a lower bound,
-// not a measured day.
-func (s *Store) foodTotals(ctx context.Context, day string) (map[string]float64, map[string]int64, int64, error) {
+// foodTotals derives a day's macro totals and per-macro row counts.
+// Totals live only in responses, never in storage — a correction shows up
+// on the next read. Macros with no rows are nil, not zero: 0 means
+// "measured zero across N rows", nil means "nothing logged".
+func (s *Store) foodTotals(ctx context.Context, day string) (map[string]any, map[string]int64, int64, error) {
 	cur, err := s.food.Find(ctx, bson.M{"day": day})
 	if err != nil {
 		return nil, nil, 0, err
@@ -372,7 +371,7 @@ func (s *Store) foodTotals(ctx context.Context, day string) (map[string]float64,
 	if err := cur.All(ctx, &rows); err != nil {
 		return nil, nil, 0, err
 	}
-	totals := map[string]float64{}
+	totals := map[string]any{}
 	counts := map[string]int64{}
 	for _, m := range MacroKeys {
 		vals := make([]float64, 0, len(rows))
@@ -383,8 +382,12 @@ func (s *Store) foodTotals(ctx context.Context, day string) (map[string]float64,
 				}
 			}
 		}
-		totals[m] = sumTenths(vals)
 		counts[m] = int64(len(vals))
+		if len(vals) == 0 {
+			totals[m] = nil
+		} else {
+			totals[m] = sumTenths(vals)
+		}
 	}
 	return totals, counts, int64(len(rows)), nil
 }
@@ -1063,13 +1066,26 @@ func workoutOut(doc bson.M) bson.M {
 }
 
 func workoutKcal(wos []bson.M) float64 {
+	total, _ := workoutKcalTotal(wos)
+	return total
+}
+
+// workoutKcalTotal sums kcal over rows that carry it; the bool reports
+// whether any row did — absent everywhere means unknown, not zero.
+func workoutKcalTotal(wos []bson.M) (float64, bool) {
 	var vals []float64
 	for _, w := range wos {
+		if _, ok := w["kcal"]; !ok {
+			continue
+		}
 		if f, err := validate.ToFloat(w["kcal"]); err == nil {
 			vals = append(vals, f)
 		}
 	}
-	return sumTenths(vals)
+	if len(vals) == 0 {
+		return 0, false
+	}
+	return sumTenths(vals), true
 }
 
 func workoutMinutes(wos []bson.M) float64 {
@@ -1498,15 +1514,18 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 			}
 		}
 	}
-	workoutKcal := workoutKcal(wos)
+	workoutKcal, hasWorkoutKcal := workoutKcalTotal(wos)
 	// No rows means no measurement, not a measured zero: null beats 0
-	// for a day with nothing logged.
-	var totalsOut, calIn, macroCountsOut any = totals, totals["kcal"], macroCounts
+	// for a day with nothing logged. totals["kcal"] is already nil when
+	// no row carried kcal, so cal_in follows it — a partial-macro day
+	// reads as a lower bound, never a measured zero.
+	var totalsOut, macroCountsOut any = totals, macroCounts
+	calIn := totals["kcal"]
 	var workoutKcalOut any = workoutKcal
 	if foodCount == 0 {
-		totalsOut, calIn, macroCountsOut = nil, nil, nil
+		totalsOut, macroCountsOut = nil, nil
 	}
-	if len(wos) == 0 {
+	if !hasWorkoutKcal {
 		workoutKcalOut = nil
 	}
 	out := bson.M{"day": day, "foods": foodCount, "totals": totalsOut, "macro_counts": macroCountsOut,
