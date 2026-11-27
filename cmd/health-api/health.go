@@ -196,9 +196,9 @@ func sync(w http.ResponseWriter, r *http.Request) {
 			tsInvalidWorkouts++
 			continue
 		}
-		var kcal float64
+		var kcal *float64
 		if wo.CaloriesKcal != nil {
-			kcal = *wo.CaloriesKcal
+			kcal = wo.CaloriesKcal
 		}
 		// Title is the human name when Type is empty (Health Connect
 		// often sends one without the other); the store lowercases it

@@ -284,9 +284,13 @@ func hexID(v any) string {
 
 // fmtDate renders a BSON DateTime as RFC3339Nano so list/get output feeds
 // straight back into correct_* datetime inputs. fmt.Sprint on a DateTime
-// prints int64 millis, which no input parser accepts — the round-trip
-// would break with "bad datetime".
-func fmtDate(v any) string {
+// prints int64 millis and on nil prints "<nil>" — neither of which any input
+// parser accepts — so missing values stay nil (consistent with the
+// null-when-missing contract) instead of becoming the string "<nil>".
+func fmtDate(v any) any {
+	if v == nil {
+		return nil
+	}
 	if dt, ok := v.(primitive.DateTime); ok {
 		return dt.Time().UTC().Format(time.RFC3339Nano)
 	}
@@ -968,12 +972,13 @@ func (s *Store) DeleteSleep(ctx context.Context, id string, dryRun bool) (bson.M
 }
 
 // WorkoutIn is one workout, from either writer. Type is free text,
-// lowercased+trimmed on write so "Run" and "run" are one type.
+// lowercased+trimmed on write so "Run" and "run" are one type. Kcal is a
+// pointer: nil means unknown (never stored), mirroring food macros.
 type WorkoutIn struct {
 	Day     string
 	Type    string
 	Minutes float64
-	Kcal    float64
+	Kcal    *float64
 }
 
 func normWorkoutType(t string) (string, error) {
@@ -984,6 +989,15 @@ func normWorkoutType(t string) (string, error) {
 		return "", fail("workout type must be <= 60 characters, got %d", n)
 	}
 	return t, nil
+}
+
+// kcalHashKey keeps unknown-kcal workouts distinct from 0-kcal ones in
+// the dedup hash: absent means unknown, never a measured zero.
+func kcalHashKey(kcal *float64) string {
+	if kcal == nil {
+		return "unknown"
+	}
+	return fmt.Sprint(round1(*kcal))
 }
 
 func insertWorkout(ctx context.Context, col *mongoDrv.Collection, w WorkoutIn, skipDup bool) (bson.M, error) {
@@ -1004,17 +1018,19 @@ func insertWorkout(ctx context.Context, col *mongoDrv.Collection, w WorkoutIn, s
 	if w.Minutes > 24*60 {
 		return nil, fail("workout minutes must be <= 1440 (24h), got %v", w.Minutes)
 	}
-	if w.Kcal < 0 {
+	if w.Kcal != nil && *w.Kcal < 0 {
 		return nil, fail("workout kcal must be >= 0")
 	}
-	if w.Kcal > maxWorkoutKcal {
-		return nil, fail("workout kcal must be <= %d, got %v", maxWorkoutKcal, w.Kcal)
+	if w.Kcal != nil && *w.Kcal > maxWorkoutKcal {
+		return nil, fail("workout kcal must be <= %d, got %v", maxWorkoutKcal, *w.Kcal)
 	}
 	minutes := round1(w.Minutes)
-	kcal := round1(w.Kcal)
-	doc := bson.M{"day": day, "type": typ, "minutes": minutes, "kcal": kcal,
-		"hash":      contentHash(day, typ, fmt.Sprint(minutes), fmt.Sprint(kcal)),
+	doc := bson.M{"day": day, "type": typ, "minutes": minutes,
+		"hash":      contentHash(day, typ, fmt.Sprint(minutes), kcalHashKey(w.Kcal)),
 		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
+	if w.Kcal != nil {
+		doc["kcal"] = round1(*w.Kcal)
+	}
 	res, err := col.InsertOne(ctx, doc)
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
@@ -1029,13 +1045,17 @@ func insertWorkout(ctx context.Context, col *mongoDrv.Collection, w WorkoutIn, s
 	return workoutOut(doc), nil
 }
 
-// LogWorkout records one manual workout.
-func (s *Store) LogWorkout(ctx context.Context, day, typ string, minutes, kcal float64) (bson.M, error) {
+// LogWorkout records one manual workout. Kcal is optional (nil = unknown,
+// never stored) like food macros.
+func (s *Store) LogWorkout(ctx context.Context, day, typ string, minutes float64, kcal *float64) (bson.M, error) {
 	return insertWorkout(ctx, s.workouts, WorkoutIn{Day: day, Type: typ, Minutes: minutes, Kcal: kcal}, false)
 }
 
 func workoutOut(doc bson.M) bson.M {
-	out := bson.M{"id": hexID(doc["_id"]), "type": doc["type"], "minutes": doc["minutes"], "kcal": doc["kcal"], "createdAt": fmtDate(doc["createdAt"])}
+	out := bson.M{"id": hexID(doc["_id"]), "type": doc["type"], "minutes": doc["minutes"], "createdAt": fmtDate(doc["createdAt"])}
+	if v, ok := doc["kcal"]; ok {
+		out["kcal"] = v
+	}
 	if v, ok := doc["day"]; ok {
 		out["day"] = v
 	}
@@ -1171,7 +1191,10 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 	set := bson.M{}
 	newType, _ := doc["type"].(string)
 	newMin, _ := validate.ToFloat(doc["minutes"])
-	newKcal, _ := validate.ToFloat(doc["kcal"])
+	var newKcal *float64
+	if f, err := validate.ToFloat(doc["kcal"]); err == nil {
+		newKcal = &f
+	}
 	if typ != nil {
 		if strings.TrimSpace(*typ) == "" {
 			return nil, fail("type cannot be cleared to empty — pass a type or omit it")
@@ -1202,13 +1225,14 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 		if *kcal > maxWorkoutKcal {
 			return nil, fail("workout kcal must be <= %d, got %v", maxWorkoutKcal, *kcal)
 		}
-		newKcal = round1(*kcal)
-		set["kcal"] = newKcal
+		rounded := round1(*kcal)
+		newKcal = &rounded
+		set["kcal"] = rounded
 	}
 	if len(set) == 0 {
 		return nil, fail("correct_workout needs at least one field to change")
 	}
-	set["hash"] = contentHash(day, newType, fmt.Sprint(newMin), fmt.Sprint(newKcal))
+	set["hash"] = contentHash(day, newType, fmt.Sprint(newMin), kcalHashKey(newKcal))
 	_, err = s.workouts.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": set})
 	if err != nil {
 		if mongoDrv.IsDuplicateKeyError(err) {
@@ -1409,11 +1433,11 @@ func checkWorkoutIn(w WorkoutIn) error {
 	if w.Minutes > 24*60 {
 		return fail("workout minutes must be <= 1440 (24h), got %v", w.Minutes)
 	}
-	if w.Kcal < 0 {
+	if w.Kcal != nil && *w.Kcal < 0 {
 		return fail("workout kcal must be >= 0")
 	}
-	if w.Kcal > maxWorkoutKcal {
-		return fail("workout kcal must be <= %d, got %v", maxWorkoutKcal, w.Kcal)
+	if w.Kcal != nil && *w.Kcal > maxWorkoutKcal {
+		return fail("workout kcal must be <= %d, got %v", maxWorkoutKcal, *w.Kcal)
 	}
 	return nil
 }

@@ -233,24 +233,24 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	}
 
 	// Workouts: manual log, type normalized, duplicate rejected.
-	if _, err := s.LogWorkout(ctx, day, "Run", 30, 300); err != nil {
+	if _, err := s.LogWorkout(ctx, day, "Run", 30, fptr(300)); err != nil {
 		t.Fatalf("workout: %v", err)
 	}
-	if _, err := s.LogWorkout(ctx, day, "Run", 30.5, 300); err == nil {
+	if _, err := s.LogWorkout(ctx, day, "Run", 30.5, fptr(300)); err == nil {
 		t.Fatal("expected fractional-minutes error")
 	}
-	if _, err := s.LogWorkout(ctx, day, strings.Repeat("x", 61), 30, 300); err == nil {
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("x", 61), 30, fptr(300)); err == nil {
 		t.Fatal("expected over-60 type error")
 	}
 	// Rune count, not bytes: 60 multibyte chars pass, 61 fail.
 	// kcal 0 keeps the passing row out of the later totals.
-	if _, err := s.LogWorkout(ctx, day, strings.Repeat("é", 60), 30, 0); err != nil {
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("é", 60), 30, nil); err != nil {
 		t.Fatalf("60-char type should pass: %v", err)
 	}
-	if _, err := s.LogWorkout(ctx, day, strings.Repeat("é", 61), 30, 0); err == nil {
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("é", 61), 30, nil); err == nil {
 		t.Fatal("expected over-61 type error")
 	}
-	if _, err := s.LogWorkout(ctx, day, "run", 30, 300); err == nil {
+	if _, err := s.LogWorkout(ctx, day, "run", 30, fptr(300)); err == nil {
 		t.Fatal("expected duplicate-workout error (lowered type)")
 	}
 	wodays, wtotal, err := s.ListWorkouts(ctx, day, day, "", "", "RUN")
@@ -263,6 +263,20 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	}
 	allDays, _, _ := s.ListWorkouts(ctx, day, day, "", "", "")
 	first := allDays[0]["workouts"].([]bson.M)[0]
+	if _, ok := first["kcal"]; !ok {
+		t.Fatalf("kcal should be present when provided: %v", first)
+	}
+	// No-kcal workout omits the key (unknown, never zero).
+	nokcal, err := s.LogWorkout(ctx, day, "yoga", 20, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := nokcal["kcal"]; ok {
+		t.Fatalf("absent kcal must not be stored as 0: %v", nokcal)
+	}
+	if _, err := s.DeleteWorkout(ctx, nokcal["id"].(string), false); err != nil {
+		t.Fatal(err)
+	}
 	woid, _ := first["id"].(string)
 	if _, err := s.CorrectWorkout(ctx, woid, nil, nil, nil); err == nil {
 		t.Fatal("expected empty-patch error")
@@ -292,10 +306,11 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	// Sync path: steps overwrite, sessions dedup quietly, updatedAt is Date.
 	steps := 1000
 	kcal := 50.5
+	woKcal := 150.0
 	start, _ := time.Parse(time.RFC3339, "2026-09-03T22:00:00Z")
 	rec := SyncRecord{Date: day, Steps: &steps, ActiveKcal: &kcal,
 		Sleeps:   []SleepIn{{Day: day, Start: &start, Minutes: 400}},
-		Workouts: []WorkoutIn{{Day: day, Type: "cycle", Minutes: 20, Kcal: 150}}}
+		Workouts: []WorkoutIn{{Day: day, Type: "cycle", Minutes: 20, Kcal: &woKcal}}}
 	res, err := s.RecordSync(ctx, rec)
 	if err != nil || res.SessionsAdded != 1 || res.WorkoutsAdded != 1 {
 		t.Fatalf("sync %v %v", res, err)
@@ -304,7 +319,7 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	// the caller, never defaulted by the store.
 	rec2 := SyncRecord{Date: day, Steps: &steps, ActiveKcal: &kcal,
 		Sleeps:   []SleepIn{{Day: day, Start: &start, Minutes: 400}},
-		Workouts: []WorkoutIn{{Day: day, Type: "cycle", Minutes: 20, Kcal: 150}}}
+		Workouts: []WorkoutIn{{Day: day, Type: "cycle", Minutes: 20, Kcal: &woKcal}}}
 	res2, err := s.RecordSync(ctx, rec2)
 	if err != nil || res2.SessionsSkipped != 1 || res2.WorkoutsSkipped != 1 {
 		t.Fatalf("resync %v %v", res2, err)
@@ -380,8 +395,8 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if ghost["steps"] != nil || ghost["active_kcal"] != nil || ghost["weight"] != nil {
 		t.Fatalf("ghost scalars: %v", ghost)
 	}
-	if ghost["sleep_hours"] != nil {
-		t.Fatalf("ghost sleep: %v", ghost)
+	if ghost["sleep_hours"] != nil || ghost["workout_kcal"] != nil {
+		t.Fatalf("ghost cal-out/sleep: %v", ghost)
 	}
 	if ghost["cal_in"] != nil || ghost["workout_kcal"] != nil || ghost["totals"] != nil || ghost["macro_counts"] != nil {
 		t.Fatalf("ghost totals: %v", ghost)
@@ -493,7 +508,7 @@ func TestRecordSyncPreservesEntryDays(t *testing.T) {
 			{Day: "2026-09-11", Start: &start1, Minutes: 400},
 			{Day: "2026-09-12", Start: &start2, Minutes: 300},
 		},
-		Workouts: []WorkoutIn{{Day: "2026-09-10", Type: "run", Minutes: 30, Kcal: 300}},
+		Workouts: []WorkoutIn{{Day: "2026-09-10", Type: "run", Minutes: 30, Kcal: fptr(300)}},
 	}
 	res, err := s.RecordSync(ctx, rec)
 	if err != nil || res.SessionsAdded != 2 || res.WorkoutsAdded != 1 {

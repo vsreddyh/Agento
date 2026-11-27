@@ -147,10 +147,10 @@ type deleteSleepInput struct {
 }
 
 type logWorkoutInput struct {
-	Type    string  `json:"type,omitempty"`
-	Minutes float64 `json:"minutes"`
-	Kcal    float64 `json:"kcal,omitempty"`
-	Date    string  `json:"date,omitempty"`
+	Type    string   `json:"type,omitempty"`
+	Minutes float64  `json:"minutes"`
+	Kcal    *float64 `json:"kcal,omitempty"`
+	Date    string   `json:"date,omitempty"`
 }
 
 type listWorkoutsInput struct {
@@ -380,7 +380,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_workout",
-		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes required; kcal optional). Sync workouts arrive deduplicated through the same store."},
+		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes required; kcal optional, absent means unknown never 0). Sync workouts arrive deduplicated through the same store."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogWorkout(ctx, dayOf(in.Date), in.Type, in.Minutes, in.Kcal)
 			if err != nil {

@@ -13,8 +13,9 @@ prune tool, retention is a no-op for all five collections.
   and `health-api/sync` share.
 - `hc_sleep`: `day` (indexed), `start?` (Date), `minutes`, `hash` (content
   dedup, unique), `createdAt`. Sleep hours are always derived from sessions.
-- `hc_workouts`: `day` (indexed), `type` (lowercased on write), `minutes`,
-  `kcal`, `hash` (content dedup, unique), `createdAt`.
+- `hc_workouts`: `day` (indexed), `type` (lowercased on write, empty → `other`,
+  max 60 runes), `minutes` (whole), `kcal?` (absent means unknown, never
+  stored as 0), `hash` (content dedup, unique), `createdAt`.
 
 Dedup hashes live on top-level docs with scalar unique indexes: unique
 multikey indexes do not enforce on this cluster (probed), so sessions and
