@@ -311,7 +311,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_weight",
-		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes). Dry-runs by default."},
+		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes); dry-run returns would_delete:0 with no weight key in that case. Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteWeight(ctx, in.Date, dryRun(in.DryRun))
 			if err != nil {
@@ -348,7 +348,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_sleep",
-		Description: "Patch one sleep session: minutes or hours (one of the two — both-set fails). Ask-gated."},
+		Description: "Patch one sleep session: minutes or hours (one of the two — both-set fails), max 1440 minutes / 24 hours. Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			if in.Minutes != nil && in.Hours != nil {
 				return fail(fmt.Errorf("correct_sleep takes minutes or hours, not both"))
@@ -381,7 +381,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_workout",
-		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes required; kcal optional, absent means unknown never 0, max 100000). Sync workouts arrive deduplicated through the same store."},
+		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes, max 1440; kcal optional, absent means unknown never 0, max 100000). Sync workouts arrive deduplicated through the same store."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogWorkout(ctx, dayOf(in.Date), in.Type, in.Minutes, in.Kcal)
 			if err != nil {
@@ -405,7 +405,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_workout",
-		Description: "Patch one workout by entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty; kcal clears with clear_kcal:true (setting both fails); minutes must be whole. Ask-gated."},
+		Description: "Patch one workout by entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty; minutes must be whole, max 1440; kcal max 100000, clear with clear_kcal:true (setting both fails). Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			row, err := store.CorrectWorkout(ctx, in.ID, in.Type, in.Minutes, in.Kcal, in.ClearKcal != nil && *in.ClearKcal)
 			if err != nil {

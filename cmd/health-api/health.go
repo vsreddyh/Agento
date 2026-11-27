@@ -61,9 +61,12 @@ func localDate(iso string) string {
 }
 
 // minutesBetween returns whole-minute duration; ok=false when unparseable
-// or under a minute. Sub-minute intervals are skipped, not rounded up:
-// like the manual path (which rejects fractional minutes), sync never
-// invents a 1-minute workout from seconds of data.
+// or under a minute. Sub-minute intervals are skipped, not stored.
+// Longer intervals truncate (floor) to whole minutes: 61s and 119s both
+// store 1. That differs deliberately from the manual path, which rejects
+// fractional input outright — a sync duration is measured (flooring never
+// overstates it), while a typed fraction claims a precision the store
+// does not keep.
 func minutesBetween(startISO, endISO string) (dur int, ok bool) {
 	s, ok1 := parseSyncTime(startISO)
 	e, ok2 := parseSyncTime(endISO)
@@ -131,11 +134,15 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(p.Sleep) > 100 {
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "sleep batch max 100"})
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "sleep batch max 100",
+			"sessions_added": 0, "sessions_skipped": 0, "sessions_invalid": len(p.Sleep),
+			"workouts_added": 0, "workouts_skipped": 0, "workouts_invalid": len(p.Workouts)})
 		return
 	}
 	if len(p.Workouts) > 100 {
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "workouts batch max 100"})
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "workouts batch max 100",
+			"sessions_added": 0, "sessions_skipped": 0, "sessions_invalid": 0,
+			"workouts_added": 0, "workouts_skipped": 0, "workouts_invalid": len(p.Workouts)})
 		return
 	}
 
