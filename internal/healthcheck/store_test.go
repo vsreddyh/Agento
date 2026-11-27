@@ -223,6 +223,14 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.LogWorkout(ctx, day, strings.Repeat("x", 61), 30, 300); err == nil {
 		t.Fatal("expected over-60 type error")
 	}
+	// Rune count, not bytes: 60 multibyte chars pass, 61 fail.
+	// kcal 0 keeps the passing row out of the later totals.
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("é", 60), 30, 0); err != nil {
+		t.Fatalf("60-char type should pass: %v", err)
+	}
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("é", 61), 30, 0); err == nil {
+		t.Fatal("expected over-61 type error")
+	}
 	if _, err := s.LogWorkout(ctx, day, "run", 30, 300); err == nil {
 		t.Fatal("expected duplicate-workout error (lowered type)")
 	}

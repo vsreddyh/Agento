@@ -105,7 +105,16 @@ func TestLocalDate(t *testing.T) {
 	if d := localDate("2026-09-20T20:00:00Z"); d != "2026-09-21" {
 		t.Fatalf("got %s", d)
 	}
-	if d := localDate("not-a-date"); d != "not-a-date"[:10] {
+	// Garbage is invalid (""), never a guessed prefix: a corrupt
+	// timestamp must fail or count invalid downstream, not land on a date.
+	if d := localDate("not-a-date"); d != "" {
+		t.Fatalf("got %s", d)
+	}
+	if d := localDate("2026-11-27 oops"); d != "" {
+		t.Fatalf("got %s", d)
+	}
+	// Naive timestamps read as UTC: 08:00 naive = 13:30 IST same date.
+	if d := localDate("2026-11-27T08:00:00"); d != "2026-11-27" {
 		t.Fatalf("got %s", d)
 	}
 }

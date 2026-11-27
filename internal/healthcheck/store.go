@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agento/internal/mongo"
 	"agento/internal/validate"
@@ -941,8 +942,8 @@ func normWorkoutType(t string) (string, error) {
 	if t = strings.ToLower(strings.TrimSpace(t)); t == "" {
 		return "other", nil
 	}
-	if len(t) > 60 {
-		return "", fail("workout type must be <= 60 characters, got %d", len(t))
+	if n := utf8.RuneCountInString(t); n > 60 {
+		return "", fail("workout type must be <= 60 characters, got %d", n)
 	}
 	return t, nil
 }

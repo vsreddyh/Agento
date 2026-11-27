@@ -46,7 +46,9 @@ soft-deletes instead: flagged rows vanish from reads at once and TTL away
   containers, editing live `.env` — ask first, every time, and never do
   them unannounced: this checkout may BE the live stack.
 - After compose changes, `up -d` alone does not recreate: `ps`, `podman rm -f
-  <container-name>`, `up -d <service>`. Keep the explicit `-f`.
+  <container-name>`, `up -d <service>`. Keep the explicit
+  `podman-compose --env-file .env -f docker/docker-compose.yml` spelling —
+  bare `-f` without `--env-file` runs every `${VAR}` empty.
 - `podman-compose` cannot parse `condition:` in `depends_on` — short list form only.
 - Never `cat`/`echo` `PASSWORD` or `OPENCODE_API_KEY`, never commit them.
   All env lives in the single git-ignored root `.env`.

@@ -50,15 +50,14 @@ func parseSyncTime(s string) (time.Time, bool) {
 }
 
 // localDate buckets an ISO timestamp into the user's (IST) calendar date.
+// Unparseable input is invalid (""), never a guessed prefix: a corrupt
+// timestamp must fail or count invalid downstream, not land on a date.
 func localDate(iso string) string {
 	s := strings.TrimSpace(iso)
 	if t, ok := parseSyncTime(s); ok {
 		return t.In(healthcheck.IST()).Format("2006-01-02")
 	}
-	if len(s) >= 10 {
-		return s[:10]
-	}
-	return s
+	return ""
 }
 
 // minutesBetween returns whole-minute duration; ok=false when unparseable
@@ -166,15 +165,15 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		// Sessions bucket by wake date but carry their own start, so a
 		// night crossing midnight still attributes to the morning —
 		// while the dedup hash keys on the real start. An unparseable
-		// start still syncs (minutes only), like a manual log_sleep —
-		// but an empty wake date is invalid, not a session on the sync
-		// date. Naive timestamps parse as UTC, same as localDate above.
-		day := localDate(s.EndISO)
-		if strings.TrimSpace(s.EndISO) == "" || day == "" {
-			log.Printf("skipping sleep with empty end timestamp (minutes=%d)", s.TotalMinutes)
+		// end timestamp skips-and-counts (invalid, not a session on the
+		// sync date); an unparseable start still syncs (minutes only),
+		// like a manual log_sleep. Naive timestamps parse as UTC.
+		if _, ok := parseSyncTime(s.EndISO); !ok {
+			log.Printf("skipping sleep with unparseable end timestamp: %q (minutes=%d)", s.EndISO, s.TotalMinutes)
 			tsInvalidSleeps++
 			continue
 		}
+		day := localDate(s.EndISO)
 		start, ok := parseSyncTime(s.StartISO)
 		var startPtr *time.Time
 		if ok {
