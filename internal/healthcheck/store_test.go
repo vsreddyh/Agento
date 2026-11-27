@@ -88,6 +88,10 @@ func TestFoodRoundTrip(t *testing.T) {
 	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, []string{"sugar"}, nil); err == nil {
 		t.Fatal("expected unknown-macro error on clear")
 	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil,
+		map[string]*float64{"kcal": fptr(1)}, []string{"kcal"}, nil); err == nil {
+		t.Fatal("expected set+clear overlap error")
+	}
 	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("expected empty-patch error")
 	}
@@ -181,6 +185,9 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.CorrectSleep(ctx, "nonexistent", 60); err == nil {
 		t.Fatal("expected unknown-id error")
 	}
+	if _, err := s.CorrectSleep(ctx, sessID, 25*60); err == nil {
+		t.Fatal("expected over-24h error")
+	}
 	dry, err := s.DeleteSleep(ctx, sessID, true)
 	if err != nil || dry["would_delete"] != 1 {
 		t.Fatalf("dry run %v %v", dry, err)
@@ -235,8 +242,8 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if err != nil || res2.SessionsSkipped != 1 || res2.WorkoutsSkipped != 1 {
 		t.Fatalf("resync %v %v", res2, err)
 	}
-	// Sync validation: negative scalars and implausible sessions fail
-	// before anything is written (422, not 500).
+	// Sync validation tiers: bad scalars fail the batch (422, not 500);
+	// bad entries skip-and-count without blocking the rest.
 	negSteps := -5
 	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, Steps: &negSteps}); err == nil {
 		t.Fatal("expected negative-steps error")
@@ -245,9 +252,10 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, ActiveKcal: &negKcal}); err == nil {
 		t.Fatal("expected negative-kcal error")
 	}
-	if _, err := s.RecordSync(ctx, SyncRecord{Date: day,
-		Sleeps: []SleepIn{{Day: day, Minutes: 25 * 60}}}); err == nil {
-		t.Fatal("expected over-24h session error")
+	skipRes, err := s.RecordSync(ctx, SyncRecord{Date: day,
+		Sleeps: []SleepIn{{Day: day, Minutes: 25 * 60}}})
+	if err != nil || skipRes.SessionsInvalid != 1 || skipRes.SessionsAdded != 0 {
+		t.Fatalf("invalid entry should skip, not fail: %v %v", skipRes, err)
 	}
 	sum, err := s.DailySummary(ctx, day)
 	if err != nil {

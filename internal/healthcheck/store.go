@@ -214,6 +214,24 @@ func mustDay(day string) (string, error) {
 }
 
 // hexID renders an _id as hex, like miser-money's oidHex.
+// ParseSyncTime parses an ISO timestamp from either writer. Fractional
+// seconds are accepted (RFC3339Nano); naive timestamps (no zone) are
+// read as UTC — the same rule in every parse site, so a retried payload
+// hashes identically whether zoned or naive.
+func ParseSyncTime(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse(time.RFC3339Nano, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
+		return t, true
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC); err == nil {
+		return t, true
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04:05.999999999", s, time.UTC); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
 // IST is the day-bucketing zone every writer shares: calendar dates are
 // IST midnights, matching the app's localDate. Fixed offset, always
 // available — LoadLocation depends on tzdata the minimal container may
@@ -461,6 +479,9 @@ func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *str
 	for _, k := range clearMacros {
 		if err := checkMacroName(k); err != nil {
 			return nil, err
+		}
+		if _, ok := macros[k]; ok {
+			return nil, fail("macro '%s' is both set and cleared — pick one", k)
 		}
 		unset[k] = ""
 	}
@@ -726,11 +747,8 @@ func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) (
 		}
 		byDay[day] = append(byDay[day], r)
 	}
-	if !asc {
-		for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
-			order[i], order[j] = order[j], order[i]
-		}
-	}
+	// Day order comes from the DB sort (directional); only value sorts
+	// reorder in memory below.
 	out := []bson.M{}
 	for _, day := range order {
 		sessions := make([]bson.M, 0, len(byDay[day]))
@@ -789,6 +807,9 @@ func (s *Store) CorrectSleep(ctx context.Context, id string, minutes int) (bson.
 	}
 	if minutes <= 0 {
 		return nil, fail("sleep session minutes must be > 0")
+	}
+	if minutes > 24*60 {
+		return nil, fail("sleep session minutes must be <= 1440 (24h), got %d", minutes)
 	}
 	var doc bson.M
 	if err := s.sleep.FindOne(ctx, bson.M{"_id": oid}).Decode(&doc); err != nil {
@@ -973,11 +994,8 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 		}
 		byDay[day] = append(byDay[day], r)
 	}
-	if !asc {
-		for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
-			order[i], order[j] = order[j], order[i]
-		}
-	}
+	// Day order comes from the DB sort (directional); only value sorts
+	// reorder in memory below.
 	out := []bson.M{}
 	for _, day := range order {
 		wos := make([]bson.M, 0, len(byDay[day]))
@@ -1090,13 +1108,17 @@ type SyncRecord struct {
 
 // SyncResult reports what one sync wrote. Re-sent sessions/workouts are
 // skipped quietly (already there), not errors — syncs are cumulative.
+// Invalid entries are skipped and counted, never batch-failing: one
+// corrupt Health Connect timestamp must not stall steps/scalars.
 type SyncResult struct {
 	Date            string `json:"date"`
 	Steps           *int   `json:"steps,omitempty"`
 	SessionsAdded   int    `json:"sessions_added"`
 	SessionsSkipped int    `json:"sessions_skipped"`
+	SessionsInvalid int    `json:"sessions_invalid"`
 	WorkoutsAdded   int    `json:"workouts_added"`
 	WorkoutsSkipped int    `json:"workouts_skipped"`
+	WorkoutsInvalid int    `json:"workouts_invalid"`
 }
 
 // RecordSync is the single write path for hc_days, hc_sleep and
@@ -1107,10 +1129,10 @@ type SyncResult struct {
 //
 // Each entry keeps its own bucketed day (a backfill's nights stay on
 // their mornings); rec.Date covers only the scalars. Input is validated
-// before anything is written, so a bad session fails the sync before the
-// scalars land — but later write-time failures (duplicate hash, DB error)
-// can still land partial rows after the scalars. Best-effort, not atomic:
-// the sync is idempotent, so a retry converges instead of duplicating.
+// in two tiers: bad scalars (date, steps, kcal) fail the whole batch,
+// while bad entries are skipped and counted — one corrupt timestamp never
+// stalls the rest. Best-effort, not atomic: write-time failures can still
+// land partial rows, and a retry converges instead of duplicating.
 func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, error) {
 	day, err := mustDay(rec.Date)
 	if err != nil {
@@ -1122,23 +1144,29 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	if rec.ActiveKcal != nil && *rec.ActiveKcal < 0 {
 		return SyncResult{}, fail("active_kcal must be >= 0, got %v", *rec.ActiveKcal)
 	}
+	res := SyncResult{Date: day}
+	validSleeps := make([]SleepIn, 0, len(rec.Sleeps))
 	for i := range rec.Sleeps {
 		if rec.Sleeps[i].Day == "" {
 			rec.Sleeps[i].Day = day
 		}
 		if err := checkSleepIn(rec.Sleeps[i]); err != nil {
-			return SyncResult{}, err
+			res.SessionsInvalid++
+			continue
 		}
+		validSleeps = append(validSleeps, rec.Sleeps[i])
 	}
+	validWorkouts := make([]WorkoutIn, 0, len(rec.Workouts))
 	for i := range rec.Workouts {
 		if rec.Workouts[i].Day == "" {
 			rec.Workouts[i].Day = day
 		}
 		if err := checkWorkoutIn(rec.Workouts[i]); err != nil {
-			return SyncResult{}, err
+			res.WorkoutsInvalid++
+			continue
 		}
+		validWorkouts = append(validWorkouts, rec.Workouts[i])
 	}
-	res := SyncResult{Date: day}
 	set := bson.M{"updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	if rec.Steps != nil {
 		set["steps"] = *rec.Steps
@@ -1151,7 +1179,7 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 		options.Update().SetUpsert(true)); err != nil {
 		return SyncResult{}, err
 	}
-	for _, sl := range rec.Sleeps {
+	for _, sl := range validSleeps {
 		out, err := s.insertSleepSession(ctx, sl.Day, sl.Start, sl.Minutes, true)
 		if err != nil {
 			return SyncResult{}, err
@@ -1162,7 +1190,7 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 			res.SessionsAdded++
 		}
 	}
-	for _, w := range rec.Workouts {
+	for _, w := range validWorkouts {
 		out, err := insertWorkout(ctx, s.workouts, w, true)
 		if err != nil {
 			return SyncResult{}, err

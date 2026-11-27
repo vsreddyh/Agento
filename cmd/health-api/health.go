@@ -41,22 +41,12 @@ type HealthSyncPayload struct {
 	Workouts           []WorkoutEntry `json:"workouts"`
 }
 
-// parseSyncTime parses a Health Connect ISO timestamp. Fractional
-// seconds are accepted (RFC3339Nano); naive timestamps (no zone) are
-// read as UTC — the same rule in every parse site, so a retried payload
-// hashes identically whether zoned or naive.
+// parseSyncTime parses a Health Connect ISO timestamp: fractional
+// seconds accepted, naive read as UTC — one rule, shared with the MCP
+// (healthcheck.ParseSyncTime), so a retried payload hashes identically
+// whether zoned or naive.
 func parseSyncTime(s string) (time.Time, bool) {
-	s = strings.TrimSpace(s)
-	if t, err := time.Parse(time.RFC3339Nano, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
-		return t, true
-	}
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC); err == nil {
-		return t, true
-	}
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05.999999999", s, time.UTC); err == nil {
-		return t, true
-	}
-	return time.Time{}, false
+	return healthcheck.ParseSyncTime(s)
 }
 
 // localDate buckets an ISO timestamp into the user's (IST) calendar date.
@@ -228,9 +218,10 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	if p.ActiveCaloriesKcal != nil {
 		kcal = *p.ActiveCaloriesKcal
 	}
-	log.Printf("synced device=%s steps=%d calories=%v sleep=%d workouts=%d (+%d sessions +%d workouts, %d+%d skipped)",
+	log.Printf("synced device=%s steps=%d calories=%v sleep=%d workouts=%d (+%d sessions +%d workouts, %d+%d skipped, %d+%d invalid)",
 		p.Device, steps, kcal, len(p.Sleep), len(p.Workouts),
-		syncRes.SessionsAdded, syncRes.WorkoutsAdded, syncRes.SessionsSkipped, syncRes.WorkoutsSkipped)
+		syncRes.SessionsAdded, syncRes.WorkoutsAdded, syncRes.SessionsSkipped, syncRes.WorkoutsSkipped,
+		syncRes.SessionsInvalid, syncRes.WorkoutsInvalid)
 	writeJSON(w, http.StatusOK, bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339)})
 }
 

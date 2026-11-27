@@ -200,13 +200,13 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "health-check", Version: "2.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_food",
-		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero."},
+		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero. datetime is RFC3339 (naive read as UTC), =now when absent."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			dt := time.Now().UTC()
 			if in.Datetime != "" {
-				t, err := time.Parse(time.RFC3339Nano, in.Datetime)
-				if err != nil {
-					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339", in.Datetime))
+				t, ok := healthcheck.ParseSyncTime(in.Datetime)
+				if !ok {
+					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339 (naive read as UTC)", in.Datetime))
 				}
 				dt = t
 			}
@@ -249,7 +249,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
-		Description: "Patch one food entry by id: supplied fields replace, omitted keep; clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). Ask-gated like edit_transaction."},
+		Description: "Patch one food entry by id: supplied fields replace, omitted keep; clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC). Ask-gated like edit_transaction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			macros := map[string]*float64{}
 			for k, v := range map[string]*float64{"kcal": in.Kcal, "protein": in.Protein, "carbs": in.Carbs, "fat": in.Fat, "fiber": in.Fiber} {
@@ -259,9 +259,9 @@ func main() {
 			}
 			var dt *time.Time
 			if in.Datetime != nil {
-				t, err := time.Parse(time.RFC3339Nano, *in.Datetime)
-				if err != nil {
-					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339", *in.Datetime))
+				t, ok := healthcheck.ParseSyncTime(*in.Datetime)
+				if !ok {
+					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339 (naive read as UTC)", *in.Datetime))
 				}
 				dt = &t
 			}

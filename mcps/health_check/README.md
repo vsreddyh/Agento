@@ -28,7 +28,7 @@ vary any field, or delete and re-log, to record both.
 
 Food (id-keyed, full CRUD): `log_food(what, qty?, macros?, note?, datetime?)`,
 `list_food(start, end, sort_by?, sort?, what?)`, `get_food(id)`,
-`correct_food(id, patch…)` (ask), `delete_food(id, dry_run=true)` (ask).
+`correct_food(id, patch…, clear_macros?)` (ask), `delete_food(id, dry_run=true)` (ask).
 Weight (date-keyed, upsert is the correction): `log_weight(kg, date?)`,
 `list_weight(…)`, `delete_weight(date, dry_run=true)` (ask).
 Sleep (session-keyed): `log_sleep(hours, date?)`, `list_sleep(…)`,
@@ -46,8 +46,11 @@ fields (`list_food`: `datetime,kcal`; `list_weight`: `date,kg`;
 `list_sleep`: `date,hours`; `list_workouts`: `date,minutes,kcal`),
 `sort` is `asc|desc`. Unknown values return errors on both layers (schema
 first, then the store's `fail()` naming the allowed set); the applied pair
-is echoed. Filters are exact match on lowered text and return the empty
-page when nothing matches; bad dates/ids return errors.
+is echoed along with `count`/`total`/`truncated` (cap 500 rows — a
+truncated page means narrow the dates). Value sorts (`hours`/`minutes`/
+`kcal`) apply within the returned page. Filters are exact match on
+lowered text and return the empty page when nothing matches; bad
+dates/ids return errors.
 
 Run: `go run ./cmd/health-check` (stdio), needs `MONGODB_URI`/`MONGODB_DB`.
 Built binary: `bin/health-check` (via `./scripts/build-mcps.sh`), launched by
