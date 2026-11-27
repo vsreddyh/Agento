@@ -384,7 +384,10 @@ func (s *Store) LogFood(ctx context.Context, day string, dt time.Time, what, qty
 	}
 	doc := bson.M{"datetime": primitive.NewDateTimeFromTime(dt.UTC()), "day": day,
 		"what": what, "what_lc": strings.ToLower(what),
-		"qty": strings.TrimSpace(qty), "createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
+		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
+	if q := strings.TrimSpace(qty); q != "" {
+		doc["qty"] = q
+	}
 	for k, v := range checked {
 		doc[k] = v
 	}
@@ -400,7 +403,10 @@ func (s *Store) LogFood(ctx context.Context, day string, dt time.Time, what, qty
 }
 
 func foodOut(doc bson.M) bson.M {
-	out := bson.M{"_id": hexID(doc["_id"]), "day": doc["day"], "what": doc["what"], "qty": doc["qty"]}
+	out := bson.M{"_id": hexID(doc["_id"]), "day": doc["day"], "what": doc["what"]}
+	if v, ok := doc["qty"]; ok {
+		out["qty"] = v
+	}
 	if v, ok := doc["datetime"]; ok {
 		out["datetime"] = fmtDate(v)
 	}
@@ -506,7 +512,11 @@ func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *str
 		}
 	}
 	if qty != nil {
-		upd["qty"] = strings.TrimSpace(*qty)
+		if q := strings.TrimSpace(*qty); q != "" {
+			upd["qty"] = q
+		} else {
+			unset["qty"] = ""
+		}
 	}
 	if note != nil {
 		if n := strings.TrimSpace(*note); n != "" {
@@ -729,7 +739,7 @@ func (s *Store) LogSleep(ctx context.Context, day string, hours float64) (bson.M
 	if err != nil {
 		return nil, err
 	}
-	return bson.M{"date": day, "sleep_hours": round1(float64(minutes) / 60), "session": entry}, nil
+	return bson.M{"day": day, "sleep_hours": round1(float64(minutes) / 60), "session": entry}, nil
 }
 
 func sleepOut(doc bson.M) bson.M {
@@ -801,7 +811,7 @@ func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) (
 		for _, se := range byDay[day] {
 			sessions = append(sessions, sleepOut(se))
 		}
-		out = append(out, bson.M{"date": day, "sleep_hours": sleepHours(sessions), "sessions": sessions})
+		out = append(out, bson.M{"day": day, "sleep_hours": sleepHours(sessions), "sessions": sessions})
 	}
 	if sortBy == "hours" {
 		sortDaysByFloat(out, "sleep_hours", asc)
@@ -833,8 +843,8 @@ func sortDaysByFloat(rows []bson.M, key string, asc bool) {
 		fi, _ := validate.ToFloat(rows[i][key])
 		fj, _ := validate.ToFloat(rows[j][key])
 		if fi == fj {
-			di, _ := rows[i]["date"].(string)
-			dj, _ := rows[j]["date"].(string)
+			di, _ := rows[i]["day"].(string)
+			dj, _ := rows[j]["day"].(string)
 			if asc {
 				return di < dj
 			}
@@ -903,7 +913,7 @@ func (s *Store) CorrectSleep(ctx context.Context, id string, minutes int) (bson.
 		}
 		return nil, err
 	}
-	return bson.M{"date": day, "id": id, "minutes": minutes}, nil
+	return bson.M{"day": day, "id": id, "minutes": minutes}, nil
 }
 
 // DeleteSleep hard-deletes one session by entry id. Unknown ids fail;
@@ -1091,7 +1101,7 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 		if len(wos) == 0 {
 			continue
 		}
-		row := bson.M{"date": day, "workouts": wos}
+		row := bson.M{"day": day, "workouts": wos}
 		if sortBy == "minutes" {
 			row["_sort"] = workoutMinutes(wos)
 		} else if sortBy == "kcal" {
@@ -1166,7 +1176,7 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 		}
 		return nil, err
 	}
-	return bson.M{"date": day, "id": id, "type": newType, "minutes": newMin, "kcal": newKcal}, nil
+	return bson.M{"day": day, "id": id, "type": newType, "minutes": newMin, "kcal": newKcal}, nil
 }
 
 // DeleteWorkout hard-deletes one workout by id. Unknown ids fail;
@@ -1224,10 +1234,12 @@ type SyncResult struct {
 //
 // Each entry keeps its own bucketed day (a backfill's nights stay on
 // their mornings); rec.Date covers only the scalars. Input is validated
-// in two tiers: bad scalars (date, steps, kcal) fail the whole batch,
-// while bad entries are skipped and counted — one corrupt timestamp never
-// stalls the rest. Best-effort, not atomic: write-time failures can still
-// land partial rows, and a retry converges instead of duplicating.
+// in three tiers: a bad batch date or scalar fails the whole payload
+// (422 — a corrupt SyncedAtISO/scalar stalls everything by design, since
+// scalars have nowhere else to go); bad entries are skipped and counted;
+// an empty sync writes nothing at all. Best-effort past validation, not
+// atomic: write-time failures can still land partial rows, and a retry
+// converges instead of duplicating.
 func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, error) {
 	day, err := mustDay(rec.Date)
 	if err != nil {
@@ -1257,6 +1269,12 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 			continue
 		}
 		validWorkouts = append(validWorkouts, rec.Workouts[i])
+	}
+	// An empty sync writes nothing — not even a bare day doc. A heartbeat
+	// with all entries skipped-invalid leaves no trace; DailySummary then
+	// reports the day as missing (nulls), not as a zero sync.
+	if rec.Steps == nil && rec.ActiveKcal == nil && len(validSleeps) == 0 && len(validWorkouts) == 0 {
+		return res, nil
 	}
 	set := bson.M{"updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	if rec.Steps != nil {
@@ -1357,10 +1375,13 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 		return nil, err
 	}
 	var sessions []bson.M
-	var sleepHours float64
+	var sleepHours any
 	if len(sleeps) > 0 {
 		sessions, _ = sleeps[0]["sessions"].([]bson.M)
 		sleepHours, _ = sleeps[0]["sleep_hours"].(float64)
+		if sessions == nil {
+			sleepHours = nil
+		}
 	}
 	var wos []bson.M
 	if len(workouts) > 0 {
@@ -1383,7 +1404,7 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 		}
 	}
 	workoutKcal := workoutKcal(wos)
-	out := bson.M{"date": day, "foods": foodCount, "totals": totals, "macro_counts": macroCounts,
+	out := bson.M{"day": day, "foods": foodCount, "totals": totals, "macro_counts": macroCounts,
 		"sleep_hours": sleepHours, "sessions": sessions, "workouts": wos,
 		"steps": steps, "active_kcal": activeKcal,
 		"cal_in": totals["kcal"], "workout_kcal": workoutKcal}

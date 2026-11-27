@@ -208,7 +208,7 @@ Operators use the `mongo` Go CLI (`cmd/mongo/main.go`) directly:
 
 ```bash
 go run ./cmd/mongo count money_transactions '{"type":"expense"}'
-go run ./cmd/mongo insert hc_weight '{"date":"2026-08-08","kg":63.2}'
+go run ./cmd/mongo insert hc_weight '{"date":"2026-08-08","kg":63.2}'  # raw escape hatch: skips LogWeight validation (real date, 0<kg<=500) + upsert semantics — prefer the log_weight MCP verb
 go run ./cmd/mongo get hc_days '{"date":"2026-08-08"}'  # read-only: steps/sleep/workouts write through POST /api/health/sync (validated) — never raw upserts
 # update rewrites every match (UpdateMany $set — plain fields, not a full
 # update doc). The project Blocked migration, then its verify:
