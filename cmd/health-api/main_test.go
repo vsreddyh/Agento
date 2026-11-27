@@ -456,6 +456,25 @@ func TestSyncBatchCapCarriesCounts(t *testing.T) {
 			t.Fatalf("batch-cap 422 must carry over-cap counts, got %s", w.Body.String())
 		}
 	}
+	// Both sides over cap: one 422 names both, not just the first.
+	var workouts []string
+	for i := 0; i < 101; i++ {
+		workouts = append(workouts, fmt.Sprintf(`{"startIso":"2026-11-26T10:00:00Z","endIso":"2026-11-26T10:30:00Z","title":"r%d"}`, i))
+	}
+	bodyBoth := `{"device":"test","syncedAtIso":"2026-11-27T10:00:00Z","sleep":[` + strings.Join(sessions, ",") +
+		`],"workouts":[` + strings.Join(workouts, ",") + `]}`
+	req = httptest.NewRequest(http.MethodPost, "/api/health/sync", strings.NewReader(bodyBoth))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("oversize batch: got %d (%s), want 422", w.Code, w.Body.String())
+	}
+	for _, want := range []string{`"sessions_over_cap":101`, `"workouts_over_cap":101`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("both-sides batch-cap 422 must name both sides, got %s", w.Body.String())
+		}
+	}
 }
 
 // #519 reorder: collection-shaped verb, guarded before any MongoDB touch.
