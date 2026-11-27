@@ -107,6 +107,10 @@ func TestFoodRoundTrip(t *testing.T) {
 		t.Fatal("expected unknown-macro error on clear")
 	}
 	if _, err := s.CorrectFood(ctx, id, nil, nil, nil,
+		map[string]*float64{"kcal": fptr(1e9)}, nil, nil); err == nil {
+		t.Fatal("expected absurd-macro error on correct")
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil,
 		map[string]*float64{"kcal": fptr(1)}, []string{"kcal"}, nil); err == nil {
 		t.Fatal("expected set+clear overlap error")
 	}
@@ -161,6 +165,9 @@ func TestWeightRoundTrip(t *testing.T) {
 	dry, err := s.DeleteWeight(ctx, day, true)
 	if err != nil || dry["would_delete"] != 1 {
 		t.Fatalf("dry run %v %v", dry, err)
+	}
+	if w, _ := dry["weight"].(bson.M); w["createdAt"] == nil {
+		t.Fatalf("dry run should show createdAt: %v", dry)
 	}
 	live, err := s.DeleteWeight(ctx, day, false)
 	if err != nil || live["deleted"] != 1 {
@@ -334,6 +341,17 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if err != nil || emptyDay.SessionsInvalid != 1 || emptyDay.SessionsAdded != 0 {
 		t.Fatalf("empty Day should count invalid: %v %v", emptyDay, err)
 	}
+	// Entries-only sync with a valid date writes no day doc and echoes
+	// no date: there are no scalars to attribute it to.
+	entriesOnly, err := s.RecordSync(ctx, SyncRecord{Date: "2026-09-14",
+		Sleeps: []SleepIn{{Day: "2026-09-14", Minutes: 60}}})
+	if err != nil || entriesOnly.Date != "" || entriesOnly.SessionsAdded != 1 {
+		t.Fatalf("entries-only sync %v %v", entriesOnly, err)
+	}
+	if n := countDay(t, ctx, s.days, "date", "2026-09-14"); n != 0 {
+		t.Fatal("entries-only sync created a day doc")
+	}
+	cleanDay(t, s, ctx, "2026-09-14")
 	// Bad batch date with no scalars: entries still write on their own
 	// days instead of 422ing the whole payload.
 	badDate, err := s.RecordSync(ctx, SyncRecord{Date: "not-a-day",

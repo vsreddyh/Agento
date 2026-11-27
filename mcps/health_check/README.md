@@ -7,7 +7,7 @@ prune tool, retention is a no-op for all five collections.
   indexed), `what` + `what_lc` (lowercased copy for exact-match filter),
   `qty` free-text, `kcal/protein/carbs/fat/fiber` (optional 1-decimal, >= 0),
   `note?`, `createdAt`. One row = one thing eaten. No meals, no totals.
-- `hc_weight`: `date` (unique), `kg`, `createdAt`. Re-logging overwrites.
+- `hc_weight`: `date` (unique), `kg`, `createdAt` (set once on insert, never rewritten by re-logs). Re-logging overwrites `kg` only.
 - `hc_days`: `date` (unique), `steps`, `active_kcal`, `updatedAt` (always
   Date) — scalars only, written through the single `RecordSync` path the MCP
   and `health-api/sync` share.

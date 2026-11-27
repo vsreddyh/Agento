@@ -553,20 +553,20 @@ func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *str
 		}
 		unset[k] = ""
 	}
+	setMacros := map[string]float64{}
 	for k, v := range macros {
-		if err := checkMacroName(k); err != nil {
-			return nil, err
+		if v != nil {
+			setMacros[k] = *v
 		}
-		if v == nil {
-			continue
+	}
+	// Same caps as the log path: a correction cannot store what a fresh
+	// log would reject (unknown names, NaN, negatives, absurd values).
+	if checked, err := checkMacros(setMacros); err != nil {
+		return nil, err
+	} else {
+		for k, v := range checked {
+			upd[k] = v
 		}
-		if math.IsNaN(*v) || math.IsInf(*v, 0) {
-			return nil, fail("macro '%s' must be a number", k)
-		}
-		if *v < 0 {
-			return nil, fail("macro '%s' must be >= 0", k)
-		}
-		upd[k] = round1(*v)
 	}
 	if dt != nil {
 		upd["datetime"] = primitive.NewDateTimeFromTime(dt.UTC())
@@ -1309,7 +1309,7 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	if rec.ActiveKcal != nil && *rec.ActiveKcal > maxActiveKcal {
 		return SyncResult{}, fail("active_kcal must be <= %d, got %v", maxActiveKcal, *rec.ActiveKcal)
 	}
-	res := SyncResult{Date: day}
+	res := SyncResult{}
 	validSleeps := make([]SleepIn, 0, len(rec.Sleeps))
 	for i := range rec.Sleeps {
 		// No defaulting: an empty Day is invalid input, not a silent
@@ -1344,8 +1344,10 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	}
 	// Entry-only syncs leave hc_days alone: the day doc is scalars-only,
 	// so a sync with no scalars writes nothing there — no bare
-	// updatedAt-only marker rows.
+	// updatedAt-only marker rows. res.Date is set only when scalars were
+	// written: entries-only syncs echo no date.
 	if hasScalars {
+		res.Date = day
 		if _, err := s.days.UpdateOne(ctx, bson.M{"date": day}, bson.M{"$set": set},
 			options.Update().SetUpsert(true)); err != nil {
 			return SyncResult{}, err

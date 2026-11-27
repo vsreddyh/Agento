@@ -65,7 +65,8 @@ instead of round-tripping one at a time.
   (free-text type, lowercased on write, empty → `other`) / `list_workouts` / `correct_workout` /
   `delete_workout`. `daily_summary` (food-derived cal-in with per-macro
   counts, so partial-macro days read as lower bounds; `workout_kcal` +
-  `active_kcal` as separate cal-out lines, no single net).
+  `active_kcal` as separate cal-out lines, no single net; missing data
+  reads as null on every scalar, never a measured zero).
   Dedup caveat: an exact-duplicate same-day sleep/workout collides on purpose
   (double-submit protection) — vary any field, or delete and re-log, to
   record a genuine repeat.
