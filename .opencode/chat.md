@@ -62,7 +62,7 @@ instead of round-tripping one at a time.
   `log_weight` (upsert per date; re-logging is the correction) / `list_weight` /
   `delete_weight`. `log_sleep` (manual hours) / `list_sleep` (per-day derived
   hours + sessions) / `correct_sleep` / `delete_sleep`. `log_workout`
-  (free-text type, lowercased on write, empty → `other`) / `list_workouts` / `correct_workout` /
+  (free-text type, lowercased on write, empty → `other`, sync falls back to `Title`) / `list_workouts` / `correct_workout` /
   `delete_workout`. `daily_summary` (food-derived cal-in with per-macro
   counts, so partial-macro days read as lower bounds; `workout_kcal` +
   `active_kcal` as separate cal-out lines, no single net; missing data

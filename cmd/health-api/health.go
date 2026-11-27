@@ -10,7 +10,6 @@ import (
 	"errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"log"
-	"math"
 	"net/http"
 	"strings"
 	stdsync "sync"
@@ -62,17 +61,16 @@ func localDate(iso string) string {
 }
 
 // minutesBetween returns whole-minute duration; ok=false when unparseable
-// or non-positive. Fractional minutes round to nearest (90s -> 2, 20s ->
-// invalid), matching the manual path's whole-minutes-only rule in both
-// directions: sync never stores a fraction and never invents a 1-minute
-// workout from a sub-minute interval.
+// or under a minute. Sub-minute intervals are skipped, not rounded up:
+// like the manual path (which rejects fractional minutes), sync never
+// invents a 1-minute workout from seconds of data.
 func minutesBetween(startISO, endISO string) (dur int, ok bool) {
 	s, ok1 := parseSyncTime(startISO)
 	e, ok2 := parseSyncTime(endISO)
 	if !ok1 || !ok2 {
 		return 0, false
 	}
-	m := int(math.Round(e.Sub(s).Minutes()))
+	m := int(e.Sub(s).Minutes())
 	if m < 1 {
 		return 0, false
 	}

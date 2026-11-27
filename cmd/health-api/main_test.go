@@ -131,6 +131,11 @@ func TestMinutesBetween(t *testing.T) {
 	if _, ok := minutesBetween("2026-09-20T08:30:00+05:30", "2026-09-20T08:00:00+05:30"); ok {
 		t.Fatal("expected failure on reversed interval, not a 1-minute workout")
 	}
+	// Sub-minute intervals are invalid, not rounded up: sync never invents
+	// a 1-minute workout from seconds of data.
+	if _, ok := minutesBetween("2026-09-20T08:00:00Z", "2026-09-20T08:00:30Z"); ok {
+		t.Fatal("expected sub-minute failure")
+	}
 }
 
 func TestListTasksGuard(t *testing.T) {

@@ -251,7 +251,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
-		Description: "Patch one food entry by id: supplied fields replace, omitted keep; clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC). Ask-gated like edit_transaction."},
+		Description: "Patch one food entry by id: supplied fields replace, omitted keep; an empty string clears qty/note (what cannot be cleared); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC). Ask-gated like edit_transaction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			macros := map[string]*float64{}
 			for k, v := range map[string]*float64{"kcal": in.Kcal, "protein": in.Protein, "carbs": in.Carbs, "fat": in.Fat, "fiber": in.Fiber} {
@@ -311,7 +311,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_weight",
-		Description: "Hard-delete one date's weight row. Dry-runs by default."},
+		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes). Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteWeight(ctx, in.Date, dryRun(in.DryRun))
 			if err != nil {
