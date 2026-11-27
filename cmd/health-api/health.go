@@ -242,10 +242,16 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		p.Device, steps, kcal, len(p.Sleep), len(p.Workouts),
 		syncRes.SessionsAdded, syncRes.WorkoutsAdded, syncRes.SessionsSkipped, syncRes.WorkoutsSkipped,
 		syncRes.SessionsInvalid, syncRes.WorkoutsInvalid)
-	writeJSON(w, http.StatusOK, bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339),
-		"date": syncRes.Date, "sessions_added": syncRes.SessionsAdded, "sessions_skipped": syncRes.SessionsSkipped,
+	resp := bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339),
+		"sessions_added": syncRes.SessionsAdded, "sessions_skipped": syncRes.SessionsSkipped,
 		"sessions_invalid": syncRes.SessionsInvalid, "workouts_added": syncRes.WorkoutsAdded,
-		"workouts_skipped": syncRes.WorkoutsSkipped, "workouts_invalid": syncRes.WorkoutsInvalid})
+		"workouts_skipped": syncRes.WorkoutsSkipped, "workouts_invalid": syncRes.WorkoutsInvalid}
+	// The batch date covers only the scalars; entries-only syncs (or a
+	// bad batch date) write no scalars, so no date is echoed.
+	if syncRes.Date != "" {
+		resp["date"] = syncRes.Date
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // registerHealth wires this domain's routes. One function per file so main stays a

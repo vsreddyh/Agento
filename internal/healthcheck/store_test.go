@@ -145,6 +145,11 @@ func TestWeightRoundTrip(t *testing.T) {
 	if _, err := s.LogWeight(ctx, day, 70.5); err != nil {
 		t.Fatalf("weight: %v", err)
 	}
+	// Re-logging overwrites kg but keeps the original createdAt.
+	first, _ := s.LogWeight(ctx, day, 70.5)
+	if first["createdAt"] == nil || first["createdAt"] == "<nil>" {
+		t.Fatalf("weight missing createdAt: %v", first)
+	}
 	// Upsert is the correction: re-log overwrites.
 	if _, err := s.LogWeight(ctx, day, 71); err != nil {
 		t.Fatalf("re-log: %v", err)
@@ -197,6 +202,10 @@ func TestSleepWorkoutDedup(t *testing.T) {
 
 	if _, err := s.CorrectSleep(ctx, sessID, 8*60); err != nil {
 		t.Fatalf("correct: %v", err)
+	}
+	corr, err := s.CorrectSleep(ctx, sessID, 8*60)
+	if err != nil || corr["createdAt"] == nil || corr["day"] != day {
+		t.Fatalf("correct should return the full session: %v %v", corr, err)
 	}
 	days, _, _ = s.ListSleep(ctx, day, day, "", "")
 	if days[0]["sleep_hours"] != 8.0 {
@@ -262,6 +271,10 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.CorrectWorkout(ctx, woid, strptr("lift"), nil, nil); err != nil {
 		t.Fatalf("correct: %v", err)
 	}
+	corrW, err := s.CorrectWorkout(ctx, woid, nil, nil, fptr(310))
+	if err != nil || corrW["createdAt"] == nil || corrW["day"] != day {
+		t.Fatalf("correct should return the full workout: %v %v", corrW, err)
+	}
 	if _, err := s.CorrectWorkout(ctx, "nonexistent", nil, nil, nil); err == nil {
 		t.Fatal("expected unknown-id error")
 	}
@@ -298,6 +311,17 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	negKcal := -1.0
 	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, ActiveKcal: &negKcal}); err == nil {
 		t.Fatal("expected negative-kcal error")
+	}
+	hugeSteps := 2000000000
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, Steps: &hugeSteps}); err == nil {
+		t.Fatal("expected absurd-steps error")
+	}
+	hugeKcal := 1e9
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, ActiveKcal: &hugeKcal}); err == nil {
+		t.Fatal("expected absurd-kcal error")
+	}
+	if _, err := s.LogFood(ctx, day, time.Now().UTC(), "oil", "", map[string]float64{"kcal": 1e9}, ""); err == nil {
+		t.Fatal("expected absurd-macro error")
 	}
 	skipRes, err := s.RecordSync(ctx, SyncRecord{Date: day,
 		Sleeps: []SleepIn{{Day: day, Minutes: 25 * 60}}})
@@ -341,7 +365,7 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if ghost["sleep_hours"] != nil {
 		t.Fatalf("ghost sleep: %v", ghost)
 	}
-	if ghost["cal_in"] != nil || ghost["workout_kcal"] != nil || ghost["totals"] != nil {
+	if ghost["cal_in"] != nil || ghost["workout_kcal"] != nil || ghost["totals"] != nil || ghost["macro_counts"] != nil {
 		t.Fatalf("ghost totals: %v", ghost)
 	}
 	// Partial macros: one row with kcal, one without — totals are lower

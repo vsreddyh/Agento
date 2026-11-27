@@ -70,6 +70,18 @@ var (
 // MacroKeys is the 5-macro set shared by food rows.
 var MacroKeys = []string{"kcal", "protein", "carbs", "fat", "fiber"}
 
+// Absurdity bounds: corrupt-payload tripwires, not physiological limits.
+// Set 10-100x beyond human extremes so only garbage trips them (an int32
+// max or 1e9 must never land in hc_days). Violations fail like any other
+// domain error.
+const (
+	maxSteps       = 1000000
+	maxActiveKcal  = 100000
+	maxWorkoutKcal = 100000
+	maxFoodKcal    = 100000
+	maxFoodMacro   = 10000
+)
+
 // StoreError is the domain error.
 type StoreError struct{ Msg string }
 
@@ -308,6 +320,13 @@ func checkMacros(macros map[string]float64) (map[string]float64, error) {
 		}
 		if v < 0 {
 			return nil, fail("macro '%s' must be >= 0", k)
+		}
+		cap := float64(maxFoodMacro)
+		if k == "kcal" {
+			cap = maxFoodKcal
+		}
+		if v > cap {
+			return nil, fail("macro '%s' must be <= %v, got %v", k, cap, v)
 		}
 		out[k] = round1(v)
 	}
@@ -608,7 +627,11 @@ func (s *Store) LogWeight(ctx context.Context, day string, kg float64) (bson.M, 
 		options.Update().SetUpsert(true)); err != nil {
 		return nil, err
 	}
-	return bson.M{"date": day, "kg": kg}, nil
+	var row bson.M
+	if err := s.weight.FindOne(ctx, bson.M{"date": day}).Decode(&row); err != nil {
+		return nil, err
+	}
+	return bson.M{"date": row["date"], "kg": row["kg"], "createdAt": fmtDate(row["createdAt"])}, nil
 }
 
 // ListWeight scans a day range. sort_by is date|kg.
@@ -672,7 +695,7 @@ func (s *Store) DeleteWeight(ctx context.Context, day string, dryRun bool) (bson
 		if row == nil {
 			return bson.M{"would_delete": 0}, nil
 		}
-		return bson.M{"would_delete": 1, "weight": bson.M{"date": row["date"], "kg": row["kg"]}}, nil
+		return bson.M{"would_delete": 1, "weight": bson.M{"date": row["date"], "kg": row["kg"], "createdAt": fmtDate(row["createdAt"])}}, nil
 	}
 	res, err := s.weight.DeleteOne(ctx, bson.M{"date": day})
 	if err != nil {
@@ -914,7 +937,11 @@ func (s *Store) CorrectSleep(ctx context.Context, id string, minutes int) (bson.
 		}
 		return nil, err
 	}
-	return bson.M{"day": day, "id": id, "minutes": minutes}, nil
+	var updated bson.M
+	if err := s.sleep.FindOne(ctx, bson.M{"_id": oid}).Decode(&updated); err != nil {
+		return nil, err
+	}
+	return sleepOut(updated), nil
 }
 
 // DeleteSleep hard-deletes one session by entry id. Unknown ids fail;
@@ -979,6 +1006,9 @@ func insertWorkout(ctx context.Context, col *mongoDrv.Collection, w WorkoutIn, s
 	}
 	if w.Kcal < 0 {
 		return nil, fail("workout kcal must be >= 0")
+	}
+	if w.Kcal > maxWorkoutKcal {
+		return nil, fail("workout kcal must be <= %d, got %v", maxWorkoutKcal, w.Kcal)
 	}
 	minutes := round1(w.Minutes)
 	kcal := round1(w.Kcal)
@@ -1169,6 +1199,9 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 		if *kcal < 0 {
 			return nil, fail("workout kcal must be >= 0")
 		}
+		if *kcal > maxWorkoutKcal {
+			return nil, fail("workout kcal must be <= %d, got %v", maxWorkoutKcal, *kcal)
+		}
 		newKcal = round1(*kcal)
 		set["kcal"] = newKcal
 	}
@@ -1183,7 +1216,11 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 		}
 		return nil, err
 	}
-	return bson.M{"day": day, "id": id, "type": newType, "minutes": newMin, "kcal": newKcal}, nil
+	var updated bson.M
+	if err := s.workouts.FindOne(ctx, bson.M{"_id": oid}).Decode(&updated); err != nil {
+		return nil, err
+	}
+	return workoutOut(updated), nil
 }
 
 // DeleteWorkout hard-deletes one workout by id. Unknown ids fail;
@@ -1263,8 +1300,14 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	if rec.Steps != nil && *rec.Steps < 0 {
 		return SyncResult{}, fail("steps must be >= 0, got %d", *rec.Steps)
 	}
+	if rec.Steps != nil && *rec.Steps > maxSteps {
+		return SyncResult{}, fail("steps must be <= %d, got %d", maxSteps, *rec.Steps)
+	}
 	if rec.ActiveKcal != nil && *rec.ActiveKcal < 0 {
 		return SyncResult{}, fail("active_kcal must be >= 0, got %v", *rec.ActiveKcal)
+	}
+	if rec.ActiveKcal != nil && *rec.ActiveKcal > maxActiveKcal {
+		return SyncResult{}, fail("active_kcal must be <= %d, got %v", maxActiveKcal, *rec.ActiveKcal)
 	}
 	res := SyncResult{Date: day}
 	validSleeps := make([]SleepIn, 0, len(rec.Sleeps))
@@ -1367,6 +1410,9 @@ func checkWorkoutIn(w WorkoutIn) error {
 	if w.Kcal < 0 {
 		return fail("workout kcal must be >= 0")
 	}
+	if w.Kcal > maxWorkoutKcal {
+		return fail("workout kcal must be <= %d, got %v", maxWorkoutKcal, w.Kcal)
+	}
 	return nil
 }
 
@@ -1429,15 +1475,15 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 	workoutKcal := workoutKcal(wos)
 	// No rows means no measurement, not a measured zero: null beats 0
 	// for a day with nothing logged.
-	var totalsOut, calIn any = totals, totals["kcal"]
+	var totalsOut, calIn, macroCountsOut any = totals, totals["kcal"], macroCounts
 	var workoutKcalOut any = workoutKcal
 	if foodCount == 0 {
-		totalsOut, calIn = nil, nil
+		totalsOut, calIn, macroCountsOut = nil, nil, nil
 	}
 	if len(wos) == 0 {
 		workoutKcalOut = nil
 	}
-	out := bson.M{"day": day, "foods": foodCount, "totals": totalsOut, "macro_counts": macroCounts,
+	out := bson.M{"day": day, "foods": foodCount, "totals": totalsOut, "macro_counts": macroCountsOut,
 		"sleep_hours": sleepHours, "sessions": sessions, "workouts": wos,
 		"steps": steps, "active_kcal": activeKcal, "weight": nil,
 		"cal_in": calIn, "workout_kcal": workoutKcalOut}
