@@ -1337,38 +1337,15 @@ type SyncResult struct {
 // old string-vs-Date drift is gone by construction.
 //
 // Each entry keeps its own bucketed day (a backfill's nights stay on
-// their mornings); rec.Date covers only the scalars. Input is validated
-// in three tiers: present-but-bad scalars fail the payload (they are
-// homeless without a batch date); a bad batch date with no scalars lets
-// entries through on their own days; bad entries are skipped and counted.
-// An entries-only sync never touches hc_days, and an empty sync writes
-// nothing at all. Best-effort past validation, not atomic: write-time
-// failures can still land partial rows, and a retry converges instead
-// of duplicating.
+// their mornings); rec.Date covers only the scalars. Validation runs
+// entries first so every 422 carries the full skip breakdown (a retry
+// after fixing the scalar sees no new invalids); then the batch date and
+// scalars — bad scalars fail the payload (they are homeless without a
+// batch date), except an entries-only payload with a corrupt date still
+// writes its entries. An empty sync writes nothing at all. Best-effort
+// past validation, not atomic: write-time failures can still land partial
+// rows, and a retry converges instead of duplicating.
 func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, error) {
-	hasScalars := rec.Steps != nil || rec.ActiveKcal != nil
-	day, dateErr := mustDay(rec.Date)
-	if dateErr != nil {
-		// Scalars are homeless without a batch date; an entries-only
-		// payload with a corrupt date still writes its entries. A payload
-		// with nothing salvageable at all stays a 422.
-		if hasScalars || (len(rec.Sleeps) == 0 && len(rec.Workouts) == 0) {
-			return SyncResult{}, dateErr
-		}
-		day = ""
-	}
-	if rec.Steps != nil && *rec.Steps < 0 {
-		return SyncResult{}, fail("steps must be >= 0, got %d", *rec.Steps)
-	}
-	if rec.Steps != nil && *rec.Steps > maxSteps {
-		return SyncResult{}, fail("steps must be <= %d, got %d", maxSteps, *rec.Steps)
-	}
-	if rec.ActiveKcal != nil && *rec.ActiveKcal < 0 {
-		return SyncResult{}, fail("active_kcal must be >= 0, got %v", *rec.ActiveKcal)
-	}
-	if rec.ActiveKcal != nil && *rec.ActiveKcal > maxActiveKcal {
-		return SyncResult{}, fail("active_kcal must be <= %d, got %v", maxActiveKcal, *rec.ActiveKcal)
-	}
 	res := SyncResult{}
 	validSleeps := make([]SleepIn, 0, len(rec.Sleeps))
 	for i := range rec.Sleeps {
@@ -1393,6 +1370,29 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	// reports the day as missing (nulls), not as a zero sync.
 	if rec.Steps == nil && rec.ActiveKcal == nil && len(validSleeps) == 0 && len(validWorkouts) == 0 {
 		return res, nil
+	}
+	hasScalars := rec.Steps != nil || rec.ActiveKcal != nil
+	day, dateErr := mustDay(rec.Date)
+	if dateErr != nil {
+		// Scalars are homeless without a batch date; an entries-only
+		// payload with a corrupt date still writes its entries. A payload
+		// with nothing salvageable at all stays a 422.
+		if hasScalars {
+			return res, dateErr
+		}
+		day = ""
+	}
+	if rec.Steps != nil && *rec.Steps < 0 {
+		return res, fail("steps must be >= 0, got %d", *rec.Steps)
+	}
+	if rec.Steps != nil && *rec.Steps > maxSteps {
+		return res, fail("steps must be <= %d, got %d", maxSteps, *rec.Steps)
+	}
+	if rec.ActiveKcal != nil && *rec.ActiveKcal < 0 {
+		return res, fail("active_kcal must be >= 0, got %v", *rec.ActiveKcal)
+	}
+	if rec.ActiveKcal != nil && *rec.ActiveKcal > maxActiveKcal {
+		return res, fail("active_kcal must be <= %d, got %v", maxActiveKcal, *rec.ActiveKcal)
 	}
 	set := bson.M{"updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	if rec.Steps != nil {

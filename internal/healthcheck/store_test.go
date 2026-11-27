@@ -369,6 +369,17 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, ActiveKcal: &hugeKcal}); err == nil {
 		t.Fatal("expected absurd-kcal error")
 	}
+	// Entry validation runs before scalar validation, so a 422 still
+	// carries the full invalid breakdown — a retry after fixing the
+	// scalar sees no new invalids.
+	badBoth, err := s.RecordSync(ctx, SyncRecord{Date: day, Steps: &negSteps,
+		Sleeps: []SleepIn{{Day: "bad-day", Minutes: 60}}})
+	if err == nil {
+		t.Fatal("expected negative-steps error")
+	}
+	if badBoth.SessionsInvalid != 1 {
+		t.Fatalf("scalar 422 must carry entry counts: %v", badBoth)
+	}
 	if _, err := s.LogFood(ctx, day, time.Now().UTC(), "oil", "", map[string]float64{"kcal": 1e9}, ""); err == nil {
 		t.Fatal("expected absurd-macro error")
 	}

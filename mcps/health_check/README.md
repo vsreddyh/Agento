@@ -16,8 +16,8 @@ prune tool, retention is a no-op for all five collections.
   dedup, unique), `createdAt`. Sleep hours are always derived from sessions.
 - `hc_workouts`: `day` (indexed), `type` (lowercased on write, empty →
   `other` (sync falls back to `Title` when `type` is empty), max 60 runes),
-  `minutes` (whole), `kcal?` (absent means unknown, never stored), `hash`
-  (content dedup, unique), `createdAt`.
+  `minutes` (whole 1–1440), `kcal?` (absent means unknown, never stored;
+  max 100000), `hash` (content dedup, unique), `createdAt`.
 
 Dedup hashes live on top-level docs with scalar unique indexes: unique
 multikey indexes do not enforce on this cluster (probed), so sessions and
