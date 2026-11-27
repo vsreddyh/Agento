@@ -37,9 +37,10 @@ Sleep (session-keyed): `log_sleep(hours, date?)`, `list_sleep(…)`,
 `log_workout(type?, minutes, kcal?, date?)` (empty type → `other`),
 `list_workouts(start, end, sort_by?, sort?, type?)`, `correct_workout(id, …)`
 (ask), `delete_workout(id, dry_run=true)` (ask).
-Read path: `daily_summary(date?)` — food-derived cal-in; `workout_kcal` +
-`active_kcal` as separate cal-out lines (no single net: Health Connect
-active calories already include exercise).
+Read path: `daily_summary(date?)` — food-derived cal-in with per-macro
+counts (`macro_counts`), plus `workout_kcal` + `active_kcal` as separate
+cal-out lines (no single net: Health Connect active calories already
+include exercise).
 
 Sort is two enums on every `list_*`: `sort_by` names only that list's
 fields (`list_food`: `datetime,kcal`; `list_weight`: `date,kg`;

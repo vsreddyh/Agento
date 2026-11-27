@@ -63,7 +63,8 @@ instead of round-tripping one at a time.
   `delete_weight`. `log_sleep` (manual hours) / `list_sleep` (per-day derived
   hours + sessions) / `correct_sleep` / `delete_sleep`. `log_workout`
   (free-text type, lowercased on write, empty → `other`) / `list_workouts` / `correct_workout` /
-  `delete_workout`. `daily_summary` (food-derived cal-in; `workout_kcal` +
+  `delete_workout`. `daily_summary` (food-derived cal-in with per-macro
+  counts, so partial-macro days read as lower bounds; `workout_kcal` +
   `active_kcal` as separate cal-out lines, no single net).
   Dedup caveat: an exact-duplicate same-day sleep/workout collides on purpose
   (double-submit protection) — vary any field, or delete and re-log, to
