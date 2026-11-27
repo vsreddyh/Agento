@@ -651,7 +651,7 @@ func (s *Store) ListWeight(ctx context.Context, start, end, sortBy, dir string) 
 	}
 	out := make([]bson.M, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, bson.M{"date": r["date"], "kg": r["kg"]})
+		out = append(out, bson.M{"date": r["date"], "kg": r["kg"], "createdAt": fmtDate(r["createdAt"])})
 	}
 	return out, total, nil
 }
@@ -743,7 +743,7 @@ func (s *Store) LogSleep(ctx context.Context, day string, hours float64) (bson.M
 }
 
 func sleepOut(doc bson.M) bson.M {
-	out := bson.M{"id": hexID(doc["_id"]), "minutes": doc["minutes"]}
+	out := bson.M{"id": hexID(doc["_id"]), "minutes": doc["minutes"], "createdAt": fmtDate(doc["createdAt"])}
 	if v, ok := doc["day"]; ok {
 		out["day"] = v
 	}
@@ -971,6 +971,9 @@ func insertWorkout(ctx context.Context, col *mongoDrv.Collection, w WorkoutIn, s
 	if w.Minutes <= 0 {
 		return nil, fail("workout minutes must be > 0")
 	}
+	if w.Minutes != math.Trunc(w.Minutes) {
+		return nil, fail("workout minutes must be whole minutes, got %v", w.Minutes)
+	}
 	if w.Minutes > 24*60 {
 		return nil, fail("workout minutes must be <= 1440 (24h), got %v", w.Minutes)
 	}
@@ -1002,7 +1005,7 @@ func (s *Store) LogWorkout(ctx context.Context, day, typ string, minutes, kcal f
 }
 
 func workoutOut(doc bson.M) bson.M {
-	out := bson.M{"id": hexID(doc["_id"]), "type": doc["type"], "minutes": doc["minutes"], "kcal": doc["kcal"]}
+	out := bson.M{"id": hexID(doc["_id"]), "type": doc["type"], "minutes": doc["minutes"], "kcal": doc["kcal"], "createdAt": fmtDate(doc["createdAt"])}
 	if v, ok := doc["day"]; ok {
 		out["day"] = v
 	}
@@ -1152,6 +1155,9 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 	if minutes != nil {
 		if *minutes <= 0 {
 			return nil, fail("workout minutes must be > 0")
+		}
+		if *minutes != math.Trunc(*minutes) {
+			return nil, fail("workout minutes must be whole minutes, got %v", *minutes)
 		}
 		if *minutes > 24*60 {
 			return nil, fail("workout minutes must be <= 1440 (24h), got %v", *minutes)
@@ -1352,6 +1358,9 @@ func checkWorkoutIn(w WorkoutIn) error {
 	if w.Minutes <= 0 {
 		return fail("workout minutes must be > 0")
 	}
+	if w.Minutes != math.Trunc(w.Minutes) {
+		return fail("workout minutes must be whole minutes, got %v", w.Minutes)
+	}
 	if w.Minutes > 24*60 {
 		return fail("workout minutes must be <= 1440 (24h), got %v", w.Minutes)
 	}
@@ -1418,12 +1427,22 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 		}
 	}
 	workoutKcal := workoutKcal(wos)
-	out := bson.M{"day": day, "foods": foodCount, "totals": totals, "macro_counts": macroCounts,
+	// No rows means no measurement, not a measured zero: null beats 0
+	// for a day with nothing logged.
+	var totalsOut, calIn any = totals, totals["kcal"]
+	var workoutKcalOut any = workoutKcal
+	if foodCount == 0 {
+		totalsOut, calIn = nil, nil
+	}
+	if len(wos) == 0 {
+		workoutKcalOut = nil
+	}
+	out := bson.M{"day": day, "foods": foodCount, "totals": totalsOut, "macro_counts": macroCounts,
 		"sleep_hours": sleepHours, "sessions": sessions, "workouts": wos,
 		"steps": steps, "active_kcal": activeKcal, "weight": nil,
-		"cal_in": totals["kcal"], "workout_kcal": workoutKcal}
+		"cal_in": calIn, "workout_kcal": workoutKcalOut}
 	if w != nil {
-		out["weight"] = bson.M{"date": w["date"], "kg": w["kg"]}
+		out["weight"] = bson.M{"date": w["date"], "kg": w["kg"], "createdAt": fmtDate(w["createdAt"])}
 	}
 	return out, nil
 }

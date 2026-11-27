@@ -220,6 +220,9 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.LogWorkout(ctx, day, "Run", 30, 300); err != nil {
 		t.Fatalf("workout: %v", err)
 	}
+	if _, err := s.LogWorkout(ctx, day, "Run", 30.5, 300); err == nil {
+		t.Fatal("expected fractional-minutes error")
+	}
 	if _, err := s.LogWorkout(ctx, day, strings.Repeat("x", 61), 30, 300); err == nil {
 		t.Fatal("expected over-60 type error")
 	}
@@ -337,6 +340,9 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	}
 	if ghost["sleep_hours"] != nil {
 		t.Fatalf("ghost sleep: %v", ghost)
+	}
+	if ghost["cal_in"] != nil || ghost["workout_kcal"] != nil || ghost["totals"] != nil {
+		t.Fatalf("ghost totals: %v", ghost)
 	}
 	// Partial macros: one row with kcal, one without — totals are lower
 	// bounds, and macro_counts says so.

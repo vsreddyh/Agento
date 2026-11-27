@@ -263,6 +263,8 @@ Agento Android App ──POST /api/health/sync──► proxy (:8080 compose def
 1. **Agento** (`android/agento/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
 2. **`health-api` Endpoint** (compose default `:8001`, `HEALTH_HOST_PORT` remaps the host side): Authenticates requests via `Authorization: Bearer <PASSWORD>` and upserts metrics into MongoDB.
 
+   Bucketing: sleep sessions land on the wake date, workouts on the start date, scalars on the sync date. Batches are capped at 100 sleep sessions + 100 workouts — an oversized batch 422s with nothing written, so large backfills must be chunked. Unparseable entries are skipped and counted (`sessions_invalid`/`workouts_invalid` in the response); a bad batch date with no scalars still writes valid entries, but bad scalars 422 the whole payload.
+
 > **Upgrading from Health Gateway?** Agento ships under a new `applicationId` (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway app — settings do not transfer automatically.
 > 1. Install Agento → re-enter the sync server URL/password by hand.
 > 2. Re-grant Health Connect permissions in Agento (grants are per-package).

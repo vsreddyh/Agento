@@ -164,10 +164,13 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	for _, s := range p.Sleep {
 		// Sessions bucket by wake date but carry their own start, so a
 		// night crossing midnight still attributes to the morning —
-		// while the dedup hash keys on the real start. An unparseable
-		// end timestamp skips-and-counts (invalid, not a session on the
-		// sync date); an unparseable start still syncs (minutes only),
-		// like a manual log_sleep. Naive timestamps parse as UTC.
+		// while the dedup hash keys on the real start. Sleep uses the
+		// device-reported minutes (awake time excluded), NOT the
+		// start/end interval — workouts instead use the interval
+		// duration. An unparseable end timestamp skips-and-counts
+		// (invalid, not a session on the sync date); an unparseable
+		// start still syncs (minutes only), like a manual log_sleep.
+		// Naive timestamps parse as UTC.
 		if _, ok := parseSyncTime(s.EndISO); !ok {
 			log.Printf("skipping sleep with unparseable end timestamp: %q (minutes=%d)", s.EndISO, s.TotalMinutes)
 			tsInvalidSleeps++
@@ -240,7 +243,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		syncRes.SessionsAdded, syncRes.WorkoutsAdded, syncRes.SessionsSkipped, syncRes.WorkoutsSkipped,
 		syncRes.SessionsInvalid, syncRes.WorkoutsInvalid)
 	writeJSON(w, http.StatusOK, bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339),
-		"sessions_added": syncRes.SessionsAdded, "sessions_skipped": syncRes.SessionsSkipped,
+		"date": syncRes.Date, "sessions_added": syncRes.SessionsAdded, "sessions_skipped": syncRes.SessionsSkipped,
 		"sessions_invalid": syncRes.SessionsInvalid, "workouts_added": syncRes.WorkoutsAdded,
 		"workouts_skipped": syncRes.WorkoutsSkipped, "workouts_invalid": syncRes.WorkoutsInvalid})
 }
