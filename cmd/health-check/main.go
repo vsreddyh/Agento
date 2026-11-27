@@ -380,7 +380,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_workout",
-		Description: "Log one manual workout (type free text, lowercased on write; minutes required; kcal optional). Sync workouts arrive deduplicated through the same store."},
+		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; minutes required; kcal optional). Sync workouts arrive deduplicated through the same store."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogWorkout(ctx, dayOf(in.Date), in.Type, in.Minutes, in.Kcal)
 			if err != nil {
@@ -390,7 +390,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_workouts",
-		Description: "List per-day workouts between start/end dates. Sort_by names the field, sort the direction; type is exact match on the lowered type. No match returns the empty page.",
+		Description: "List per-day workouts between start/end dates. Sort_by names the field, sort the direction; type is exact match on the lowered type (max 60 chars). No match returns the empty page.",
 		InputSchema: enumSchema(listWorkoutsInput{},
 			map[string][]string{"sort_by": healthcheck.WorkoutSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWorkoutsInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -404,7 +404,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_workout",
-		Description: "Patch one workout by entry id: supplied fields replace, omitted keep. Ask-gated."},
+		Description: "Patch one workout by entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty. Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			row, err := store.CorrectWorkout(ctx, in.ID, in.Type, in.Minutes, in.Kcal)
 			if err != nil {

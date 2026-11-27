@@ -114,8 +114,18 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	}
 	// Legacy unnamed indexes first: the meals era created date_1 on the
 	// same keys uniq_date now owns, and creating a second name errors.
+	// The array-path uniq_sleephash/uniq_workouthash indexes go entirely:
+	// dedup moved to scalar unique hashes on the top-level hc_sleep and
+	// hc_workouts collections (unique multikey does not enforce on this
+	// cluster — and non-sparse, it null-collides every doc without the
+	// path on the second insert).
 	for _, col := range []*mongoDrv.Collection{s.weight, s.days} {
 		if err := dropIndexIfNamed(ctx, col, "date_1"); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"uniq_sleephash", "uniq_workouthash"} {
+		if err := dropIndexIfNamed(ctx, s.days, name); err != nil {
 			return err
 		}
 	}
@@ -324,18 +334,22 @@ func sumTenths(vals []float64) float64 {
 	return float64(t) / 10
 }
 
-// foodTotals derives a day's macro totals from its rows. Totals live only
-// in responses, never in storage — a correction shows up on the next read.
-func (s *Store) foodTotals(ctx context.Context, day string) (map[string]float64, int64, error) {
+// foodTotals derives a day's macro totals from its rows, plus how many
+// rows carried each macro. Totals live only in responses, never in
+// storage — a correction shows up on the next read. Counts matter because
+// macros are optional (#601): a total over 2 of 5 rows is a lower bound,
+// not a measured day.
+func (s *Store) foodTotals(ctx context.Context, day string) (map[string]float64, map[string]int64, int64, error) {
 	cur, err := s.food.Find(ctx, bson.M{"day": day})
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	var rows []bson.M
 	if err := cur.All(ctx, &rows); err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	totals := map[string]float64{}
+	counts := map[string]int64{}
 	for _, m := range MacroKeys {
 		vals := make([]float64, 0, len(rows))
 		for _, r := range rows {
@@ -346,8 +360,9 @@ func (s *Store) foodTotals(ctx context.Context, day string) (map[string]float64,
 			}
 		}
 		totals[m] = sumTenths(vals)
+		counts[m] = int64(len(vals))
 	}
-	return totals, int64(len(rows)), nil
+	return totals, counts, int64(len(rows)), nil
 }
 
 // LogFood records one flat food entry. Macros are optional (#601); absent
@@ -922,14 +937,14 @@ type WorkoutIn struct {
 	Kcal    float64
 }
 
-func normWorkoutType(t string) string {
+func normWorkoutType(t string) (string, error) {
 	if t = strings.ToLower(strings.TrimSpace(t)); t == "" {
-		return "other"
+		return "other", nil
 	}
 	if len(t) > 60 {
-		t = t[:60]
+		return "", fail("workout type must be <= 60 characters, got %d", len(t))
 	}
-	return t
+	return t, nil
 }
 
 func insertWorkout(ctx context.Context, col *mongoDrv.Collection, w WorkoutIn, skipDup bool) (bson.M, error) {
@@ -937,7 +952,10 @@ func insertWorkout(ctx context.Context, col *mongoDrv.Collection, w WorkoutIn, s
 	if err != nil {
 		return nil, err
 	}
-	typ := normWorkoutType(w.Type)
+	typ, err := normWorkoutType(w.Type)
+	if err != nil {
+		return nil, err
+	}
 	if w.Minutes <= 0 {
 		return nil, fail("workout minutes must be > 0")
 	}
@@ -1022,8 +1040,13 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 		sortBy = WorkoutSortFields[0]
 	}
 	filt := bson.M{"day": bson.M{"$gte": st, "$lte": en}}
+	var typeFilt string
 	if t := strings.TrimSpace(typ); t != "" {
-		filt["type"] = normWorkoutType(t)
+		var err error
+		if typeFilt, err = normWorkoutType(t); err != nil {
+			return nil, 0, err
+		}
+		filt["type"] = typeFilt
 	}
 	dayVals, err := s.workouts.Distinct(ctx, "day", filt)
 	if err != nil {
@@ -1035,8 +1058,8 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 		days = days[:listCap]
 	}
 	dayFilt := bson.M{"day": bson.M{"$in": days}}
-	if t := strings.TrimSpace(typ); t != "" {
-		dayFilt["type"] = normWorkoutType(t)
+	if typeFilt != "" {
+		dayFilt["type"] = typeFilt
 	}
 	cur, err := s.workouts.Find(ctx, dayFilt, options.Find().
 		SetSort(bson.D{{Key: "day", Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}))
@@ -1108,7 +1131,10 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 		if strings.TrimSpace(*typ) == "" {
 			return nil, fail("type cannot be cleared to empty — pass a type or omit it")
 		}
-		newType = normWorkoutType(*typ)
+		var err error
+		if newType, err = normWorkoutType(*typ); err != nil {
+			return nil, err
+		}
 		set["type"] = newType
 	}
 	if minutes != nil {
@@ -1215,9 +1241,8 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	res := SyncResult{Date: day}
 	validSleeps := make([]SleepIn, 0, len(rec.Sleeps))
 	for i := range rec.Sleeps {
-		if rec.Sleeps[i].Day == "" {
-			rec.Sleeps[i].Day = day
-		}
+		// No defaulting: an empty Day is invalid input, not a silent
+		// re-bucket onto the sync date.
 		if err := checkSleepIn(rec.Sleeps[i]); err != nil {
 			res.SessionsInvalid++
 			continue
@@ -1226,9 +1251,6 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	}
 	validWorkouts := make([]WorkoutIn, 0, len(rec.Workouts))
 	for i := range rec.Workouts {
-		if rec.Workouts[i].Day == "" {
-			rec.Workouts[i].Day = day
-		}
 		if err := checkWorkoutIn(rec.Workouts[i]); err != nil {
 			res.WorkoutsInvalid++
 			continue
@@ -1291,6 +1313,9 @@ func checkWorkoutIn(w WorkoutIn) error {
 	if _, err := mustDay(w.Day); err != nil {
 		return err
 	}
+	if _, err := normWorkoutType(w.Type); err != nil {
+		return err
+	}
 	if w.Minutes <= 0 {
 		return fail("workout minutes must be > 0")
 	}
@@ -1313,7 +1338,7 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 	if err != nil {
 		return nil, err
 	}
-	totals, foodCount, err := s.foodTotals(ctx, day)
+	totals, macroCounts, foodCount, err := s.foodTotals(ctx, day)
 	if err != nil {
 		return nil, err
 	}
@@ -1357,7 +1382,7 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 		}
 	}
 	workoutKcal := workoutKcal(wos)
-	out := bson.M{"date": day, "foods": foodCount, "totals": totals,
+	out := bson.M{"date": day, "foods": foodCount, "totals": totals, "macro_counts": macroCounts,
 		"sleep_hours": sleepHours, "sessions": sessions, "workouts": wos,
 		"steps": steps, "active_kcal": activeKcal,
 		"cal_in": totals["kcal"], "workout_kcal": workoutKcal}

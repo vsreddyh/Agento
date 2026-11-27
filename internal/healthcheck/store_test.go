@@ -33,6 +33,7 @@ func TestFoodRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	day := "2026-09-01"
+	cleanDay(t, s, ctx, day)
 	dt, _ := time.Parse(time.RFC3339, "2026-09-01T12:30:00Z")
 
 	if _, err := s.LogFood(ctx, day, dt, "  ", "", nil, ""); err == nil {
@@ -136,6 +137,7 @@ func TestWeightRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	day := "2026-09-02"
+	cleanDay(t, s, ctx, day)
 
 	if _, err := s.LogWeight(ctx, day, 0); err == nil {
 		t.Fatal("expected implausible error")
@@ -171,6 +173,7 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	day := "2026-09-03"
+	cleanDay(t, s, ctx, day)
 
 	if _, err := s.LogSleep(ctx, day, 0); err == nil {
 		t.Fatal("expected implausible error")
@@ -217,6 +220,9 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.LogWorkout(ctx, day, "Run", 30, 300); err != nil {
 		t.Fatalf("workout: %v", err)
 	}
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("x", 61), 30, 300); err == nil {
+		t.Fatal("expected over-60 type error")
+	}
 	if _, err := s.LogWorkout(ctx, day, "run", 30, 300); err == nil {
 		t.Fatal("expected duplicate-workout error (lowered type)")
 	}
@@ -257,13 +263,18 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	kcal := 50.5
 	start, _ := time.Parse(time.RFC3339, "2026-09-03T22:00:00Z")
 	rec := SyncRecord{Date: day, Steps: &steps, ActiveKcal: &kcal,
-		Sleeps:   []SleepIn{{Start: &start, Minutes: 400}},
-		Workouts: []WorkoutIn{{Type: "cycle", Minutes: 20, Kcal: 150}}}
+		Sleeps:   []SleepIn{{Day: day, Start: &start, Minutes: 400}},
+		Workouts: []WorkoutIn{{Day: day, Type: "cycle", Minutes: 20, Kcal: 150}}}
 	res, err := s.RecordSync(ctx, rec)
 	if err != nil || res.SessionsAdded != 1 || res.WorkoutsAdded != 1 {
 		t.Fatalf("sync %v %v", res, err)
 	}
-	res2, err := s.RecordSync(ctx, rec)
+	// Re-sent entries skip quietly (same content hashes) — Day is set by
+	// the caller, never defaulted by the store.
+	rec2 := SyncRecord{Date: day, Steps: &steps, ActiveKcal: &kcal,
+		Sleeps:   []SleepIn{{Day: day, Start: &start, Minutes: 400}},
+		Workouts: []WorkoutIn{{Day: day, Type: "cycle", Minutes: 20, Kcal: 150}}}
+	res2, err := s.RecordSync(ctx, rec2)
 	if err != nil || res2.SessionsSkipped != 1 || res2.WorkoutsSkipped != 1 {
 		t.Fatalf("resync %v %v", res2, err)
 	}
@@ -282,9 +293,11 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if err != nil || skipRes.SessionsInvalid != 1 || skipRes.SessionsAdded != 0 {
 		t.Fatalf("invalid entry should skip, not fail: %v %v", skipRes, err)
 	}
-	sum, err := s.DailySummary(ctx, day)
-	if err != nil {
-		t.Fatalf("summary: %v", err)
+	// Empty Day is invalid, never silently re-bucketed onto the sync date.
+	emptyDay, err := s.RecordSync(ctx, SyncRecord{Date: day,
+		Sleeps: []SleepIn{{Minutes: 60}}})
+	if err != nil || emptyDay.SessionsInvalid != 1 || emptyDay.SessionsAdded != 0 {
+		t.Fatalf("empty Day should count invalid: %v %v", emptyDay, err)
 	}
 	// Missing day: both scalars null (missing sync indistinguishable from
 	// nothing measured — never a fake zero on one line only).
@@ -295,6 +308,19 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if ghost["steps"] != nil || ghost["active_kcal"] != nil {
 		t.Fatalf("ghost scalars: %v", ghost)
 	}
+	// Partial macros: one row with kcal, one without — totals are lower
+	// bounds, and macro_counts says so.
+	dt, _ := time.Parse(time.RFC3339, "2026-09-03T08:00:00Z")
+	if _, err := s.LogFood(ctx, day, dt, "rice", "", map[string]float64{"kcal": 200}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LogFood(ctx, day, dt, "tea", "", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := s.DailySummary(ctx, day)
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
 	if fval(sum["steps"]) != 1000 || sum["sleep_hours"] != 6.7 {
 		t.Fatalf("summary %v", sum)
 	}
@@ -304,11 +330,23 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if sum["workout_kcal"] != 150.0 || sum["active_kcal"] != 50.5 {
 		t.Fatalf("split cal-out %v", sum)
 	}
-
-	// Cleanup rows created by this test.
-	if _, err := s.DeleteWeight(ctx, day, false); err != nil {
-		t.Fatal(err)
+	mc, _ := sum["macro_counts"].(map[string]int64)
+	if mc["kcal"] != 1 || mc["protein"] != 0 {
+		t.Fatalf("macro_counts %v (rice had kcal only)", mc)
 	}
+
+	cleanDay(t, s, ctx, day)
+}
+
+func fptr(f float64) *float64 { return &f }
+
+func strptr(s string) *string { return &s }
+
+// cleanDay wipes one test day from all four collections, before and
+// after. Aborted runs leave rows behind; without this a rerun trips the
+// very dedup the suite is asserting.
+func cleanDay(t *testing.T, s *Store, ctx context.Context, day string) {
+	t.Helper()
 	for _, c := range []struct {
 		col *mongoDrv.Collection
 		key string
@@ -320,10 +358,6 @@ func TestSleepWorkoutDedup(t *testing.T) {
 		}
 	}
 }
-
-func fptr(f float64) *float64 { return &f }
-
-func strptr(s string) *string { return &s }
 
 // Non-empty legacy hc_meals fails boot (fail-closed) instead of being
 // dropped; an empty one is cleaned quietly.
@@ -361,6 +395,9 @@ func TestRecordSyncPreservesEntryDays(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	for _, d := range []string{"2026-09-10", "2026-09-11", "2026-09-12", "2026-09-30"} {
+		cleanDay(t, s, ctx, d)
+	}
 	start1, _ := time.Parse(time.RFC3339, "2026-09-10T22:00:00Z")
 	start2, _ := time.Parse(time.RFC3339, "2026-09-11T22:00:00Z")
 	steps := 100
