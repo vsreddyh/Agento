@@ -310,6 +310,11 @@ func contentHash(parts ...string) string {
 // round1 rounds to one decimal, like validate.Round1.
 func round1(f float64) float64 { return validate.Round1(f) }
 
+// round2 keeps two decimals. Sleep hours alone use it: at one decimal a
+// 1-minute session reads 0.0 — indistinguishable from a missing night,
+// which the null contract exists to prevent.
+func round2(f float64) float64 { return math.Round(f*100) / 100 }
+
 // checkMacros validates provided macros: each present key must be numeric
 // and >= 0, rounded to one decimal. Absent keys mean "not provided", never
 // zero — food macros are optional per #601.
@@ -769,7 +774,7 @@ func (s *Store) LogSleep(ctx context.Context, day string, hours float64) (bson.M
 	if err != nil {
 		return nil, err
 	}
-	return bson.M{"day": day, "sleep_hours": round1(float64(minutes) / 60), "session": entry}, nil
+	return bson.M{"day": day, "sleep_hours": round2(float64(minutes) / 60), "session": entry}, nil
 }
 
 func sleepOut(doc bson.M) bson.M {
@@ -898,7 +903,7 @@ func sleepMinutes(sessions []bson.M) int {
 }
 
 func sleepHours(sessions []bson.M) float64 {
-	return round1(float64(sleepMinutes(sessions)) / 60)
+	return round2(float64(sleepMinutes(sessions)) / 60)
 }
 
 // CorrectSleep replaces one session's minutes by entry id. The hash is
@@ -1309,17 +1314,20 @@ type SyncRecord struct {
 
 // SyncResult reports what one sync wrote. Re-sent sessions/workouts are
 // skipped quietly (already there), not errors — syncs are cumulative.
-// Invalid entries are skipped and counted, never batch-failing: one
-// corrupt Health Connect timestamp must not stall steps/scalars.
+// Invalid entries are skipped and counted; over-cap batches never reach
+// the store at all. Over-cap and invalid are different fields: the first
+// means "valid rows, too many", the second "corrupt rows, skipped".
 type SyncResult struct {
 	Date            string `json:"date"`
 	Steps           *int   `json:"steps,omitempty"`
 	SessionsAdded   int    `json:"sessions_added"`
 	SessionsSkipped int    `json:"sessions_skipped"`
 	SessionsInvalid int    `json:"sessions_invalid"`
+	SessionsOverCap int    `json:"sessions_over_cap"`
 	WorkoutsAdded   int    `json:"workouts_added"`
 	WorkoutsSkipped int    `json:"workouts_skipped"`
 	WorkoutsInvalid int    `json:"workouts_invalid"`
+	WorkoutsOverCap int    `json:"workouts_over_cap"`
 }
 
 // RecordSync is the single write path for hc_days, hc_sleep and
@@ -1402,13 +1410,15 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 		res.Date = day
 		if _, err := s.days.UpdateOne(ctx, bson.M{"date": day}, bson.M{"$set": set},
 			options.Update().SetUpsert(true)); err != nil {
-			return SyncResult{}, err
+			// Partial write: scalars may or may not have landed — the
+			// caller sees what was counted so far, not an empty result.
+			return res, err
 		}
 	}
 	for _, sl := range validSleeps {
 		out, err := s.insertSleepSession(ctx, sl.Day, sl.Start, sl.Minutes, true)
 		if err != nil {
-			return SyncResult{}, err
+			return res, err
 		}
 		if sk, _ := out["skipped"].(bool); sk {
 			res.SessionsSkipped++
@@ -1419,7 +1429,7 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	for _, w := range validWorkouts {
 		out, err := insertWorkout(ctx, s.workouts, w, true)
 		if err != nil {
-			return SyncResult{}, err
+			return res, err
 		}
 		if sk, _ := out["skipped"].(bool); sk {
 			res.WorkoutsSkipped++

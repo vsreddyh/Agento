@@ -451,9 +451,9 @@ func TestSyncBatchCapCarriesCounts(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("oversize batch: got %d (%s), want 422", w.Code, w.Body.String())
 	}
-	for _, want := range []string{`"sessions_invalid":101`, `"workouts_invalid":0`} {
+	for _, want := range []string{`"sessions_over_cap":101`, `"sessions_invalid":0`, `"workouts_over_cap":0`, `"workouts_invalid":0`} {
 		if !strings.Contains(w.Body.String(), want) {
-			t.Fatalf("batch-cap 422 must carry counts, got %s", w.Body.String())
+			t.Fatalf("batch-cap 422 must carry over-cap counts, got %s", w.Body.String())
 		}
 	}
 }

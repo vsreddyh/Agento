@@ -458,7 +458,7 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
-	if fval(sum["steps"]) != 1000 || sum["sleep_hours"] != 6.7 {
+	if fval(sum["steps"]) != 1000 || sum["sleep_hours"] != 6.67 {
 		t.Fatalf("summary %v", sum)
 	}
 	if _, ok := sum["net"]; ok {

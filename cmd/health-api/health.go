@@ -135,14 +135,15 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(p.Sleep) > 100 {
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "sleep batch max 100",
-			"sessions_added": 0, "sessions_skipped": 0, "sessions_invalid": len(p.Sleep),
-			"workouts_added": 0, "workouts_skipped": 0, "workouts_invalid": len(p.Workouts)})
+			"sessions_added": 0, "sessions_skipped": 0, "sessions_invalid": 0,
+			"sessions_over_cap": len(p.Sleep),
+			"workouts_added":    0, "workouts_skipped": 0, "workouts_invalid": 0, "workouts_over_cap": 0})
 		return
 	}
 	if len(p.Workouts) > 100 {
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "workouts batch max 100",
-			"sessions_added": 0, "sessions_skipped": 0, "sessions_invalid": 0,
-			"workouts_added": 0, "workouts_skipped": 0, "workouts_invalid": len(p.Workouts)})
+			"sessions_added": 0, "sessions_skipped": 0, "sessions_invalid": 0, "sessions_over_cap": 0,
+			"workouts_added": 0, "workouts_skipped": 0, "workouts_invalid": 0, "workouts_over_cap": len(p.Workouts)})
 		return
 	}
 
@@ -233,7 +234,8 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		// above, not a 500 server bug. Anything else is ours. Either way
 		// the skip/invalid breakdown rides along — a 422 with counts
 		// debugs like a 200.
-		body := bson.M{"sessions_invalid": syncRes.SessionsInvalid, "workouts_invalid": syncRes.WorkoutsInvalid}
+		body := bson.M{"sessions_invalid": syncRes.SessionsInvalid, "workouts_invalid": syncRes.WorkoutsInvalid,
+			"sessions_over_cap": 0, "workouts_over_cap": 0}
 		var se *healthcheck.StoreError
 		if errors.As(err, &se) {
 			body["detail"] = se.Error()
@@ -258,8 +260,9 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		syncRes.SessionsInvalid, syncRes.WorkoutsInvalid)
 	resp := bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339),
 		"sessions_added": syncRes.SessionsAdded, "sessions_skipped": syncRes.SessionsSkipped,
-		"sessions_invalid": syncRes.SessionsInvalid, "workouts_added": syncRes.WorkoutsAdded,
-		"workouts_skipped": syncRes.WorkoutsSkipped, "workouts_invalid": syncRes.WorkoutsInvalid}
+		"sessions_invalid": syncRes.SessionsInvalid, "sessions_over_cap": 0,
+		"workouts_added": syncRes.WorkoutsAdded, "workouts_skipped": syncRes.WorkoutsSkipped,
+		"workouts_invalid": syncRes.WorkoutsInvalid, "workouts_over_cap": 0}
 	// The batch date covers only the scalars; entries-only syncs (or a
 	// bad batch date) write no scalars, so no date is echoed.
 	if syncRes.Date != "" {
