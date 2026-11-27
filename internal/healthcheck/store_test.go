@@ -258,3 +258,77 @@ func TestSleepWorkoutDedup(t *testing.T) {
 func fptr(f float64) *float64 { return &f }
 
 func strptr(s string) *string { return &s }
+
+// A backfill's nights stay on their mornings: per-entry days survive
+// RecordSync, rec.Date covers only the scalars.
+func TestRecordSyncPreservesEntryDays(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	start1, _ := time.Parse(time.RFC3339, "2026-09-10T22:00:00Z")
+	start2, _ := time.Parse(time.RFC3339, "2026-09-11T22:00:00Z")
+	steps := 100
+	rec := SyncRecord{Date: "2026-09-12", Steps: &steps,
+		Sleeps: []SleepIn{
+			{Day: "2026-09-11", Start: &start1, Minutes: 400},
+			{Day: "2026-09-12", Start: &start2, Minutes: 300},
+		},
+		Workouts: []WorkoutIn{{Day: "2026-09-10", Type: "run", Minutes: 30, Kcal: 300}},
+	}
+	res, err := s.RecordSync(ctx, rec)
+	if err != nil || res.SessionsAdded != 2 || res.WorkoutsAdded != 1 {
+		t.Fatalf("sync %v %v", res, err)
+	}
+	countDay := func(col *mongoDrv.Collection, key, day string) int {
+		t.Helper()
+		n, err := col.CountDocuments(ctx, bson.M{key: day})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return int(n)
+	}
+	if n := countDay(s.sleep, "day", "2026-09-11"); n != 1 {
+		t.Fatalf("2026-09-11 sessions: %d", n)
+	}
+	if n := countDay(s.sleep, "day", "2026-09-12"); n != 1 {
+		t.Fatalf("2026-09-12 sessions: %d", n)
+	}
+	if n := countDay(s.workouts, "day", "2026-09-10"); n != 1 {
+		t.Fatalf("2026-09-10 workouts: %d", n)
+	}
+	// Scalars land on rec.Date only.
+	var d bson.M
+	if err := s.days.FindOne(ctx, bson.M{"date": "2026-09-12"}).Decode(&d); err != nil {
+		t.Fatal(err)
+	}
+	if fval(d["steps"]) != 100 {
+		t.Fatalf("steps %v (%T)", d["steps"], d["steps"])
+	}
+	// CorrectFood datetime refresh moves the day.
+	dt, _ := time.Parse(time.RFC3339, "2026-09-10T08:00:00Z")
+	row, err := s.LogFood(ctx, "2026-09-11", dt, "oats", "", map[string]float64{"kcal": 150}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := row["_id"].(string)
+	newDT, _ := time.Parse(time.RFC3339, "2026-09-12T08:00:00+05:30")
+	patched, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, &newDT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patched["day"] != "2026-09-12" {
+		t.Fatalf("day not refreshed: %v", patched)
+	}
+	// Cleanup.
+	for _, c := range []struct {
+		col *mongoDrv.Collection
+		key string
+	}{
+		{s.days, "date"}, {s.sleep, "day"}, {s.workouts, "day"}, {s.food, "day"},
+	} {
+		if _, err := c.col.DeleteMany(ctx, bson.M{c.key: bson.M{"$gte": "2026-09-10", "$lte": "2026-09-12"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

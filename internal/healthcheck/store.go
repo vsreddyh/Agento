@@ -214,6 +214,16 @@ func mustDay(day string) (string, error) {
 }
 
 // hexID renders an _id as hex, like miser-money's oidHex.
+// istLocation is the day-bucketing zone both writers share: calendar
+// dates are IST midnights, matching the app's localDate.
+func istLocation() *time.Location {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
 func hexID(v any) string {
 	if o, ok := v.(primitive.ObjectID); ok {
 		return o.Hex()
@@ -423,6 +433,7 @@ func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *str
 		return nil, fail("'%s' is not a food id", id)
 	}
 	upd := bson.M{}
+	unset := bson.M{}
 	if what != nil {
 		if w := strings.TrimSpace(*what); w == "" {
 			return nil, fail("what cannot be cleared to empty")
@@ -438,10 +449,9 @@ func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *str
 		if n := strings.TrimSpace(*note); n != "" {
 			upd["note"] = n
 		} else {
-			upd["note"] = nil
+			unset["note"] = ""
 		}
 	}
-	unset := bson.M{}
 	for k, v := range macros {
 		known := false
 		for _, m := range MacroKeys {
@@ -467,6 +477,7 @@ func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *str
 	}
 	if dt != nil {
 		upd["datetime"] = primitive.NewDateTimeFromTime(dt.UTC())
+		upd["day"] = dt.In(istLocation()).Format("2006-01-02")
 	}
 	if len(upd) == 0 && len(unset) == 0 {
 		return nil, fail("correct_food needs at least one field to change")
@@ -771,8 +782,15 @@ func (s *Store) CorrectSleep(ctx context.Context, id string, minutes int) (bson.
 	}
 	day, _ := doc["day"].(string)
 	hashBase := day + "|manual"
-	if v, ok := doc["start"]; ok {
-		if t, err := time.Parse(time.RFC3339, fmt.Sprint(v)); err == nil {
+	// Start may be a BSON Date (current writes) or a string (pre-v2
+	// rows): handle both, so the recomputed hash keys on the real start
+	// instead of falling back to manual.
+	switch v := doc["start"].(type) {
+	case primitive.DateTime:
+		t := v.Time()
+		hashBase = day + "|" + t.UTC().Format(time.RFC3339)
+	case string:
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			hashBase = day + "|" + t.UTC().Format(time.RFC3339)
 		}
 	}
@@ -1065,10 +1083,31 @@ type SyncResult struct {
 // active_kcal overwrite when provided; sessions and workouts append with
 // atomic scalar-unique hash dedup. updatedAt is always a BSON Date — the
 // old string-vs-Date drift is gone by construction.
+//
+// Each entry keeps its own bucketed day (a backfill's nights stay on
+// their mornings); rec.Date covers only the scalars. Everything is
+// validated before anything is written, so a bad session fails the whole
+// sync instead of half-applying after the scalars landed.
 func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, error) {
 	day, err := mustDay(rec.Date)
 	if err != nil {
 		return SyncResult{}, err
+	}
+	for i := range rec.Sleeps {
+		if rec.Sleeps[i].Day == "" {
+			rec.Sleeps[i].Day = day
+		}
+		if err := checkSleepIn(rec.Sleeps[i]); err != nil {
+			return SyncResult{}, err
+		}
+	}
+	for i := range rec.Workouts {
+		if rec.Workouts[i].Day == "" {
+			rec.Workouts[i].Day = day
+		}
+		if err := checkWorkoutIn(rec.Workouts[i]); err != nil {
+			return SyncResult{}, err
+		}
 	}
 	res := SyncResult{Date: day}
 	set := bson.M{"updatedAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
@@ -1084,7 +1123,6 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 		return SyncResult{}, err
 	}
 	for _, sl := range rec.Sleeps {
-		sl.Day = day
 		out, err := s.insertSleepSession(ctx, sl.Day, sl.Start, sl.Minutes, true)
 		if err != nil {
 			return SyncResult{}, err
@@ -1096,7 +1134,6 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 		}
 	}
 	for _, w := range rec.Workouts {
-		w.Day = day
 		out, err := insertWorkout(ctx, s.workouts, w, true)
 		if err != nil {
 			return SyncResult{}, err
@@ -1108,6 +1145,31 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 		}
 	}
 	return res, nil
+}
+
+// checkSleepIn / checkWorkoutIn validate an entry without writing it, so
+// RecordSync fails whole-sync on bad input.
+func checkSleepIn(sl SleepIn) error {
+	if _, err := mustDay(sl.Day); err != nil {
+		return err
+	}
+	if sl.Minutes <= 0 {
+		return fail("sleep session minutes must be > 0")
+	}
+	return nil
+}
+
+func checkWorkoutIn(w WorkoutIn) error {
+	if _, err := mustDay(w.Day); err != nil {
+		return err
+	}
+	if w.Minutes <= 0 {
+		return fail("workout minutes must be > 0")
+	}
+	if w.Kcal < 0 {
+		return fail("workout kcal must be >= 0")
+	}
+	return nil
 }
 
 // DailySummary is the cross-entity read: food totals derived from

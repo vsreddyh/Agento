@@ -32,8 +32,10 @@ podman-compose -f docker/docker-compose.yml logs --tail 50 health-api
 podman-compose -f docker/docker-compose.yml run --rm retention --dry-run  # safe; real run deletes data
 ```
 
-Retention is a no-op for health-check (all five collections permanent, no prune tool) and cookbook (miser-money
-has no retention — its rows are permanent).
+Retention is a no-op for health-check and cookbook (both fully permanent —
+health-check has no prune tool and no TTL; cookbook the same). Miser-money
+soft-deletes instead: flagged rows vanish from reads at once and TTL away
+10 days after flagging, unflagged rows are permanent.
 <!-- #584 TEMP-REMOVE (∃-Mail): reports retention disabled, data left as-is.
 `reports` (∃-Mail): read+unstarred pruned after 7d; unread/starred never touched.
 -->

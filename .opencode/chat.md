@@ -65,6 +65,9 @@ instead of round-tripping one at a time.
   (free-text type, lowercased on write) / `list_workouts` / `correct_workout` /
   `delete_workout`. `daily_summary` (food-derived cal-in; `workout_kcal` +
   `active_kcal` as separate cal-out lines, no single net).
+  Dedup caveat: an exact-duplicate same-day sleep/workout collides on purpose
+  (double-submit protection) — vary any field, or delete and re-log, to
+  record a genuine repeat.
   Every `list_*` takes `sort_by` (names only its own fields) + `sort`
   (`asc|desc`) as real schema enums — unknown values return errors on both
   layers. Filters (`what`, `type`) are exact match on the lowered text and

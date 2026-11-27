@@ -19,7 +19,10 @@ prune tool, retention is a no-op for all five collections.
 Dedup hashes live on top-level docs with scalar unique indexes: unique
 multikey indexes do not enforce on this cluster (probed), so sessions and
 workouts are collections, not subdocs. A re-sent sync skips quietly;
-a manual double-log returns a friendly duplicate error.
+a manual double-log returns a friendly duplicate error. Exact-duplicate
+same-day repeats are unrepresentable by design (double-submit protection):
+two identical naps or two identical runs in one day collide on purpose —
+vary any field, or delete and re-log, to record both.
 
 ## Tools (17)
 
@@ -46,4 +49,11 @@ is echoed. Filters are exact match on lowered text and return the empty
 page when nothing matches; bad dates/ids return errors.
 
 Run: `go run ./cmd/health-check` (stdio), needs `MONGODB_URI`/`MONGODB_DB`.
-In-container binary: `/usr/local/bin/health-check`.
+Built binary: `bin/health-check` (via `./scripts/build-mcps.sh`), launched by
+T3 through `./scripts/mcp-run.sh health-check` — there is no health-check
+container in the stack, so never `exec` into one for it.
+
+Upgrading from the meals era drops the frozen `hc_meals` collection on first
+`EnsureSchema` — pre-wipe environments lose that history on first new-binary
+start. "Permanent" below means no TTL/prune going forward, not that the
+pre-v2 shape is preserved.
