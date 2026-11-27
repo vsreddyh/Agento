@@ -307,14 +307,36 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if err != nil || emptyDay.SessionsInvalid != 1 || emptyDay.SessionsAdded != 0 {
 		t.Fatalf("empty Day should count invalid: %v %v", emptyDay, err)
 	}
-	// Missing day: both scalars null (missing sync indistinguishable from
+	// Bad batch date with no scalars: entries still write on their own
+	// days instead of 422ing the whole payload.
+	badDate, err := s.RecordSync(ctx, SyncRecord{Date: "not-a-day",
+		Sleeps: []SleepIn{{Day: "2026-09-10", Minutes: 60}}})
+	if err != nil || badDate.SessionsAdded != 1 {
+		t.Fatalf("entries-only bad-date sync %v %v", badDate, err)
+	}
+	// Bad batch date WITH scalars stays a 422 (scalars are homeless).
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: "not-a-day",
+		Steps: &steps}); err == nil {
+		t.Fatal("expected bad-date error with scalars")
+	}
+	// Empty sync writes nothing — not even a bare day doc.
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: "2026-09-13"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := countDay(t, ctx, s.days, "date", "2026-09-13"); n != 0 {
+		t.Fatal("empty sync created a day doc")
+	}
+	// Missing day: all scalars null (missing sync indistinguishable from
 	// nothing measured — never a fake zero on one line only).
 	ghost, err := s.DailySummary(ctx, "2026-09-30")
 	if err != nil {
 		t.Fatalf("ghost summary: %v", err)
 	}
-	if ghost["steps"] != nil || ghost["active_kcal"] != nil {
+	if ghost["steps"] != nil || ghost["active_kcal"] != nil || ghost["weight"] != nil {
 		t.Fatalf("ghost scalars: %v", ghost)
+	}
+	if ghost["sleep_hours"] != nil {
+		t.Fatalf("ghost sleep: %v", ghost)
 	}
 	// Partial macros: one row with kcal, one without — totals are lower
 	// bounds, and macro_counts says so.
@@ -349,6 +371,15 @@ func TestSleepWorkoutDedup(t *testing.T) {
 func fptr(f float64) *float64 { return &f }
 
 func strptr(s string) *string { return &s }
+
+func countDay(t *testing.T, ctx context.Context, col *mongoDrv.Collection, key, day string) int {
+	t.Helper()
+	n, err := col.CountDocuments(ctx, bson.M{key: day})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int(n)
+}
 
 // cleanDay wipes one test day from all four collections, before and
 // after. Aborted runs leave rows behind; without this a rerun trips the
@@ -420,21 +451,13 @@ func TestRecordSyncPreservesEntryDays(t *testing.T) {
 	if err != nil || res.SessionsAdded != 2 || res.WorkoutsAdded != 1 {
 		t.Fatalf("sync %v %v", res, err)
 	}
-	countDay := func(col *mongoDrv.Collection, key, day string) int {
-		t.Helper()
-		n, err := col.CountDocuments(ctx, bson.M{key: day})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return int(n)
-	}
-	if n := countDay(s.sleep, "day", "2026-09-11"); n != 1 {
+	if n := countDay(t, ctx, s.sleep, "day", "2026-09-11"); n != 1 {
 		t.Fatalf("2026-09-11 sessions: %d", n)
 	}
-	if n := countDay(s.sleep, "day", "2026-09-12"); n != 1 {
+	if n := countDay(t, ctx, s.sleep, "day", "2026-09-12"); n != 1 {
 		t.Fatalf("2026-09-12 sessions: %d", n)
 	}
-	if n := countDay(s.workouts, "day", "2026-09-10"); n != 1 {
+	if n := countDay(t, ctx, s.workouts, "day", "2026-09-10"); n != 1 {
 		t.Fatalf("2026-09-10 workouts: %d", n)
 	}
 	// Scalars land on rec.Date only.

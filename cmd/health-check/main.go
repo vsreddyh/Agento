@@ -426,7 +426,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "daily_summary",
-		Description: "Daily recap: food-derived cal-in totals, workout_kcal + active_kcal as separate cal-out lines (no single net — Health Connect active calories already include exercise), weight, sleep, steps."},
+		Description: "Daily recap: food-derived cal-in totals with per-macro counts (a partial-macro day reads as a lower bound), workout_kcal + active_kcal as separate cal-out lines (no single net), weight (null when never logged), sleep, steps."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in dailySummaryInput) (*mcp.CallToolResult, map[string]any, error) {
 			sum, err := store.DailySummary(ctx, dayOf(in.Date))
 			if err != nil {

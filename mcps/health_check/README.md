@@ -44,7 +44,7 @@ include exercise).
 
 Sort is two enums on every `list_*`: `sort_by` names only that list's
 fields (`list_food`: `datetime,kcal`; `list_weight`: `date,kg`;
-`list_sleep`: `date,hours`; `list_workouts`: `date,minutes,kcal`),
+`list_sleep`: `day,sleep_hours`; `list_workouts`: `day,minutes,kcal`),
 `sort` is `asc|desc`. Unknown values return errors on both layers (schema
 first, then the store's `fail()` naming the allowed set); the applied pair
 is echoed along with `count`/`total`/`truncated` (cap 500: rows for the

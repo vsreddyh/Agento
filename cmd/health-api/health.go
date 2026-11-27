@@ -197,9 +197,16 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		if wo.CaloriesKcal != nil {
 			kcal = *wo.CaloriesKcal
 		}
+		// Title is the human name when Type is empty (Health Connect
+		// often sends one without the other); the store lowercases it
+		// like any other type.
+		typ := wo.Type
+		if strings.TrimSpace(typ) == "" {
+			typ = wo.Title
+		}
 		rec.Workouts = append(rec.Workouts, healthcheck.WorkoutIn{
 			Day:     localDate(wo.StartISO),
-			Type:    wo.Type,
+			Type:    typ,
 			Minutes: float64(duration),
 			Kcal:    kcal,
 		})

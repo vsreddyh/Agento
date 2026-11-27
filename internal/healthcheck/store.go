@@ -63,8 +63,8 @@ const (
 var (
 	FoodSortFields    = []string{"datetime", "kcal"}
 	WeightSortFields  = []string{"date", "kg"}
-	SleepSortFields   = []string{"date", "hours"}
-	WorkoutSortFields = []string{"date", "minutes", "kcal"}
+	SleepSortFields   = []string{"day", "sleep_hours"}
+	WorkoutSortFields = []string{"day", "minutes", "kcal"}
 )
 
 // MacroKeys is the 5-macro set shared by food rows.
@@ -707,7 +707,7 @@ func (s *Store) insertSleepSession(ctx context.Context, day string, start *time.
 		"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}
 	if start != nil {
 		doc["start"] = primitive.NewDateTimeFromTime(start.UTC())
-		hashBase = day + "|" + start.UTC().Format(time.RFC3339)
+		hashBase = day + "|" + start.UTC().Format(time.RFC3339Nano)
 	}
 	doc["hash"] = contentHash(hashBase, fmt.Sprint(minutes))
 	res, err := s.sleep.InsertOne(ctx, doc)
@@ -754,7 +754,7 @@ func sleepOut(doc bson.M) bson.M {
 }
 
 // ListSleep returns per-day docs with derived hours and full sessions,
-// capped at listCap day-docs. sort_by is date|hours (the day's derived
+// capped at listCap day-docs. sort_by is day|sleep_hours (the day's derived
 // total); value sorts apply within the returned page, so narrow wide
 // ranges when chasing extremes. total is the unpaged day count, and the
 // cap applies to day-docs — a returned day always carries all of its
@@ -813,7 +813,7 @@ func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) (
 		}
 		out = append(out, bson.M{"day": day, "sleep_hours": sleepHours(sessions), "sessions": sessions})
 	}
-	if sortBy == "hours" {
+	if sortBy == "sleep_hours" {
 		sortDaysByFloat(out, "sleep_hours", asc)
 	}
 	return out, total, nil
@@ -895,14 +895,15 @@ func (s *Store) CorrectSleep(ctx context.Context, id string, minutes int) (bson.
 	hashBase := day + "|manual"
 	// Start may be a BSON Date (current writes) or a string (pre-v2
 	// rows): handle both, so the recomputed hash keys on the real start
-	// instead of falling back to manual.
+	// instead of falling back to manual. Same parse rule as sync
+	// (RFC3339Nano, naive as UTC) so retries hash identically.
 	switch v := doc["start"].(type) {
 	case primitive.DateTime:
 		t := v.Time()
-		hashBase = day + "|" + t.UTC().Format(time.RFC3339)
+		hashBase = day + "|" + t.UTC().Format(time.RFC3339Nano)
 	case string:
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			hashBase = day + "|" + t.UTC().Format(time.RFC3339)
+		if t, ok := ParseSyncTime(v); ok {
+			hashBase = day + "|" + t.UTC().Format(time.RFC3339Nano)
 		}
 	}
 	_, err = s.sleep.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": bson.M{
@@ -1029,7 +1030,7 @@ func workoutMinutes(wos []bson.M) float64 {
 }
 
 // ListWorkouts returns per-day docs, capped at listCap day-docs.
-// sort_by is date|minutes|kcal, where minutes/kcal sort by the day's
+// sort_by is day|minutes|kcal, where minutes/kcal sort by the day's
 // derived totals (within the returned page — narrow wide ranges when
 // chasing extremes). The type filter is exact match on the lowered type.
 // total is the unpaged day count; the cap applies to day-docs, so a
@@ -1109,7 +1110,7 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 		}
 		out = append(out, row)
 	}
-	if sortBy != "date" {
+	if sortBy != "day" {
 		sortDaysByFloat(out, "_sort", asc)
 		for _, r := range out {
 			delete(r, "_sort")
@@ -1234,16 +1235,24 @@ type SyncResult struct {
 //
 // Each entry keeps its own bucketed day (a backfill's nights stay on
 // their mornings); rec.Date covers only the scalars. Input is validated
-// in three tiers: a bad batch date or scalar fails the whole payload
-// (422 — a corrupt SyncedAtISO/scalar stalls everything by design, since
-// scalars have nowhere else to go); bad entries are skipped and counted;
-// an empty sync writes nothing at all. Best-effort past validation, not
-// atomic: write-time failures can still land partial rows, and a retry
-// converges instead of duplicating.
+// in three tiers: present-but-bad scalars fail the payload (they are
+// homeless without a batch date); a bad batch date with no scalars lets
+// entries through on their own days; bad entries are skipped and counted.
+// An entries-only sync never touches hc_days, and an empty sync writes
+// nothing at all. Best-effort past validation, not atomic: write-time
+// failures can still land partial rows, and a retry converges instead
+// of duplicating.
 func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, error) {
-	day, err := mustDay(rec.Date)
-	if err != nil {
-		return SyncResult{}, err
+	hasScalars := rec.Steps != nil || rec.ActiveKcal != nil
+	day, dateErr := mustDay(rec.Date)
+	if dateErr != nil {
+		// Scalars are homeless without a batch date; an entries-only
+		// payload with a corrupt date still writes its entries. A payload
+		// with nothing salvageable at all stays a 422.
+		if hasScalars || (len(rec.Sleeps) == 0 && len(rec.Workouts) == 0) {
+			return SyncResult{}, dateErr
+		}
+		day = ""
 	}
 	if rec.Steps != nil && *rec.Steps < 0 {
 		return SyncResult{}, fail("steps must be >= 0, got %d", *rec.Steps)
@@ -1284,9 +1293,14 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	if rec.ActiveKcal != nil {
 		set["active_kcal"] = round1(*rec.ActiveKcal)
 	}
-	if _, err := s.days.UpdateOne(ctx, bson.M{"date": day}, bson.M{"$set": set},
-		options.Update().SetUpsert(true)); err != nil {
-		return SyncResult{}, err
+	// Entry-only syncs leave hc_days alone: the day doc is scalars-only,
+	// so a sync with no scalars writes nothing there — no bare
+	// updatedAt-only marker rows.
+	if hasScalars {
+		if _, err := s.days.UpdateOne(ctx, bson.M{"date": day}, bson.M{"$set": set},
+			options.Update().SetUpsert(true)); err != nil {
+			return SyncResult{}, err
+		}
 	}
 	for _, sl := range validSleeps {
 		out, err := s.insertSleepSession(ctx, sl.Day, sl.Start, sl.Minutes, true)
@@ -1406,7 +1420,7 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 	workoutKcal := workoutKcal(wos)
 	out := bson.M{"day": day, "foods": foodCount, "totals": totals, "macro_counts": macroCounts,
 		"sleep_hours": sleepHours, "sessions": sessions, "workouts": wos,
-		"steps": steps, "active_kcal": activeKcal,
+		"steps": steps, "active_kcal": activeKcal, "weight": nil,
 		"cal_in": totals["kcal"], "workout_kcal": workoutKcal}
 	if w != nil {
 		out["weight"] = bson.M{"date": w["date"], "kg": w["kg"]}
