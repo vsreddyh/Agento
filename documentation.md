@@ -190,7 +190,7 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | `hc_days` | Health-check / Health Sync | `date` (YYYY-MM-DD, unique), `steps` (int), `active_kcal` (float), `updatedAt` (BSON Date, always) — scalars only; sleep/workouts live in their own collections — **permanent** |
 | `hc_sleep` | Health-check / Health Sync | `day` (YYYY-MM-DD, indexed), `start` (BSON Date, sync sessions only), `minutes`, `hash` (content dedup, unique), `createdAt` — **permanent** |
 | `hc_workouts` | Health-check / Health Sync | `day` (YYYY-MM-DD, indexed), `type` (free text, lowercased+trimmed, empty → `other`, max 60 chars), `minutes`, `kcal`, `hash` (content dedup, unique), `createdAt` — **permanent** |
-| `hc_weight` | Health-check | `date` (YYYY-MM-DD, unique), `kg` (float) — **permanent** |
+| `hc_weight` | Health-check | `date` (YYYY-MM-DD, unique), `kg` (float), `createdAt` (set once on insert, never rewritten by re-logs) — **permanent** |
 | `cookbook_ingredients` | Cookbook | `name` (unique, case-sensitive, trimmed), `note` (≤2000 bytes, trimmed, UTF-8-safe cut), `createdAt`, `updatedAt` — **permanent** |
 | `cookbook_recipes` | Cookbook | `name` (unique, case-sensitive, trimmed), `note` (≤2000 bytes, trimmed, UTF-8-safe cut), `tags[]` (≤20 entries, ≤40 bytes each, trimmed), `createdAt`, `updatedAt` — **permanent** |
 | `cookbook_cook_log` | Cookbook (retired #600) | pre-trim rows stay in Atlas untouched; nothing reads or writes them — **permanent** |

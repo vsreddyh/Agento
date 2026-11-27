@@ -50,9 +50,10 @@ first, then the store's `fail()` naming the allowed set); the applied pair
 is echoed along with `count`/`total`/`truncated` (cap 500: rows for the
 flat lists, day-docs for the grouped ones — a returned day always carries
 all of its sessions/workouts; a truncated page means narrow the dates).
-Value sorts (`hours`/`minutes`/`kcal`) apply within the returned page.
-Filters are exact match on lowered text and return the empty page when
-nothing matches; bad dates/ids return errors.
+Value sorts (`sleep_hours`/`minutes`/`kcal`) apply within the returned page,
+and `kcal` sorts put unknown-macro rows first in asc (absent means unknown,
+never zero). Filters are exact match on lowered text and return the empty
+page when nothing matches; bad dates/ids return errors.
 
 Run: `go run ./cmd/health-check` (stdio), needs `MONGODB_URI`/`MONGODB_DB`.
 Built binary: `bin/health-check` (via `./scripts/build-mcps.sh`), launched by

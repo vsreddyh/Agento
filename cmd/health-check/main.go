@@ -236,7 +236,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_food",
-		Description: "List food entries between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). Sort_by names the field, sort the direction; what is exact match on the lowercased entry text. No match returns the empty page.",
+		Description: "List food entries between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). Sort_by names the field, sort the direction; rows without the sort field sort first in asc (unknown, not zero). What is exact match on the lowercased entry text. No match returns the empty page.",
 		InputSchema: enumSchema(listFoodInput{},
 			map[string][]string{"sort_by": healthcheck.FoodSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listFoodInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -246,7 +246,7 @@ func main() {
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "foods": rows,
-				"sort_by": orDefault(in.SortBy, "datetime"), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(in.SortBy, healthcheck.FoodSortFields[0]), "sort": orDefault(in.Sort, "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
@@ -306,7 +306,7 @@ func main() {
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "weights": rows,
-				"sort_by": orDefault(in.SortBy, "date"), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(in.SortBy, healthcheck.WeightSortFields[0]), "sort": orDefault(in.Sort, "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_weight",
@@ -343,7 +343,7 @@ func main() {
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "days": rows,
-				"sort_by": orDefault(in.SortBy, "date"), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(in.SortBy, healthcheck.SleepSortFields[0]), "sort": orDefault(in.Sort, "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_sleep",
@@ -400,7 +400,7 @@ func main() {
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "days": rows,
-				"sort_by": orDefault(in.SortBy, "date"), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(in.SortBy, healthcheck.WorkoutSortFields[0]), "sort": orDefault(in.Sort, "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_workout",

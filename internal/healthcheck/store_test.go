@@ -49,7 +49,7 @@ func TestFoodRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("log: %v", err)
 	}
-	id, _ := row["_id"].(string)
+	id, _ := row["id"].(string)
 	if id == "" {
 		t.Fatalf("no _id: %v", row)
 	}
@@ -474,7 +474,7 @@ func TestRecordSyncPreservesEntryDays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := row["_id"].(string)
+	id, _ := row["id"].(string)
 	newDT, _ := time.Parse(time.RFC3339, "2026-09-12T08:00:00+05:30")
 	patched, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil, &newDT)
 	if err != nil {

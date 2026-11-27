@@ -403,7 +403,7 @@ func (s *Store) LogFood(ctx context.Context, day string, dt time.Time, what, qty
 }
 
 func foodOut(doc bson.M) bson.M {
-	out := bson.M{"_id": hexID(doc["_id"]), "day": doc["day"], "what": doc["what"]}
+	out := bson.M{"id": hexID(doc["_id"]), "day": doc["day"], "what": doc["what"]}
 	if v, ok := doc["qty"]; ok {
 		out["qty"] = v
 	}
