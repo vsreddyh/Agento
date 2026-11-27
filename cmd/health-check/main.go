@@ -346,7 +346,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_sleep",
-		Description: "Replace one sleep session's minutes by entry id. Ask-gated."},
+		Description: "Patch one sleep session: minutes or hours (one of the two — both-set fails). Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			if in.Minutes != nil && in.Hours != nil {
 				return fail(fmt.Errorf("correct_sleep takes minutes or hours, not both"))

@@ -222,7 +222,10 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		p.Device, steps, kcal, len(p.Sleep), len(p.Workouts),
 		syncRes.SessionsAdded, syncRes.WorkoutsAdded, syncRes.SessionsSkipped, syncRes.WorkoutsSkipped,
 		syncRes.SessionsInvalid, syncRes.WorkoutsInvalid)
-	writeJSON(w, http.StatusOK, bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339)})
+	writeJSON(w, http.StatusOK, bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339),
+		"sessions_added": syncRes.SessionsAdded, "sessions_skipped": syncRes.SessionsSkipped,
+		"sessions_invalid": syncRes.SessionsInvalid, "workouts_added": syncRes.WorkoutsAdded,
+		"workouts_skipped": syncRes.WorkoutsSkipped, "workouts_invalid": syncRes.WorkoutsInvalid})
 }
 
 // registerHealth wires this domain's routes. One function per file so main stays a

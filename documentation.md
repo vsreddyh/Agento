@@ -226,7 +226,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 |---|---|---|
 | `money_transactions` | Flagged 10 days | **Soft delete** — `delete_transactions` flags rows with `deletedAt` (recoverable via `restore_transactions`); the `ttl_deleted_at` index removes flagged rows 10 days after flagging. Unflagged rows are permanent; the retention job itself is a no-op for money |
 | `money_budgets` | Permanent | **Never expires** — rows live until `delete_budget` removes them; money retention is a no-op |
-| `hc_food_log` / `hc_days` / `hc_sleep` / `hc_workouts` / `hc_weight` | Permanent | **Never pruned** — health-check is fully permanent since the v2 rewrite; no prune tool, retention is a no-op |
+| `hc_food_log` / `hc_days` / `hc_sleep` / `hc_workouts` / `hc_weight` | Permanent | **Never pruned** — fully permanent going forward; no TTL, no prune tool. Upgrading is not lossless: first v2-binary start drops the frozen pre-v2 `hc_meals` via `EnsureSchema` (no-op once gone) |
 | `cookbook_*` | Permanent | **Never pruned** |
 <!-- #584 TEMP-REMOVE (∃-Mail): reports retention row.
 | `reports` (#365) | > 7 days, conditional | Pruned when `createdAt < today - 7d AND read AND NOT starred` — unread/starred never pruned |

@@ -61,7 +61,21 @@ func TestFoodRoundTrip(t *testing.T) {
 	}
 	rows, total, err := s.ListFood(ctx, day, day, "", "", "")
 	if err != nil || len(rows) != 1 || total != 1 {
-		t.Fatalf("list %v total=%d %v", rows, total, err)
+		t.Fatalf("list %v total=%d %v", rows, err, total)
+	}
+	// Round-trip: the listed datetime feeds straight back into correct.
+	dtStr, _ := rows[0]["datetime"].(string)
+	dtRT, err := time.Parse(time.RFC3339Nano, dtStr)
+	if err != nil {
+		t.Fatalf("listed datetime %q does not parse: %v", dtStr, err)
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil, &dtRT); err != nil {
+		t.Fatalf("round-trip correct %v", err)
+	}
+	// Desc comes back newest-first.
+	rows, _, err = s.ListFood(ctx, day, day, "", "desc", "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("desc list %v %v", rows, err)
 	}
 	rows, total, err = s.ListFood(ctx, day, day, "", "", "noodles")
 	if err != nil || len(rows) != 0 {

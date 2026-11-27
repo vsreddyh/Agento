@@ -247,6 +247,17 @@ func hexID(v any) string {
 	return fmt.Sprint(v)
 }
 
+// fmtDate renders a BSON DateTime as RFC3339Nano so list/get output feeds
+// straight back into correct_* datetime inputs. fmt.Sprint on a DateTime
+// prints int64 millis, which no input parser accepts — the round-trip
+// would break with "bad datetime".
+func fmtDate(v any) string {
+	if dt, ok := v.(primitive.DateTime); ok {
+		return dt.Time().UTC().Format(time.RFC3339Nano)
+	}
+	return fmt.Sprint(v)
+}
+
 // contentHash is the deterministic dedup key for a sleep session or
 // workout entry. Same content re-sent (a re-sync, a double-tap) hashes
 // identically and hits the scalar unique index instead of inserting
@@ -363,7 +374,7 @@ func (s *Store) LogFood(ctx context.Context, day string, dt time.Time, what, qty
 func foodOut(doc bson.M) bson.M {
 	out := bson.M{"_id": hexID(doc["_id"]), "day": doc["day"], "what": doc["what"], "qty": doc["qty"]}
 	if v, ok := doc["datetime"]; ok {
-		out["datetime"] = fmt.Sprint(v)
+		out["datetime"] = fmtDate(v)
 	}
 	for _, m := range MacroKeys {
 		if v, ok := doc[m]; ok {
@@ -374,7 +385,7 @@ func foodOut(doc bson.M) bson.M {
 		out["note"] = v
 	}
 	if v, ok := doc["createdAt"]; ok {
-		out["createdAt"] = fmt.Sprint(v)
+		out["createdAt"] = fmtDate(v)
 	}
 	return out
 }
@@ -699,7 +710,7 @@ func sleepOut(doc bson.M) bson.M {
 		out["day"] = v
 	}
 	if v, ok := doc["start"]; ok {
-		out["start"] = fmt.Sprint(v)
+		out["start"] = fmtDate(v)
 	}
 	return out
 }
@@ -707,7 +718,9 @@ func sleepOut(doc bson.M) bson.M {
 // ListSleep returns per-day docs with derived hours and full sessions,
 // capped at listCap day-docs. sort_by is date|hours (the day's derived
 // total); value sorts apply within the returned page, so narrow wide
-// ranges when chasing extremes. total is the unpaged day count.
+// ranges when chasing extremes. total is the unpaged day count, and the
+// cap applies to day-docs — a returned day always carries all of its
+// sessions, never a silent subset.
 func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) ([]bson.M, int64, error) {
 	st, err := mustDay(start)
 	if err != nil {
@@ -725,12 +738,17 @@ func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) (
 		sortBy = SleepSortFields[0]
 	}
 	filt := bson.M{"day": bson.M{"$gte": st, "$lte": en}}
-	dayTotal, err := s.sleep.Distinct(ctx, "day", filt)
+	dayVals, err := s.sleep.Distinct(ctx, "day", filt)
 	if err != nil {
 		return nil, 0, err
 	}
-	cur, err := s.sleep.Find(ctx, filt,
-		options.Find().SetSort(bson.D{{Key: "day", Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}).SetLimit(listCap))
+	days := dayStrings(dayVals, asc)
+	total := int64(len(days))
+	if len(days) > listCap {
+		days = days[:listCap]
+	}
+	cur, err := s.sleep.Find(ctx, bson.M{"day": bson.M{"$in": days}},
+		options.Find().SetSort(bson.D{{Key: "day", Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -760,7 +778,24 @@ func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) (
 	if sortBy == "hours" {
 		sortDaysByFloat(out, "sleep_hours", asc)
 	}
-	return out, int64(len(dayTotal)), nil
+	return out, total, nil
+}
+
+// dayStrings sorts distinct day values in the requested direction.
+func dayStrings(vals []any, asc bool) []string {
+	out := make([]string, 0, len(vals))
+	for _, v := range vals {
+		if d, ok := v.(string); ok {
+			out = append(out, d)
+		}
+	}
+	sort.Strings(out)
+	if !asc {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
+	return out
 }
 
 // sortDaysByFloat orders day rows by a numeric key, same direction as the
@@ -949,9 +984,12 @@ func workoutMinutes(wos []bson.M) float64 {
 	return sumTenths(vals)
 }
 
-// ListWorkouts returns per-day docs. sort_by is date|minutes|kcal, where
-// minutes/kcal sort by the day's derived totals. The type filter is exact
-// match on the lowered type.
+// ListWorkouts returns per-day docs, capped at listCap day-docs.
+// sort_by is date|minutes|kcal, where minutes/kcal sort by the day's
+// derived totals (within the returned page — narrow wide ranges when
+// chasing extremes). The type filter is exact match on the lowered type.
+// total is the unpaged day count; the cap applies to day-docs, so a
+// returned day always carries all of its workouts.
 func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ string) ([]bson.M, int64, error) {
 	st, err := mustDay(start)
 	if err != nil {
@@ -972,12 +1010,21 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 	if t := strings.TrimSpace(typ); t != "" {
 		filt["type"] = normWorkoutType(t)
 	}
-	dayTotal, err := s.workouts.Distinct(ctx, "day", filt)
+	dayVals, err := s.workouts.Distinct(ctx, "day", filt)
 	if err != nil {
 		return nil, 0, err
 	}
-	cur, err := s.workouts.Find(ctx, filt, options.Find().
-		SetSort(bson.D{{Key: "day", Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}).SetLimit(listCap))
+	days := dayStrings(dayVals, asc)
+	total := int64(len(days))
+	if len(days) > listCap {
+		days = days[:listCap]
+	}
+	dayFilt := bson.M{"day": bson.M{"$in": days}}
+	if t := strings.TrimSpace(typ); t != "" {
+		dayFilt["type"] = normWorkoutType(t)
+	}
+	cur, err := s.workouts.Find(ctx, dayFilt, options.Find().
+		SetSort(bson.D{{Key: "day", Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1019,7 +1066,7 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 			delete(r, "_sort")
 		}
 	}
-	return out, int64(len(dayTotal)), nil
+	return out, total, nil
 }
 
 // CorrectWorkout patches one workout by id: supplied fields replace,
