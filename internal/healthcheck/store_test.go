@@ -59,33 +59,43 @@ func TestFoodRoundTrip(t *testing.T) {
 	if _, err := s.GetFood(ctx, "000000000000000000000000"); err == nil {
 		t.Fatal("expected unknown-id error")
 	}
-	rows, err := s.ListFood(ctx, day, day, "", "", "")
-	if err != nil || len(rows) != 1 {
-		t.Fatalf("list %v %v", rows, err)
+	rows, total, err := s.ListFood(ctx, day, day, "", "", "")
+	if err != nil || len(rows) != 1 || total != 1 {
+		t.Fatalf("list %v total=%d %v", rows, total, err)
 	}
-	rows, err = s.ListFood(ctx, day, day, "", "", "noodles")
+	rows, total, err = s.ListFood(ctx, day, day, "", "", "noodles")
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("unmatched filter must be empty, got %v %v", rows, err)
 	}
-	if _, err := s.ListFood(ctx, day, day, "sugar", "", ""); err == nil {
+	if _, _, err := s.ListFood(ctx, day, day, "sugar", "", ""); err == nil {
 		t.Fatal("expected unknown sort_by error")
 	}
-	if _, err := s.ListFood(ctx, day, day, "", "up", ""); err == nil {
+	if _, _, err := s.ListFood(ctx, day, day, "", "up", ""); err == nil {
 		t.Fatal("expected unknown sort error")
 	}
 	qty := "2 bowls"
-	patched, err := s.CorrectFood(ctx, id, nil, &qty, nil, map[string]*float64{"kcal": fptr(210)}, nil)
+	patched, err := s.CorrectFood(ctx, id, nil, &qty, nil, map[string]*float64{"kcal": fptr(210)}, nil, nil)
 	if err != nil || patched["qty"] != "2 bowls" {
 		t.Fatalf("correct %v %v", patched, err)
 	}
-	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil); err == nil {
+	cleared, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, []string{"kcal", "protein"}, nil)
+	if err != nil {
+		t.Fatalf("clear %v", err)
+	}
+	if _, ok := cleared["kcal"]; ok {
+		t.Fatalf("kcal not cleared: %v", cleared)
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, []string{"sugar"}, nil); err == nil {
+		t.Fatal("expected unknown-macro error on clear")
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("expected empty-patch error")
 	}
 	dry, err := s.DeleteFood(ctx, id, true)
 	if err != nil || dry["would_delete"] != 1 {
 		t.Fatalf("dry run %v %v", dry, err)
 	}
-	if rows, _ := s.ListFood(ctx, day, day, "", "", ""); len(rows) != 1 {
+	if rows, _, _ := s.ListFood(ctx, day, day, "", "", ""); len(rows) != 1 {
 		t.Fatal("dry run must not delete")
 	}
 	live, err := s.DeleteFood(ctx, id, false)
@@ -95,7 +105,7 @@ func TestFoodRoundTrip(t *testing.T) {
 	if _, err := s.DeleteFood(ctx, id, false); err == nil {
 		t.Fatal("expected unknown-id error on second delete")
 	}
-	if _, err := s.ListFood(ctx, "bad-day", day, "", "", ""); err == nil {
+	if _, _, err := s.ListFood(ctx, "bad-day", day, "", "", ""); err == nil {
 		t.Fatal("expected bad-date error")
 	}
 }
@@ -116,9 +126,9 @@ func TestWeightRoundTrip(t *testing.T) {
 	if _, err := s.LogWeight(ctx, day, 71); err != nil {
 		t.Fatalf("re-log: %v", err)
 	}
-	rows, err := s.ListWeight(ctx, day, day, "", "")
-	if err != nil || len(rows) != 1 || rows[0]["kg"] != 71.0 {
-		t.Fatalf("list %v %v", rows, err)
+	rows, total, err := s.ListWeight(ctx, day, day, "", "")
+	if err != nil || len(rows) != 1 || rows[0]["kg"] != 71.0 || total != 1 {
+		t.Fatalf("list %v total=%d %v", rows, total, err)
 	}
 	dry, err := s.DeleteWeight(ctx, day, true)
 	if err != nil || dry["would_delete"] != 1 {
@@ -151,9 +161,9 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.LogSleep(ctx, day, 7.5); err == nil {
 		t.Fatal("expected duplicate-sleep error")
 	}
-	days, err := s.ListSleep(ctx, day, day, "", "")
-	if err != nil || len(days) != 1 || days[0]["sleep_hours"] != 7.5 {
-		t.Fatalf("list %v %v", days, err)
+	days, total, err := s.ListSleep(ctx, day, day, "", "")
+	if err != nil || len(days) != 1 || days[0]["sleep_hours"] != 7.5 || total != 1 {
+		t.Fatalf("list %v total=%d %v", days, total, err)
 	}
 	sessArr, _ := days[0]["sessions"].([]bson.M)
 	if len(sessArr) != 1 {
@@ -164,7 +174,7 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.CorrectSleep(ctx, sessID, 8*60); err != nil {
 		t.Fatalf("correct: %v", err)
 	}
-	days, _ = s.ListSleep(ctx, day, day, "", "")
+	days, _, _ = s.ListSleep(ctx, day, day, "", "")
 	if days[0]["sleep_hours"] != 8.0 {
 		t.Fatalf("hours %v", days[0]["sleep_hours"])
 	}
@@ -186,15 +196,15 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.LogWorkout(ctx, day, "run", 30, 300); err == nil {
 		t.Fatal("expected duplicate-workout error (lowered type)")
 	}
-	wodays, err := s.ListWorkouts(ctx, day, day, "", "", "RUN")
-	if err != nil || len(wodays) != 1 {
-		t.Fatalf("type filter %v %v", wodays, err)
+	wodays, wtotal, err := s.ListWorkouts(ctx, day, day, "", "", "RUN")
+	if err != nil || len(wodays) != 1 || wtotal != 1 {
+		t.Fatalf("type filter %v total=%d %v", wodays, wtotal, err)
 	}
-	wodays, err = s.ListWorkouts(ctx, day, day, "", "", "swim")
+	wodays, _, err = s.ListWorkouts(ctx, day, day, "", "", "swim")
 	if err != nil || len(wodays) != 0 {
 		t.Fatalf("unmatched type must be empty, got %v %v", wodays, err)
 	}
-	allDays, _ := s.ListWorkouts(ctx, day, day, "", "", "")
+	allDays, _, _ := s.ListWorkouts(ctx, day, day, "", "", "")
 	first := allDays[0]["workouts"].([]bson.M)[0]
 	woid, _ := first["id"].(string)
 	if _, err := s.CorrectWorkout(ctx, woid, nil, nil, nil); err == nil {
@@ -224,6 +234,20 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	res2, err := s.RecordSync(ctx, rec)
 	if err != nil || res2.SessionsSkipped != 1 || res2.WorkoutsSkipped != 1 {
 		t.Fatalf("resync %v %v", res2, err)
+	}
+	// Sync validation: negative scalars and implausible sessions fail
+	// before anything is written (422, not 500).
+	negSteps := -5
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, Steps: &negSteps}); err == nil {
+		t.Fatal("expected negative-steps error")
+	}
+	negKcal := -1.0
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, ActiveKcal: &negKcal}); err == nil {
+		t.Fatal("expected negative-kcal error")
+	}
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day,
+		Sleeps: []SleepIn{{Day: day, Minutes: 25 * 60}}}); err == nil {
+		t.Fatal("expected over-24h session error")
 	}
 	sum, err := s.DailySummary(ctx, day)
 	if err != nil {
@@ -313,7 +337,7 @@ func TestRecordSyncPreservesEntryDays(t *testing.T) {
 	}
 	id, _ := row["_id"].(string)
 	newDT, _ := time.Parse(time.RFC3339, "2026-09-12T08:00:00+05:30")
-	patched, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, &newDT)
+	patched, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil, &newDT)
 	if err != nil {
 		t.Fatal(err)
 	}

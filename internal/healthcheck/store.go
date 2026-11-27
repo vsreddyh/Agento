@@ -248,15 +248,8 @@ func round1(f float64) float64 { return validate.Round1(f) }
 func checkMacros(macros map[string]float64) (map[string]float64, error) {
 	out := map[string]float64{}
 	for k, v := range macros {
-		known := false
-		for _, m := range MacroKeys {
-			if k == m {
-				known = true
-				break
-			}
-		}
-		if !known {
-			return nil, fail("unknown macro '%s' — use one of %v", k, MacroKeys)
+		if err := checkMacroName(k); err != nil {
+			return nil, err
 		}
 		if math.IsNaN(v) || math.IsInf(v, 0) {
 			return nil, fail("macro '%s' must be a number", k)
@@ -269,6 +262,17 @@ func checkMacros(macros map[string]float64) (map[string]float64, error) {
 	return out, nil
 }
 
+// checkMacroName rejects unknown macro keys naming the allowed set.
+func checkMacroName(k string) error {
+	for _, m := range MacroKeys {
+		if k == m {
+			return nil
+		}
+	}
+	return fail("unknown macro '%s' — use one of %v", k, MacroKeys)
+}
+
+// (0.1+0.2 stays 0.3) — the miser int64-paise rule, one decimal up.
 // sumTenths adds values in integer tenths so a day's totals can't drift
 // (0.1+0.2 stays 0.3) — the miser int64-paise rule, one decimal up.
 func sumTenths(vals []float64) float64 {
@@ -378,18 +382,18 @@ func (s *Store) GetFood(ctx context.Context, id string) (bson.M, error) {
 // is exact match on the lowercased copy — equal-or-nothing, never
 // substring. A filter matching nothing returns the empty page, not an
 // error; only the enums and the dates can fail.
-func (s *Store) ListFood(ctx context.Context, start, end, sortBy, dir, what string) ([]bson.M, error) {
+func (s *Store) ListFood(ctx context.Context, start, end, sortBy, dir, what string) ([]bson.M, int64, error) {
 	st, err := mustDay(start)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	en, err := mustDay(end)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	asc, err := checkSort("list_food", sortBy, FoodSortFields, dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if sortBy == "" {
 		sortBy = FoodSortFields[0]
@@ -402,15 +406,19 @@ func (s *Store) ListFood(ctx context.Context, start, end, sortBy, dir, what stri
 	if sortBy == "kcal" {
 		key = "kcal"
 	}
+	total, err := s.food.CountDocuments(ctx, filt)
+	if err != nil {
+		return nil, 0, err
+	}
 	cur, err := s.food.Find(ctx, filt, options.Find().
 		SetSort(bson.D{{Key: key, Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}).
 		SetLimit(listCap))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var rows []bson.M
 	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if rows == nil {
 		rows = []bson.M{}
@@ -419,13 +427,13 @@ func (s *Store) ListFood(ctx context.Context, start, end, sortBy, dir, what stri
 	for _, r := range rows {
 		out = append(out, foodOut(r))
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // CorrectFood patches one entry by id: supplied fields replace, omitted
-// fields keep. A macro set to nil clears it; what also refreshes what_lc;
-// datetime also refreshes day.
-func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *string, macros map[string]*float64, dt *time.Time) (bson.M, error) {
+// fields keep, and clearMacros names macros to remove. what also refreshes
+// what_lc; datetime also refreshes day (IST, like log_food).
+func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *string, macros map[string]*float64, clearMacros []string, dt *time.Time) (bson.M, error) {
 	oid, err := primitive.ObjectIDFromHex(strings.TrimSpace(id))
 	if err != nil {
 		return nil, fail("'%s' is not a food id", id)
@@ -450,19 +458,17 @@ func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *str
 			unset["note"] = ""
 		}
 	}
-	for k, v := range macros {
-		known := false
-		for _, m := range MacroKeys {
-			if k == m {
-				known = true
-				break
-			}
+	for _, k := range clearMacros {
+		if err := checkMacroName(k); err != nil {
+			return nil, err
 		}
-		if !known {
-			return nil, fail("unknown macro '%s' — use one of %v", k, MacroKeys)
+		unset[k] = ""
+	}
+	for k, v := range macros {
+		if err := checkMacroName(k); err != nil {
+			return nil, err
 		}
 		if v == nil {
-			unset[k] = ""
 			continue
 		}
 		if math.IsNaN(*v) || math.IsInf(*v, 0) {
@@ -536,18 +542,18 @@ func (s *Store) LogWeight(ctx context.Context, day string, kg float64) (bson.M, 
 }
 
 // ListWeight scans a day range. sort_by is date|kg.
-func (s *Store) ListWeight(ctx context.Context, start, end, sortBy, dir string) ([]bson.M, error) {
+func (s *Store) ListWeight(ctx context.Context, start, end, sortBy, dir string) ([]bson.M, int64, error) {
 	st, err := mustDay(start)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	en, err := mustDay(end)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	asc, err := checkSort("list_weight", sortBy, WeightSortFields, dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if sortBy == "" {
 		sortBy = WeightSortFields[0]
@@ -556,14 +562,19 @@ func (s *Store) ListWeight(ctx context.Context, start, end, sortBy, dir string) 
 	if sortBy == "kg" {
 		key = "kg"
 	}
-	cur, err := s.weight.Find(ctx, bson.M{"date": bson.M{"$gte": st, "$lte": en}},
+	filt := bson.M{"date": bson.M{"$gte": st, "$lte": en}}
+	total, err := s.weight.CountDocuments(ctx, filt)
+	if err != nil {
+		return nil, 0, err
+	}
+	cur, err := s.weight.Find(ctx, filt,
 		options.Find().SetSort(bson.D{{Key: key, Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}).SetLimit(listCap))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var rows []bson.M
 	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if rows == nil {
 		rows = []bson.M{}
@@ -572,7 +583,7 @@ func (s *Store) ListWeight(ctx context.Context, start, end, sortBy, dir string) 
 	for _, r := range rows {
 		out = append(out, bson.M{"date": r["date"], "kg": r["kg"]})
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // DeleteWeight hard-deletes one date's row. A valid date with no row is
@@ -672,32 +683,39 @@ func sleepOut(doc bson.M) bson.M {
 	return out
 }
 
-// ListSleep returns per-day docs with derived hours and full sessions.
-// sort_by is date|hours (the day's derived total).
-func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) ([]bson.M, error) {
+// ListSleep returns per-day docs with derived hours and full sessions,
+// capped at listCap day-docs. sort_by is date|hours (the day's derived
+// total); value sorts apply within the returned page, so narrow wide
+// ranges when chasing extremes. total is the unpaged day count.
+func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) ([]bson.M, int64, error) {
 	st, err := mustDay(start)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	en, err := mustDay(end)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	asc, err := checkSort("list_sleep", sortBy, SleepSortFields, dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if sortBy == "" {
 		sortBy = SleepSortFields[0]
 	}
-	cur, err := s.sleep.Find(ctx, bson.M{"day": bson.M{"$gte": st, "$lte": en}},
+	filt := bson.M{"day": bson.M{"$gte": st, "$lte": en}}
+	dayTotal, err := s.sleep.Distinct(ctx, "day", filt)
+	if err != nil {
+		return nil, 0, err
+	}
+	cur, err := s.sleep.Find(ctx, filt,
 		options.Find().SetSort(bson.D{{Key: "day", Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}).SetLimit(listCap))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var rows []bson.M
 	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	byDay := map[string][]bson.M{}
 	order := []string{}
@@ -724,7 +742,7 @@ func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) (
 	if sortBy == "hours" {
 		sortDaysByFloat(out, "sleep_hours", asc)
 	}
-	return out, nil
+	return out, int64(len(dayTotal)), nil
 }
 
 // sortDaysByFloat orders day rows by a numeric key, same direction as the
@@ -913,18 +931,18 @@ func workoutMinutes(wos []bson.M) float64 {
 // ListWorkouts returns per-day docs. sort_by is date|minutes|kcal, where
 // minutes/kcal sort by the day's derived totals. The type filter is exact
 // match on the lowered type.
-func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ string) ([]bson.M, error) {
+func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ string) ([]bson.M, int64, error) {
 	st, err := mustDay(start)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	en, err := mustDay(end)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	asc, err := checkSort("list_workouts", sortBy, WorkoutSortFields, dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if sortBy == "" {
 		sortBy = WorkoutSortFields[0]
@@ -933,14 +951,18 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 	if t := strings.TrimSpace(typ); t != "" {
 		filt["type"] = normWorkoutType(t)
 	}
+	dayTotal, err := s.workouts.Distinct(ctx, "day", filt)
+	if err != nil {
+		return nil, 0, err
+	}
 	cur, err := s.workouts.Find(ctx, filt, options.Find().
 		SetSort(bson.D{{Key: "day", Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}).SetLimit(listCap))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var rows []bson.M
 	if err := cur.All(ctx, &rows); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	byDay := map[string][]bson.M{}
 	order := []string{}
@@ -979,7 +1001,7 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 			delete(r, "_sort")
 		}
 	}
-	return out, nil
+	return out, int64(len(dayTotal)), nil
 }
 
 // CorrectWorkout patches one workout by id: supplied fields replace,
@@ -1094,6 +1116,12 @@ func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, err
 	if err != nil {
 		return SyncResult{}, err
 	}
+	if rec.Steps != nil && *rec.Steps < 0 {
+		return SyncResult{}, fail("steps must be >= 0, got %d", *rec.Steps)
+	}
+	if rec.ActiveKcal != nil && *rec.ActiveKcal < 0 {
+		return SyncResult{}, fail("active_kcal must be >= 0, got %v", *rec.ActiveKcal)
+	}
 	for i := range rec.Sleeps {
 		if rec.Sleeps[i].Day == "" {
 			rec.Sleeps[i].Day = day
@@ -1157,6 +1185,9 @@ func checkSleepIn(sl SleepIn) error {
 	if sl.Minutes <= 0 {
 		return fail("sleep session minutes must be > 0")
 	}
+	if sl.Minutes > 24*60 {
+		return fail("sleep session minutes must be <= 1440 (24h), got %d", sl.Minutes)
+	}
 	return nil
 }
 
@@ -1192,11 +1223,11 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 	var d bson.M
 	_ = s.days.FindOne(ctx, bson.M{"date": day}).Decode(&d)
 
-	sleeps, err := s.ListSleep(ctx, day, day, "", "")
+	sleeps, _, err := s.ListSleep(ctx, day, day, "", "")
 	if err != nil {
 		return nil, err
 	}
-	workouts, err := s.ListWorkouts(ctx, day, day, "", "", "")
+	workouts, _, err := s.ListWorkouts(ctx, day, day, "", "", "")
 	if err != nil {
 		return nil, err
 	}

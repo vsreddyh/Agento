@@ -71,7 +71,7 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"log_food":        {"qty", "kcal", "protein", "carbs", "fat", "fiber", "note", "datetime"},
 		"get_food":        {},
 		"list_food":       {"sort_by", "sort", "what"},
-		"correct_food":    {"what", "qty", "kcal", "protein", "carbs", "fat", "fiber", "note", "datetime"},
+		"correct_food":    {"what", "qty", "kcal", "protein", "carbs", "fat", "fiber", "note", "clear_macros", "datetime"},
 		"delete_food":     {"dry_run"},
 		"log_weight":      {"date"},
 		"list_weight":     {"sort_by", "sort"},

@@ -62,7 +62,7 @@ instead of round-tripping one at a time.
   `log_weight` (upsert per date; re-logging is the correction) / `list_weight` /
   `delete_weight`. `log_sleep` (manual hours) / `list_sleep` (per-day derived
   hours + sessions) / `correct_sleep` / `delete_sleep`. `log_workout`
-  (free-text type, lowercased on write) / `list_workouts` / `correct_workout` /
+  (free-text type, lowercased on write, empty → `other`) / `list_workouts` / `correct_workout` /
   `delete_workout`. `daily_summary` (food-derived cal-in; `workout_kcal` +
   `active_kcal` as separate cal-out lines, no single net).
   Dedup caveat: an exact-duplicate same-day sleep/workout collides on purpose
@@ -144,7 +144,7 @@ when the target is one entry. `unarchive_account` also prompts (it matches
 the `*archive_account*` pattern) even though it restores rather than
 destroys.
 
-Reads (`list_*`, `get_*`, `query_*`, `daily_summary`,
+Reads (`list_*`, `get_*`, `daily_summary`,
 `get_balances`, `money_*`, `budget_status`) need no confirmation. Food/sleep/
 workout corrections name the row through `correct_food`/`correct_sleep`/
 `correct_workout` by id (ask-gated, like `edit_transaction`) — there is no

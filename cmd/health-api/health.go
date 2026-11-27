@@ -41,14 +41,28 @@ type HealthSyncPayload struct {
 	Workouts           []WorkoutEntry `json:"workouts"`
 }
 
+// parseSyncTime parses a Health Connect ISO timestamp. Fractional
+// seconds are accepted (RFC3339Nano); naive timestamps (no zone) are
+// read as UTC — the same rule in every parse site, so a retried payload
+// hashes identically whether zoned or naive.
+func parseSyncTime(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse(time.RFC3339Nano, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
+		return t, true
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC); err == nil {
+		return t, true
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04:05.999999999", s, time.UTC); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
 // localDate buckets an ISO timestamp into the user's (IST) calendar date.
 func localDate(iso string) string {
 	s := strings.TrimSpace(iso)
-	if t, err := time.Parse(time.RFC3339Nano, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
-		return t.In(healthcheck.IST()).Format("2006-01-02")
-	}
-	// Naive timestamps are UTC.
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC); err == nil {
+	if t, ok := parseSyncTime(s); ok {
 		return t.In(healthcheck.IST()).Format("2006-01-02")
 	}
 	if len(s) >= 10 {
@@ -61,15 +75,8 @@ func localDate(iso string) string {
 // or non-positive (an end before/at the start is corrupt data, not a
 // 1-minute workout — skipped like unparseable timestamps).
 func minutesBetween(startISO, endISO string) (dur int, ok bool) {
-	p := func(s string) (time.Time, bool) {
-		s = strings.TrimSpace(s)
-		if t, err := time.Parse(time.RFC3339Nano, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
-			return t, true
-		}
-		return time.Time{}, false
-	}
-	s, ok1 := p(startISO)
-	e, ok2 := p(endISO)
+	s, ok1 := parseSyncTime(startISO)
+	e, ok2 := parseSyncTime(endISO)
 	if !ok1 || !ok2 {
 		return 0, false
 	}
@@ -169,9 +176,10 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		// night crossing midnight still attributes to the morning —
 		// while the dedup hash keys on the real start. An unparseable
 		// start still syncs (minutes only), like a manual log_sleep.
-		start, perr := time.Parse(time.RFC3339Nano, strings.Replace(s.StartISO, "Z", "+00:00", 1))
+		// Naive timestamps parse as UTC, same as localDate above.
+		start, ok := parseSyncTime(s.StartISO)
 		var startPtr *time.Time
-		if perr == nil {
+		if ok {
 			startPtr = &start
 		}
 		rec.Sleeps = append(rec.Sleeps, healthcheck.SleepIn{

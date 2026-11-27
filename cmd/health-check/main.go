@@ -87,16 +87,17 @@ type listFoodInput struct {
 }
 
 type correctFoodInput struct {
-	ID       string   `json:"id"`
-	What     *string  `json:"what,omitempty"`
-	Qty      *string  `json:"qty,omitempty"`
-	Kcal     *float64 `json:"kcal,omitempty"`
-	Protein  *float64 `json:"protein,omitempty"`
-	Carbs    *float64 `json:"carbs,omitempty"`
-	Fat      *float64 `json:"fat,omitempty"`
-	Fiber    *float64 `json:"fiber,omitempty"`
-	Note     *string  `json:"note,omitempty"`
-	Datetime *string  `json:"datetime,omitempty"`
+	ID          string   `json:"id"`
+	What        *string  `json:"what,omitempty"`
+	Qty         *string  `json:"qty,omitempty"`
+	Kcal        *float64 `json:"kcal,omitempty"`
+	Protein     *float64 `json:"protein,omitempty"`
+	Carbs       *float64 `json:"carbs,omitempty"`
+	Fat         *float64 `json:"fat,omitempty"`
+	Fiber       *float64 `json:"fiber,omitempty"`
+	Note        *string  `json:"note,omitempty"`
+	ClearMacros []string `json:"clear_macros,omitempty"`
+	Datetime    *string  `json:"datetime,omitempty"`
 }
 
 type deleteFoodInput struct {
@@ -238,16 +239,17 @@ func main() {
 		InputSchema: enumSchema(listFoodInput{},
 			map[string][]string{"sort_by": healthcheck.FoodSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listFoodInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.ListFood(ctx, in.Start, in.End, in.SortBy, in.Sort, in.What)
+			rows, total, err := store.ListFood(ctx, in.Start, in.End, in.SortBy, in.Sort, in.What)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "foods": rows,
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": int64(len(rows)) < total, "foods": rows,
 				"sort_by": orDefault(in.SortBy, "datetime"), "sort": orDefault(in.Sort, "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
-		Description: "Patch one food entry by id: supplied fields replace, omitted keep; a macro set to null clears it. Ask-gated like edit_transaction."},
+		Description: "Patch one food entry by id: supplied fields replace, omitted keep; clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). Ask-gated like edit_transaction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			macros := map[string]*float64{}
 			for k, v := range map[string]*float64{"kcal": in.Kcal, "protein": in.Protein, "carbs": in.Carbs, "fat": in.Fat, "fiber": in.Fiber} {
@@ -263,7 +265,7 @@ func main() {
 				}
 				dt = &t
 			}
-			row, err := store.CorrectFood(ctx, in.ID, in.What, in.Qty, in.Note, macros, dt)
+			row, err := store.CorrectFood(ctx, in.ID, in.What, in.Qty, in.Note, macros, in.ClearMacros, dt)
 			if err != nil {
 				return fail(err)
 			}
@@ -297,11 +299,12 @@ func main() {
 		InputSchema: enumSchema(listWeightInput{},
 			map[string][]string{"sort_by": healthcheck.WeightSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWeightInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.ListWeight(ctx, in.Start, in.End, in.SortBy, in.Sort)
+			rows, total, err := store.ListWeight(ctx, in.Start, in.End, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "weights": rows,
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": int64(len(rows)) < total, "weights": rows,
 				"sort_by": orDefault(in.SortBy, "date"), "sort": orDefault(in.Sort, "asc")})
 		})
 
@@ -333,17 +336,21 @@ func main() {
 		InputSchema: enumSchema(listSleepInput{},
 			map[string][]string{"sort_by": healthcheck.SleepSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listSleepInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.ListSleep(ctx, in.Start, in.End, in.SortBy, in.Sort)
+			rows, total, err := store.ListSleep(ctx, in.Start, in.End, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "days": rows,
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": int64(len(rows)) < total, "days": rows,
 				"sort_by": orDefault(in.SortBy, "date"), "sort": orDefault(in.Sort, "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_sleep",
 		Description: "Replace one sleep session's minutes by entry id. Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctSleepInput) (*mcp.CallToolResult, map[string]any, error) {
+			if in.Minutes != nil && in.Hours != nil {
+				return fail(fmt.Errorf("correct_sleep takes minutes or hours, not both"))
+			}
 			minutes := 0
 			if in.Minutes != nil {
 				minutes = *in.Minutes
@@ -386,11 +393,12 @@ func main() {
 		InputSchema: enumSchema(listWorkoutsInput{},
 			map[string][]string{"sort_by": healthcheck.WorkoutSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWorkoutsInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.ListWorkouts(ctx, in.Start, in.End, in.SortBy, in.Sort, in.Type)
+			rows, total, err := store.ListWorkouts(ctx, in.Start, in.End, in.SortBy, in.Sort, in.Type)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "days": rows,
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": int64(len(rows)) < total, "days": rows,
 				"sort_by": orDefault(in.SortBy, "date"), "sort": orDefault(in.Sort, "asc")})
 		})
 

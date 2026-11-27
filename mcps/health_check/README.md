@@ -32,8 +32,9 @@ Food (id-keyed, full CRUD): `log_food(what, qty?, macros?, note?, datetime?)`,
 Weight (date-keyed, upsert is the correction): `log_weight(kg, date?)`,
 `list_weight(…)`, `delete_weight(date, dry_run=true)` (ask).
 Sleep (session-keyed): `log_sleep(hours, date?)`, `list_sleep(…)`,
-`correct_sleep(id, minutes)` (ask), `delete_sleep(id, dry_run=true)` (ask).
-Workouts (entry-keyed): `log_workout(type?, minutes, kcal?, date?)`,
+`correct_sleep(id, minutes|hours — one of the two, both-set fails)` (ask),
+`delete_sleep(id, dry_run=true)` (ask). Workouts (entry-keyed):
+`log_workout(type?, minutes, kcal?, date?)` (empty type → `other`),
 `list_workouts(start, end, sort_by?, sort?, type?)`, `correct_workout(id, …)`
 (ask), `delete_workout(id, dry_run=true)` (ask).
 Read path: `daily_summary(date?)` — food-derived cal-in; `workout_kcal` +
