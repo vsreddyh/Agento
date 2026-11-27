@@ -72,8 +72,8 @@ instead of round-tripping one at a time.
   (`asc|desc`) as real schema enums — unknown values return errors on both
   layers. Filters (`what`, `type`) are exact match on the lowered text and
   return the empty page when nothing matches; bad dates/ids return errors.
-  Lists echo `count`/`total`/`truncated` (cap 500 rows) — a truncated page
-  means narrow the dates.
+  Lists echo `count`/`total`/`truncated` (cap 500: rows for the flat lists,
+  day-docs for the grouped ones) — a truncated page means narrow the dates.
 - **task-manager** (10): `create_task`, `list_tasks`, `get_task`,
   `update_task`, `complete_task`, `skip_task`, `reopen_task`, `delete_task`,
   `duplicate_task`, `task_history` (the change log: what changed, who changed it, when — it

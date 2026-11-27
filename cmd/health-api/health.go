@@ -161,19 +161,27 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		rec.ActiveKcal = &kcal
 	}
 
+	tsInvalidSleeps, tsInvalidWorkouts := 0, 0
 	for _, s := range p.Sleep {
 		// Sessions bucket by wake date but carry their own start, so a
 		// night crossing midnight still attributes to the morning —
 		// while the dedup hash keys on the real start. An unparseable
-		// start still syncs (minutes only), like a manual log_sleep.
-		// Naive timestamps parse as UTC, same as localDate above.
+		// start still syncs (minutes only), like a manual log_sleep —
+		// but an empty wake date is invalid, not a session on the sync
+		// date. Naive timestamps parse as UTC, same as localDate above.
+		day := localDate(s.EndISO)
+		if strings.TrimSpace(s.EndISO) == "" || day == "" {
+			log.Printf("skipping sleep with empty end timestamp (minutes=%d)", s.TotalMinutes)
+			tsInvalidSleeps++
+			continue
+		}
 		start, ok := parseSyncTime(s.StartISO)
 		var startPtr *time.Time
 		if ok {
 			startPtr = &start
 		}
 		rec.Sleeps = append(rec.Sleeps, healthcheck.SleepIn{
-			Day:     localDate(s.EndISO),
+			Day:     day,
 			Start:   startPtr,
 			Minutes: s.TotalMinutes,
 		})
@@ -183,6 +191,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		duration, ok := minutesBetween(wo.StartISO, wo.EndISO)
 		if !ok {
 			log.Printf("skipping workout with unparseable timestamps: %s -> %s", wo.StartISO, wo.EndISO)
+			tsInvalidWorkouts++
 			continue
 		}
 		var kcal float64
@@ -198,6 +207,8 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	syncRes, err := hcs.RecordSync(ctx, rec)
+	syncRes.SessionsInvalid += tsInvalidSleeps
+	syncRes.WorkoutsInvalid += tsInvalidWorkouts
 	if err != nil {
 		// Domain errors (bad date, implausible minutes/kcal) are the
 		// client's malformed payload: 422 like the batch-size guards

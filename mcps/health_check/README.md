@@ -46,18 +46,19 @@ fields (`list_food`: `datetime,kcal`; `list_weight`: `date,kg`;
 `list_sleep`: `date,hours`; `list_workouts`: `date,minutes,kcal`),
 `sort` is `asc|desc`. Unknown values return errors on both layers (schema
 first, then the store's `fail()` naming the allowed set); the applied pair
-is echoed along with `count`/`total`/`truncated` (cap 500 rows — a
-truncated page means narrow the dates). Value sorts (`hours`/`minutes`/
-`kcal`) apply within the returned page. Filters are exact match on
-lowered text and return the empty page when nothing matches; bad
-dates/ids return errors.
+is echoed along with `count`/`total`/`truncated` (cap 500: rows for the
+flat lists, day-docs for the grouped ones — a returned day always carries
+all of its sessions/workouts; a truncated page means narrow the dates).
+Value sorts (`hours`/`minutes`/`kcal`) apply within the returned page.
+Filters are exact match on lowered text and return the empty page when
+nothing matches; bad dates/ids return errors.
 
 Run: `go run ./cmd/health-check` (stdio), needs `MONGODB_URI`/`MONGODB_DB`.
 Built binary: `bin/health-check` (via `./scripts/build-mcps.sh`), launched by
 T3 through `./scripts/mcp-run.sh health-check` — there is no health-check
 container in the stack, so never `exec` into one for it.
 
-Upgrading from the meals era drops the frozen `hc_meals` collection on first
-`EnsureSchema` — pre-wipe environments lose that history on first new-binary
-start. "Permanent" below means no TTL/prune going forward, not that the
-pre-v2 shape is preserved.
+Upgrading from the meals era is gated: `EnsureSchema` refuses to boot with
+a non-empty frozen `hc_meals` (back it up or wipe it with `mongo delete
+hc_meals '{}'`); an empty one is dropped quietly. "Permanent" below means no
+TTL/prune going forward, not that the pre-v2 shape is preserved.

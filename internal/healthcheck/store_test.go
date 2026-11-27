@@ -3,8 +3,11 @@ package healthcheck
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"agento/internal/mongo"
 
 	"go.mongodb.org/mongo-driver/bson"
 	mongoDrv "go.mongodb.org/mongo-driver/mongo"
@@ -231,6 +234,14 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if _, err := s.CorrectWorkout(ctx, woid, nil, nil, nil); err == nil {
 		t.Fatal("expected empty-patch error")
 	}
+	empty := ""
+	if _, err := s.CorrectWorkout(ctx, woid, &empty, nil, nil); err == nil {
+		t.Fatal("expected empty-type error")
+	}
+	huge := 2000.0
+	if _, err := s.CorrectWorkout(ctx, woid, nil, &huge, nil); err == nil {
+		t.Fatal("expected over-24h error")
+	}
 	if _, err := s.CorrectWorkout(ctx, woid, strptr("lift"), nil, nil); err != nil {
 		t.Fatalf("correct: %v", err)
 	}
@@ -275,6 +286,15 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
+	// Missing day: both scalars null (missing sync indistinguishable from
+	// nothing measured — never a fake zero on one line only).
+	ghost, err := s.DailySummary(ctx, "2026-09-30")
+	if err != nil {
+		t.Fatalf("ghost summary: %v", err)
+	}
+	if ghost["steps"] != nil || ghost["active_kcal"] != nil {
+		t.Fatalf("ghost scalars: %v", ghost)
+	}
 	if fval(sum["steps"]) != 1000 || sum["sleep_hours"] != 6.7 {
 		t.Fatalf("summary %v", sum)
 	}
@@ -304,6 +324,35 @@ func TestSleepWorkoutDedup(t *testing.T) {
 func fptr(f float64) *float64 { return &f }
 
 func strptr(s string) *string { return &s }
+
+// Non-empty legacy hc_meals fails boot (fail-closed) instead of being
+// dropped; an empty one is cleaned quietly.
+func TestLegacyMealsGate(t *testing.T) {
+	if os.Getenv("MONGODB_URI") == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	t.Setenv("MONGODB_DB", "healthcheck_test")
+	d, err := mongo.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := d.Collection("hc_meals").InsertOne(ctx, bson.M{"date": "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(); err == nil {
+		t.Fatal("expected refusal with non-empty hc_meals")
+	} else if got := err.Error(); !strings.Contains(got, "hc_meals still holds") {
+		t.Fatalf("wrong error: %v", err)
+	}
+	if _, err := d.Collection("hc_meals").DeleteMany(ctx, bson.M{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(); err != nil {
+		t.Fatalf("empty hc_meals should boot: %v", err)
+	}
+}
 
 // A backfill's nights stay on their mornings: per-entry days survive
 // RecordSync, rec.Date covers only the scalars.

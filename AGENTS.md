@@ -68,8 +68,8 @@ workspace/portals + workspace/portfolio-resume stay on disk, orphaned (retired s
    days after flagging; unflagged rows are permanent);
    health-check is fully permanent going forward (all five collections —
    no prune tool, no TTL, retention is a no-op). First run of the v2 binary
-   drops the frozen pre-v2 `hc_meals` collection via `EnsureSchema`, so
-   upgrading is not lossless for any environment that still holds meals;
+   refuses to boot with a non-empty frozen pre-v2 `hc_meals` collection
+   via `EnsureSchema`, so upgrading needs a wipe/backup there first;
    cookbook is
    permanent;<!-- #584 TEMP-REMOVE (∃-Mail): reports pruning disabled, data left as-is — reports (∃-Mail) pruned read+unstarred >7d (never unread/starred); -->
    task_mutations prunes entries >90d.

@@ -104,12 +104,12 @@ func New() (*Store, error) {
 // FromEnv builds a Store from env (kept for symmetry; New reads env itself).
 func FromEnv() (*Store, error) { return New() }
 
-// EnsureSchema creates the named indexes and removes the machinery the
-// meals era left behind: the hc_meals collection and the unnamed date_1
-// indexes (superseded by the uniq_date names below). Idempotent — reruns
-// are cheap no-ops.
+// EnsureSchema creates the named indexes and refuses to boot over a
+// non-empty legacy hc_meals (fail-closed: the operator wipes or backs it
+// up; an empty one is dropped quietly). Idempotent — reruns after the
+// first success are cheap no-ops.
 func (s *Store) EnsureSchema(ctx context.Context) error {
-	if err := s.dropCollectionIfExists(ctx, "hc_meals"); err != nil {
+	if err := s.dropLegacyMeals(ctx); err != nil {
 		return err
 	}
 	// Legacy unnamed indexes first: the meals era created date_1 on the
@@ -141,15 +141,27 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) dropCollectionIfExists(ctx context.Context, name string) error {
-	names, err := s.db.ListCollectionNames(ctx, bson.M{"name": name})
+// Legacy cleanup, gated: the meals era is over, but an operator's data
+// is never dropped silently. A non-empty hc_meals fails boot with a
+// domain error naming the manual fix; an empty one is dropped quietly as
+// harmless residue. Either way the first successful boot converges and
+// reruns are no-ops.
+func (s *Store) dropLegacyMeals(ctx context.Context) error {
+	names, err := s.db.ListCollectionNames(ctx, bson.M{"name": "hc_meals"})
 	if err != nil {
 		return err
 	}
 	if len(names) == 0 {
 		return nil
 	}
-	return s.db.Collection(name).Drop(ctx)
+	n, err := s.db.Collection("hc_meals").CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return fail("hc_meals still holds %d frozen meal rows — back it up or wipe it (mongo delete hc_meals '{}'), then restart", n)
+	}
+	return s.db.Collection("hc_meals").Drop(ctx)
 }
 
 func dropIndexIfNamed(ctx context.Context, col *mongoDrv.Collection, name string) error {
@@ -929,6 +941,9 @@ func insertWorkout(ctx context.Context, col *mongoDrv.Collection, w WorkoutIn, s
 	if w.Minutes <= 0 {
 		return nil, fail("workout minutes must be > 0")
 	}
+	if w.Minutes > 24*60 {
+		return nil, fail("workout minutes must be <= 1440 (24h), got %v", w.Minutes)
+	}
 	if w.Kcal < 0 {
 		return nil, fail("workout kcal must be >= 0")
 	}
@@ -1090,12 +1105,18 @@ func (s *Store) CorrectWorkout(ctx context.Context, id string, typ *string, minu
 	newMin, _ := validate.ToFloat(doc["minutes"])
 	newKcal, _ := validate.ToFloat(doc["kcal"])
 	if typ != nil {
+		if strings.TrimSpace(*typ) == "" {
+			return nil, fail("type cannot be cleared to empty — pass a type or omit it")
+		}
 		newType = normWorkoutType(*typ)
 		set["type"] = newType
 	}
 	if minutes != nil {
 		if *minutes <= 0 {
 			return nil, fail("workout minutes must be > 0")
+		}
+		if *minutes > 24*60 {
+			return nil, fail("workout minutes must be <= 1440 (24h), got %v", *minutes)
 		}
 		newMin = round1(*minutes)
 		set["minutes"] = newMin
@@ -1273,6 +1294,9 @@ func checkWorkoutIn(w WorkoutIn) error {
 	if w.Minutes <= 0 {
 		return fail("workout minutes must be > 0")
 	}
+	if w.Minutes > 24*60 {
+		return fail("workout minutes must be <= 1440 (24h), got %v", w.Minutes)
+	}
 	if w.Kcal < 0 {
 		return fail("workout kcal must be >= 0")
 	}
@@ -1323,7 +1347,7 @@ func (s *Store) DailySummary(ctx context.Context, day string) (bson.M, error) {
 		wos = []bson.M{}
 	}
 	var steps any
-	var activeKcal float64
+	var activeKcal any
 	if d != nil {
 		steps = d["steps"]
 		if v, ok := d["active_kcal"]; ok {

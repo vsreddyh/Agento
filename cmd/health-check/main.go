@@ -1,6 +1,7 @@
 // Command health-check is the food + weight + sleep + workout MCP server.
-// Storage: MongoDB (hc_food_log, hc_weight, hc_days — all permanent, no
-// prune, no TTL). Runs over stdio for MCP clients.
+// Storage: MongoDB (hc_food_log, hc_weight, hc_days, hc_sleep,
+// hc_workouts — all permanent, no prune, no TTL). Runs over stdio for MCP
+// clients.
 package main
 
 import (

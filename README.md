@@ -52,7 +52,7 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 |---|---|---|
 | Money | `money_transactions` | **Permanent until flagged** — unflagged rows never expire; `delete_transactions` flags (recoverable via `restore_transactions`), flagged rows TTL away 10 days after flagging |
 | Cookbook | `cookbook_*` | **Permanent** |
-| Health tracking | `hc_food_log`, `hc_days`, `hc_sleep`, `hc_workouts`, `hc_weight` + Health Connect sync via `health-api` | **Permanent** — no prune, no TTL (first v2-binary start drops the frozen pre-v2 `hc_meals`, if present) |
+| Health tracking | `hc_food_log`, `hc_days`, `hc_sleep`, `hc_workouts`, `hc_weight` + Health Connect sync via `health-api` | **Permanent** — no prune, no TTL (boot refuses a non-empty frozen pre-v2 `hc_meals`; wipe or back it up first) |
 | Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |
 <!-- #584 TEMP-REMOVE (∃-Mail): retention row.
 | ∃-Mail | `reports` | Read + unstarred >7d; unread and starred are never pruned |
