@@ -7,6 +7,7 @@ import (
 	"agento/internal/healthcheck"
 	"context"
 	"encoding/json"
+	"errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"log"
 	"net/http"
@@ -43,12 +44,12 @@ type HealthSyncPayload struct {
 // localDate buckets an ISO timestamp into the user's (IST) calendar date.
 func localDate(iso string) string {
 	s := strings.TrimSpace(iso)
-	if t, err := time.Parse(time.RFC3339, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
-		return t.In(IST).Format("2006-01-02")
+	if t, err := time.Parse(time.RFC3339Nano, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
+		return t.In(healthcheck.IST()).Format("2006-01-02")
 	}
 	// Naive timestamps are UTC.
 	if t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC); err == nil {
-		return t.In(IST).Format("2006-01-02")
+		return t.In(healthcheck.IST()).Format("2006-01-02")
 	}
 	if len(s) >= 10 {
 		return s[:10]
@@ -56,11 +57,13 @@ func localDate(iso string) string {
 	return s
 }
 
-// minutesBetween returns whole-minute duration; ok=false when unparseable.
+// minutesBetween returns whole-minute duration; ok=false when unparseable
+// or non-positive (an end before/at the start is corrupt data, not a
+// 1-minute workout — skipped like unparseable timestamps).
 func minutesBetween(startISO, endISO string) (dur int, ok bool) {
 	p := func(s string) (time.Time, bool) {
 		s = strings.TrimSpace(s)
-		if t, err := time.Parse(time.RFC3339, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
+		if t, err := time.Parse(time.RFC3339Nano, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
 			return t, true
 		}
 		return time.Time{}, false
@@ -72,7 +75,7 @@ func minutesBetween(startISO, endISO string) (dur int, ok bool) {
 	}
 	m := int(e.Sub(s).Minutes())
 	if m < 1 {
-		m = 1
+		return 0, false
 	}
 	return m, true
 }
@@ -166,7 +169,7 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		// night crossing midnight still attributes to the morning —
 		// while the dedup hash keys on the real start. An unparseable
 		// start still syncs (minutes only), like a manual log_sleep.
-		start, perr := time.Parse(time.RFC3339, strings.Replace(s.StartISO, "Z", "+00:00", 1))
+		start, perr := time.Parse(time.RFC3339Nano, strings.Replace(s.StartISO, "Z", "+00:00", 1))
 		var startPtr *time.Time
 		if perr == nil {
 			startPtr = &start
@@ -198,7 +201,15 @@ func sync(w http.ResponseWriter, r *http.Request) {
 
 	syncRes, err := hcs.RecordSync(ctx, rec)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
+		// Domain errors (bad date, implausible minutes/kcal) are the
+		// client's malformed payload: 422 like the batch-size guards
+		// above, not a 500 server bug. Anything else is ours.
+		var se *healthcheck.StoreError
+		if errors.As(err, &se) {
+			writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": se.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
+		}
 		return
 	}
 

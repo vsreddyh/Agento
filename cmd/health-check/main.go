@@ -181,7 +181,7 @@ type dailySummaryInput struct {
 
 func dayOf(date string) string {
 	if date == "" {
-		return time.Now().Format("2006-01-02")
+		return time.Now().In(healthcheck.IST()).Format("2006-01-02")
 	}
 	return date
 }
@@ -203,7 +203,7 @@ func main() {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			dt := time.Now().UTC()
 			if in.Datetime != "" {
-				t, err := time.Parse(time.RFC3339, in.Datetime)
+				t, err := time.Parse(time.RFC3339Nano, in.Datetime)
 				if err != nil {
 					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339", in.Datetime))
 				}
@@ -257,7 +257,7 @@ func main() {
 			}
 			var dt *time.Time
 			if in.Datetime != nil {
-				t, err := time.Parse(time.RFC3339, *in.Datetime)
+				t, err := time.Parse(time.RFC3339Nano, *in.Datetime)
 				if err != nil {
 					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339", *in.Datetime))
 				}
@@ -440,12 +440,9 @@ func orDefault(v, def string) string {
 	return v
 }
 
-// mustIST is the day-bucketing zone both writers share: calendar dates are
-// IST midnights, matching the app's localDate.
+// mustIST is the day-bucketing zone: IST, via the shared healthcheck
+// helper (fixed offset — LoadLocation depends on tzdata the minimal
+// container may not have).
 func mustIST() *time.Location {
-	loc, err := time.LoadLocation("Asia/Kolkata")
-	if err != nil {
-		return time.UTC
-	}
-	return loc
+	return healthcheck.IST()
 }

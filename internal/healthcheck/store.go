@@ -214,14 +214,12 @@ func mustDay(day string) (string, error) {
 }
 
 // hexID renders an _id as hex, like miser-money's oidHex.
-// istLocation is the day-bucketing zone both writers share: calendar
-// dates are IST midnights, matching the app's localDate.
-func istLocation() *time.Location {
-	loc, err := time.LoadLocation("Asia/Kolkata")
-	if err != nil {
-		return time.UTC
-	}
-	return loc
+// IST is the day-bucketing zone every writer shares: calendar dates are
+// IST midnights, matching the app's localDate. Fixed offset, always
+// available — LoadLocation depends on tzdata the minimal container may
+// not have, which once bucketed the same instant to different days.
+func IST() *time.Location {
+	return time.FixedZone("IST", 5*3600+30*60)
 }
 
 func hexID(v any) string {
@@ -477,7 +475,7 @@ func (s *Store) CorrectFood(ctx context.Context, id string, what, qty, note *str
 	}
 	if dt != nil {
 		upd["datetime"] = primitive.NewDateTimeFromTime(dt.UTC())
-		upd["day"] = dt.In(istLocation()).Format("2006-01-02")
+		upd["day"] = dt.In(IST()).Format("2006-01-02")
 	}
 	if len(upd) == 0 && len(unset) == 0 {
 		return nil, fail("correct_food needs at least one field to change")
@@ -529,7 +527,8 @@ func (s *Store) LogWeight(ctx context.Context, day string, kg float64) (bson.M, 
 		return nil, fail("implausible weight %v kg", kg)
 	}
 	if _, err := s.weight.UpdateOne(ctx, bson.M{"date": day},
-		bson.M{"$set": bson.M{"kg": kg, "createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}},
+		bson.M{"$set": bson.M{"kg": kg},
+			"$setOnInsert": bson.M{"createdAt": primitive.NewDateTimeFromTime(time.Now().UTC())}},
 		options.Update().SetUpsert(true)); err != nil {
 		return nil, err
 	}
@@ -1085,9 +1084,11 @@ type SyncResult struct {
 // old string-vs-Date drift is gone by construction.
 //
 // Each entry keeps its own bucketed day (a backfill's nights stay on
-// their mornings); rec.Date covers only the scalars. Everything is
-// validated before anything is written, so a bad session fails the whole
-// sync instead of half-applying after the scalars landed.
+// their mornings); rec.Date covers only the scalars. Input is validated
+// before anything is written, so a bad session fails the sync before the
+// scalars land — but later write-time failures (duplicate hash, DB error)
+// can still land partial rows after the scalars. Best-effort, not atomic:
+// the sync is idempotent, so a retry converges instead of duplicating.
 func (s *Store) RecordSync(ctx context.Context, rec SyncRecord) (SyncResult, error) {
 	day, err := mustDay(rec.Date)
 	if err != nil {

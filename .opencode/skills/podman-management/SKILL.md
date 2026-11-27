@@ -27,9 +27,9 @@ Services: `health-api` (8001) · `proxy` (8080, app URL) · `retention`
 (one-shot). No agent service.
 
 ```bash
-podman-compose -f docker/docker-compose.yml ps
-podman-compose -f docker/docker-compose.yml logs --tail 50 health-api
-podman-compose -f docker/docker-compose.yml run --rm retention --dry-run  # safe; real run deletes data
+scripts/hermes.sh status
+podman-compose --env-file .env -f docker/docker-compose.yml logs --tail 50 health-api
+scripts/retention.sh --dry-run  # safe; real run deletes data
 ```
 
 Retention is a no-op for health-check and cookbook (both fully permanent —
