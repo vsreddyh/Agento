@@ -168,7 +168,9 @@ type dailySummaryInput struct {
 }
 
 func dayOf(date string) string {
-	if date == "" {
+	// Trimmed: whitespace-only counts as absent (today), like every other
+	// optional date in this PR — never a "bad date ''" rejection.
+	if strings.TrimSpace(date) == "" {
 		return time.Now().In(healthcheck.IST()).Format("2006-01-02")
 	}
 	return date
@@ -187,10 +189,10 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "health-check", Version: "2.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_food",
-		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero; implausible values fail (kcal>100000, others>10000). datetime is RFC3339 (naive read as UTC), =now when absent."},
+		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero; implausible values fail (kcal>100000, others>10000). datetime is RFC3339 (naive read as UTC); omitted or blank means now."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			dt := time.Now().UTC()
-			if in.Datetime != "" {
+			if strings.TrimSpace(in.Datetime) != "" {
 				t, ok := healthcheck.ParseSyncTime(in.Datetime)
 				if !ok {
 					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339 (naive read as UTC)", in.Datetime))
@@ -249,7 +251,9 @@ func main() {
 				}
 			}
 			var dt *time.Time
-			if in.Datetime != nil {
+			// Whitespace-only counts as absent (no change), like the log
+			// path's now-default — never a "bad datetime" rejection.
+			if in.Datetime != nil && strings.TrimSpace(*in.Datetime) != "" {
 				t, ok := healthcheck.ParseSyncTime(*in.Datetime)
 				if !ok {
 					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339 (naive read as UTC)", *in.Datetime))
@@ -276,7 +280,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_weight",
-		Description: "Log body weight in kg (0 < kg <= 500; upserts one row per date). Re-logging is the correction."},
+		Description: "Log body weight in kg (0 < kg <= 500; upserts one row per date). Omitted or blank date means today. Re-logging is the correction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			w, err := store.LogWeight(ctx, dayOf(in.Date), in.Kg)
 			if err != nil {
@@ -316,7 +320,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_sleep",
-		Description: "Log a manual sleep in hours (0 < hours <= 24, no start time — sync sessions carry starts). Date = morning of wake-up."},
+		Description: "Log a manual sleep in hours (0 < hours <= 24, no start time — sync sessions carry starts). Date = morning of wake-up; omitted or blank means today."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogSleep(ctx, dayOf(in.Date), in.Hours)
 			if err != nil {
@@ -378,7 +382,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_workout",
-		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes, max 1440; kcal optional, absent means unknown never 0, max 100000). Sync workouts arrive deduplicated through the same store."},
+		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes, max 1440; kcal optional, absent means unknown never 0, max 100000; omitted or blank date means today). Sync workouts arrive deduplicated through the same store."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogWorkout(ctx, dayOf(in.Date), in.Type, in.Minutes, in.Kcal)
 			if err != nil {
@@ -428,7 +432,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "daily_summary",
-		Description: "Daily recap: food-derived cal-in totals with per-macro counts (a partial-macro day reads as a lower bound), workout_kcal + active_kcal as separate cal-out lines (no single net), weight, sleep, steps. Missing data reads as null on every scalar — never a measured zero."},
+		Description: "Daily recap: food-derived cal-in totals with per-macro counts (a partial-macro day reads as a lower bound), workout_kcal + active_kcal as separate cal-out lines (no single net), weight, sleep, steps. Missing data reads as null on every scalar — never a measured zero. Omitted or blank date means today."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in dailySummaryInput) (*mcp.CallToolResult, map[string]any, error) {
 			sum, err := store.DailySummary(ctx, dayOf(in.Date))
 			if err != nil {
