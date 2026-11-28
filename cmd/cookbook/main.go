@@ -130,7 +130,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_ingredient",
-		Description: "Get one ingredient by exact name (case-sensitive) or id. Unknown targets return ok:false."},
+		Description: "Get one ingredient by exact name (case-sensitive, trimmed) or id. Unknown targets return ok:false."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			ing, err := store.GetIngredient(ctx, in.NameOrID)
 			if err != nil {
@@ -201,7 +201,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_recipe",
-		Description: "Get one recipe by exact dish name (case-sensitive) or id. Unknown targets return ok:false."},
+		Description: "Get one recipe by exact dish name (case-sensitive, trimmed) or id. Unknown targets return ok:false."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.GetRecipe(ctx, in.NameOrID)
 			if err != nil {
