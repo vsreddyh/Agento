@@ -232,6 +232,34 @@ func TestAnalysisCompareAndRecurring(t *testing.T) {
 	}
 }
 
+// Equal-amount candidates tie-break alphabetically in both directions, like
+// every other category table: desc flips the value compare, never the name
+// order.
+func TestRecurringDescKeepsNameTiebreak(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, cat := range []string{"rent", "bills"} {
+		for _, day := range []string{"2026-03-01", "2026-03-08", "2026-03-15"} {
+			if _, _, err := s.Insert(ctx, day, 10000, "expense", cat, "Cash", "", "", "", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, order := range []string{"asc", "desc"} {
+		cands, total, err := s.DetectRecurring(ctx, "2026-03-01", "2026-03-31", nil, nil, 3, 0, 10, "amount", order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total != 2 || len(cands) != 2 {
+			t.Fatalf("%s candidates = %d, want 2", order, total)
+		}
+		if cands[0].Category != "bills" || cands[1].Category != "rent" {
+			t.Fatalf("%s tied candidates ordered %s then %s, want bills then rent",
+				order, cands[0].Category, cands[1].Category)
+		}
+	}
+}
+
 func TestBudgetCRUDAndStatus(t *testing.T) {
 	s := testStore(t)
 	seedAnalysisFixture(t, s)

@@ -241,6 +241,25 @@ func TestAccountFlowCategoryFilterKeepsRealBalances(t *testing.T) {
 	}
 }
 
+// Whitespace-only filters count as absent for direct store callers too,
+// not just over MCP (the handler trims first): "   " means all budgets /
+// open-ended, never an empty list or a month error.
+func TestListBudgetsTrimsWhitespace(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateBudget(ctx, "groceries", "2026-01", 100000); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListBudgets(ctx, "   ", "  ", "   ")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("whitespace filters got %d rows %v, want all budgets", len(rows), err)
+	}
+	rows, err = s.ListBudgets(ctx, "", "", "  groceries  ")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("padded category got %d rows %v", len(rows), err)
+	}
+}
+
 // #565: effective_now reflects the row in force today, independent of the
 // month filter — a superseded row must not flag just because the filter cuts
 // off its successor.
@@ -278,6 +297,28 @@ func TestListBudgetsEffectiveNowIgnoresMonthFilter(t *testing.T) {
 	}
 	if flagged != 1 {
 		t.Errorf("flagged rows = %d, want exactly 1", flagged)
+	}
+}
+
+// Equal deltas tie-break alphabetically in both directions, like every
+// other category table (breakdown, top expenses, budgets): desc flips the
+// value compare, never the name order.
+func TestCompareCategoriesDescKeepsNameTiebreak(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, cat := range []string{"rent", "bills"} {
+		if _, _, err := s.Insert(ctx, "2026-03-01", 10000, "expense", cat, "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, order := range []string{"asc", "desc"} {
+		deltas, err := s.CompareCategories(ctx, "2026-03-01", "2026-03-31", "2026-03-01", "2026-03-31", nil, nil, "delta", order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(deltas) != 2 || deltas[0].Category != "bills" || deltas[1].Category != "rent" {
+			t.Fatalf("%s tied deltas ordered %v, want bills then rent", order, deltas)
+		}
 	}
 }
 

@@ -132,13 +132,17 @@ type ListedBudget struct {
 // ListBudgets lists every row (or the filtered slice), ordered by category
 // ascending then month descending. Filters are optional and open-ended.
 func (s *Store) ListBudgets(ctx context.Context, monthFrom, monthTo, category string) ([]ListedBudget, error) {
+	// Trimmed up front like the handler: whitespace-only counts as absent
+	// (all budgets / open-ended), not as an error or an empty filter — the
+	// same whitespace rule every other read filter follows.
+	monthFrom, monthTo, category = strings.TrimSpace(monthFrom), strings.TrimSpace(monthTo), strings.TrimSpace(category)
 	filt := bson.M{}
 	if category != "" {
-		cat, err := s.CheckBudgetCategory(ctx, "list_budgets", category)
-		if err != nil {
-			return nil, err
-		}
-		filt["category"] = cat
+		// A read filter, not a write: a name no budget row can carry
+		// (unknown, or salary which can never be budgeted) matches nothing
+		// and returns the empty list, instead of failing (#619). Writes
+		// keep rejecting through CheckBudgetCategory.
+		filt["category"] = normalizeCategoryName(category)
 	}
 	if monthFrom != "" {
 		if _, err := CheckBudgetMonth("list_budgets", monthFrom); err != nil {
@@ -408,21 +412,6 @@ func monthsTouched(start, end string) ([]string, error) {
 // limit prorated per covered day. Unbudgeted categories share the table with
 // budgeted:false. Categories[] picks rows; the footer follows the selection.
 func (s *Store) BudgetStatus(ctx context.Context, start, end string, categories []string, sortBy, order string) (*BudgetStatusResult, error) {
-	if len(categories) > 0 {
-		live, err := s.categoryList(ctx)
-		if err != nil {
-			return nil, err
-		}
-		have := map[string]bool{}
-		for _, c := range live {
-			have[c] = true
-		}
-		for _, c := range categories {
-			if !have[c] {
-				return nil, fail("category %q does not exist — use one of %v", c, live)
-			}
-		}
-	}
 	months, err := monthsTouched(start, end)
 	if err != nil {
 		return nil, err

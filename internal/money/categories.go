@@ -90,18 +90,20 @@ func (s *Store) requireCategory(ctx context.Context, tool, v string) (string, er
 	return "", fail("%s category %q does not exist — use one of %v", tool, v, live)
 }
 
-// NormalizeCategory trims and lowercases one optional category. Blank means
-// absent (""). An unknown name is rejected, like writes — never zero-filled.
-func (s *Store) NormalizeCategory(ctx context.Context, tool, v string) (string, error) {
-	if normalizeCategoryName(v) == "" {
-		return "", nil
-	}
-	return s.requireCategory(ctx, tool, v)
+// NormalizeCategory normalizes one optional category filter: trimmed,
+// lowercased, blank meaning absent (""). Existence is not checked — a dynamic
+// ref that names nothing matches no row, so the read returns the empty table
+// (#619) instead of a typo rejection. Writes reject unknown names through
+// requireCategory; filters do not.
+func NormalizeCategory(v string) string {
+	return normalizeCategoryName(v)
 }
 
 // NormalizeCategories trims, lowercases, drops blanks and dedupes a plural
-// filter, preserving first-seen order. Unknown names reject the whole call.
-func (s *Store) NormalizeCategories(ctx context.Context, tool string, in []string) ([]string, error) {
+// filter, preserving first-seen order. Existence is not checked, for the same
+// reason as NormalizeCategory: a name that does not exist matches no row, so the
+// caller gets an empty table rather than a rejected call (#619).
+func NormalizeCategories(in []string) []string {
 	out := []string{}
 	seen := map[string]bool{}
 	for _, v := range in {
@@ -109,15 +111,12 @@ func (s *Store) NormalizeCategories(ctx context.Context, tool string, in []strin
 		if c == "" {
 			continue
 		}
-		if _, err := s.requireCategory(ctx, tool, v); err != nil {
-			return nil, err
-		}
 		if !seen[c] {
 			seen[c] = true
 			out = append(out, c)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // CheckBudgetCategory normalizes a budget category: trimmed, lowercased,

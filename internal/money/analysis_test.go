@@ -240,26 +240,30 @@ func TestDescribeClusterBills(t *testing.T) {
 }
 
 func TestNormalizeCategories(t *testing.T) {
-	s := testStore(t)
-	ctx := context.Background()
-	got, err := s.NormalizeCategories(ctx, "money_totals", []string{" Groceries ", "bills", "groceries", "  "})
-	if err != nil {
-		t.Fatalf("NormalizeCategories: %v", err)
-	}
+	got := NormalizeCategories([]string{" Groceries ", "bills", "groceries", "  "})
 	if len(got) != 2 || got[0] != "groceries" || got[1] != "bills" {
 		t.Errorf("got %v, want [groceries bills]", got)
 	}
-	if _, err := s.NormalizeCategories(ctx, "money_totals", []string{"grocerys"}); err == nil {
-		t.Fatal("unknown category was accepted")
-	} else if !containsSub(err.Error(), "grocerys") {
-		t.Errorf("error %q does not name the value", err)
+	// Unknown names are kept, not rejected: a name that does not exist
+	// matches no row, so the read returns the empty table (#619).
+	got = NormalizeCategories([]string{"grocerys"})
+	if len(got) != 1 || got[0] != "grocerys" {
+		t.Errorf("got %v, want [grocerys]", got)
 	}
-	// A user-added category validates too: the set is live, not fixed.
+	if got := NormalizeCategory(" Groceries "); got != "groceries" {
+		t.Errorf("got %q, want groceries", got)
+	}
+	if got := NormalizeCategory("   "); got != "" {
+		t.Errorf("blank normalizes to %q, want absent", got)
+	}
+	// A user-added category normalizes the same way: the set is live, not fixed.
+	s := testStore(t)
+	ctx := context.Background()
 	if _, err := s.CreateCategory(ctx, "subscriptions"); err != nil {
 		t.Fatalf("CreateCategory: %v", err)
 	}
-	if _, err := s.NormalizeCategories(ctx, "money_totals", []string{"subscriptions"}); err != nil {
-		t.Errorf("fresh category rejected: %v", err)
+	if got := NormalizeCategories([]string{"subscriptions"}); len(got) != 1 || got[0] != "subscriptions" {
+		t.Errorf("fresh category normalized to %v", got)
 	}
 }
 

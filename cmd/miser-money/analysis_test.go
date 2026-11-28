@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -21,16 +22,25 @@ func TestMoneyTotalsRejectsBadWindow(t *testing.T) {
 	}
 }
 
-func TestMoneyTotalsRejectsUnknownCategory(t *testing.T) {
+// An unknown category/account filter is not a typo rejection on a read: no
+// row can carry it, so the window reports zeros — the empty answer (#619).
+// Typo protection lives on the write path (log/edit still reject).
+func TestMoneyTotalsUnknownFilterReportsZeros(t *testing.T) {
 	withTestStore(t)
-	_, errMsg := callTool(t, "money_totals", map[string]any{
-		"start": "2026-03-01", "end": "2026-03-31", "category": "grocerys",
-	})
-	if errMsg == "" {
-		t.Fatal("unknown category was accepted; expected a rejection, not a silent zero")
-	}
-	if !strings.Contains(errMsg, "grocerys") {
-		t.Errorf("error %q does not name the offending category", errMsg)
+	for _, args := range []map[string]any{
+		{"start": "2026-03-01", "end": "2026-03-31", "category": "grocerys"},
+		{"start": "2026-03-01", "end": "2026-03-31", "account": "no-such-account"},
+	} {
+		text, errMsg := callTool(t, "money_totals", args)
+		if errMsg != "" {
+			t.Fatalf("unknown filter %v was rejected: %s", args, errMsg)
+		}
+		if !strings.Contains(text, `"ok":true`) {
+			t.Fatalf("unknown filter %v did not return ok:true: %q", args, text)
+		}
+		if !strings.Contains(text, `"rows_total":0`) {
+			t.Errorf("unknown filter %v did not report zeros: %q", args, text)
+		}
 	}
 }
 
@@ -61,17 +71,78 @@ func TestMoneyBreakdownRequiresSideInCategoryMode(t *testing.T) {
 	}
 }
 
-func TestMoneyBreakdownRejectsUnknownPluralCategory(t *testing.T) {
+func TestMoneyBreakdownUnknownPluralCategoryReturnsEmpty(t *testing.T) {
 	withTestStore(t)
-	_, errMsg := callTool(t, "money_breakdown", map[string]any{
+	// Seed one known-category row: withTestStore leaves the ledger empty.
+	if _, _, err := store.Insert(context.Background(), "2026-03-05", 10000, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// All-unknown: nothing can match, so the table comes back empty — but
+	// still ok:true, not a rejection.
+	text, errMsg := callTool(t, "money_breakdown", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "by": "category",
+		"side": "expense", "categories": []string{"grocerys"},
+	})
+	if errMsg != "" {
+		t.Fatalf("unknown plural category was rejected: %s", errMsg)
+	}
+	if !strings.Contains(text, `"ok":true`) || !strings.Contains(text, `"categories":[]`) {
+		t.Fatalf("all-unknown filter did not return the empty table: %q", text)
+	}
+	// Mixed: the unknown name contributes no rows, the known name still
+	// matches — partial results, no error.
+	text, errMsg = callTool(t, "money_breakdown", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "by": "category",
 		"side": "expense", "categories": []string{"groceries", "grocerys"},
 	})
-	if errMsg == "" {
-		t.Fatal("unknown plural category was accepted; the whole call must fail")
+	if errMsg != "" {
+		t.Fatalf("mixed plural categories were rejected: %s", errMsg)
 	}
-	if !strings.Contains(errMsg, "grocerys") {
-		t.Errorf("error %q does not name the offending element", errMsg)
+	if !strings.Contains(text, `"groceries"`) {
+		t.Fatalf("mixed filter dropped the known category's rows: %q", text)
+	}
+	// by=account with an all-unknown categories filter still lists every
+	// account — categories[] narrows the flow columns there, it is not a row
+	// picker — with zero flows and real balances. A valid side is accepted
+	// and ignored here (only a typo fails).
+	text, errMsg = callTool(t, "money_breakdown", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "by": "account",
+		"side": "expense", "categories": []string{"grocerys"},
+	})
+	if errMsg != "" {
+		t.Fatalf("account-mode unknown categories were rejected: %s", errMsg)
+	}
+	if !strings.Contains(text, `"Cash"`) || !strings.Contains(text, `"rows_total":0`) {
+		t.Fatalf("account-mode unknown categories did not list zero-flow accounts: %q", text)
+	}
+	if !strings.Contains(text, `"side":null`) {
+		t.Fatalf("account-mode envelope did not echo side:null: %q", text)
+	}
+	// by=account with an all-unknown accounts picker returns the empty table.
+	text, errMsg = callTool(t, "money_breakdown", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "by": "account",
+		"accounts": []string{"no-such-account"},
+	})
+	if errMsg != "" {
+		t.Fatalf("account-mode unknown accounts were rejected: %s", errMsg)
+	}
+	if !strings.Contains(text, `"accounts":[]`) {
+		t.Fatalf("account-mode unknown accounts did not return the empty table: %q", text)
+	}
+}
+
+// Account mode ignores a valid side but still rejects a typo'd one: closed
+// sets fail in both modes, before any store touch (`store` is nil here).
+func TestMoneyBreakdownAccountModeRejectsBadSide(t *testing.T) {
+	_, errMsg := callTool(t, "money_breakdown", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "by": "account",
+		"side": "expens",
+	})
+	if errMsg == "" {
+		t.Fatal("account mode with a typo'd side was accepted; expected the side rejection")
+	}
+	if !strings.Contains(errMsg, "side") {
+		t.Errorf("error %q does not name the side", errMsg)
 	}
 }
 
@@ -127,6 +198,23 @@ func TestMoneyCompareNamesItsPeriod(t *testing.T) {
 	}
 	if !strings.Contains(errMsg, "period A") {
 		t.Errorf("error %q does not name period A", errMsg)
+	}
+}
+
+// The totals envelope echoes the filters it ran on (nil when absent), so a
+// filtered zeros table is distinguishable from an unfiltered one.
+func TestMoneyCompareTotalsEchoesFilters(t *testing.T) {
+	withTestStore(t)
+	text, errMsg := callTool(t, "money_compare", map[string]any{
+		"start_a": "2026-03-01", "end_a": "2026-03-31",
+		"start_b": "2026-03-01", "end_b": "2026-03-31", "by": "totals",
+		"category": "grocerys",
+	})
+	if errMsg != "" {
+		t.Fatalf("totals compare failed: %s", errMsg)
+	}
+	if !strings.Contains(text, `"category":"grocerys"`) || !strings.Contains(text, `"account":null`) {
+		t.Fatalf("totals envelope did not echo the filters: %q", text)
 	}
 }
 
@@ -216,13 +304,16 @@ func TestBudgetStatusRejectsBadInputs(t *testing.T) {
 	}
 }
 
-func TestBudgetStatusRejectsUnknownCategory(t *testing.T) {
+func TestBudgetStatusUnknownCategoryReturnsEmpty(t *testing.T) {
 	withTestStore(t)
-	_, errMsg := callTool(t, "budget_status", map[string]any{
+	text, errMsg := callTool(t, "budget_status", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "categories": []string{"grocerys"},
 	})
-	if errMsg == "" {
-		t.Fatal("unknown category was accepted; expected a rejection naming it")
+	if errMsg != "" {
+		t.Fatalf("unknown category was rejected: %s", errMsg)
+	}
+	if !strings.Contains(text, `"ok":true`) {
+		t.Fatalf("unknown category did not return ok:true: %q", text)
 	}
 }
 
@@ -291,10 +382,19 @@ func TestListBudgetsRejectsReversedRange(t *testing.T) {
 	}
 }
 
-func TestListBudgetsRejectsSalary(t *testing.T) {
+// A read filter, not a write: a name no budget row can carry (salary, which
+// can never be budgeted, or an unknown name) matches nothing and returns the
+// empty list — not a rejection (#619). The salary guard lives on the write
+// path (create/update_budget still reject it).
+func TestListBudgetsUnknownCategoryReturnsEmpty(t *testing.T) {
 	withTestStore(t)
-	_, errMsg := callTool(t, "list_budgets", map[string]any{"category": "salary"})
-	if errMsg == "" {
-		t.Fatal("salary was accepted; income cannot be budgeted")
+	for _, cat := range []string{"salary", "grocerys"} {
+		text, errMsg := callTool(t, "list_budgets", map[string]any{"category": cat})
+		if errMsg != "" {
+			t.Fatalf("category %q was rejected: %s", cat, errMsg)
+		}
+		if !strings.Contains(text, `"ok":true`) {
+			t.Fatalf("category %q did not return ok:true: %q", cat, text)
+		}
 	}
 }

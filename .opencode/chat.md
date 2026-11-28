@@ -47,13 +47,26 @@ instead of round-tripping one at a time.
   the next call); windowed tools need explicit bounds (`start`/`end`, or
   `start_a`/`end_a`/`start_b`/`end_b` for `money_compare`), and every
   response carries at most one table. `list_budgets` is unwindowed
-  (optional `month_from`/`month_to` only). Budgets live in `money_budgets`
-  keyed by (category, month) as dated versions.
+  (optional `month_from`/`month_to`/`category`; blank/whitespace-only months
+  mean open-ended, blank/whitespace-only `category` means all budgets, an unknown one (or salary, which can never be budgeted) matches nothing and returns the empty list). Budgets live in `money_budgets`
+  keyed by (category, month) as dated versions. `query_transactions` orders
+  by `sort_by` (date|amount, default date) + `sort` (asc|desc, default asc),
+  both echoed back in range mode (a by-id fetch returns one row and carries no sort keys). Omit a sort field to default it over MCP for query/cookbook/health lists — their schema enums are exact, so a blank string is rejected before the handler; the money analysis sorts have no schema enum and default on blank. Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
+  unknown account/category filter returns the empty page (exception:
+  `money_breakdown` by=account with no accounts[] filter lists every account
+  except archived ones with zero balance and no history (omitted) — an unknown
+  categories[] only zeroes the flow columns; an accounts[] picker still
+  filters rows, and an all-unknown picker returns the empty table) — typo protection
+  lives on the write path (`log`/`edit` still reject unknown names); a live
+  delete of an empty filter reports `deleted:0`, so check the dry run first.
 - **cookbook** (10, permanent): `add_ingredient`, `get_ingredient`,
   `list_ingredients`, `update_ingredient`, `delete_ingredient`,
   `add_recipe`, `get_recipe`, `list_recipes`, `update_recipe`,
   `delete_recipe` — recipe + ingredient books with notes (no quantities,
-  servings, macros or cook log).
+  servings, macros or cook log). Both `list_*` take `sort_by`
+  (name|updatedAt, default name) + `sort` (asc|desc, default asc), echoed back;
+  unknown values fail on both layers. Omit a sort field to default it over
+  MCP (blank is rejected by the exact enum, not defaulted).
 - **health-check** (17, all permanent — no prune, no TTL): flat food log, not
   meals — `log_food` takes `what` (required) + free-text `qty`, optional
   estimated macros (`kcal/protein/carbs/fat/fiber`, absent means unknown, never
@@ -72,7 +85,7 @@ instead of round-tripping one at a time.
   record a genuine repeat.
   Every `list_*` takes `sort_by` (names only its own fields) + `sort`
   (`asc|desc`) as real schema enums — unknown values return errors on both
-  layers. Filters (`what`, `type`) are exact match on the lowered text and
+  layers; omit a field to default it (blank is rejected, not defaulted). Filters (`what`, `type`) are exact match on the trimmed lowered text (blank/whitespace-only means absent, unfiltered) and
   return the empty page when nothing matches; bad dates/ids return errors.
   Lists echo `count`/`total`/`truncated` (cap 500: rows for the flat lists,
   day-docs for the grouped ones) — a truncated page means narrow the dates.

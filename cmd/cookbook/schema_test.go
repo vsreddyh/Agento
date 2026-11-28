@@ -5,6 +5,9 @@ import (
 	"slices"
 	"testing"
 
+	"agento/internal/cookbook"
+	"agento/internal/mcpschema"
+
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
@@ -68,10 +71,10 @@ func TestToolInputSchemaRequired(t *testing.T) {
 func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 	optional := map[string][]string{
 		"add_ingredient":    {"note"},
-		"list_ingredients":  {"search"},
+		"list_ingredients":  {"search", "sort_by", "sort"},
 		"update_ingredient": {"name", "note"},
 		"add_recipe":        {"note", "tags"},
-		"list_recipes":      {"search", "tag"},
+		"list_recipes":      {"search", "tag", "sort_by", "sort"},
 		"update_recipe":     {"name", "note", "tags"},
 	}
 	inputs := map[string]any{
@@ -107,4 +110,45 @@ func schemaFor(t *testing.T, input any) *jsonschema.Schema {
 		t.Fatalf("inferring schema: %v", err)
 	}
 	return schema
+}
+
+// Enums are published in the schema (not just validated server-side) so
+// unknown values throw before the handler. Each list's sort_by names only
+// its own fields; sort is asc|desc everywhere — the same two-enum convention
+// as query_transactions.
+func TestSortEnumsPublished(t *testing.T) {
+	cases := []struct {
+		tool   string
+		input  any
+		sortBy []string
+	}{
+		{"list_ingredients", listIngredientsInput{}, cookbook.IngredientSortFields},
+		{"list_recipes", listRecipesInput{}, cookbook.RecipeSortFields},
+	}
+	for _, c := range cases {
+		t.Run(c.tool, func(t *testing.T) {
+			schema := mcpschema.EnumSchema(c.input, map[string][]string{
+				"sort_by": c.sortBy, "sort": {"asc", "desc"}})
+			for field, want := range map[string][]string{"sort_by": c.sortBy, "sort": {"asc", "desc"}} {
+				prop, ok := schema.Properties[field]
+				if !ok {
+					t.Fatalf("%s missing from schema", field)
+				}
+				var got []string
+				for _, v := range prop.Enum {
+					s, ok := v.(string)
+					if !ok {
+						t.Fatalf("%s enum value %v is not a string", field, v)
+					}
+					got = append(got, s)
+				}
+				slices.Sort(got)
+				wantSorted := slices.Clone(want)
+				slices.Sort(wantSorted)
+				if !slices.Equal(got, wantSorted) {
+					t.Errorf("%s enum = %v, want %v", field, got, wantSorted)
+				}
+			}
+		})
+	}
 }

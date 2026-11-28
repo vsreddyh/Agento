@@ -10,10 +10,11 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"reflect"
+	"strings"
 	"time"
 
 	"agento/internal/healthcheck"
+	"agento/internal/mcpschema"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -38,27 +39,11 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 // without it (omitempty is the only switch); everything else is optional.
 //
 // Enums: the SDK infers plain strings, so sort_by/sort get real JSON-schema
-// enums via enumSchema (inferred base + enum patch, one source). Unknown
-// values throw on both layers — schema first, then the store's fail()
-// naming the allowed set.
+// enums via mcpschema.EnumSchema (inferred base + enum patch, one source).
+// Unknown values throw on both layers — schema first, then the store's
+// fail() naming the allowed set.
 func enumSchema(in any, enums map[string][]string) *jsonschema.Schema {
-	s, err := jsonschema.ForType(reflect.TypeOf(in), nil)
-	if err != nil {
-		panic(err)
-	}
-	for field, values := range enums {
-		prop, ok := s.Properties[field]
-		if !ok {
-			panic(fmt.Sprintf("enum field %q missing from schema", field))
-		}
-		anyVals := make([]any, 0, len(values))
-		for _, v := range values {
-			anyVals = append(anyVals, v)
-		}
-		prop.Enum = anyVals
-		s.Properties[field] = prop
-	}
-	return s
+	return mcpschema.EnumSchema(in, enums)
 }
 
 var sortEnum = []string{"asc", "desc"}
@@ -183,7 +168,9 @@ type dailySummaryInput struct {
 }
 
 func dayOf(date string) string {
-	if date == "" {
+	// Trimmed: whitespace-only counts as absent (today), like every other
+	// optional date in this PR — never a "bad date ''" rejection.
+	if strings.TrimSpace(date) == "" {
 		return time.Now().In(healthcheck.IST()).Format("2006-01-02")
 	}
 	return date
@@ -202,10 +189,10 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "health-check", Version: "2.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_food",
-		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero; implausible values fail (kcal>100000, others>10000). datetime is RFC3339 (naive read as UTC), =now when absent."},
+		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note (what/qty/note trimmed; whitespace-only what fails like empty, whitespace-only qty/note means absent). Macros absent mean unknown, never zero; implausible values fail (kcal>100000, others>10000). datetime is RFC3339 (naive read as UTC); omitted or blank/whitespace-only means now."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			dt := time.Now().UTC()
-			if in.Datetime != "" {
+			if strings.TrimSpace(in.Datetime) != "" {
 				t, ok := healthcheck.ParseSyncTime(in.Datetime)
 				if !ok {
 					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339 (naive read as UTC)", in.Datetime))
@@ -227,7 +214,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_food",
-		Description: "Fetch one food entry by id. Unknown ids fail."},
+		Description: "Fetch one food entry by id (trimmed — a padded hex works). Unknown ids fail."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in foodIDInput) (*mcp.CallToolResult, map[string]any, error) {
 			row, err := store.GetFood(ctx, in.ID)
 			if err != nil {
@@ -237,21 +224,25 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_food",
-		Description: "List food entries between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). Sort_by names the field, sort the direction; rows without the sort field sort first in asc (unknown, not zero). What is exact match on the lowercased entry text. No match returns the empty page.",
+		Description: "List food entries between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). Sort_by names the field (datetime|kcal, default datetime), sort the direction; rows without the sort field sort first in asc and last in desc (unknown, not zero). Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers, and the applied pair is echoed. sort_by is case-sensitive, sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc). What is exact match on the trimmed lowercased entry text (blank/whitespace-only means absent, unfiltered). No match returns the empty page; reversed bounds are rejected, not silently empty.",
 		InputSchema: enumSchema(listFoodInput{},
 			map[string][]string{"sort_by": healthcheck.FoodSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listFoodInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, total, err := store.ListFood(ctx, in.Start, in.End, in.SortBy, in.Sort, in.What)
+			// Trimmed up front so whitespace-only means absent (the
+			// default), like the money/cookbook lists.
+			sortBy := strings.TrimSpace(in.SortBy)
+			sort := strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListFood(ctx, in.Start, in.End, sortBy, sort, in.What)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "foods": rows,
-				"sort_by": orDefault(in.SortBy, healthcheck.FoodSortFields[0]), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(sortBy, healthcheck.FoodSortFields[0]), "sort": orDefault(normDir(sort), "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
-		Description: "Patch one food entry by id: supplied fields replace, omitted keep; an empty string clears qty/note (what cannot be cleared); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC). Ask-gated like edit_transaction."},
+		Description: "Patch one food entry by trimmed id: supplied fields replace, omitted keep; an empty or whitespace-only string clears qty/note (whitespace-only what fails like empty); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear; setting and clearing the same macro in one call fails). datetime is RFC3339 (naive read as UTC; whitespace-only counts as absent — no change, like omitted). Ask-gated like edit_transaction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			macros := map[string]*float64{}
 			for k, v := range map[string]*float64{"kcal": in.Kcal, "protein": in.Protein, "carbs": in.Carbs, "fat": in.Fat, "fiber": in.Fiber} {
@@ -260,7 +251,9 @@ func main() {
 				}
 			}
 			var dt *time.Time
-			if in.Datetime != nil {
+			// Whitespace-only counts as absent (no change), like the log
+			// path's now-default — never a "bad datetime" rejection.
+			if in.Datetime != nil && strings.TrimSpace(*in.Datetime) != "" {
 				t, ok := healthcheck.ParseSyncTime(*in.Datetime)
 				if !ok {
 					return fail(fmt.Errorf("bad datetime '%s' — use RFC3339 (naive read as UTC)", *in.Datetime))
@@ -275,7 +268,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_food",
-		Description: "Hard-delete one food entry by id. Dry-runs by default: reports the row, deletes nothing unless dry_run=false. Permanent, no restore."},
+		Description: "Hard-delete one food entry by trimmed id. Unknown ids fail, even on dry-run (unlike cookbook deletes / delete_weight). Dry-runs by default: reports the row, deletes nothing unless dry_run=false. Permanent, no restore."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteFood(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {
@@ -287,7 +280,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_weight",
-		Description: "Log body weight in kg (0 < kg <= 500; upserts one row per date). Re-logging is the correction."},
+		Description: "Log body weight in kg (0 < kg <= 500; upserts one row per date). Omitted or blank/whitespace-only date means today. Re-logging is the correction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			w, err := store.LogWeight(ctx, dayOf(in.Date), in.Kg)
 			if err != nil {
@@ -297,21 +290,25 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_weight",
-		Description: "List weights between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). No match returns the empty page.",
+		Description: "List weights between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). sort_by names the field (date|kg, default date), sort the direction (asc|desc, default asc). Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers, and the applied pair is echoed. sort_by is case-sensitive, sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc). No match returns the empty page; reversed bounds are rejected, not silently empty.",
 		InputSchema: enumSchema(listWeightInput{},
 			map[string][]string{"sort_by": healthcheck.WeightSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWeightInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, total, err := store.ListWeight(ctx, in.Start, in.End, in.SortBy, in.Sort)
+			// Trimmed up front so whitespace-only means absent (the
+			// default), like the money/cookbook lists.
+			sortBy := strings.TrimSpace(in.SortBy)
+			sort := strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListWeight(ctx, in.Start, in.End, sortBy, sort)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "weights": rows,
-				"sort_by": orDefault(in.SortBy, healthcheck.WeightSortFields[0]), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(sortBy, healthcheck.WeightSortFields[0]), "sort": orDefault(normDir(sort), "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_weight",
-		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes); dry-run returns would_delete:0 with no weight key in that case. Dry-runs by default."},
+		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes); dry-run returns would_delete:0 with no weight key in that case. The date is required: unlike the log tools (blank/whitespace-only means today), a blank or whitespace-only date is rejected, not read as today. Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteWeight(ctx, in.Date, dryRun(in.DryRun))
 			if err != nil {
@@ -323,7 +320,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_sleep",
-		Description: "Log a manual sleep in hours (0 < hours <= 24, no start time — sync sessions carry starts). Date = morning of wake-up."},
+		Description: "Log a manual sleep in hours (0 < hours <= 24, no start time — sync sessions carry starts). Date = morning of wake-up; omitted or blank/whitespace-only means today."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogSleep(ctx, dayOf(in.Date), in.Hours)
 			if err != nil {
@@ -334,21 +331,25 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_sleep",
-		Description: "List per-day sleep (derived hours + full sessions) between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all sessions; value sorts apply within the page). No match returns the empty page.",
+		Description: "List per-day sleep (derived hours + full sessions) between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all sessions; value sorts apply within the page). sort_by names the field (day|sleep_hours, default day), sort the direction (asc|desc, default asc). Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers, and the applied pair is echoed. sort_by is case-sensitive, sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc). No match returns the empty page; reversed bounds are rejected, not silently empty.",
 		InputSchema: enumSchema(listSleepInput{},
 			map[string][]string{"sort_by": healthcheck.SleepSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listSleepInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, total, err := store.ListSleep(ctx, in.Start, in.End, in.SortBy, in.Sort)
+			// Trimmed up front so whitespace-only means absent (the
+			// default), like the money/cookbook lists.
+			sortBy := strings.TrimSpace(in.SortBy)
+			sort := strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListSleep(ctx, in.Start, in.End, sortBy, sort)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "days": rows,
-				"sort_by": orDefault(in.SortBy, healthcheck.SleepSortFields[0]), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(sortBy, healthcheck.SleepSortFields[0]), "sort": orDefault(normDir(sort), "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_sleep",
-		Description: "Patch one sleep session: minutes or hours (one of the two — both-set fails), max 1440 minutes / 24 hours. Ask-gated."},
+		Description: "Patch one sleep session by trimmed id: minutes or hours (one of the two — both-set fails), max 1440 minutes / 24 hours. Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			if in.Minutes != nil && in.Hours != nil {
 				return fail(fmt.Errorf("correct_sleep takes minutes or hours, not both"))
@@ -369,7 +370,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_sleep",
-		Description: "Hard-delete one sleep session by entry id. Dry-runs by default."},
+		Description: "Hard-delete one sleep session by trimmed entry id. Unknown ids fail, even on dry-run (unlike cookbook deletes / delete_weight). Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteSleep(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {
@@ -381,7 +382,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_workout",
-		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes, max 1440; kcal optional, absent means unknown never 0, max 100000). Sync workouts arrive deduplicated through the same store."},
+		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty or whitespace-only becomes other; whole minutes, max 1440; kcal optional, absent means unknown never 0, max 100000; omitted or blank/whitespace-only date means today). Sync workouts arrive deduplicated through the same store."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogWorkout(ctx, dayOf(in.Date), in.Type, in.Minutes, in.Kcal)
 			if err != nil {
@@ -391,21 +392,25 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_workouts",
-		Description: "List per-day workouts between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all workouts; value sorts apply within the page). Sort_by names the field, sort the direction; days without the sort field sort first in asc (unknown, not zero). Type is exact match on the lowered type (max 60 chars, empty means no filter). No match returns the empty page.",
+		Description: "List per-day workouts between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all workouts; value sorts apply within the page). Sort_by names the field (day|minutes|kcal, default day), sort the direction; days without the sort field sort first in asc and last in desc (unknown, not zero). Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers, and the applied pair is echoed. sort_by is case-sensitive, sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc). Type is exact match on the trimmed lowered type (max 60 chars, blank/whitespace-only means no filter). No match returns the empty page; reversed bounds are rejected, not silently empty.",
 		InputSchema: enumSchema(listWorkoutsInput{},
 			map[string][]string{"sort_by": healthcheck.WorkoutSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWorkoutsInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, total, err := store.ListWorkouts(ctx, in.Start, in.End, in.SortBy, in.Sort, in.Type)
+			// Trimmed up front so whitespace-only means absent (the
+			// default), like the money/cookbook lists.
+			sortBy := strings.TrimSpace(in.SortBy)
+			sort := strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListWorkouts(ctx, in.Start, in.End, sortBy, sort, in.Type)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "days": rows,
-				"sort_by": orDefault(in.SortBy, healthcheck.WorkoutSortFields[0]), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(sortBy, healthcheck.WorkoutSortFields[0]), "sort": orDefault(normDir(sort), "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_workout",
-		Description: "Patch one workout by entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty; minutes must be whole, max 1440; kcal max 100000, clear with clear_kcal:true (setting both fails). Ask-gated."},
+		Description: "Patch one workout by trimmed entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty (whitespace-only fails like empty); minutes must be whole, max 1440; kcal max 100000, clear with clear_kcal:true (setting both fails). Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			row, err := store.CorrectWorkout(ctx, in.ID, in.Type, in.Minutes, in.Kcal, in.ClearKcal != nil && *in.ClearKcal)
 			if err != nil {
@@ -415,7 +420,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_workout",
-		Description: "Hard-delete one workout by entry id. Dry-runs by default."},
+		Description: "Hard-delete one workout by trimmed entry id. Unknown ids fail, even on dry-run (unlike cookbook deletes / delete_weight). Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteWorkout(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {
@@ -427,7 +432,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "daily_summary",
-		Description: "Daily recap: food-derived cal-in totals with per-macro counts (a partial-macro day reads as a lower bound), workout_kcal + active_kcal as separate cal-out lines (no single net), weight, sleep, steps. Missing data reads as null on every scalar — never a measured zero."},
+		Description: "Daily recap: food-derived cal-in totals with per-macro counts (a partial-macro day reads as a lower bound), workout_kcal + active_kcal as separate cal-out lines (no single net), weight, sleep, steps. Missing data reads as null on every scalar — never a measured zero. Omitted or blank/whitespace-only date means today."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in dailySummaryInput) (*mcp.CallToolResult, map[string]any, error) {
 			sum, err := store.DailySummary(ctx, dayOf(in.Date))
 			if err != nil {
@@ -449,6 +454,11 @@ func orDefault(v, def string) string {
 	}
 	return v
 }
+
+// normDir folds an already-trimmed sort direction for the echo, matching the
+// store's case-insensitive match. sort_by echoes raw (trimmed): the field
+// names are case-sensitive.
+func normDir(v string) string { return strings.ToLower(v) }
 
 // mustIST is the day-bucketing zone: IST, via the shared healthcheck
 // helper (fixed offset — LoadLocation depends on tzdata the minimal

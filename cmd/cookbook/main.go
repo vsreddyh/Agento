@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"agento/internal/cookbook"
+	"agento/internal/mcpschema"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -57,6 +59,10 @@ type getIngredientInput struct {
 type listIngredientsInput struct {
 	// "optionally filtered by substring"
 	Search string `json:"search,omitempty"`
+	// Order, two enums: sort_by names the field (name|updatedAt, default
+	// name), sort the direction (asc|desc, default asc). Both echoed back.
+	SortBy string `json:"sort_by,omitempty"`
+	Sort   string `json:"sort,omitempty"`
 }
 
 type updateIngredientInput struct {
@@ -87,6 +93,10 @@ type listRecipesInput struct {
 	// nothing-filtered has to stay expressible.
 	Search string `json:"search,omitempty"`
 	Tag    string `json:"tag,omitempty"`
+	// Order, two enums: sort_by names the field (name|updatedAt, default
+	// name), sort the direction (asc|desc, default asc). Both echoed back.
+	SortBy string `json:"sort_by,omitempty"`
+	Sort   string `json:"sort,omitempty"`
 }
 
 type updateRecipeInput struct {
@@ -120,7 +130,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_ingredient",
-		Description: "Get one ingredient by exact name (case-sensitive) or id. Unknown targets return ok:false."},
+		Description: "Get one ingredient by exact name (case-sensitive, trimmed) or id. Unknown targets return ok:false."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			ing, err := store.GetIngredient(ctx, in.NameOrID)
 			if err != nil {
@@ -133,17 +143,26 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
-		Description: "List ingredients, optionally filtered by case-insensitive substring (up to 500, sorted by name; a full page may hide more — narrow with search)."},
+		Description: "List ingredients, optionally filtered by case-insensitive substring (trimmed; blank/whitespace-only means absent, unfiltered — up to 500, with total echoed and truncated flagging a short page). sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and the applied pair is echoed in the response. Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers. sort_by is case-sensitive (updatedAt), sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc).",
+		InputSchema: mcpschema.EnumSchema(listIngredientsInput{},
+			map[string][]string{"sort_by": cookbook.IngredientSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.ListIngredients(ctx, in.Search)
+			// Trimmed up front so whitespace-only means absent (the default),
+			// like every other filter on this server.
+			in.SortBy = strings.TrimSpace(in.SortBy)
+			in.Sort = strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListIngredients(ctx, in.Search, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "ingredients": rows})
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": int64(len(rows)) < total,
+				"sort_by":   orDefault(in.SortBy, cookbook.IngredientSortFields[0]), "sort": orDefault(normDir(in.Sort), "asc"),
+				"ingredients": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_ingredient",
-		Description: "Patch an ingredient's name or note (at least one required). Names/notes are trimmed; empty args are left unchanged. Renames to an existing name error; unknown targets return ok:false. Notes cannot be cleared to empty, over-cap notes are truncated UTF-8-safe."},
+		Description: "Patch an ingredient (by exact name or id, case-sensitive, trimmed) — new name or note, at least one required. Names/notes are trimmed (whitespace-only counts as empty); empty args are left unchanged (a patch with only empty args fails with nothing to update), notes cannot be cleared to empty. Renames to an existing name error; unknown targets return ok:false. Over-cap notes are truncated UTF-8-safe."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
@@ -183,7 +202,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_recipe",
-		Description: "Get one recipe by exact dish name (case-sensitive) or id. Unknown targets return ok:false."},
+		Description: "Get one recipe by exact dish name (case-sensitive, trimmed) or id. Unknown targets return ok:false."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			r, err := store.GetRecipe(ctx, in.NameOrID)
 			if err != nil {
@@ -196,17 +215,24 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_recipes",
-		Description: "List recipes, optionally filtered by name substring (case-insensitive) or tag (exact, case-sensitive). Up to 200, sorted by name; a full page may hide more — narrow with search."},
+		Description: "List recipes, optionally filtered by name substring (case-insensitive, trimmed) and/or tag (exact, case-sensitive, trimmed) — when both are sent they combine (AND); blank/whitespace-only means absent, unfiltered. Up to 200, with total echoed and truncated flagging a short page (count == total means the end); a full page may hide more — narrow with search. sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and the applied pair is echoed in the response. Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers. sort_by is case-sensitive (updatedAt), sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc).",
+		InputSchema: mcpschema.EnumSchema(listRecipesInput{},
+			map[string][]string{"sort_by": cookbook.RecipeSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listRecipesInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.ListRecipes(ctx, in.Search, in.Tag)
+			in.SortBy = strings.TrimSpace(in.SortBy)
+			in.Sort = strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListRecipes(ctx, in.Search, in.Tag, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "recipes": rows})
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": int64(len(rows)) < total,
+				"sort_by":   orDefault(in.SortBy, cookbook.RecipeSortFields[0]), "sort": orDefault(normDir(in.Sort), "asc"),
+				"recipes": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
-		Description: "Patch a recipe's name, note or tags (at least one required; tags replace the whole list, not merged). Names/notes/tags are trimmed; empty args are left unchanged. Renames to an existing name error; unknown targets return ok:false. Note/tags cannot be cleared to empty, over-cap values are truncated UTF-8-safe."},
+		Description: "Patch a recipe (by exact name or id, case-sensitive, trimmed) — new name, note or tags, at least one required (tags replace the whole list, not merged). Names/notes/tags are trimmed (whitespace-only counts as empty); empty args are left unchanged (a patch with only empty args fails with nothing to update), note/tags cannot be cleared to empty. Renames to an existing name error; unknown targets return ok:false. Over-cap values are truncated UTF-8-safe."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
@@ -247,3 +273,15 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// normDir folds an already-trimmed sort direction for the echo, matching the
+// store's case-insensitive match. sort_by echoes raw (trimmed): the field
+// names are case-sensitive.
+func normDir(v string) string { return strings.ToLower(v) }

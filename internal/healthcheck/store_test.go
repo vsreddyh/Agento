@@ -28,6 +28,25 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
+// A reversed range is a typo, not an empty window: all four lists fail
+// like the money reads instead of returning a silent empty page.
+func TestListReversedBoundsRejected(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.ListFood(ctx, "2026-02-01", "2026-01-01", "", "", ""); err == nil {
+		t.Fatal("reversed list_food was accepted; expected the bounds rejection")
+	}
+	if _, _, err := s.ListWeight(ctx, "2026-02-01", "2026-01-01", "", ""); err == nil {
+		t.Fatal("reversed list_weight was accepted; expected the bounds rejection")
+	}
+	if _, _, err := s.ListSleep(ctx, "2026-02-01", "2026-01-01", "", ""); err == nil {
+		t.Fatal("reversed list_sleep was accepted; expected the bounds rejection")
+	}
+	if _, _, err := s.ListWorkouts(ctx, "2026-02-01", "2026-01-01", "", "", ""); err == nil {
+		t.Fatal("reversed list_workouts was accepted; expected the bounds rejection")
+	}
+}
+
 func TestFoodRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -90,6 +109,16 @@ func TestFoodRoundTrip(t *testing.T) {
 	}
 	if _, _, err := s.ListFood(ctx, day, day, "", "up", ""); err == nil {
 		t.Fatal("expected unknown sort error")
+	}
+	// Whitespace-only counts as absent (the default) like money/cookbook,
+	// not as an error — and the direction folds case.
+	rows, _, err = s.ListFood(ctx, day, day, "   ", "  ", "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("whitespace sort %v %v", rows, err)
+	}
+	rows, _, err = s.ListFood(ctx, day, day, "", "DESC", "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("DESC sort %v %v", rows, err)
 	}
 	qty := "2 bowls"
 	patched, err := s.CorrectFood(ctx, id, nil, &qty, nil, map[string]*float64{"kcal": fptr(210)}, nil, nil)
@@ -277,7 +306,29 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if wos, _ := nokSum["workouts"].([]bson.M); len(wos) != 1 {
 		t.Fatalf("workouts: %v", nokSum)
 	}
+	// Unknown kcal sorts first in asc, distinct from a measured 0: a day
+	// with an explicit 0-kcal workout reads after the unknown day.
+	zeroDay := "2026-09-16"
+	cleanDay(t, s, ctx, zeroDay)
+	if _, err := s.LogWorkout(ctx, zeroDay, "walk", 10, fptr(0)); err != nil {
+		t.Fatal(err)
+	}
+	kdays, _, err := s.ListWorkouts(ctx, nokDay, zeroDay, "kcal", "asc", "")
+	if err != nil || len(kdays) != 2 {
+		t.Fatalf("kcal sort %v %v", kdays, err)
+	}
+	if kdays[0]["day"] != nokDay || kdays[1]["day"] != zeroDay {
+		t.Fatalf("unknown kcal did not sort first-distinct: %v then %v", kdays[0]["day"], kdays[1]["day"])
+	}
+	kdays, _, err = s.ListWorkouts(ctx, nokDay, zeroDay, "kcal", "desc", "")
+	if err != nil || len(kdays) != 2 {
+		t.Fatalf("kcal desc sort %v %v", kdays, err)
+	}
+	if kdays[0]["day"] != zeroDay || kdays[1]["day"] != nokDay {
+		t.Fatalf("unknown kcal did not sort last in desc: %v then %v", kdays[0]["day"], kdays[1]["day"])
+	}
 	cleanDay(t, s, ctx, nokDay)
+	cleanDay(t, s, ctx, zeroDay)
 	allDays, _, _ := s.ListWorkouts(ctx, day, day, "", "", "")
 	first := allDays[0]["workouts"].([]bson.M)[0]
 	if _, ok := first["kcal"]; !ok {
