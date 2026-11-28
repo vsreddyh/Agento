@@ -132,6 +132,10 @@ type ListedBudget struct {
 // ListBudgets lists every row (or the filtered slice), ordered by category
 // ascending then month descending. Filters are optional and open-ended.
 func (s *Store) ListBudgets(ctx context.Context, monthFrom, monthTo, category string) ([]ListedBudget, error) {
+	// Trimmed up front like the handler: whitespace-only counts as absent
+	// (all budgets / open-ended), not as an error or an empty filter — the
+	// same whitespace rule every other read filter follows.
+	monthFrom, monthTo, category = strings.TrimSpace(monthFrom), strings.TrimSpace(monthTo), strings.TrimSpace(category)
 	filt := bson.M{}
 	if category != "" {
 		// A read filter, not a write: a name no budget row can carry

@@ -241,6 +241,25 @@ func TestAccountFlowCategoryFilterKeepsRealBalances(t *testing.T) {
 	}
 }
 
+// Whitespace-only filters count as absent for direct store callers too,
+// not just over MCP (the handler trims first): "   " means all budgets /
+// open-ended, never an empty list or a month error.
+func TestListBudgetsTrimsWhitespace(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateBudget(ctx, "groceries", "2026-01", 100000); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListBudgets(ctx, "   ", "  ", "   ")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("whitespace filters got %d rows %v, want all budgets", len(rows), err)
+	}
+	rows, err = s.ListBudgets(ctx, "", "", "  groceries  ")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("padded category got %d rows %v", len(rows), err)
+	}
+}
+
 // #565: effective_now reflects the row in force today, independent of the
 // month filter — a superseded row must not flag just because the filter cuts
 // off its successor.
