@@ -3,6 +3,7 @@ package cookbook
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func TestIngredientCRUD(t *testing.T) {
 	if _, err := s.AddIngredient(ctx, "gotest-salt", ""); err == nil {
 		t.Fatal("expected duplicate error")
 	}
-	rows, err := s.ListIngredients(ctx, "gotest-s")
+	rows, err := s.ListIngredients(ctx, "gotest-s", "", "")
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %v %v", rows, err)
 	}
@@ -120,11 +121,11 @@ func TestRecipeCRUD(t *testing.T) {
 	if _, err := s.AddRecipe(ctx, "gotest-soup", "", nil); err == nil {
 		t.Fatal("expected duplicate error")
 	}
-	rows, err := s.ListRecipes(ctx, "gotest-s", "test")
+	rows, err := s.ListRecipes(ctx, "gotest-s", "test", "", "")
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("got %v %v", rows, err)
 	}
-	rows, err = s.ListRecipes(ctx, "", "no-such-tag")
+	rows, err = s.ListRecipes(ctx, "", "no-such-tag", "", "")
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("got %v %v", rows, err)
 	}
@@ -183,6 +184,80 @@ func TestEmptyPatchIsRejected(t *testing.T) {
 	got, err := s.GetIngredient(ctx, "gotest-patch")
 	if err != nil || got == nil || got["name"] != "gotest-patch" {
 		t.Fatalf("got %v %v", got, err)
+	}
+}
+
+// List sort: two enums, not one string. sort_by names the field
+// (name|updatedAt), sort the direction (asc|desc); blank means the defaults
+// (name, asc). Unknown values fail on the store layer naming the allowed set.
+func TestListSort(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, n := range []string{"gotest-sort-b", "gotest-sort-a"} {
+		_, _ = s.DeleteIngredient(ctx, n)
+	}
+	defer func() {
+		_, _ = s.DeleteIngredient(ctx, "gotest-sort-a")
+		_, _ = s.DeleteIngredient(ctx, "gotest-sort-b")
+	}()
+	if _, err := s.AddIngredient(ctx, "gotest-sort-b", ""); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := s.AddIngredient(ctx, "gotest-sort-a", ""); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	rows, err := s.ListIngredients(ctx, "gotest-sort-", "", "")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	if rows[0]["name"] != "gotest-sort-a" || rows[1]["name"] != "gotest-sort-b" {
+		t.Fatalf("default order is name-asc, got %v, %v", rows[0]["name"], rows[1]["name"])
+	}
+	rows, err = s.ListIngredients(ctx, "gotest-sort-", "name", "desc")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	if rows[0]["name"] != "gotest-sort-b" || rows[1]["name"] != "gotest-sort-a" {
+		t.Fatalf("name-desc swapped nothing: %v, %v", rows[0]["name"], rows[1]["name"])
+	}
+	if _, err := s.ListIngredients(ctx, "", "colour", ""); err == nil {
+		t.Fatal("unknown sort_by was accepted")
+	} else if !strings.Contains(err.Error(), "sort_by must be one of") {
+		t.Fatalf("sort_by error %q does not name the allowed set", err)
+	}
+	if _, err := s.ListIngredients(ctx, "", "", "sideways"); err == nil {
+		t.Fatal("unknown sort was accepted")
+	} else if !strings.Contains(err.Error(), "sort must be one of") {
+		t.Fatalf("sort error %q does not name the allowed set", err)
+	}
+	if _, err := s.ListRecipes(ctx, "", "", "colour", ""); err == nil {
+		t.Fatal("unknown recipe sort_by was accepted")
+	}
+	if _, err := s.ListRecipes(ctx, "", "", "", "sideways"); err == nil {
+		t.Fatal("unknown recipe sort was accepted")
+	}
+
+	for _, n := range []string{"gotest-rsort-b", "gotest-rsort-a"} {
+		_, _ = s.DeleteRecipe(ctx, n)
+	}
+	defer func() {
+		_, _ = s.DeleteRecipe(ctx, "gotest-rsort-a")
+		_, _ = s.DeleteRecipe(ctx, "gotest-rsort-b")
+	}()
+	if _, err := s.AddRecipe(ctx, "gotest-rsort-b", "", nil); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := s.AddRecipe(ctx, "gotest-rsort-a", "", nil); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	rows, err = s.ListRecipes(ctx, "gotest-rsort-", "", "name", "desc")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	if rows[0]["name"] != "gotest-rsort-b" || rows[1]["name"] != "gotest-rsort-a" {
+		t.Fatalf("recipe name-desc swapped nothing: %v, %v", rows[0]["name"], rows[1]["name"])
 	}
 }
 

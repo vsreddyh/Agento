@@ -40,15 +40,20 @@ type TxRow struct {
 	SendingToAccount string
 }
 
-// resolveAccountIDs maps name-or-hex values to ObjectIDs, failing on the
-// first unknown like findAccount does — an analysis over a typo'd account
-// is a silent empty answer otherwise.
+// resolveAccountIDs maps name-or-hex values to ObjectIDs. An unknown name
+// resolves to the nil id — no stored row carries it, so an $in filter over it
+// matches nothing (#619) instead of failing the whole analysis, and instead of
+// widening to "all accounts" when every requested name was unknown.
 func (s *Store) resolveAccountIDs(ctx context.Context, names []string) ([]primitive.ObjectID, error) {
 	out := make([]primitive.ObjectID, 0, len(names))
 	for _, n := range names {
-		acct, err := s.findAccount(ctx, n)
+		acct, found, err := s.lookupAccount(ctx, n)
 		if err != nil {
 			return nil, err
+		}
+		if !found {
+			out = append(out, primitive.NilObjectID)
+			continue
 		}
 		oid, ok := acct["_id"].(primitive.ObjectID)
 		if !ok {
@@ -61,8 +66,9 @@ func (s *Store) resolveAccountIDs(ctx context.Context, names []string) ([]primit
 
 // scanWindow fetches every row in [start, end] matching the optional filters.
 // Empty types/categories/accountIDs mean "all". Types and categories must
-// already be normalized (lowercase, trimmed); unknown values are rejected
-// rather than matching nothing.
+// already be normalized (lowercase, trimmed). `type` is a closed set, so an
+// unknown value fails; category and account are dynamic refs, so a name that
+// does not exist simply matches no row (#619).
 func (s *Store) scanWindow(ctx context.Context, start, end string, types, categories []string, accountIDs []primitive.ObjectID) ([]TxRow, error) {
 	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}, "deletedAt": bson.M{"$exists": false}}
 	if len(types) > 0 {
@@ -74,19 +80,6 @@ func (s *Store) scanWindow(ctx context.Context, start, end string, types, catego
 		filt["type"] = bson.M{"$in": types}
 	}
 	if len(categories) > 0 {
-		live, err := s.categoryList(ctx)
-		if err != nil {
-			return nil, err
-		}
-		have := map[string]bool{}
-		for _, c := range live {
-			have[c] = true
-		}
-		for _, c := range categories {
-			if !have[c] {
-				return nil, fail("category %q does not exist — use one of %v", c, live)
-			}
-		}
 		filt["category"] = bson.M{"$in": categories}
 	}
 	if len(accountIDs) > 0 {
@@ -569,21 +562,6 @@ var accountFlowSorts = []string{"closing", "name", "net", "inflows", "outflows"}
 // logged category, default other. accounts[] picks rows. An archived account
 // with a zero seed and no rows ever is omitted.
 func (s *Store) AccountFlow(ctx context.Context, start, end string, categories []string, accountNames []string, sortBy, order string) (*AccountFlowResult, error) {
-	if len(categories) > 0 {
-		live, err := s.categoryList(ctx)
-		if err != nil {
-			return nil, err
-		}
-		have := map[string]bool{}
-		for _, c := range live {
-			have[c] = true
-		}
-		for _, c := range categories {
-			if !have[c] {
-				return nil, fail("category %q does not exist — use one of %v", c, live)
-			}
-		}
-	}
 	var filterIDs []primitive.ObjectID
 	if len(accountNames) > 0 {
 		var err error

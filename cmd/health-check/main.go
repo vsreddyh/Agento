@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"reflect"
 	"time"
 
 	"agento/internal/healthcheck"
+	"agento/internal/mcpschema"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -38,27 +38,11 @@ func result(out map[string]any) (*mcp.CallToolResult, map[string]any, error) {
 // without it (omitempty is the only switch); everything else is optional.
 //
 // Enums: the SDK infers plain strings, so sort_by/sort get real JSON-schema
-// enums via enumSchema (inferred base + enum patch, one source). Unknown
-// values throw on both layers — schema first, then the store's fail()
-// naming the allowed set.
+// enums via mcpschema.EnumSchema (inferred base + enum patch, one source).
+// Unknown values throw on both layers — schema first, then the store's
+// fail() naming the allowed set.
 func enumSchema(in any, enums map[string][]string) *jsonschema.Schema {
-	s, err := jsonschema.ForType(reflect.TypeOf(in), nil)
-	if err != nil {
-		panic(err)
-	}
-	for field, values := range enums {
-		prop, ok := s.Properties[field]
-		if !ok {
-			panic(fmt.Sprintf("enum field %q missing from schema", field))
-		}
-		anyVals := make([]any, 0, len(values))
-		for _, v := range values {
-			anyVals = append(anyVals, v)
-		}
-		prop.Enum = anyVals
-		s.Properties[field] = prop
-	}
-	return s
+	return mcpschema.EnumSchema(in, enums)
 }
 
 var sortEnum = []string{"asc", "desc"}

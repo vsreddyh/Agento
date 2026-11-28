@@ -13,6 +13,7 @@ import (
 	"os"
 
 	"agento/internal/cookbook"
+	"agento/internal/mcpschema"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -57,6 +58,10 @@ type getIngredientInput struct {
 type listIngredientsInput struct {
 	// "optionally filtered by substring"
 	Search string `json:"search,omitempty"`
+	// Order, two enums: sort_by names the field (name|updatedAt, default
+	// name), sort the direction (asc|desc, default asc). Both echoed back.
+	SortBy string `json:"sort_by,omitempty"`
+	Sort   string `json:"sort,omitempty"`
 }
 
 type updateIngredientInput struct {
@@ -87,6 +92,10 @@ type listRecipesInput struct {
 	// nothing-filtered has to stay expressible.
 	Search string `json:"search,omitempty"`
 	Tag    string `json:"tag,omitempty"`
+	// Order, two enums: sort_by names the field (name|updatedAt, default
+	// name), sort the direction (asc|desc, default asc). Both echoed back.
+	SortBy string `json:"sort_by,omitempty"`
+	Sort   string `json:"sort,omitempty"`
 }
 
 type updateRecipeInput struct {
@@ -133,13 +142,17 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
-		Description: "List ingredients, optionally filtered by case-insensitive substring (up to 500, sorted by name; a full page may hide more — narrow with search)."},
+		Description: "List ingredients, optionally filtered by case-insensitive substring (up to 500; a full page may hide more — narrow with search). sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and both are echoed in the response.",
+		InputSchema: mcpschema.EnumSchema(listIngredientsInput{},
+			map[string][]string{"sort_by": cookbook.IngredientSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.ListIngredients(ctx, in.Search)
+			rows, err := store.ListIngredients(ctx, in.Search, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "ingredients": rows})
+			return result(map[string]any{"ok": true, "count": len(rows),
+				"sort_by": orDefault(in.SortBy, cookbook.IngredientSortFields[0]), "sort": orDefault(in.Sort, "asc"),
+				"ingredients": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_ingredient",
@@ -196,13 +209,17 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_recipes",
-		Description: "List recipes, optionally filtered by name substring (case-insensitive) or tag (exact, case-sensitive). Up to 200, sorted by name; a full page may hide more — narrow with search."},
+		Description: "List recipes, optionally filtered by name substring (case-insensitive) or tag (exact, case-sensitive). Up to 200; a full page may hide more — narrow with search. sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and both are echoed in the response.",
+		InputSchema: mcpschema.EnumSchema(listRecipesInput{},
+			map[string][]string{"sort_by": cookbook.RecipeSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listRecipesInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, err := store.ListRecipes(ctx, in.Search, in.Tag)
+			rows, err := store.ListRecipes(ctx, in.Search, in.Tag, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows), "recipes": rows})
+			return result(map[string]any{"ok": true, "count": len(rows),
+				"sort_by": orDefault(in.SortBy, cookbook.RecipeSortFields[0]), "sort": orDefault(in.Sort, "asc"),
+				"recipes": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
@@ -246,4 +263,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cookbook:", err)
 		os.Exit(1)
 	}
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }

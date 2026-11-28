@@ -48,12 +48,18 @@ instead of round-tripping one at a time.
   `start_a`/`end_a`/`start_b`/`end_b` for `money_compare`), and every
   response carries at most one table. `list_budgets` is unwindowed
   (optional `month_from`/`month_to` only). Budgets live in `money_budgets`
-  keyed by (category, month) as dated versions.
+  keyed by (category, month) as dated versions. `query_transactions` orders
+  by `sort_by` (date|amount, default date) + `sort` (asc|desc, default asc),
+  both echoed back. Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
+  unknown account/category filter returns the empty page — typo protection
+  lives on the write path (`log`/`edit` still reject unknown names).
 - **cookbook** (10, permanent): `add_ingredient`, `get_ingredient`,
   `list_ingredients`, `update_ingredient`, `delete_ingredient`,
   `add_recipe`, `get_recipe`, `list_recipes`, `update_recipe`,
   `delete_recipe` — recipe + ingredient books with notes (no quantities,
-  servings, macros or cook log).
+  servings, macros or cook log). Both `list_*` take `sort_by`
+  (name|updatedAt, default name) + `sort` (asc|desc, default asc), echoed back;
+  unknown values fail on both layers.
 - **health-check** (17, all permanent — no prune, no TTL): flat food log, not
   meals — `log_food` takes `what` (required) + free-text `qty`, optional
   estimated macros (`kcal/protein/carbs/fat/fiber`, absent means unknown, never

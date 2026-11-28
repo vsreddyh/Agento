@@ -164,6 +164,131 @@ func TestQueryTransactionsRejectsUnusableBounds(t *testing.T) {
 	}
 }
 
+// Sort is two enums, not one string: sort_by names the field (date|amount),
+// sort the direction (asc|desc); both default (date, asc) and both are echoed.
+// Unknown values are rejected before any store touch (`store` is nil here),
+// like the other range-mode validations.
+func TestQueryTransactionsRejectsUnknownSort(t *testing.T) {
+	// The schema enum rejects before the handler: a protocol-level failure
+	// (IsError) whose text names the field — no structured payload, so like
+	// the fractional-paise rejection this asserts on text, not errMsg.
+	text, _, isErr := callToolFull(t, "query_transactions", map[string]any{
+		"start": "2026-01-01", "end": "2026-01-31", "sort_by": "colour",
+	})
+	if !isErr {
+		t.Fatal("an unknown sort_by was accepted; expected the enum rejection")
+	}
+	if !strings.Contains(text, "sort_by") {
+		t.Errorf("rejection %q does not name the field", text)
+	}
+	// A value the schema enum allows but the store forbids is impossible by
+	// construction (both read money.TxSortFields), so the second layer is
+	// pinned at the store level in TestQuerySorted instead.
+	text, _, isErr = callToolFull(t, "query_transactions", map[string]any{
+		"start": "2026-01-01", "end": "2026-01-31", "sort": "sideways",
+	})
+	if !isErr {
+		t.Fatal("an unknown sort was accepted; expected the enum rejection")
+	}
+	if !strings.Contains(text, "sort") {
+		t.Errorf("rejection %q does not name the field", text)
+	}
+}
+
+// Like limit/offset, order args are filters on a range, not on a row: a
+// non-blank sort with id is rejected rather than silently dropped (`store` is
+// nil here).
+func TestQueryByIdRejectsSortArgs(t *testing.T) {
+	for _, extra := range []map[string]any{
+		{"sort_by": "amount"},
+		{"sort": "desc"},
+	} {
+		args := map[string]any{"id": "000000000000000000000001"}
+		for k, v := range extra {
+			args[k] = v
+		}
+		_, errMsg := callTool(t, "query_transactions", args)
+		if errMsg == "" {
+			t.Fatalf("query by id combined with %v was accepted; expected a rejection", extra)
+		}
+		if !strings.Contains(errMsg, "cannot be combined") {
+			t.Errorf("error %q does not explain the exclusivity", errMsg)
+		}
+	}
+}
+
+// The applied order is echoed so the caller never guesses: defaults read
+// back as date/asc, and an explicit pair orders + echoes.
+func TestQueryTransactionsSortEchoAndOrder(t *testing.T) {
+	withTestStore(t)
+	ctx := context.Background()
+	for _, row := range []struct {
+		date  string
+		paise int64
+	}{{"2026-03-01", 50000}, {"2026-03-02", 10000}, {"2026-03-03", 30000}} {
+		if _, _, err := store.Insert(ctx, row.date, row.paise, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text, errMsg := callTool(t, "query_transactions", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31",
+	})
+	if errMsg != "" {
+		t.Fatalf("default query failed: %s", errMsg)
+	}
+	for _, want := range []string{`"sort_by":"date"`, `"sort":"asc"`, `"2026-03-01"`, `"2026-03-03"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("default query text misses %s: %q", want, text)
+		}
+	}
+	text, errMsg = callTool(t, "query_transactions", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "sort_by": "amount", "sort": "desc",
+	})
+	if errMsg != "" {
+		t.Fatalf("amount-desc query failed: %s", errMsg)
+	}
+	for _, want := range []string{`"sort_by":"amount"`, `"sort":"desc"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("amount-desc query text misses %s: %q", want, text)
+		}
+	}
+	first, third := strings.Index(text, "50000"), strings.Index(text, "10000")
+	if first < 0 || third < 0 || first > third {
+		t.Errorf("amount-desc did not order 50000 before 10000: %q", text)
+	}
+}
+
+// An unknown account/category filter on a read is the empty page, not a
+// rejection (#619): no row can carry the name, so count 0 is the truth.
+// Closed sets (type) and by-id lookups still fail.
+func TestQueryTransactionsUnknownFilterEmptiesOut(t *testing.T) {
+	withTestStore(t)
+	for _, args := range []map[string]any{
+		{"start": "2026-03-01", "end": "2026-03-31", "category": "grocerys"},
+		{"start": "2026-03-01", "end": "2026-03-31", "account": "no-such-account"},
+	} {
+		text, errMsg := callTool(t, "query_transactions", args)
+		if errMsg != "" {
+			t.Fatalf("unknown filter %v was rejected: %s", args, errMsg)
+		}
+		if !strings.Contains(text, `"count":0`) {
+			t.Errorf("unknown filter %v did not return the empty page: %q", args, text)
+		}
+	}
+	_, errMsg := callTool(t, "query_transactions", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "type": "banana",
+	})
+	if errMsg == "" || !strings.Contains(errMsg, "does not exist") {
+		t.Errorf("unknown type did not fail closed: %q", errMsg)
+	}
+	_, errMsg = callTool(t, "delete_transactions", map[string]any{
+		"category": "grocerys", "dry_run": true,
+	})
+	if errMsg != "" {
+		t.Fatalf("unknown delete category was rejected: %s", errMsg)
+	}
+}
+
 // A negative offset is rejected like a reversed range, before any store
 // touch (`store` is nil here): paging backwards is a typo, not page zero.
 func TestQueryTransactionsRejectsNegativeOffset(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 
+	"agento/internal/mcpschema"
 	"agento/internal/money"
 	"agento/internal/validate"
 
@@ -144,6 +145,13 @@ type queryTransactionsInput struct {
 	Type     string `json:"type,omitempty"`
 	Category string `json:"category,omitempty"`
 	Account  string `json:"account,omitempty"`
+	// Range-mode order, two enums: sort_by names the field (date|amount) and
+	// sort the direction (asc|desc). Blank means the defaults (date, asc).
+	// Both are echoed in the response so the applied order is never a guess.
+	// Like limit/offset, a non-blank value with id is rejected — a by-id fetch
+	// is one row, and its order is fixed.
+	SortBy string `json:"sort_by,omitempty"`
+	Sort   string `json:"sort,omitempty"`
 	// Page size in range mode; <=0 means the 100-row default, clamped to 500.
 	// The store speaks limit<=0 as unlimited, but the handler never forwards
 	// that — an unbounded MCP read is how full-history dumps happen.
@@ -405,7 +413,9 @@ func registerTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_transactions",
-		Description: "Fetch one transaction by id, or list transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Give an id OR a start/end pair: an id addresses one row, so it cannot be combined with any other argument except the zero-valued paging defaults — whitespace-only filters/bounds count as absent, since every argument is trimmed upfront (an unknown id is rejected, not a silent empty page). The id itself is trimmed: a padded hex works, while a blank id counts as absent and falls through to range mode; without an id both bounds are required. A by-id fetch returns a fixed single-row envelope — count:1, total:1, limit:1, truncated:false, next_offset:null. All paging below is range-mode only. In range mode, optional type/category/account filters (whitespace-only means absent); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type/category rejected like writes (not a silent zero). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos, in range mode: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then). Rows come back date-ascending with an _id tiebreak (oldest first; deterministic order, but not a snapshot — a concurrent log between page fetches can shift rows across page boundaries)."},
+		Description: "Fetch one transaction by id, or list transactions between start and end dates (YYYY-MM-DD inclusive, padded bounds trimmed like log/delete, start <= end; anything else is rejected rather than returning nothing. Bounds are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored (stored rows default to IST today). Give an id OR a start/end pair: an id addresses one row, so it cannot be combined with any other argument except the zero-valued paging defaults — whitespace-only filters/bounds count as absent, since every argument is trimmed upfront (an unknown id is rejected, not a silent empty page). The id itself is trimmed: a padded hex works, while a blank id counts as absent and falls through to range mode; without an id both bounds are required. A by-id fetch returns a fixed single-row envelope — count:1, total:1, limit:1, truncated:false, next_offset:null. All paging below is range-mode only. In range mode, optional type/category/account filters (whitespace-only means absent); account is a case-sensitive exact name or id hex, unlike type/category — `cash` does not find `Cash` — and matches EITHER side of a transfer (sender or receiver), so a transfer appears under both accounts. Unknown type is rejected like a write (closed set — type names a fixed list); an unknown account/category filter is not a typo rejection — no row can carry it, so it returns the empty page (count 0), the same as a valid-but-empty query. Typo protection lives on the write path (log/edit reject unknown names). Paged: limit defaults to 100, clamped to 500; offset defaults to 0. Paging typos, in range mode: offset: -1 is rejected (a negative skip is a typo, not page 0); limit: 0 or negative silently means 100, not unlimited (check the echoed limit — expect 100); limit above 500 (e.g. 9999) silently clamps to 500 — check the echoed limit. Ordered: sort_by names the field (date|amount, default date), sort the direction (asc|desc, default asc); unknown values are rejected on both layers (schema enum first, then the store), and both are echoed in the response — the tiebreak follows the direction (_id-asc with asc, _id-desc with desc) so paging with limit/offset stays deterministic either way. The response carries count (rows in this page — unlike total, which counts all matches), limit (the applied cap), total, truncated and next_offset so a short page is never mistaken for the end. There is no unlimited `query_transactions` page on MCP (delete dry-runs stay unbounded by design) — to read everything, repeat with offset = next_offset until truncated is false (next_offset is null then).",
+		InputSchema: mcpschema.EnumSchema(queryTransactionsInput{},
+			map[string][]string{"sort_by": money.TxSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed up front like delete's filters, so whitespace-only means
 			// absent instead of an error.
@@ -415,6 +425,8 @@ func registerTools(s *mcp.Server) {
 			in.Type = strings.TrimSpace(in.Type)
 			in.Category = strings.TrimSpace(in.Category)
 			in.Account = strings.TrimSpace(in.Account)
+			in.SortBy = strings.TrimSpace(in.SortBy)
+			in.Sort = strings.TrimSpace(in.Sort)
 			if in.ID != "" {
 				if in.Start != "" || in.End != "" || in.Type != "" || in.Category != "" || in.Account != "" {
 					return failMsg("id cannot be combined with start, end, type, category or account.")
@@ -423,9 +435,13 @@ func registerTools(s *mcp.Server) {
 				// limit/offset with id is rejected rather than silently
 				// dropped, so `{id, limit: 10}` fails loudly instead of
 				// succeeding while ignoring what was asked for. Zero values
-				// are the unset defaults and pass through.
+				// are the unset defaults and pass through. The order args are
+				// the same class: one row has no order to choose.
 				if in.Limit != 0 || in.Offset != 0 {
 					return failMsg("id cannot be combined with limit or offset — a by-id fetch is a single row.")
+				}
+				if in.SortBy != "" || in.Sort != "" {
+					return failMsg("id cannot be combined with sort_by or sort — a by-id fetch is a single row, in a fixed order.")
 				}
 				// Same already-deleted distinction as the delete path: Match
 				// is live-only and would report a flagged id as unknown.
@@ -460,22 +476,34 @@ func registerTools(s *mcp.Server) {
 			if err != nil {
 				return fail(err)
 			}
+			// Validated here so the error names the tool, then again in the
+			// store for direct callers. Unknown values fail on both layers;
+			// blank takes the documented default.
+			sortBy, err := money.NormalizeSort("query_transactions", in.SortBy, money.TxSortFields[0], money.TxSortFields)
+			if err != nil {
+				return fail(err)
+			}
+			order, err := money.NormalizeOrder("query_transactions", in.Sort, "asc")
+			if err != nil {
+				return fail(err)
+			}
 			limit := clampLimit(in.Limit)
 			if in.Offset < 0 {
 				return fail(fmt.Errorf("query_transactions offset must be >= 0 — got %d", in.Offset))
 			}
-			rows, total, err := store.Query(ctx, start, end, typ, cat, acct, limit, in.Offset)
+			rows, total, err := store.QuerySorted(ctx, start, end, typ, cat, acct, sortBy, order, limit, in.Offset)
 			if err != nil {
 				return fail(err)
 			}
 			truncated, next := pageWindow(in.Offset, len(rows), total)
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": truncated, "next_offset": next, "limit": limit,
+				"sort_by": sortBy, "sort": order,
 				"transactions": rows})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_transactions",
-		Description: "Delete transactions (soft delete: flagged rows stop contributing to balances, which are derived from what remains, and vanish from every ledger read immediately; the ttl_deleted_at index removes them for good 10 days after flagging — restore with restore_transactions inside that window). Target one row by id — a non-existent id is rejected, not a silent 0 (and an already-deleted id names restore_transactions instead of reading as unknown) — or filter by amount_paise (integer paise > 0; an explicit 0 is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type/category rejected like writes (not a silent would_delete: 0). dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
+		Description: "Delete transactions (soft delete: flagged rows stop contributing to balances, which are derived from what remains, and vanish from every ledger read immediately; the ttl_deleted_at index removes them for good 10 days after flagging — restore with restore_transactions inside that window). Target one row by id — a non-existent id is rejected, not a silent 0 (and an already-deleted id names restore_transactions instead of reading as unknown) — or filter by amount_paise (integer paise > 0; an explicit 0 is rejected, not a wildcard)/type/category/date/account (case-sensitive exact name or hex, unlike type/category; whitespace-only means absent); dates are plain calendar-day strings with no timezone conversion — pass IST dates to match how rows are stored. id cannot be combined with filters. account matches EITHER side of a transfer, so deleting by account removes transfers where it only received; check dry_run first. Unknown type is rejected like a write (closed set); an unknown account/category matches nothing, so the dry run reports would_delete: 0 — the empty answer is the truth when no row can carry the name. dry_run=true (default) only reports what would go (uncapped by design — a dry run must show everything it would delete); pass dry_run=false to delete."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteTransactionsInput) (*mcp.CallToolResult, map[string]any, error) {
 			// Trimmed before the emptiness checks like the query bounds, so
 			// whitespace-only means absent (not an "unknown account" error):
@@ -535,10 +563,11 @@ func registerTools(s *mcp.Server) {
 			if in.DryRun != nil {
 				dry = *in.DryRun
 			}
-			// A non-existent id is rejected like unknown account/type/category,
-			// not a silent 0: with id there is no second signal, so 0 would read
-			// as "nothing to delete" for a typo. Other filters may validly match
-			// nothing, so they keep the 0.
+			// A non-existent id is rejected, not a silent 0: with id there is
+			// no second signal, so 0 would read as "nothing to delete" for a
+			// typo. Other filters may validly match nothing — including an
+			// unknown account/category, which no row can carry (#619) — so
+			// they keep the 0.
 			byID := in.ID != ""
 			if dry {
 				rows, err := store.Match(ctx, filt)

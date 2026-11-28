@@ -39,6 +39,10 @@ var (
 	dateRE       = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 	accountTypes = []string{"cash", "bank", "card", "wallet", "other"}
 	txTypes      = []string{"income", "expense", "transfer"}
+	// TxSortFields is the query_transactions sort_by set: the two fields a
+	// ledger read orders by. The direction is the separate `sort` enum, so
+	// neither argument carries two meanings.
+	TxSortFields = []string{"date", "amount"}
 )
 
 // StoreError is the domain error: servers catch it and return {ok: False, error}.
@@ -722,6 +726,13 @@ func liveFilter() bson.M {
 	return bson.M{"deletedAt": bson.M{"$exists": false}}
 }
 
+// noMatchFilter matches no stored row. It is what a dynamic ref that names
+// nothing resolves to: an unknown account or category cannot be carried by any
+// row, so the read comes back empty (ok:true, count 0) instead of erroring
+// (#619). Closed sets (type, sort_by/sort, ids) still fail — typo protection
+// lives on the write path, and on anything that addresses exactly one thing.
+func noMatchFilter() bson.M { return bson.M{"_id": bson.M{"$in": bson.A{}}} }
+
 // accountNames maps account-id hex -> name, for annotating transaction rows.
 func (s *Store) accountNames(ctx context.Context) (map[string]string, error) {
 	cur, err := s.accts.Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"name": 1}))
@@ -997,8 +1008,12 @@ func (s *Store) EditTransaction(ctx context.Context, id string, amountPaise *int
 	return changed, nil
 }
 
-// queryFilter builds the normalized Mongo filter Query scans: date range plus optional type/category/account (either side of a
-// transfer). Normalization and membership checks live here, once.
+// queryFilter builds the normalized Mongo filter Query scans: date range plus
+// optional type/category/account (either side of a transfer). Normalization and
+// membership checks live here, once. `type` is a closed set, so an unknown value
+// fails; category and account are dynamic refs, so a name that does not exist
+// returns noMatchFilter instead of an error (#619) — the empty page is the
+// honest answer when no row can carry the name.
 func (s *Store) queryFilter(ctx context.Context, start, end string, typ, category, account *string) (bson.M, error) {
 	filt := bson.M{"date": bson.M{"$gte": start, "$lte": end}, "deletedAt": bson.M{"$exists": false}}
 	if typ != nil {
@@ -1009,16 +1024,29 @@ func (s *Store) queryFilter(ctx context.Context, start, end string, typ, categor
 		filt["type"] = t
 	}
 	if category != nil {
-		c, err := s.requireCategory(ctx, "query_transactions", *category)
+		c := normalizeCategoryName(*category)
+		if c == "" {
+			return nil, fail("query_transactions category is required")
+		}
+		live, err := s.categoryList(ctx)
 		if err != nil {
 			return nil, err
+		}
+		if !contains(live, c) {
+			return noMatchFilter(), nil
 		}
 		filt["category"] = c
 	}
 	if account != nil {
-		acct, err := s.findAccount(ctx, *account)
+		if strings.TrimSpace(*account) == "" {
+			return nil, fail("query_transactions account is required")
+		}
+		acct, found, err := s.lookupAccount(ctx, *account)
 		if err != nil {
 			return nil, err
+		}
+		if !found {
+			return noMatchFilter(), nil
 		}
 		filt["$or"] = []bson.M{{"accountId": acct["_id"]}, {"sending_to": acct["_id"]}}
 	}
@@ -1036,11 +1064,27 @@ func (s *Store) CountRange(ctx context.Context, start, end string, account *stri
 	return s.txns.CountDocuments(ctx, filt)
 }
 
-// Query date-range scan; account filter matches either side of transfers.
+// Query is the default-order range scan — date ascending with an _id
+// tiebreak, the order every derived read (totals, series, analysis, the app's
+// HTTP surface) builds on. Callers that name an order use QuerySorted.
+func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string, limit, offset int) ([]bson.M, int64, error) {
+	return s.QuerySorted(ctx, start, end, typ, category, account, "", "", limit, offset)
+}
+
+// QuerySorted is Query with a caller-chosen order: sortBy names the field
+// (TxSortFields), order the direction (asc|desc). Two enums, not one string, so
+// neither argument carries two meanings; blank means the defaults (date, asc).
+// Unknown values fail naming the allowed set — the published schema enum stops
+// them first, and this is the second layer for direct store callers, never a
+// silent default. The _id tiebreak follows the direction, so paging with
+// limit/offset stays deterministic either way.
+//
+// Range scan; account filter matches either side of transfers.
 // Type/category filters are normalized exactly like writes (lowercase + trim),
-// so `Groceries` finds what was logged as `groceries` — and unknown values are
-// rejected like writes (and like unknown accounts), instead of silently
-// returning zero rows for a typo.
+// so `Groceries` finds what was logged as `groceries`. A dynamic ref that names
+// nothing — an unknown account or category — is not a typo rejection on a read:
+// no row can carry it, so the page comes back empty (#619). Writes are where an
+// unknown name fails.
 //
 // `_id` is returned as a hex string like Match does: without it, the documented
 // `delete by id` workflow is unreachable from a query — the caller would hold a
@@ -1060,7 +1104,15 @@ func (s *Store) CountRange(ctx context.Context, start, end string, account *stri
 // rows across page boundaries (dupes/skips on a live ledger). Negative
 // offsets fail the same way (typo, not page 0).
 
-func (s *Store) Query(ctx context.Context, start, end string, typ, category, account *string, limit, offset int) ([]bson.M, int64, error) {
+func (s *Store) QuerySorted(ctx context.Context, start, end string, typ, category, account *string, sortBy, order string, limit, offset int) ([]bson.M, int64, error) {
+	sortBy, err := NormalizeSort("query_transactions", sortBy, TxSortFields[0], TxSortFields)
+	if err != nil {
+		return nil, 0, err
+	}
+	dir, err := NormalizeOrder("query_transactions", order, "asc")
+	if err != nil {
+		return nil, 0, err
+	}
 	filt, err := s.queryFilter(ctx, start, end, typ, category, account)
 	if err != nil {
 		return nil, 0, err
@@ -1080,7 +1132,13 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	if err != nil {
 		return nil, 0, err
 	}
-	findOpts := options.Find().SetSort(bson.D{{Key: "date", Value: 1}, {Key: "_id", Value: 1}})
+	// The tiebreak follows the direction: amount-desc with _id-desc keeps page
+	// boundaries stable across rows that share an amount.
+	step := 1
+	if dir == "desc" {
+		step = -1
+	}
+	findOpts := options.Find().SetSort(bson.D{{Key: sortBy, Value: step}, {Key: "_id", Value: step}})
 	if limit > 0 {
 		findOpts.SetLimit(int64(limit))
 	}
@@ -1118,7 +1176,25 @@ func (s *Store) Query(ctx context.Context, start, end string, typ, category, acc
 	return rows, total, nil
 }
 
+// findAccount resolves an account name or id hex for the write and by-id
+// paths: a ref that names nothing fails with "unknown account", like an unknown
+// id. Read filters use lookupAccount, which empties out instead (#619).
 func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
+	acct, found, err := s.lookupAccount(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fail("unknown account '%s'", strings.TrimSpace(v))
+	}
+	return acct, nil
+}
+
+// lookupAccount resolves an account name or id hex, reporting found=false when
+// the ref names nothing. A read filter treats that as an empty result (#619);
+// a real driver failure still propagates, so a transient Atlas error never reads
+// as "no such account" — and therefore never as an empty ledger.
+func (s *Store) lookupAccount(ctx context.Context, v string) (bson.M, bool, error) {
 	v = strings.TrimSpace(v)
 	ors := []bson.M{{"name": v}}
 	if oid, err := primitive.ObjectIDFromHex(v); err == nil {
@@ -1126,9 +1202,12 @@ func (s *Store) findAccount(ctx context.Context, v string) (bson.M, error) {
 	}
 	var acct bson.M
 	if err := s.accts.FindOne(ctx, bson.M{"$or": ors}).Decode(&acct); err != nil {
-		return nil, fail("unknown account '%s'", v)
+		if err == mongoDrv.ErrNoDocuments {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
-	return acct, nil
+	return acct, true, nil
 }
 
 func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M, error) {
@@ -1169,9 +1248,15 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 			}
 		case "account":
 			vs, _ := v.(string)
-			acct, err := s.findAccount(ctx, vs)
+			if strings.TrimSpace(vs) == "" {
+				return nil, fail("delete_transactions account is required")
+			}
+			acct, found, err := s.lookupAccount(ctx, vs)
 			if err != nil {
 				return nil, err
+			}
+			if !found {
+				return noMatchFilter(), nil
 			}
 			out["$or"] = []bson.M{{"accountId": acct["_id"]}, {"sending_to": acct["_id"]}}
 		case "id":
@@ -1184,11 +1269,10 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 		case "type", "category":
 			// Normalized like writes: `Groceries` deletes what was logged as
 			// `groceries` instead of reporting "would_delete: 0" for rows that
-			// exist — and unknown values are rejected like writes (and like
-			// unknown accounts), instead of silently matching nothing for a
-			// typo. Non-strings pass through for the driver to reject.
-			// Categories are user-managed (money_categories): the live set is
-			// checked, never a fixed list.
+			// exist. `type` is a closed set, so an unknown value fails; category
+			// is user-managed, so a name that does not exist matches nothing —
+			// the dry run reports would_delete: 0, which is the truth (#619).
+			// Non-strings pass through for the driver to reject.
 			if vs, ok := v.(string); ok {
 				if k == "type" {
 					norm := strings.ToLower(strings.TrimSpace(vs))
@@ -1196,9 +1280,18 @@ func (s *Store) toMongoFilter(ctx context.Context, filt map[string]any) (bson.M,
 						return nil, fail("type %q does not exist — use one of %v", vs, txTypes)
 					}
 					out[k] = norm
-				} else if c, err := s.requireCategory(ctx, "delete_transactions", vs); err != nil {
-					return nil, err
 				} else {
+					c := normalizeCategoryName(vs)
+					if c == "" {
+						return nil, fail("delete_transactions category is required")
+					}
+					live, err := s.categoryList(ctx)
+					if err != nil {
+						return nil, err
+					}
+					if !contains(live, c) {
+						return noMatchFilter(), nil
+					}
 					out[k] = c
 				}
 			} else {

@@ -67,10 +67,7 @@ func handleMoneyTotals(ctx context.Context, in moneyTotalsInput) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	cat, err := store.NormalizeCategory(ctx, "money_totals", in.Category)
-	if err != nil {
-		return nil, err
-	}
+	cat := money.NormalizeCategory(in.Category)
 	var catP, acctP *string
 	if cat != "" {
 		catP = &cat
@@ -119,10 +116,7 @@ func handleMoneyBreakdown(ctx context.Context, in moneyBreakdownInput) (map[stri
 	if by != "category" && by != "account" {
 		return nil, fmt.Errorf("money_breakdown by must be category or account — got %q (trends live in money_series)", in.By)
 	}
-	cats, err := store.NormalizeCategories(ctx, "money_breakdown", in.Categories)
-	if err != nil {
-		return nil, err
-	}
+	cats := money.NormalizeCategories(in.Categories)
 	accts := normalizeAccountList("money_breakdown", in.Accounts)
 	if by == "category" {
 		side, err := money.NormalizeSide("money_breakdown", in.Side)
@@ -223,10 +217,7 @@ func handleMoneyTopExpenses(ctx context.Context, in moneyTopExpensesInput) (map[
 	if err != nil {
 		return nil, err
 	}
-	cat, err := store.NormalizeCategory(ctx, "money_top_expenses", in.Category)
-	if err != nil {
-		return nil, err
-	}
+	cat := money.NormalizeCategory(in.Category)
 	var catP, acctP *string
 	if cat != "" {
 		catP = &cat
@@ -287,10 +278,7 @@ func handleMoneySeries(ctx context.Context, in moneySeriesInput) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	cat, err := store.NormalizeCategory(ctx, "money_series", in.Category)
-	if err != nil {
-		return nil, err
-	}
+	cat := money.NormalizeCategory(in.Category)
 	var catP, acctP *string
 	if cat != "" {
 		catP = &cat
@@ -370,10 +358,7 @@ func handleMoneyCompare(ctx context.Context, in moneyCompareInput) (map[string]a
 		if strings.TrimSpace(in.SortBy) != "" || strings.TrimSpace(in.Order) != "" {
 			return nil, fmt.Errorf("money_compare totals mode has a fixed row order (income, expense, net) — no sort arguments")
 		}
-		cat, err := store.NormalizeCategory(ctx, "money_compare", in.Category)
-		if err != nil {
-			return nil, err
-		}
+		cat := money.NormalizeCategory(in.Category)
 		var catP *string
 		if cat != "" {
 			catP = &cat
@@ -396,10 +381,7 @@ func handleMoneyCompare(ctx context.Context, in moneyCompareInput) (map[string]a
 	if strings.TrimSpace(in.Category) != "" {
 		return nil, fmt.Errorf("money_compare category is only valid when by=totals — use categories[] in categories mode")
 	}
-	cats, err := store.NormalizeCategories(ctx, "money_compare", in.Categories)
-	if err != nil {
-		return nil, err
-	}
+	cats := money.NormalizeCategories(in.Categories)
 	sortBy, err := money.NormalizeSort("money_compare", in.SortBy, "delta", []string{"delta", "name", "b_amount"})
 	if err != nil {
 		return nil, err
@@ -450,10 +432,7 @@ func handleMoneyRecurring(ctx context.Context, in moneyRecurringInput) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	cat, err := store.NormalizeCategory(ctx, "money_recurring", in.Category)
-	if err != nil {
-		return nil, err
-	}
+	cat := money.NormalizeCategory(in.Category)
 	var catP, acctP *string
 	if cat != "" {
 		catP = &cat
@@ -543,10 +522,7 @@ func handleMoneyAnomalies(ctx context.Context, in moneyAnomaliesInput) (map[stri
 	if scope != "bucket" && scope != "row" {
 		return nil, fmt.Errorf("money_anomalies scope must be bucket or row — got %q", in.Scope)
 	}
-	cat, err := store.NormalizeCategory(ctx, "money_anomalies", in.Category)
-	if err != nil {
-		return nil, err
-	}
+	cat := money.NormalizeCategory(in.Category)
 	var catP, acctP *string
 	if cat != "" {
 		catP = &cat

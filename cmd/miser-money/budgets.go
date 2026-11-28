@@ -141,10 +141,7 @@ func handleBudgetStatus(ctx context.Context, in budgetStatusInput) (map[string]a
 	if err != nil {
 		return nil, err
 	}
-	cats, err := store.NormalizeCategories(ctx, "budget_status", in.Categories)
-	if err != nil {
-		return nil, err
-	}
+	cats := money.NormalizeCategories(in.Categories)
 	sortBy, err := money.NormalizeSort("budget_status", in.SortBy, "remaining", []string{"remaining", "used", "spend", "limit", "name"})
 	if err != nil {
 		return nil, err

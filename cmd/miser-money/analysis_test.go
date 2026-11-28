@@ -21,16 +21,25 @@ func TestMoneyTotalsRejectsBadWindow(t *testing.T) {
 	}
 }
 
-func TestMoneyTotalsRejectsUnknownCategory(t *testing.T) {
+// An unknown category/account filter is not a typo rejection on a read: no
+// row can carry it, so the window reports zeros — the empty answer (#619).
+// Typo protection lives on the write path (log/edit still reject).
+func TestMoneyTotalsUnknownFilterReportsZeros(t *testing.T) {
 	withTestStore(t)
-	_, errMsg := callTool(t, "money_totals", map[string]any{
-		"start": "2026-03-01", "end": "2026-03-31", "category": "grocerys",
-	})
-	if errMsg == "" {
-		t.Fatal("unknown category was accepted; expected a rejection, not a silent zero")
-	}
-	if !strings.Contains(errMsg, "grocerys") {
-		t.Errorf("error %q does not name the offending category", errMsg)
+	for _, args := range []map[string]any{
+		{"start": "2026-03-01", "end": "2026-03-31", "category": "grocerys"},
+		{"start": "2026-03-01", "end": "2026-03-31", "account": "no-such-account"},
+	} {
+		text, errMsg := callTool(t, "money_totals", args)
+		if errMsg != "" {
+			t.Fatalf("unknown filter %v was rejected: %s", args, errMsg)
+		}
+		if !strings.Contains(text, `"ok":true`) {
+			t.Fatalf("unknown filter %v did not return ok:true: %q", args, text)
+		}
+		if !strings.Contains(text, `"rows_total":0`) {
+			t.Errorf("unknown filter %v did not report zeros: %q", args, text)
+		}
 	}
 }
 
@@ -61,17 +70,17 @@ func TestMoneyBreakdownRequiresSideInCategoryMode(t *testing.T) {
 	}
 }
 
-func TestMoneyBreakdownRejectsUnknownPluralCategory(t *testing.T) {
+func TestMoneyBreakdownUnknownPluralCategoryReturnsEmpty(t *testing.T) {
 	withTestStore(t)
-	_, errMsg := callTool(t, "money_breakdown", map[string]any{
+	text, errMsg := callTool(t, "money_breakdown", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "by": "category",
 		"side": "expense", "categories": []string{"groceries", "grocerys"},
 	})
-	if errMsg == "" {
-		t.Fatal("unknown plural category was accepted; the whole call must fail")
+	if errMsg != "" {
+		t.Fatalf("unknown plural category was rejected: %s", errMsg)
 	}
-	if !strings.Contains(errMsg, "grocerys") {
-		t.Errorf("error %q does not name the offending element", errMsg)
+	if !strings.Contains(text, `"ok":true`) {
+		t.Fatalf("unknown plural category did not return ok:true: %q", text)
 	}
 }
 
@@ -216,13 +225,16 @@ func TestBudgetStatusRejectsBadInputs(t *testing.T) {
 	}
 }
 
-func TestBudgetStatusRejectsUnknownCategory(t *testing.T) {
+func TestBudgetStatusUnknownCategoryReturnsEmpty(t *testing.T) {
 	withTestStore(t)
-	_, errMsg := callTool(t, "budget_status", map[string]any{
+	text, errMsg := callTool(t, "budget_status", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "categories": []string{"grocerys"},
 	})
-	if errMsg == "" {
-		t.Fatal("unknown category was accepted; expected a rejection naming it")
+	if errMsg != "" {
+		t.Fatalf("unknown category was rejected: %s", errMsg)
+	}
+	if !strings.Contains(text, `"ok":true`) {
+		t.Fatalf("unknown category did not return ok:true: %q", text)
 	}
 }
 

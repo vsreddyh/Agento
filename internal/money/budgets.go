@@ -408,21 +408,6 @@ func monthsTouched(start, end string) ([]string, error) {
 // limit prorated per covered day. Unbudgeted categories share the table with
 // budgeted:false. Categories[] picks rows; the footer follows the selection.
 func (s *Store) BudgetStatus(ctx context.Context, start, end string, categories []string, sortBy, order string) (*BudgetStatusResult, error) {
-	if len(categories) > 0 {
-		live, err := s.categoryList(ctx)
-		if err != nil {
-			return nil, err
-		}
-		have := map[string]bool{}
-		for _, c := range live {
-			have[c] = true
-		}
-		for _, c := range categories {
-			if !have[c] {
-				return nil, fail("category %q does not exist — use one of %v", c, live)
-			}
-		}
-	}
 	months, err := monthsTouched(start, end)
 	if err != nil {
 		return nil, err

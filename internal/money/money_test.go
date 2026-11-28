@@ -1407,22 +1407,53 @@ func TestArchiveAcceptsIdHexLikeOtherPaths(t *testing.T) {
 	}
 }
 
-// Unknown type/category filters are rejected like writes (and like unknown
-// accounts), instead of silently returning zero rows for a typo.
-func TestUnknownFilterValuesAreRejectedLikeWrites(t *testing.T) {
+// Closed sets still fail; dynamic refs empty out. `type` and the by-id
+// verbs address a fixed list or exactly one row, so an unknown value is a
+// wrong address and stays an error. An unknown account/category filter names
+// nothing any row can carry, so the read comes back empty (ok:true) instead
+// of failing — typo protection moved to the write path (#619).
+func TestUnknownTypeStillFailsWhileUnknownRefsEmptyOut(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	badType, badCat := "banana", "utilities"
+	badType := "banana"
 	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", &badType, nil, nil, 0, 0); err == nil {
 		t.Fatal("unknown query type matched nothing instead of failing")
 	} else if !containsStr(err.Error(), "does not exist") {
 		t.Fatalf("query type error %q does not name the problem", err)
 	}
-	if _, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, &badCat, nil, 0, 0); err == nil {
-		t.Fatal("unknown query category matched nothing instead of failing")
+	if _, err := s.Match(ctx, map[string]any{"type": "banana"}); err == nil {
+		t.Fatal("unknown delete type matched nothing instead of failing")
 	}
-	if _, err := s.Match(ctx, map[string]any{"category": "utilities"}); err == nil {
-		t.Fatal("unknown match category matched nothing instead of failing")
+	badCat := "utilities"
+	rows, total, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, &badCat, nil, 0, 0)
+	if err != nil {
+		t.Fatalf("unknown query category failed: %v", err)
+	}
+	if len(rows) != 0 || total != 0 {
+		t.Fatalf("unknown query category returned %d rows total %d, want the empty page", len(rows), total)
+	}
+	badAcct := "no-such-account"
+	rows, total, err = s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, &badAcct, 0, 0)
+	if err != nil {
+		t.Fatalf("unknown query account failed: %v", err)
+	}
+	if len(rows) != 0 || total != 0 {
+		t.Fatalf("unknown query account returned %d rows total %d, want the empty page", len(rows), total)
+	}
+	for _, filt := range []map[string]any{{"category": "utilities"}, {"account": "no-such-account"}} {
+		rows, err := s.Match(ctx, filt)
+		if err != nil {
+			t.Fatalf("unknown match filter %v failed: %v", filt, err)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("unknown match filter %v returned %d rows, want would_delete: 0", filt, len(rows))
+		}
+		if n, err := s.Delete(ctx, filt); err != nil || n != 0 {
+			t.Fatalf("unknown delete filter %v deleted %d rows err %v, want 0 with no error", filt, n, err)
+		}
+	}
+	if n, err := s.CountRange(ctx, "2026-09-01", "2026-09-30", &badAcct); err != nil || n != 0 {
+		t.Fatalf("unknown count account returned %d err %v, want 0 with no error", n, err)
 	}
 }
 
@@ -1448,6 +1479,96 @@ func TestDeleteByTypeFilter(t *testing.T) {
 	after, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
 	if err != nil || len(after) != 1 {
 		t.Fatalf("got %d rows after type delete, %v", len(after), err)
+	}
+}
+
+// Sort is two enums, not one string: sort_by names the field (date|amount),
+// sort the direction (asc|desc); blank means the defaults (date, asc).
+// Unknown values fail naming the allowed set, on the store layer (the schema
+// enum stops them first for MCP callers). The _id tiebreak follows the
+// direction, so paging with limit/offset stays deterministic either way.
+func TestQuerySorted(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.Insert(ctx, "2026-09-01", 50000, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-02", 10000, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-03", 30000, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Default: date-ascending.
+	rows, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("got %d rows %v", len(rows), err)
+	}
+	if rows[0]["date"] != "2026-09-01" || rows[2]["date"] != "2026-09-03" {
+		t.Fatalf("default order is not date-asc: %v %v %v", rows[0]["date"], rows[1]["date"], rows[2]["date"])
+	}
+	// Amount-descending: the 50000 row first, the 10000 row last.
+	rows, _, err = s.QuerySorted(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, "amount", "desc", 0, 0)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("got %d rows %v", len(rows), err)
+	}
+	if rows[0]["amount_paise"] != int64(50000) || rows[2]["amount_paise"] != int64(10000) {
+		t.Fatalf("amount-desc misordered: %v %v %v", rows[0]["amount_paise"], rows[1]["amount_paise"], rows[2]["amount_paise"])
+	}
+	// Amount-ascending: reverse of the above.
+	rows, _, err = s.QuerySorted(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, "amount", "asc", 0, 0)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("got %d rows %v", len(rows), err)
+	}
+	if rows[0]["amount_paise"] != int64(10000) || rows[2]["amount_paise"] != int64(50000) {
+		t.Fatalf("amount-asc misordered: %v %v %v", rows[0]["amount_paise"], rows[1]["amount_paise"], rows[2]["amount_paise"])
+	}
+	// Blank pair matches the default exactly.
+	def, _, err := s.QuerySorted(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, "", "", 0, 0)
+	if err != nil || len(def) != 3 {
+		t.Fatalf("got %d rows %v", len(def), err)
+	}
+	plain, _, err := s.Query(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range def {
+		if def[i]["_id"] != plain[i]["_id"] {
+			t.Fatalf("blank sort pair diverges from Query at row %d", i)
+		}
+	}
+	// Unknown values fail naming the allowed set, on both axes.
+	if _, _, err := s.QuerySorted(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, "colour", "", 0, 0); err == nil {
+		t.Fatal("unknown sort_by was accepted")
+	} else if !containsStr(err.Error(), "sort_by") || !containsStr(err.Error(), "date") || !containsStr(err.Error(), "amount") {
+		t.Fatalf("sort_by error %q does not name the allowed set", err)
+	}
+	if _, _, err := s.QuerySorted(ctx, "2026-09-01", "2026-09-30", nil, nil, nil, "", "sideways", 0, 0); err == nil {
+		t.Fatal("unknown sort was accepted")
+	} else if !containsStr(err.Error(), "asc") || !containsStr(err.Error(), "desc") {
+		t.Fatalf("sort error %q does not name the allowed set", err)
+	}
+	// Equal amounts keep the _id tiebreak in the sort's own direction: insert
+	// two same-amount rows and read amount-desc — the later _id comes first.
+	if _, _, err := s.Insert(ctx, "2026-09-10", 70000, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Insert(ctx, "2026-09-11", 70000, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err = s.QuerySorted(ctx, "2026-09-10", "2026-09-11", nil, nil, nil, "amount", "desc", 0, 0)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("got %d rows %v", len(rows), err)
+	}
+	if rows[0]["date"] != "2026-09-11" || rows[1]["date"] != "2026-09-10" {
+		t.Fatalf("desc tiebreak is not _id-desc: %v then %v", rows[0]["date"], rows[1]["date"])
+	}
+	rows, _, err = s.QuerySorted(ctx, "2026-09-10", "2026-09-11", nil, nil, nil, "amount", "asc", 0, 0)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("got %d rows %v", len(rows), err)
+	}
+	if rows[0]["date"] != "2026-09-10" || rows[1]["date"] != "2026-09-11" {
+		t.Fatalf("asc tiebreak is not _id-asc: %v then %v", rows[0]["date"], rows[1]["date"])
 	}
 }
 

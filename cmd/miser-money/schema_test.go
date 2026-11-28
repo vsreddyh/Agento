@@ -6,6 +6,9 @@ import (
 	"slices"
 	"testing"
 
+	"agento/internal/mcpschema"
+	"agento/internal/money"
+
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
@@ -114,7 +117,7 @@ func TestOptionalFieldsAreStillDocumented(t *testing.T) {
 		"list_categories":     {},
 		"list_accounts":       {"include_archived"},
 		"log_transaction":     {"sending_to", "note", "date", "idempotency_key"},
-		"query_transactions":  {"id", "type", "category", "account", "limit", "offset"},
+		"query_transactions":  {"id", "type", "category", "account", "sort_by", "sort", "limit", "offset"},
 		"delete_transactions": {"id", "amount_paise", "type", "category", "date", "account", "dry_run"},
 		"delete_category":     {"reassign_to", "dry_run"},
 		"money_totals":        {"category", "account"},
@@ -185,4 +188,32 @@ func schemaFor(t *testing.T, input any) *jsonschema.Schema {
 		t.Fatalf("inferring schema: %v", err)
 	}
 	return schema
+}
+
+// Sort is two enums, not one string: sort_by names the field (date|amount),
+// sort the direction (asc|desc). Both are published in the schema so unknown
+// values throw before the handler; the store re-validates for direct callers.
+func TestQuerySortEnumsPublished(t *testing.T) {
+	schema := mcpschema.EnumSchema(queryTransactionsInput{},
+		map[string][]string{"sort_by": money.TxSortFields, "sort": {"asc", "desc"}})
+	for field, want := range map[string][]string{"sort_by": money.TxSortFields, "sort": {"asc", "desc"}} {
+		prop, ok := schema.Properties[field]
+		if !ok {
+			t.Fatalf("%s missing from schema", field)
+		}
+		var got []string
+		for _, v := range prop.Enum {
+			s, ok := v.(string)
+			if !ok {
+				t.Fatalf("%s enum value %v is not a string", field, v)
+			}
+			got = append(got, s)
+		}
+		slices.Sort(got)
+		wantSorted := slices.Clone(want)
+		slices.Sort(wantSorted)
+		if !slices.Equal(got, wantSorted) {
+			t.Errorf("%s enum = %v, want %v", field, got, wantSorted)
+		}
+	}
 }
