@@ -47,11 +47,11 @@ instead of round-tripping one at a time.
   the next call); windowed tools need explicit bounds (`start`/`end`, or
   `start_a`/`end_a`/`start_b`/`end_b` for `money_compare`), and every
   response carries at most one table. `list_budgets` is unwindowed
-  (optional `month_from`/`month_to`/`category`; an unknown category matches
-  nothing and returns the empty list). Budgets live in `money_budgets`
+  (optional `month_from`/`month_to`/`category`; blank `category` means all
+  budgets, an unknown one matches nothing and returns the empty list). Budgets live in `money_budgets`
   keyed by (category, month) as dated versions. `query_transactions` orders
   by `sort_by` (date|amount, default date) + `sort` (asc|desc, default asc),
-  both echoed back in range mode (a by-id fetch returns one row and carries no sort keys). Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
+  both echoed back in range mode (a by-id fetch returns one row and carries no sort keys). Omit a sort field to default it over MCP — the schema enum is exact, so a blank string is rejected before the handler. Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
   unknown account/category filter returns the empty page — typo protection
   lives on the write path (`log`/`edit` still reject unknown names); a live
   delete of an empty filter reports `deleted:0`, so check the dry run first.
@@ -61,7 +61,8 @@ instead of round-tripping one at a time.
   `delete_recipe` — recipe + ingredient books with notes (no quantities,
   servings, macros or cook log). Both `list_*` take `sort_by`
   (name|updatedAt, default name) + `sort` (asc|desc, default asc), echoed back;
-  unknown values fail on both layers.
+  unknown values fail on both layers. Omit a sort field to default it over
+  MCP (blank is rejected by the exact enum, not defaulted).
 - **health-check** (17, all permanent — no prune, no TTL): flat food log, not
   meals — `log_food` takes `what` (required) + free-text `qty`, optional
   estimated macros (`kcal/protein/carbs/fat/fiber`, absent means unknown, never
@@ -80,7 +81,7 @@ instead of round-tripping one at a time.
   record a genuine repeat.
   Every `list_*` takes `sort_by` (names only its own fields) + `sort`
   (`asc|desc`) as real schema enums — unknown values return errors on both
-  layers. Filters (`what`, `type`) are exact match on the lowered text and
+  layers; omit a field to default it (blank is rejected, not defaulted). Filters (`what`, `type`) are exact match on the lowered text and
   return the empty page when nothing matches; bad dates/ids return errors.
   Lists echo `count`/`total`/`truncated` (cap 500: rows for the flat lists,
   day-docs for the grouped ones) — a truncated page means narrow the dates.
