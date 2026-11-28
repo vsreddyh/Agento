@@ -268,7 +268,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_food",
-		Description: "Hard-delete one food entry by trimmed id. Dry-runs by default: reports the row, deletes nothing unless dry_run=false. Permanent, no restore."},
+		Description: "Hard-delete one food entry by trimmed id. Unknown ids fail, even on dry-run (unlike cookbook deletes / delete_weight). Dry-runs by default: reports the row, deletes nothing unless dry_run=false. Permanent, no restore."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteFood(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {
@@ -370,7 +370,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_sleep",
-		Description: "Hard-delete one sleep session by trimmed entry id. Dry-runs by default."},
+		Description: "Hard-delete one sleep session by trimmed entry id. Unknown ids fail, even on dry-run (unlike cookbook deletes / delete_weight). Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteSleep(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {
@@ -420,7 +420,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_workout",
-		Description: "Hard-delete one workout by trimmed entry id. Dry-runs by default."},
+		Description: "Hard-delete one workout by trimmed entry id. Unknown ids fail, even on dry-run (unlike cookbook deletes / delete_weight). Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteWorkout(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {
