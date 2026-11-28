@@ -42,11 +42,15 @@ var (
 	RecipeSortFields     = []string{"name", "updatedAt"}
 )
 
-func checkSort(tool, sortBy string, allowed []string, dir string) (bool, error) {
-	// Trimmed like money's NormalizeSort: whitespace-only counts as absent
-	// (the default), not as an error. sort_by stays case-exact — the fields
-	// are camelCase (updatedAt), so lowercasing would corrupt the key — while
-	// the direction folds case like money's order.
+// checkSort validates a list's sort pair and returns the normalized sort
+// key plus direction. Unknown values fail naming the allowed set — the
+// schema enum stops them first, this is the second layer for direct store
+// callers. Whitespace-only counts as absent (the default), not as an error;
+// sort_by stays case-exact — the fields are camelCase (updatedAt), so
+// lowercasing would corrupt the key — while the direction folds case like
+// money's order. Returning the key (instead of validating a copy) keeps
+// validation and the issued sort from ever disagreeing.
+func checkSort(tool, sortBy string, allowed []string, dir string) (string, bool, error) {
 	sortBy = strings.TrimSpace(sortBy)
 	dir = strings.ToLower(strings.TrimSpace(dir))
 	if sortBy == "" {
@@ -60,15 +64,15 @@ func checkSort(tool, sortBy string, allowed []string, dir string) (bool, error) 
 		}
 	}
 	if !ok {
-		return false, fail("%s sort_by must be one of %v, got '%s'", tool, allowed, sortBy)
+		return "", false, fail("%s sort_by must be one of %v, got '%s'", tool, allowed, sortBy)
 	}
 	switch dir {
 	case "", "asc":
-		return true, nil
+		return sortBy, true, nil
 	case "desc":
-		return false, nil
+		return sortBy, false, nil
 	default:
-		return false, fail("%s sort must be one of [asc desc], got '%s'", tool, dir)
+		return "", false, fail("%s sort must be one of [asc desc], got '%s'", tool, dir)
 	}
 }
 
@@ -202,12 +206,11 @@ func (s *Store) GetIngredient(ctx context.Context, nameOrID string) (bson.M, err
 }
 
 func (s *Store) ListIngredients(ctx context.Context, search, sortBy, dir string) ([]bson.M, error) {
-	asc, err := checkSort("list_ingredients", sortBy, IngredientSortFields, dir)
+	// The key comes back normalized from checkSort: validation and the
+	// issued sort cannot disagree (whitespace-only is the default key).
+	sortBy, asc, err := checkSort("list_ingredients", sortBy, IngredientSortFields, dir)
 	if err != nil {
 		return nil, err
-	}
-	if sortBy == "" {
-		sortBy = IngredientSortFields[0]
 	}
 	filt := bson.M{}
 	if strings.TrimSpace(search) != "" {
@@ -329,12 +332,9 @@ func (s *Store) GetRecipe(ctx context.Context, nameOrID string) (bson.M, error) 
 }
 
 func (s *Store) ListRecipes(ctx context.Context, search, tag, sortBy, dir string) ([]bson.M, error) {
-	asc, err := checkSort("list_recipes", sortBy, RecipeSortFields, dir)
+	sortBy, asc, err := checkSort("list_recipes", sortBy, RecipeSortFields, dir)
 	if err != nil {
 		return nil, err
-	}
-	if sortBy == "" {
-		sortBy = RecipeSortFields[0]
 	}
 	filt := bson.M{}
 	if strings.TrimSpace(search) != "" {
