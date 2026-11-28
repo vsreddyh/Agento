@@ -280,7 +280,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_weight",
-		Description: "Log body weight in kg (0 < kg <= 500; upserts one row per date). Omitted or blank date means today. Re-logging is the correction."},
+		Description: "Log body weight in kg (0 < kg <= 500; upserts one row per date). Omitted or blank/whitespace-only date means today. Re-logging is the correction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			w, err := store.LogWeight(ctx, dayOf(in.Date), in.Kg)
 			if err != nil {
@@ -308,7 +308,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_weight",
-		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes); dry-run returns would_delete:0 with no weight key in that case. Dry-runs by default."},
+		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes); dry-run returns would_delete:0 with no weight key in that case. The date is required: unlike the log tools (blank means today), a blank date is rejected, not read as today. Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteWeight(ctx, in.Date, dryRun(in.DryRun))
 			if err != nil {
@@ -320,7 +320,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_sleep",
-		Description: "Log a manual sleep in hours (0 < hours <= 24, no start time — sync sessions carry starts). Date = morning of wake-up; omitted or blank means today."},
+		Description: "Log a manual sleep in hours (0 < hours <= 24, no start time — sync sessions carry starts). Date = morning of wake-up; omitted or blank/whitespace-only means today."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogSleep(ctx, dayOf(in.Date), in.Hours)
 			if err != nil {
@@ -382,7 +382,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_workout",
-		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes, max 1440; kcal optional, absent means unknown never 0, max 100000; omitted or blank date means today). Sync workouts arrive deduplicated through the same store."},
+		Description: "Log one manual workout (type free text, lowercased on write, max 60 chars, empty becomes other; whole minutes, max 1440; kcal optional, absent means unknown never 0, max 100000; omitted or blank/whitespace-only date means today). Sync workouts arrive deduplicated through the same store."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.LogWorkout(ctx, dayOf(in.Date), in.Type, in.Minutes, in.Kcal)
 			if err != nil {
@@ -432,7 +432,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "daily_summary",
-		Description: "Daily recap: food-derived cal-in totals with per-macro counts (a partial-macro day reads as a lower bound), workout_kcal + active_kcal as separate cal-out lines (no single net), weight, sleep, steps. Missing data reads as null on every scalar — never a measured zero. Omitted or blank date means today."},
+		Description: "Daily recap: food-derived cal-in totals with per-macro counts (a partial-macro day reads as a lower bound), workout_kcal + active_kcal as separate cal-out lines (no single net), weight, sleep, steps. Missing data reads as null on every scalar — never a measured zero. Omitted or blank/whitespace-only date means today."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in dailySummaryInput) (*mcp.CallToolResult, map[string]any, error) {
 			sum, err := store.DailySummary(ctx, dayOf(in.Date))
 			if err != nil {
