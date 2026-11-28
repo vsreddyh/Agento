@@ -189,7 +189,7 @@ func main() {
 	s := mcp.NewServer(&mcp.Implementation{Name: "health-check", Version: "2.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{Name: "log_food",
-		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero; implausible values fail (kcal>100000, others>10000). datetime is RFC3339 (naive read as UTC); omitted or blank means now."},
+		Description: "Log one flat food entry: what eaten, free-text qty, optional estimated macros + note. Macros absent mean unknown, never zero; implausible values fail (kcal>100000, others>10000). datetime is RFC3339 (naive read as UTC); omitted or blank/whitespace-only means now."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			dt := time.Now().UTC()
 			if strings.TrimSpace(in.Datetime) != "" {
@@ -242,7 +242,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
-		Description: "Patch one food entry by id: supplied fields replace, omitted keep; an empty string clears qty/note (what cannot be cleared); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC). Ask-gated like edit_transaction."},
+		Description: "Patch one food entry by id: supplied fields replace, omitted keep; an empty or whitespace-only string clears qty/note (whitespace-only what fails like empty); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC). Ask-gated like edit_transaction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			macros := map[string]*float64{}
 			for k, v := range map[string]*float64{"kcal": in.Kcal, "protein": in.Protein, "carbs": in.Carbs, "fat": in.Fat, "fiber": in.Fiber} {
@@ -308,7 +308,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_weight",
-		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes); dry-run returns would_delete:0 with no weight key in that case. The date is required: unlike the log tools (blank means today), a blank date is rejected, not read as today. Dry-runs by default."},
+		Description: "Hard-delete one date's weight row. A valid date with no row returns deleted:0 (empty, not an error — unlike id-keyed deletes); dry-run returns would_delete:0 with no weight key in that case. The date is required: unlike the log tools (blank/whitespace-only means today), a blank or whitespace-only date is rejected, not read as today. Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteWeightInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteWeight(ctx, in.Date, dryRun(in.DryRun))
 			if err != nil {
