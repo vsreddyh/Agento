@@ -354,7 +354,9 @@ func handleMoneyCompare(ctx context.Context, in moneyCompareInput) (map[string]a
 		"by": by,
 	}
 	if by == "totals" {
-		if len(in.Categories) > 0 {
+		// Normalized before the guard: whitespace-only entries count as
+		// absent (like categories mode below), so only real names fail here.
+		if cats := money.NormalizeCategories(in.Categories); len(cats) > 0 {
 			return nil, fmt.Errorf("money_compare categories[] is only valid when by=categories — pass one category or switch mode")
 		}
 		if strings.TrimSpace(in.SortBy) != "" || strings.TrimSpace(in.Order) != "" {
