@@ -285,7 +285,7 @@ The custom Android app (`android/agento/`) uses ONE Server URL + Password — th
 <!-- #584 TEMP-REMOVE (∃-Mail): reports route row.
 | `/api/reports` | ∃-Mail inbox (markdown + LaTeX) |
 -->
-| `/api/money/balances`, `/api/money/transactions` | Money read surface for the app (derived per-account `balance_paise` + total; paged `amount_paise` rows, `order=asc` oldest-first default, `desc` newest-first). `start`/`end` (YYYY-MM-DD) are required; `limit` defaults 100, clamped to 500 (an explicit `limit=0` is rejected — unlike MCP); optional `account` (name or id hex, matches either side of a transfer); `total` counts the window (not the balances total, which has no date cap); page with `offset` (default 0) = `next_offset` until `truncated` is false (`next_offset` is null when done — never send `offset=null`) |
+| `/api/money/balances`, `/api/money/transactions` | Money read surface for the app (derived per-account `balance_paise` + total; paged `amount_paise` rows, `order=asc` oldest-first default, `desc` newest-first). `start`/`end` (YYYY-MM-DD) are required; `limit` defaults 100, clamped to 500 (an explicit `limit=0` is rejected — unlike MCP); optional `account` (name or id hex, matches either side of a transfer; an unknown account matches nothing and returns the empty page, not an error — same rule as the MCP filters); `total` counts the window (not the balances total, which has no date cap); page with `offset` (default 0) = `next_offset` until `truncated` is false (`next_offset` is null when done — never send `offset=null`) |
 | `/health`, `/health/` | Liveness probe (unauthenticated) |
 
 ```bash

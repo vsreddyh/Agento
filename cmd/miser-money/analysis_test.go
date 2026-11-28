@@ -101,6 +101,30 @@ func TestMoneyBreakdownUnknownPluralCategoryReturnsEmpty(t *testing.T) {
 	if !strings.Contains(text, `"groceries"`) {
 		t.Fatalf("mixed filter dropped the known category's rows: %q", text)
 	}
+	// by=account with an all-unknown categories filter still lists every
+	// account — categories[] narrows the flow columns there, it is not a row
+	// picker — with zero flows and real balances.
+	text, errMsg = callTool(t, "money_breakdown", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "by": "account",
+		"categories": []string{"grocerys"},
+	})
+	if errMsg != "" {
+		t.Fatalf("account-mode unknown categories were rejected: %s", errMsg)
+	}
+	if !strings.Contains(text, `"Cash"`) || !strings.Contains(text, `"rows_total":0`) {
+		t.Fatalf("account-mode unknown categories did not list zero-flow accounts: %q", text)
+	}
+	// by=account with an all-unknown accounts picker returns the empty table.
+	text, errMsg = callTool(t, "money_breakdown", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "by": "account",
+		"accounts": []string{"no-such-account"},
+	})
+	if errMsg != "" {
+		t.Fatalf("account-mode unknown accounts were rejected: %s", errMsg)
+	}
+	if !strings.Contains(text, `"accounts":[]`) {
+		t.Fatalf("account-mode unknown accounts did not return the empty table: %q", text)
+	}
 }
 
 func TestMoneyBreakdownRejectsBadSort(t *testing.T) {

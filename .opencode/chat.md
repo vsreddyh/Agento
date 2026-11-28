@@ -51,7 +51,7 @@ instead of round-tripping one at a time.
   nothing and returns the empty list). Budgets live in `money_budgets`
   keyed by (category, month) as dated versions. `query_transactions` orders
   by `sort_by` (date|amount, default date) + `sort` (asc|desc, default asc),
-  both echoed back. Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
+  both echoed back in range mode (a by-id fetch returns one row and carries no sort keys). Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
   unknown account/category filter returns the empty page — typo protection
   lives on the write path (`log`/`edit` still reject unknown names).
 - **cookbook** (10, permanent): `add_ingredient`, `get_ingredient`,
