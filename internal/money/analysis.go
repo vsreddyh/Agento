@@ -1235,7 +1235,26 @@ func (s *Store) CompareCategories(ctx context.Context, aStart, aEnd, bStart, bEn
 		if sortBy == "name" {
 			return !less && a.Category != b.Category
 		}
-		return !less
+		// desc flips value compares; the name key and every tie-break stay
+		// ascending, like BreakdownByCategory.
+		switch sortBy {
+		case "b_amount":
+			if a.BPaise != b.BPaise {
+				return a.BPaise > b.BPaise
+			}
+		default: // delta: absolute delta, then name
+			ad, bd := a.DeltaPaise, b.DeltaPaise
+			if ad < 0 {
+				ad = -ad
+			}
+			if bd < 0 {
+				bd = -bd
+			}
+			if ad != bd {
+				return ad > bd
+			}
+		}
+		return a.Category < b.Category
 	})
 	return out, nil
 }

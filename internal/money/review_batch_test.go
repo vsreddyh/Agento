@@ -300,6 +300,28 @@ func TestListBudgetsEffectiveNowIgnoresMonthFilter(t *testing.T) {
 	}
 }
 
+// Equal deltas tie-break alphabetically in both directions, like every
+// other category table (breakdown, top expenses, budgets): desc flips the
+// value compare, never the name order.
+func TestCompareCategoriesDescKeepsNameTiebreak(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, cat := range []string{"rent", "bills"} {
+		if _, _, err := s.Insert(ctx, "2026-03-01", 10000, "expense", cat, "Cash", "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, order := range []string{"asc", "desc"} {
+		deltas, err := s.CompareCategories(ctx, "2026-03-01", "2026-03-31", "2026-03-01", "2026-03-31", nil, nil, "delta", order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(deltas) != 2 || deltas[0].Category != "bills" || deltas[1].Category != "rent" {
+			t.Fatalf("%s tied deltas ordered %v, want bills then rent", order, deltas)
+		}
+	}
+}
+
 // #566: category shares sum to exactly 100.00 per window, even on even
 // splits that independent rounding drifts to 99.99.
 func TestCompareCategoriesSharesSumTo100(t *testing.T) {
