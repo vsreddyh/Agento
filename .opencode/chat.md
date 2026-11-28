@@ -83,7 +83,7 @@ instead of round-tripping one at a time.
   record a genuine repeat.
   Every `list_*` takes `sort_by` (names only its own fields) + `sort`
   (`asc|desc`) as real schema enums — unknown values return errors on both
-  layers; omit a field to default it (blank is rejected, not defaulted). Filters (`what`, `type`) are exact match on the lowered text and
+  layers; omit a field to default it (blank is rejected, not defaulted). Filters (`what`, `type`) are exact match on the trimmed lowered text (blank/whitespace-only means absent, unfiltered) and
   return the empty page when nothing matches; bad dates/ids return errors.
   Lists echo `count`/`total`/`truncated` (cap 500: rows for the flat lists,
   day-docs for the grouped ones) — a truncated page means narrow the dates.
