@@ -242,7 +242,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
-		Description: "Patch one food entry by trimmed id: supplied fields replace, omitted keep; an empty or whitespace-only string clears qty/note (whitespace-only what fails like empty); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC; whitespace-only counts as absent — no change, like omitted). Ask-gated like edit_transaction."},
+		Description: "Patch one food entry by trimmed id: supplied fields replace, omitted keep; an empty or whitespace-only string clears qty/note (whitespace-only what fails like empty); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear; setting and clearing the same macro in one call fails). datetime is RFC3339 (naive read as UTC; whitespace-only counts as absent — no change, like omitted). Ask-gated like edit_transaction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			macros := map[string]*float64{}
 			for k, v := range map[string]*float64{"kcal": in.Kcal, "protein": in.Protein, "carbs": in.Carbs, "fat": in.Fat, "fiber": in.Fiber} {
