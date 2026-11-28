@@ -205,12 +205,12 @@ func (s *Store) GetIngredient(ctx context.Context, nameOrID string) (bson.M, err
 	return docOut(ing), nil
 }
 
-func (s *Store) ListIngredients(ctx context.Context, search, sortBy, dir string) ([]bson.M, error) {
+func (s *Store) ListIngredients(ctx context.Context, search, sortBy, dir string) ([]bson.M, int64, error) {
 	// The key comes back normalized from checkSort: validation and the
 	// issued sort cannot disagree (whitespace-only is the default key).
 	sortBy, asc, err := checkSort("list_ingredients", sortBy, IngredientSortFields, dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	filt := bson.M{}
 	if strings.TrimSpace(search) != "" {
@@ -218,11 +218,19 @@ func (s *Store) ListIngredients(ctx context.Context, search, sortBy, dir string)
 	}
 	// The _id tiebreak follows the direction so updatedAt ties page
 	// deterministically (names are unique, but updatedAt is not).
+	total, err := s.ings.CountDocuments(ctx, filt)
+	if err != nil {
+		return nil, 0, err
+	}
 	cur, err := s.ings.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: sortBy, Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}).SetLimit(500))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return allOut(ctx, cur)
+	rows, err := allOut(ctx, cur)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
 
 func (s *Store) UpdateIngredient(ctx context.Context, nameOrID string, patch map[string]any) (bson.M, error) {
@@ -331,10 +339,10 @@ func (s *Store) GetRecipe(ctx context.Context, nameOrID string) (bson.M, error) 
 	return docOut(r), nil
 }
 
-func (s *Store) ListRecipes(ctx context.Context, search, tag, sortBy, dir string) ([]bson.M, error) {
+func (s *Store) ListRecipes(ctx context.Context, search, tag, sortBy, dir string) ([]bson.M, int64, error) {
 	sortBy, asc, err := checkSort("list_recipes", sortBy, RecipeSortFields, dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	filt := bson.M{}
 	if strings.TrimSpace(search) != "" {
@@ -343,11 +351,19 @@ func (s *Store) ListRecipes(ctx context.Context, search, tag, sortBy, dir string
 	if strings.TrimSpace(tag) != "" {
 		filt["tags"] = strings.TrimSpace(tag)
 	}
+	total, err := s.recipes.CountDocuments(ctx, filt)
+	if err != nil {
+		return nil, 0, err
+	}
 	cur, err := s.recipes.Find(ctx, filt, options.Find().SetSort(bson.D{{Key: sortBy, Value: sortDir(asc)}, {Key: "_id", Value: sortDir(asc)}}).SetLimit(200))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return allOut(ctx, cur)
+	rows, err := allOut(ctx, cur)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
 
 func (s *Store) UpdateRecipe(ctx context.Context, nameOrID string, patch map[string]any) (bson.M, error) {

@@ -69,9 +69,9 @@ func TestIngredientCRUD(t *testing.T) {
 	if _, err := s.AddIngredient(ctx, "gotest-salt", ""); err == nil {
 		t.Fatal("expected duplicate error")
 	}
-	rows, err := s.ListIngredients(ctx, "gotest-s", "", "")
-	if err != nil || len(rows) != 1 {
-		t.Fatalf("got %v %v", rows, err)
+	rows, total, err := s.ListIngredients(ctx, "gotest-s", "", "")
+	if err != nil || len(rows) != 1 || total != 1 {
+		t.Fatalf("got %v total=%d %v", rows, total, err)
 	}
 	got, err := s.GetIngredient(ctx, "gotest-salt")
 	if err != nil || got == nil || got["note"] != "test" {
@@ -121,13 +121,13 @@ func TestRecipeCRUD(t *testing.T) {
 	if _, err := s.AddRecipe(ctx, "gotest-soup", "", nil); err == nil {
 		t.Fatal("expected duplicate error")
 	}
-	rows, err := s.ListRecipes(ctx, "gotest-s", "test", "", "")
-	if err != nil || len(rows) != 1 {
-		t.Fatalf("got %v %v", rows, err)
+	rows, total, err := s.ListRecipes(ctx, "gotest-s", "test", "", "")
+	if err != nil || len(rows) != 1 || total != 1 {
+		t.Fatalf("got %v total=%d %v", rows, total, err)
 	}
-	rows, err = s.ListRecipes(ctx, "", "no-such-tag", "", "")
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("got %v %v", rows, err)
+	rows, total, err = s.ListRecipes(ctx, "", "no-such-tag", "", "")
+	if err != nil || len(rows) != 0 || total != 0 {
+		t.Fatalf("got %v total=%d %v", rows, total, err)
 	}
 	upd, err := s.UpdateRecipe(ctx, "gotest-soup", map[string]any{"tags": []any{"test", "fast"}})
 	if err != nil || upd == nil {
@@ -208,39 +208,39 @@ func TestListSort(t *testing.T) {
 	if _, err := s.AddIngredient(ctx, "gotest-sort-a", ""); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	rows, err := s.ListIngredients(ctx, "gotest-sort-", "", "")
-	if err != nil || len(rows) != 2 {
-		t.Fatalf("got %v %v", rows, err)
+	rows, total, err := s.ListIngredients(ctx, "gotest-sort-", "", "")
+	if err != nil || len(rows) != 2 || total != 2 {
+		t.Fatalf("got %v total=%d %v", rows, total, err)
 	}
 	if rows[0]["name"] != "gotest-sort-a" || rows[1]["name"] != "gotest-sort-b" {
 		t.Fatalf("default order is name-asc, got %v, %v", rows[0]["name"], rows[1]["name"])
 	}
-	rows, err = s.ListIngredients(ctx, "gotest-sort-", "name", "desc")
+	rows, total, err = s.ListIngredients(ctx, "gotest-sort-", "name", "desc")
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("got %v %v", rows, err)
 	}
 	if rows[0]["name"] != "gotest-sort-b" || rows[1]["name"] != "gotest-sort-a" {
 		t.Fatalf("name-desc swapped nothing: %v, %v", rows[0]["name"], rows[1]["name"])
 	}
-	if _, err := s.ListIngredients(ctx, "", "colour", ""); err == nil {
+	if _, _, err := s.ListIngredients(ctx, "", "colour", ""); err == nil {
 		t.Fatal("unknown sort_by was accepted")
 	} else if !strings.Contains(err.Error(), "sort_by must be one of") {
 		t.Fatalf("sort_by error %q does not name the allowed set", err)
 	}
-	if _, err := s.ListIngredients(ctx, "", "", "sideways"); err == nil {
+	if _, _, err := s.ListIngredients(ctx, "", "", "sideways"); err == nil {
 		t.Fatal("unknown sort was accepted")
 	} else if !strings.Contains(err.Error(), "sort must be one of") {
 		t.Fatalf("sort error %q does not name the allowed set", err)
 	}
-	if _, err := s.ListRecipes(ctx, "", "", "colour", ""); err == nil {
+	if _, _, err := s.ListRecipes(ctx, "", "", "colour", ""); err == nil {
 		t.Fatal("unknown recipe sort_by was accepted")
 	}
-	if _, err := s.ListRecipes(ctx, "", "", "", "sideways"); err == nil {
+	if _, _, err := s.ListRecipes(ctx, "", "", "", "sideways"); err == nil {
 		t.Fatal("unknown recipe sort was accepted")
 	}
 	// Whitespace-only counts as absent (the default), like money's
 	// normalization — not as an error.
-	rows, err = s.ListIngredients(ctx, "gotest-sort-", "   ", "  ")
+	rows, total, err = s.ListIngredients(ctx, "gotest-sort-", "   ", "  ")
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("got %v %v", rows, err)
 	}
@@ -249,14 +249,14 @@ func TestListSort(t *testing.T) {
 	}
 	// The direction folds case like money's order; the field names stay
 	// case-exact (updatedAt is camelCase, so lowercasing would corrupt it).
-	rows, err = s.ListIngredients(ctx, "gotest-sort-", "", "DESC")
+	rows, total, err = s.ListIngredients(ctx, "gotest-sort-", "", "DESC")
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("got %v %v", rows, err)
 	}
 	if rows[0]["name"] != "gotest-sort-b" {
 		t.Fatalf("DESC did not order name-desc: %v", rows[0]["name"])
 	}
-	if _, err := s.ListIngredients(ctx, "", "UpdatedAt", ""); err == nil {
+	if _, _, err := s.ListIngredients(ctx, "", "UpdatedAt", ""); err == nil {
 		t.Fatal("cased sort_by was accepted; field names are case-sensitive")
 	}
 
@@ -273,7 +273,7 @@ func TestListSort(t *testing.T) {
 	if _, err := s.AddRecipe(ctx, "gotest-rsort-a", "", nil); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	rows, err = s.ListRecipes(ctx, "gotest-rsort-", "", "name", "desc")
+	rows, total, err = s.ListRecipes(ctx, "gotest-rsort-", "", "name", "desc")
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("got %v %v", rows, err)
 	}

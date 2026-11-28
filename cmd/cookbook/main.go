@@ -143,7 +143,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
-		Description: "List ingredients, optionally filtered by case-insensitive substring (trimmed; blank/whitespace-only means absent, unfiltered — up to 500; a full page may hide more — narrow with search). sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and the applied pair is echoed in the response. Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers. sort_by is case-sensitive (updatedAt), sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc).",
+		Description: "List ingredients, optionally filtered by case-insensitive substring (trimmed; blank/whitespace-only means absent, unfiltered — up to 500, with total echoed and truncated flagging a short page). sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and the applied pair is echoed in the response. Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers. sort_by is case-sensitive (updatedAt), sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc).",
 		InputSchema: mcpschema.EnumSchema(listIngredientsInput{},
 			map[string][]string{"sort_by": cookbook.IngredientSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -151,12 +151,13 @@ func main() {
 			// like every other filter on this server.
 			in.SortBy = strings.TrimSpace(in.SortBy)
 			in.Sort = strings.TrimSpace(in.Sort)
-			rows, err := store.ListIngredients(ctx, in.Search, in.SortBy, in.Sort)
+			rows, total, err := store.ListIngredients(ctx, in.Search, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows),
-				"sort_by": orDefault(in.SortBy, cookbook.IngredientSortFields[0]), "sort": orDefault(normDir(in.Sort), "asc"),
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": int64(len(rows)) < total,
+				"sort_by":   orDefault(in.SortBy, cookbook.IngredientSortFields[0]), "sort": orDefault(normDir(in.Sort), "asc"),
 				"ingredients": rows})
 		})
 
@@ -214,18 +215,19 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_recipes",
-		Description: "List recipes, optionally filtered by name substring (case-insensitive, trimmed) or tag (exact, case-sensitive, trimmed); blank/whitespace-only means absent, unfiltered. Up to 200; a full page may hide more — narrow with search. sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and the applied pair is echoed in the response. Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers. sort_by is case-sensitive (updatedAt), sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc).",
+		Description: "List recipes, optionally filtered by name substring (case-insensitive, trimmed) or tag (exact, case-sensitive, trimmed); blank/whitespace-only means absent, unfiltered. Up to 200, with total echoed and truncated flagging a short page (count == total means the end); a full page may hide more — narrow with search. sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and the applied pair is echoed in the response. Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers. sort_by is case-sensitive (updatedAt), sort case-insensitive for direct store callers (over MCP the schema enum is exact — always send lowercase asc/desc).",
 		InputSchema: mcpschema.EnumSchema(listRecipesInput{},
 			map[string][]string{"sort_by": cookbook.RecipeSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listRecipesInput) (*mcp.CallToolResult, map[string]any, error) {
 			in.SortBy = strings.TrimSpace(in.SortBy)
 			in.Sort = strings.TrimSpace(in.Sort)
-			rows, err := store.ListRecipes(ctx, in.Search, in.Tag, in.SortBy, in.Sort)
+			rows, total, err := store.ListRecipes(ctx, in.Search, in.Tag, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
-			return result(map[string]any{"ok": true, "count": len(rows),
-				"sort_by": orDefault(in.SortBy, cookbook.RecipeSortFields[0]), "sort": orDefault(normDir(in.Sort), "asc"),
+			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
+				"truncated": int64(len(rows)) < total,
+				"sort_by":   orDefault(in.SortBy, cookbook.RecipeSortFields[0]), "sort": orDefault(normDir(in.Sort), "asc"),
 				"recipes": rows})
 		})
 

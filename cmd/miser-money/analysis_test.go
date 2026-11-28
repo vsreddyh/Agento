@@ -115,6 +115,9 @@ func TestMoneyBreakdownUnknownPluralCategoryReturnsEmpty(t *testing.T) {
 	if !strings.Contains(text, `"Cash"`) || !strings.Contains(text, `"rows_total":0`) {
 		t.Fatalf("account-mode unknown categories did not list zero-flow accounts: %q", text)
 	}
+	if !strings.Contains(text, `"side":null`) {
+		t.Fatalf("account-mode envelope did not echo side:null: %q", text)
+	}
 	// by=account with an all-unknown accounts picker returns the empty table.
 	text, errMsg = callTool(t, "money_breakdown", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "by": "account",
@@ -195,6 +198,23 @@ func TestMoneyCompareNamesItsPeriod(t *testing.T) {
 	}
 	if !strings.Contains(errMsg, "period A") {
 		t.Errorf("error %q does not name period A", errMsg)
+	}
+}
+
+// The totals envelope echoes the filters it ran on (nil when absent), so a
+// filtered zeros table is distinguishable from an unfiltered one.
+func TestMoneyCompareTotalsEchoesFilters(t *testing.T) {
+	withTestStore(t)
+	text, errMsg := callTool(t, "money_compare", map[string]any{
+		"start_a": "2026-03-01", "end_a": "2026-03-31",
+		"start_b": "2026-03-01", "end_b": "2026-03-31", "by": "totals",
+		"category": "grocerys",
+	})
+	if errMsg != "" {
+		t.Fatalf("totals compare failed: %s", errMsg)
+	}
+	if !strings.Contains(text, `"category":"grocerys"`) || !strings.Contains(text, `"account":null`) {
+		t.Fatalf("totals envelope did not echo the filters: %q", text)
 	}
 }
 

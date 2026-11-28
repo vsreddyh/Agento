@@ -8,7 +8,7 @@ import (
 )
 
 // Whitespace-only counts as absent (today), like every other optional date
-// in this PR — never a "bad date ''" rejection.
+// in this PR — never a "bad date ”" rejection.
 func TestDayOfTrimsToAbsent(t *testing.T) {
 	want := time.Now().In(healthcheck.IST()).Format("2006-01-02")
 	for _, in := range []string{"", "   ", "\t\n "} {

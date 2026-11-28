@@ -187,7 +187,10 @@ func handleMoneyBreakdown(ctx context.Context, in moneyBreakdownInput) (map[stri
 	}
 	return map[string]any{"ok": true,
 		"start": start, "end": end, "days": resDays(start, end),
-		"by":                 "account",
+		"by": "account",
+		// Echoed as null, never the input: side is accepted and ignored in
+		// this mode, so null proves the ignore instead of implying scope.
+		"side":               nil,
 		"categories_applied": res.CategoriesApplied, "accounts_applied": res.AccountsApplied,
 		"sort_by": res.SortBy, "order": res.Order,
 		"accounts":                    rows,
@@ -374,6 +377,10 @@ func handleMoneyCompare(ctx context.Context, in moneyCompareInput) (map[string]a
 		if cat != "" {
 			catP = &cat
 		}
+		// Echoed like every sibling, so a filtered zeros table is
+		// distinguishable from an unfiltered one.
+		base["category"] = nilIfEmpty(cat)
+		base["account"] = nilIfEmpty(in.Account)
 		deltas, err := store.CompareTotals(ctx, startA, endA, startB, endB, catP, acctP)
 		if err != nil {
 			return nil, err
