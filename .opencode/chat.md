@@ -53,7 +53,8 @@ instead of round-tripping one at a time.
   by `sort_by` (date|amount, default date) + `sort` (asc|desc, default asc),
   both echoed back in range mode (a by-id fetch returns one row and carries no sort keys). Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
   unknown account/category filter returns the empty page — typo protection
-  lives on the write path (`log`/`edit` still reject unknown names).
+  lives on the write path (`log`/`edit` still reject unknown names); a live
+  delete of an empty filter reports `deleted:0`, so check the dry run first.
 - **cookbook** (10, permanent): `add_ingredient`, `get_ingredient`,
   `list_ingredients`, `update_ingredient`, `delete_ingredient`,
   `add_recipe`, `get_recipe`, `list_recipes`, `update_recipe`,

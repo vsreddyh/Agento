@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"agento/internal/healthcheck"
@@ -221,17 +222,21 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_food",
-		Description: "List food entries between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). Sort_by names the field, sort the direction; rows without the sort field sort first in asc (unknown, not zero). What is exact match on the lowercased entry text. No match returns the empty page.",
+		Description: "List food entries between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). Sort_by names the field, sort the direction; rows without the sort field sort first in asc (unknown, not zero). Blank/whitespace-only means the defaults and the applied pair is echoed; sort_by is case-sensitive, sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values. What is exact match on the lowercased entry text. No match returns the empty page.",
 		InputSchema: enumSchema(listFoodInput{},
 			map[string][]string{"sort_by": healthcheck.FoodSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listFoodInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, total, err := store.ListFood(ctx, in.Start, in.End, in.SortBy, in.Sort, in.What)
+			// Trimmed up front so whitespace-only means absent (the
+			// default), like the money/cookbook lists.
+			sortBy := strings.TrimSpace(in.SortBy)
+			sort := strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListFood(ctx, in.Start, in.End, sortBy, sort, in.What)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "foods": rows,
-				"sort_by": orDefault(in.SortBy, healthcheck.FoodSortFields[0]), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(sortBy, healthcheck.FoodSortFields[0]), "sort": orDefault(normDir(sort), "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
@@ -281,17 +286,21 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_weight",
-		Description: "List weights between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). No match returns the empty page.",
+		Description: "List weights between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). sort_by names the field (date|kg, default date), sort the direction (asc|desc, default asc). Blank/whitespace-only means the defaults and the applied pair is echoed; sort_by is case-sensitive, sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values. No match returns the empty page.",
 		InputSchema: enumSchema(listWeightInput{},
 			map[string][]string{"sort_by": healthcheck.WeightSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWeightInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, total, err := store.ListWeight(ctx, in.Start, in.End, in.SortBy, in.Sort)
+			// Trimmed up front so whitespace-only means absent (the
+			// default), like the money/cookbook lists.
+			sortBy := strings.TrimSpace(in.SortBy)
+			sort := strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListWeight(ctx, in.Start, in.End, sortBy, sort)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "weights": rows,
-				"sort_by": orDefault(in.SortBy, healthcheck.WeightSortFields[0]), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(sortBy, healthcheck.WeightSortFields[0]), "sort": orDefault(normDir(sort), "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_weight",
@@ -318,17 +327,21 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_sleep",
-		Description: "List per-day sleep (derived hours + full sessions) between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all sessions; value sorts apply within the page). No match returns the empty page.",
+		Description: "List per-day sleep (derived hours + full sessions) between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all sessions; value sorts apply within the page). sort_by names the field (day|sleep_hours, default day), sort the direction (asc|desc, default asc). Blank/whitespace-only means the defaults and the applied pair is echoed; sort_by is case-sensitive, sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values. No match returns the empty page.",
 		InputSchema: enumSchema(listSleepInput{},
 			map[string][]string{"sort_by": healthcheck.SleepSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listSleepInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, total, err := store.ListSleep(ctx, in.Start, in.End, in.SortBy, in.Sort)
+			// Trimmed up front so whitespace-only means absent (the
+			// default), like the money/cookbook lists.
+			sortBy := strings.TrimSpace(in.SortBy)
+			sort := strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListSleep(ctx, in.Start, in.End, sortBy, sort)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "days": rows,
-				"sort_by": orDefault(in.SortBy, healthcheck.SleepSortFields[0]), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(sortBy, healthcheck.SleepSortFields[0]), "sort": orDefault(normDir(sort), "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_sleep",
@@ -375,17 +388,21 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_workouts",
-		Description: "List per-day workouts between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all workouts; value sorts apply within the page). Sort_by names the field, sort the direction; days without the sort field sort first in asc (unknown, not zero). Type is exact match on the lowered type (max 60 chars, empty means no filter). No match returns the empty page.",
+		Description: "List per-day workouts between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all workouts; value sorts apply within the page). Sort_by names the field, sort the direction; days without the sort field sort first in asc (unknown, not zero). Blank/whitespace-only means the defaults and the applied pair is echoed; sort_by is case-sensitive, sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values. Type is exact match on the lowered type (max 60 chars, empty means no filter). No match returns the empty page.",
 		InputSchema: enumSchema(listWorkoutsInput{},
 			map[string][]string{"sort_by": healthcheck.WorkoutSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWorkoutsInput) (*mcp.CallToolResult, map[string]any, error) {
-			rows, total, err := store.ListWorkouts(ctx, in.Start, in.End, in.SortBy, in.Sort, in.Type)
+			// Trimmed up front so whitespace-only means absent (the
+			// default), like the money/cookbook lists.
+			sortBy := strings.TrimSpace(in.SortBy)
+			sort := strings.TrimSpace(in.Sort)
+			rows, total, err := store.ListWorkouts(ctx, in.Start, in.End, sortBy, sort, in.Type)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows), "total": total,
 				"truncated": int64(len(rows)) < total, "days": rows,
-				"sort_by": orDefault(in.SortBy, healthcheck.WorkoutSortFields[0]), "sort": orDefault(in.Sort, "asc")})
+				"sort_by": orDefault(sortBy, healthcheck.WorkoutSortFields[0]), "sort": orDefault(normDir(sort), "asc")})
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_workout",
@@ -433,6 +450,11 @@ func orDefault(v, def string) string {
 	}
 	return v
 }
+
+// normDir folds an already-trimmed sort direction for the echo, matching the
+// store's case-insensitive match. sort_by echoes raw (trimmed): the field
+// names are case-sensitive.
+func normDir(v string) string { return strings.ToLower(v) }
 
 // mustIST is the day-bucketing zone: IST, via the shared healthcheck
 // helper (fixed offset — LoadLocation depends on tzdata the minimal

@@ -206,10 +206,16 @@ func dropIndexIfNamed(ctx context.Context, col *mongoDrv.Collection, name string
 	return cur.Err()
 }
 
-// checkSort validates a list's sort pair. Unknown values fail naming the
-// allowed set — the schema enum stops them first, this is the second layer
-// for direct store callers.
-func checkSort(tool, sortBy string, allowed []string, dir string) (bool, error) {
+// checkSort validates a list's sort pair and returns the normalized sort
+// key plus direction. Unknown values fail naming the allowed set — the
+// schema enum stops them first, this is the second layer for direct store
+// callers. Whitespace-only counts as absent (the default), not as an error;
+// sort_by stays case-exact (the fields name only themselves), while the
+// direction folds case like money/cookbook. Returning the key (instead of
+// validating a copy) keeps validation and the issued sort from disagreeing.
+func checkSort(tool, sortBy string, allowed []string, dir string) (string, bool, error) {
+	sortBy = strings.TrimSpace(sortBy)
+	dir = strings.ToLower(strings.TrimSpace(dir))
 	if sortBy == "" {
 		sortBy = allowed[0]
 	}
@@ -221,15 +227,15 @@ func checkSort(tool, sortBy string, allowed []string, dir string) (bool, error) 
 		}
 	}
 	if !ok {
-		return false, fail("%s sort_by must be one of %v, got '%s'", tool, allowed, sortBy)
+		return "", false, fail("%s sort_by must be one of %v, got '%s'", tool, allowed, sortBy)
 	}
 	switch dir {
 	case "", SortAsc:
-		return true, nil
+		return sortBy, true, nil
 	case SortDesc:
-		return false, nil
+		return sortBy, false, nil
 	default:
-		return false, fail("%s sort must be one of [asc desc], got '%s'", tool, dir)
+		return "", false, fail("%s sort must be one of [asc desc], got '%s'", tool, dir)
 	}
 }
 
@@ -485,12 +491,11 @@ func (s *Store) ListFood(ctx context.Context, start, end, sortBy, dir, what stri
 	if err != nil {
 		return nil, 0, err
 	}
-	asc, err := checkSort("list_food", sortBy, FoodSortFields, dir)
+	// The key comes back normalized from checkSort: validation and the
+	// issued sort cannot disagree (whitespace-only is the default key).
+	sortBy, asc, err := checkSort("list_food", sortBy, FoodSortFields, dir)
 	if err != nil {
 		return nil, 0, err
-	}
-	if sortBy == "" {
-		sortBy = FoodSortFields[0]
 	}
 	filt := bson.M{"day": bson.M{"$gte": st, "$lte": en}}
 	if w := strings.TrimSpace(what); w != "" {
@@ -656,12 +661,11 @@ func (s *Store) ListWeight(ctx context.Context, start, end, sortBy, dir string) 
 	if err != nil {
 		return nil, 0, err
 	}
-	asc, err := checkSort("list_weight", sortBy, WeightSortFields, dir)
+	// The key comes back normalized from checkSort: validation and the
+	// issued sort cannot disagree (whitespace-only is the default key).
+	sortBy, asc, err := checkSort("list_weight", sortBy, WeightSortFields, dir)
 	if err != nil {
 		return nil, 0, err
-	}
-	if sortBy == "" {
-		sortBy = WeightSortFields[0]
 	}
 	key := "date"
 	if sortBy == "kg" {
@@ -803,12 +807,11 @@ func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) (
 	if err != nil {
 		return nil, 0, err
 	}
-	asc, err := checkSort("list_sleep", sortBy, SleepSortFields, dir)
+	// The key comes back normalized from checkSort: validation and the
+	// issued sort cannot disagree (whitespace-only is the default key).
+	sortBy, asc, err := checkSort("list_sleep", sortBy, SleepSortFields, dir)
 	if err != nil {
 		return nil, 0, err
-	}
-	if sortBy == "" {
-		sortBy = SleepSortFields[0]
 	}
 	filt := bson.M{"day": bson.M{"$gte": st, "$lte": en}}
 	dayVals, err := s.sleep.Distinct(ctx, "day", filt)
@@ -1118,12 +1121,11 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 	if err != nil {
 		return nil, 0, err
 	}
-	asc, err := checkSort("list_workouts", sortBy, WorkoutSortFields, dir)
+	// The key comes back normalized from checkSort: validation and the
+	// issued sort cannot disagree (whitespace-only is the default key).
+	sortBy, asc, err := checkSort("list_workouts", sortBy, WorkoutSortFields, dir)
 	if err != nil {
 		return nil, 0, err
-	}
-	if sortBy == "" {
-		sortBy = WorkoutSortFields[0]
 	}
 	filt := bson.M{"day": bson.M{"$gte": st, "$lte": en}}
 	var typeFilt string

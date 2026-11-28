@@ -91,6 +91,16 @@ func TestFoodRoundTrip(t *testing.T) {
 	if _, _, err := s.ListFood(ctx, day, day, "", "up", ""); err == nil {
 		t.Fatal("expected unknown sort error")
 	}
+	// Whitespace-only counts as absent (the default) like money/cookbook,
+	// not as an error — and the direction folds case.
+	rows, _, err = s.ListFood(ctx, day, day, "   ", "  ", "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("whitespace sort %v %v", rows, err)
+	}
+	rows, _, err = s.ListFood(ctx, day, day, "", "DESC", "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("DESC sort %v %v", rows, err)
+	}
 	qty := "2 bowls"
 	patched, err := s.CorrectFood(ctx, id, nil, &qty, nil, map[string]*float64{"kcal": fptr(210)}, nil, nil)
 	if err != nil || patched["qty"] != "2 bowls" {
