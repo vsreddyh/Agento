@@ -19,7 +19,9 @@ import (
 
 // normalizeAccountList trims, drops blanks and dedupes an account filter.
 // Accounts are case-sensitive exact names (unlike categories), so values are
-// never lowercased; unknown names are rejected by the store's resolver.
+// never lowercased. Existence is not checked: an unknown name resolves to the
+// nil id downstream and matches no row, so the read returns the empty table
+// (#619) instead of a rejection.
 func normalizeAccountList(tool string, in []string) []string {
 	out := []string{}
 	seen := map[string]bool{}

@@ -134,11 +134,11 @@ type ListedBudget struct {
 func (s *Store) ListBudgets(ctx context.Context, monthFrom, monthTo, category string) ([]ListedBudget, error) {
 	filt := bson.M{}
 	if category != "" {
-		cat, err := s.CheckBudgetCategory(ctx, "list_budgets", category)
-		if err != nil {
-			return nil, err
-		}
-		filt["category"] = cat
+		// A read filter, not a write: a name no budget row can carry
+		// (unknown, or salary which can never be budgeted) matches nothing
+		// and returns the empty list, instead of failing (#619). Writes
+		// keep rejecting through CheckBudgetCategory.
+		filt["category"] = normalizeCategoryName(category)
 	}
 	if monthFrom != "" {
 		if _, err := CheckBudgetMonth("list_budgets", monthFrom); err != nil {

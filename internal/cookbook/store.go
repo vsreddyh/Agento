@@ -43,6 +43,12 @@ var (
 )
 
 func checkSort(tool, sortBy string, allowed []string, dir string) (bool, error) {
+	// Trimmed like money's NormalizeSort: whitespace-only counts as absent
+	// (the default), not as an error. sort_by stays case-exact — the fields
+	// are camelCase (updatedAt), so lowercasing would corrupt the key — while
+	// the direction folds case like money's order.
+	sortBy = strings.TrimSpace(sortBy)
+	dir = strings.ToLower(strings.TrimSpace(dir))
 	if sortBy == "" {
 		sortBy = allowed[0]
 	}

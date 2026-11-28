@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"agento/internal/cookbook"
 	"agento/internal/mcpschema"
@@ -142,16 +143,20 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_ingredients",
-		Description: "List ingredients, optionally filtered by case-insensitive substring (up to 500; a full page may hide more — narrow with search). sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and both are echoed in the response.",
+		Description: "List ingredients, optionally filtered by case-insensitive substring (up to 500; a full page may hide more — narrow with search). sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and the applied pair is echoed in the response. Blank/whitespace-only means the defaults; sort_by is case-sensitive (updatedAt), sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values.",
 		InputSchema: mcpschema.EnumSchema(listIngredientsInput{},
 			map[string][]string{"sort_by": cookbook.IngredientSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listIngredientsInput) (*mcp.CallToolResult, map[string]any, error) {
+			// Trimmed up front so whitespace-only means absent (the default),
+			// like every other filter on this server.
+			in.SortBy = strings.TrimSpace(in.SortBy)
+			in.Sort = strings.TrimSpace(in.Sort)
 			rows, err := store.ListIngredients(ctx, in.Search, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows),
-				"sort_by": orDefault(in.SortBy, cookbook.IngredientSortFields[0]), "sort": orDefault(in.Sort, "asc"),
+				"sort_by": orDefault(in.SortBy, cookbook.IngredientSortFields[0]), "sort": orDefault(normDir(in.Sort), "asc"),
 				"ingredients": rows})
 		})
 
@@ -209,16 +214,18 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_recipes",
-		Description: "List recipes, optionally filtered by name substring (case-insensitive) or tag (exact, case-sensitive). Up to 200; a full page may hide more — narrow with search. sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and both are echoed in the response.",
+		Description: "List recipes, optionally filtered by name substring (case-insensitive) or tag (exact, case-sensitive). Up to 200; a full page may hide more — narrow with search. sort_by names the field (name|updatedAt, default name), sort the direction (asc|desc, default asc); unknown values are rejected on both layers, and the applied pair is echoed in the response. Blank/whitespace-only means the defaults; sort_by is case-sensitive (updatedAt), sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values.",
 		InputSchema: mcpschema.EnumSchema(listRecipesInput{},
 			map[string][]string{"sort_by": cookbook.RecipeSortFields, "sort": {"asc", "desc"}})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listRecipesInput) (*mcp.CallToolResult, map[string]any, error) {
+			in.SortBy = strings.TrimSpace(in.SortBy)
+			in.Sort = strings.TrimSpace(in.Sort)
 			rows, err := store.ListRecipes(ctx, in.Search, in.Tag, in.SortBy, in.Sort)
 			if err != nil {
 				return fail(err)
 			}
 			return result(map[string]any{"ok": true, "count": len(rows),
-				"sort_by": orDefault(in.SortBy, cookbook.RecipeSortFields[0]), "sort": orDefault(in.Sort, "asc"),
+				"sort_by": orDefault(in.SortBy, cookbook.RecipeSortFields[0]), "sort": orDefault(normDir(in.Sort), "asc"),
 				"recipes": rows})
 		})
 
@@ -271,3 +278,8 @@ func orDefault(v, def string) string {
 	}
 	return v
 }
+
+// normDir folds an already-trimmed sort direction for the echo, matching the
+// store's case-insensitive match. sort_by echoes raw (trimmed): the field
+// names are case-sensitive.
+func normDir(v string) string { return strings.ToLower(v) }

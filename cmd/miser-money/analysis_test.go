@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -72,15 +73,33 @@ func TestMoneyBreakdownRequiresSideInCategoryMode(t *testing.T) {
 
 func TestMoneyBreakdownUnknownPluralCategoryReturnsEmpty(t *testing.T) {
 	withTestStore(t)
+	// Seed one known-category row: withTestStore leaves the ledger empty.
+	if _, _, err := store.Insert(context.Background(), "2026-03-05", 10000, "expense", "groceries", "Cash", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// All-unknown: nothing can match, so the table comes back empty — but
+	// still ok:true, not a rejection.
 	text, errMsg := callTool(t, "money_breakdown", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "by": "category",
-		"side": "expense", "categories": []string{"groceries", "grocerys"},
+		"side": "expense", "categories": []string{"grocerys"},
 	})
 	if errMsg != "" {
 		t.Fatalf("unknown plural category was rejected: %s", errMsg)
 	}
-	if !strings.Contains(text, `"ok":true`) {
-		t.Fatalf("unknown plural category did not return ok:true: %q", text)
+	if !strings.Contains(text, `"ok":true`) || !strings.Contains(text, `"categories":[]`) {
+		t.Fatalf("all-unknown filter did not return the empty table: %q", text)
+	}
+	// Mixed: the unknown name contributes no rows, the known name still
+	// matches — partial results, no error.
+	text, errMsg = callTool(t, "money_breakdown", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "by": "category",
+		"side": "expense", "categories": []string{"groceries", "grocerys"},
+	})
+	if errMsg != "" {
+		t.Fatalf("mixed plural categories were rejected: %s", errMsg)
+	}
+	if !strings.Contains(text, `"groceries"`) {
+		t.Fatalf("mixed filter dropped the known category's rows: %q", text)
 	}
 }
 
@@ -303,10 +322,19 @@ func TestListBudgetsRejectsReversedRange(t *testing.T) {
 	}
 }
 
-func TestListBudgetsRejectsSalary(t *testing.T) {
+// A read filter, not a write: a name no budget row can carry (salary, which
+// can never be budgeted, or an unknown name) matches nothing and returns the
+// empty list — not a rejection (#619). The salary guard lives on the write
+// path (create/update_budget still reject it).
+func TestListBudgetsUnknownCategoryReturnsEmpty(t *testing.T) {
 	withTestStore(t)
-	_, errMsg := callTool(t, "list_budgets", map[string]any{"category": "salary"})
-	if errMsg == "" {
-		t.Fatal("salary was accepted; income cannot be budgeted")
+	for _, cat := range []string{"salary", "grocerys"} {
+		text, errMsg := callTool(t, "list_budgets", map[string]any{"category": cat})
+		if errMsg != "" {
+			t.Fatalf("category %q was rejected: %s", cat, errMsg)
+		}
+		if !strings.Contains(text, `"ok":true`) {
+			t.Fatalf("category %q did not return ok:true: %q", cat, text)
+		}
 	}
 }

@@ -182,8 +182,10 @@ func TestQueryTransactionsRejectsUnknownSort(t *testing.T) {
 		t.Errorf("rejection %q does not name the field", text)
 	}
 	// A value the schema enum allows but the store forbids is impossible by
-	// construction (both read money.TxSortFields), so the second layer is
-	// pinned at the store level in TestQuerySorted instead.
+	// construction (both read money.TxSortFields). The reverse drift is real
+	// and deliberate: the store trims and lowercases, so direct callers may
+	// send " Amount " or "DESC", while the exact schema enum rejects those
+	// for MCP callers before the handler — documented on the tool.
 	text, _, isErr = callToolFull(t, "query_transactions", map[string]any{
 		"start": "2026-01-01", "end": "2026-01-31", "sort": "sideways",
 	})

@@ -238,6 +238,27 @@ func TestListSort(t *testing.T) {
 	if _, err := s.ListRecipes(ctx, "", "", "", "sideways"); err == nil {
 		t.Fatal("unknown recipe sort was accepted")
 	}
+	// Whitespace-only counts as absent (the default), like money's
+	// normalization — not as an error.
+	rows, err = s.ListIngredients(ctx, "gotest-sort-", "   ", "  ")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	if rows[0]["name"] != "gotest-sort-a" {
+		t.Fatalf("whitespace sort did not default to name-asc: %v", rows[0]["name"])
+	}
+	// The direction folds case like money's order; the field names stay
+	// case-exact (updatedAt is camelCase, so lowercasing would corrupt it).
+	rows, err = s.ListIngredients(ctx, "gotest-sort-", "", "DESC")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("got %v %v", rows, err)
+	}
+	if rows[0]["name"] != "gotest-sort-b" {
+		t.Fatalf("DESC did not order name-desc: %v", rows[0]["name"])
+	}
+	if _, err := s.ListIngredients(ctx, "", "UpdatedAt", ""); err == nil {
+		t.Fatal("cased sort_by was accepted; field names are case-sensitive")
+	}
 
 	for _, n := range []string{"gotest-rsort-b", "gotest-rsort-a"} {
 		_, _ = s.DeleteRecipe(ctx, n)
