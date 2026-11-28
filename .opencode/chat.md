@@ -47,8 +47,8 @@ instead of round-tripping one at a time.
   the next call); windowed tools need explicit bounds (`start`/`end`, or
   `start_a`/`end_a`/`start_b`/`end_b` for `money_compare`), and every
   response carries at most one table. `list_budgets` is unwindowed
-  (optional `month_from`/`month_to`/`category`; blank/whitespace-only `category` means all
-  budgets, an unknown one matches nothing and returns the empty list). Budgets live in `money_budgets`
+  (optional `month_from`/`month_to`/`category`; blank/whitespace-only months
+  mean open-ended, blank/whitespace-only `category` means all budgets, an unknown one matches nothing and returns the empty list). Budgets live in `money_budgets`
   keyed by (category, month) as dated versions. `query_transactions` orders
   by `sort_by` (date|amount, default date) + `sort` (asc|desc, default asc),
   both echoed back in range mode (a by-id fetch returns one row and carries no sort keys). Omit a sort field to default it over MCP for query/cookbook/health lists — their schema enums are exact, so a blank string is rejected before the handler; the money analysis sorts have no schema enum and default on blank. Reads fail closed on `type`/`sort_by`/`sort`/ids, but an

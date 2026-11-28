@@ -103,10 +103,11 @@ func TestMoneyBreakdownUnknownPluralCategoryReturnsEmpty(t *testing.T) {
 	}
 	// by=account with an all-unknown categories filter still lists every
 	// account — categories[] narrows the flow columns there, it is not a row
-	// picker — with zero flows and real balances.
+	// picker — with zero flows and real balances. A valid side is accepted
+	// and ignored here (only a typo fails).
 	text, errMsg = callTool(t, "money_breakdown", map[string]any{
 		"start": "2026-03-01", "end": "2026-03-31", "by": "account",
-		"categories": []string{"grocerys"},
+		"side": "expense", "categories": []string{"grocerys"},
 	})
 	if errMsg != "" {
 		t.Fatalf("account-mode unknown categories were rejected: %s", errMsg)
@@ -124,6 +125,21 @@ func TestMoneyBreakdownUnknownPluralCategoryReturnsEmpty(t *testing.T) {
 	}
 	if !strings.Contains(text, `"accounts":[]`) {
 		t.Fatalf("account-mode unknown accounts did not return the empty table: %q", text)
+	}
+}
+
+// Account mode ignores a valid side but still rejects a typo'd one: closed
+// sets fail in both modes, before any store touch (`store` is nil here).
+func TestMoneyBreakdownAccountModeRejectsBadSide(t *testing.T) {
+	_, errMsg := callTool(t, "money_breakdown", map[string]any{
+		"start": "2026-03-01", "end": "2026-03-31", "by": "account",
+		"side": "expens",
+	})
+	if errMsg == "" {
+		t.Fatal("account mode with a typo'd side was accepted; expected the side rejection")
+	}
+	if !strings.Contains(errMsg, "side") {
+		t.Errorf("error %q does not name the side", errMsg)
 	}
 }
 

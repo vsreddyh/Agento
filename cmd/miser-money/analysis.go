@@ -153,7 +153,14 @@ func handleMoneyBreakdown(ctx context.Context, in moneyBreakdownInput) (map[stri
 			"total_amount_paise": res.TotalAmountPaise, "total_count": res.TotalCount,
 		}, nil
 	}
-	// by=account: side is accepted and ignored — the table covers all legs.
+	// by=account: side is accepted and ignored — the table covers all legs —
+	// but a non-blank side is still validated, so a typo fails here instead
+	// of succeeding silently (closed sets fail in both modes).
+	if strings.TrimSpace(in.Side) != "" {
+		if _, err := money.NormalizeSide("money_breakdown", in.Side); err != nil {
+			return nil, err
+		}
+	}
 	sortBy, err := money.NormalizeSort("money_breakdown", in.SortBy, "closing", []string{"closing", "name", "net", "inflows", "outflows"})
 	if err != nil {
 		return nil, err
