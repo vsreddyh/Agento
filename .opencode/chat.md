@@ -53,8 +53,10 @@ instead of round-tripping one at a time.
   by `sort_by` (date|amount, default date) + `sort` (asc|desc, default asc),
   both echoed back in range mode (a by-id fetch returns one row and carries no sort keys). Omit a sort field to default it over MCP for query/cookbook/health lists — their schema enums are exact, so a blank string is rejected before the handler; the money analysis sorts have no schema enum and default on blank. Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
   unknown account/category filter returns the empty page (exception:
-  `money_breakdown` by=account always lists every account — an unknown
-  categories[] only zeroes the flow columns) — typo protection
+  `money_breakdown` by=account with no accounts[] filter always lists every
+  account — an unknown categories[] only zeroes the flow columns; an
+  accounts[] picker still filters rows, and an all-unknown picker returns
+  the empty table) — typo protection
   lives on the write path (`log`/`edit` still reject unknown names); a live
   delete of an empty filter reports `deleted:0`, so check the dry run first.
 - **cookbook** (10, permanent): `add_ingredient`, `get_ingredient`,
