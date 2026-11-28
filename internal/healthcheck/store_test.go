@@ -28,6 +28,25 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
+// A reversed range is a typo, not an empty window: all four lists fail
+// like the money reads instead of returning a silent empty page.
+func TestListReversedBoundsRejected(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, _, err := s.ListFood(ctx, "2026-02-01", "2026-01-01", "", "", ""); err == nil {
+		t.Fatal("reversed list_food was accepted; expected the bounds rejection")
+	}
+	if _, _, err := s.ListWeight(ctx, "2026-02-01", "2026-01-01", "", ""); err == nil {
+		t.Fatal("reversed list_weight was accepted; expected the bounds rejection")
+	}
+	if _, _, err := s.ListSleep(ctx, "2026-02-01", "2026-01-01", "", ""); err == nil {
+		t.Fatal("reversed list_sleep was accepted; expected the bounds rejection")
+	}
+	if _, _, err := s.ListWorkouts(ctx, "2026-02-01", "2026-01-01", "", "", ""); err == nil {
+		t.Fatal("reversed list_workouts was accepted; expected the bounds rejection")
+	}
+}
+
 func TestFoodRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

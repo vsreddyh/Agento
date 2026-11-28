@@ -491,6 +491,11 @@ func (s *Store) ListFood(ctx context.Context, start, end, sortBy, dir, what stri
 	if err != nil {
 		return nil, 0, err
 	}
+	// A reversed range is a typo, not an empty window: fail like
+	// the money reads instead of returning a silent empty page.
+	if st > en {
+		return nil, 0, fail("list_food start %s is after end %s — reversed ranges are rejected, not silently empty", start, end)
+	}
 	// The key comes back normalized from checkSort: validation and the
 	// issued sort cannot disagree (whitespace-only is the default key).
 	sortBy, asc, err := checkSort("list_food", sortBy, FoodSortFields, dir)
@@ -661,6 +666,11 @@ func (s *Store) ListWeight(ctx context.Context, start, end, sortBy, dir string) 
 	if err != nil {
 		return nil, 0, err
 	}
+	// A reversed range is a typo, not an empty window: fail like
+	// the money reads instead of returning a silent empty page.
+	if st > en {
+		return nil, 0, fail("list_weight start %s is after end %s — reversed ranges are rejected, not silently empty", start, end)
+	}
 	// The key comes back normalized from checkSort: validation and the
 	// issued sort cannot disagree (whitespace-only is the default key).
 	sortBy, asc, err := checkSort("list_weight", sortBy, WeightSortFields, dir)
@@ -806,6 +816,11 @@ func (s *Store) ListSleep(ctx context.Context, start, end, sortBy, dir string) (
 	en, err := mustDay(end)
 	if err != nil {
 		return nil, 0, err
+	}
+	// A reversed range is a typo, not an empty window: fail like
+	// the money reads instead of returning a silent empty page.
+	if st > en {
+		return nil, 0, fail("list_sleep start %s is after end %s — reversed ranges are rejected, not silently empty", start, end)
 	}
 	// The key comes back normalized from checkSort: validation and the
 	// issued sort cannot disagree (whitespace-only is the default key).
@@ -1131,6 +1146,11 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 	en, err := mustDay(end)
 	if err != nil {
 		return nil, 0, err
+	}
+	// A reversed range is a typo, not an empty window: fail like
+	// the money reads instead of returning a silent empty page.
+	if st > en {
+		return nil, 0, fail("list_workouts start %s is after end %s — reversed ranges are rejected, not silently empty", start, end)
 	}
 	// The key comes back normalized from checkSort: validation and the
 	// issued sort cannot disagree (whitespace-only is the default key).
