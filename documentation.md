@@ -186,9 +186,11 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | `money_transactions` | Miser-money | `date` (YYYY-MM-DD, real calendar date — `2026-02-30` rejected), `amount` (int64 paise, >0 — read back as `amount_paise`; the surface takes integers only, so fractional money fails schema validation), `type` (income\|expense\|transfer), `category` (must exist in `money_categories`; unknown names are rejected), `note` (capped at 300 bytes, UTF-8-safe cut; `null` means no change on edit, `""` clears it), `source`, `accountId` (required), `sending_to` (transfers only), `idempotencyKey` (optional, UNIQUE+SPARSE, trimmed, max 200 bytes — a retried log returns the original row instead of writing a second — unless the row was soft-deleted, in which case even the same payload is rejected naming `restore_transactions` — but the same key with a different payload is always **rejected** as a mismatch first (restore cannot fix that, use a new key)), `createdAt`, `deletedAt` (soft-delete flag; excluded from every ledger read — query/match/analyses/balances/budget spend; the by-id verbs edit/restore/delete/idempotency-replay check the flag explicitly to reject or restore) — rows are **soft-deleted**: `delete_transactions` flags them (recoverable via `restore_transactions`), and the `ttl_deleted_at` index removes them 10 days after flagging |
 | `money_budgets` | Miser-money | `category` (must exist in `money_categories` except `salary` — income is not budgeted), `month` (`YYYY-MM`, effective from this month), `monthlyLimit` (int64 paise, > 0 — written as `monthly_limit_paise`, read back as `monthly_limit_paise`), `createdAt`, `updatedAt` — **permanent**. Unique on (`category`, `month`); only `delete_budget` removes a row |
 | `money_categories` | Miser-money | `name` (unique, trimmed, lowercased) — **permanent**. Seeded with the ten defaults; `other` is the reserved blank fallback and cannot be renamed, renamed to, or deleted. Renames rewrite `money_transactions` and `money_budgets`; deletes are refused while rows reference the category unless `reassign_to` moves them |
-| `hc_meals` | Health-check | `date` (YYYY-MM-DD), `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, `totals` (computed), `createdAt` |
-| `hc_days` | Health-check / Health Sync | `date` (YYYY-MM-DD, unique), `steps` (int), `active_kcal` (float), `sleep_hours` (float), `workouts[{type, minutes, kcal}]`, `updatedAt` |
-| `hc_weight` | Health-check | `date` (YYYY-MM-DD, unique), `kg` (float) — **exempt from retention pruning** |
+| `hc_food_log` | Health-check | `datetime` (BSON Date, =now if absent), `day` (YYYY-MM-DD, IST-derived, indexed), `what` (trimmed, required) + `what_lc` (lowercased copy, exact-match filter), `qty` free-text, `kcal/protein/carbs/fat/fiber` (optional 1-decimal, >= 0 — absent means unknown; absurd values fail: kcal>100000, others>10000), `note?`, `createdAt` — one row per thing eaten, no meals/items/totals grouping, **permanent** |
+| `hc_days` | Health-check / Health Sync | `date` (YYYY-MM-DD, unique), `steps` (0–1000000), `active_kcal` (0–100000), `updatedAt` (BSON Date, always) — scalars only; sleep/workouts live in their own collections — **permanent** |
+| `hc_sleep` | Health-check / Health Sync | `day` (YYYY-MM-DD, indexed), `start` (BSON Date, sync sessions only), `minutes` (whole, 1–1440), `hash` (content dedup, unique), `createdAt` — **permanent** |
+| `hc_workouts` | Health-check / Health Sync | `day` (YYYY-MM-DD, indexed), `type` (free text, lowercased+trimmed, empty → `other` — sync falls back to `Title` when `type` is empty, max 60 runes), `minutes` (whole 1–1440), `kcal?` (absent means unknown, never stored as 0; max 100000), `hash` (content dedup, unique), `createdAt` — **permanent** |
+| `hc_weight` | Health-check | `date` (YYYY-MM-DD, unique), `kg` (float, 0 < kg <= 500), `createdAt` (set once on insert, never rewritten by re-logs) — **permanent** |
 | `cookbook_ingredients` | Cookbook | `name` (unique, case-sensitive, trimmed), `note` (≤2000 bytes, trimmed, UTF-8-safe cut), `createdAt`, `updatedAt` — **permanent** |
 | `cookbook_recipes` | Cookbook | `name` (unique, case-sensitive, trimmed), `note` (≤2000 bytes, trimmed, UTF-8-safe cut), `tags[]` (≤20 entries, ≤40 bytes each, trimmed), `createdAt`, `updatedAt` — **permanent** |
 | `cookbook_cook_log` | Cookbook (retired #600) | pre-trim rows stay in Atlas untouched; nothing reads or writes them — **permanent** |
@@ -196,7 +198,7 @@ Domain data is managed in MongoDB (default database: `hermes`, configurable via 
 | `tasks_changes` | Task-manager | Single document (`_id: "revision"`) holding the collection-wide change counter every task write advances — create, update, complete (plus its rollover successor), skip, reopen, delete — from **both** writers, because the marker is bumped by the store itself (#178). Served read-only as `GET /api/tasks/changes?since=`; a collection that has never been written reports revision 0. **Permanent** |
 | `task_mutations` | Task-manager | The change log (#176): one row per mutation — `op`, `task_id`, `source`, `detail`, `at` — from **both** writers. Served read-only as `GET /api/tasks/mutations?task_id=&op=&since=&limit=` and as the `task_history` MCP tool (#350). It outlives its subject on purpose (done tasks are TTL-deleted after 3 days). Pruned at 90 days. Indexed `{task_id, at}` and `{at, _id}` |
 | `projects` | Project-manager | `name`, `status` (Todo\|Ongoing\|Testing\|Paused\|Done), `note`, `position` (manual board order), `snoozeAt` (RFC3339 instant, Paused only, must be strictly >60s ahead), `snoozeFiredAt` (the snooze instant the server ticker fired), `createdAt`, `updatedAt` — **permanent**, shared with the app's Projects tab. health-api wakes a due snooze to Ongoing and clears `snoozeAt` one minute early; no client schedules it |
-| `counters` | Project-manager | Single doc `_id: "projects_position"` holding `seq`, the atomic source of `projects.position` (`findOneAndUpdate` `$inc`, seeded from the max in `EnsureSchema`). Inspect with `mongo get counters`; back up and restore with `projects` — a counter restored behind the max reissues an existing position |
+| `counters` | Project-manager | Single doc `_id: "projects_position"` holding `seq`, the atomic source of `projects.position` (`findOneAndUpdate` `$inc`, seeded from the max in `EnsureSchema`). Inspect with `go run ./cmd/mongo get counters`; back up and restore with `projects` — a counter restored behind the max reissues an existing position |
 <!-- #584 TEMP-REMOVE (∃-Mail): reports collection row.
 | `reports` | Reports (∃-Mail, #365) | `title`, `body_md` (markdown with `$..$`/`$$..$$` LaTeX, compiled server-side on read), `source`, `read`, `starred`, `createdAt` — **7-day conditional retention**: pruned when `createdAt < today - 7d AND read AND NOT starred` |
 -->
@@ -206,8 +208,8 @@ Operators use the `mongo` Go CLI (`cmd/mongo/main.go`) directly:
 
 ```bash
 go run ./cmd/mongo count money_transactions '{"type":"expense"}'
-go run ./cmd/mongo insert hc_weight '{"date":"2026-08-08","kg":63.2}'
-go run ./cmd/mongo upsert hc_days '{"date":"2026-08-08"}' '{"steps":8452}'
+go run ./cmd/mongo insert hc_weight '{"date":"2026-08-08","kg":63.2}'  # raw escape hatch: skips LogWeight validation (real date, 0<kg<=500) + upsert semantics — prefer the log_weight MCP verb
+go run ./cmd/mongo get hc_days '{"date":"2026-08-08"}'  # read-only: steps/sleep/workouts write through POST /api/health/sync (validated) — never raw upserts
 # update rewrites every match (UpdateMany $set — plain fields, not a full
 # update doc). The project Blocked migration, then its verify:
 go run ./cmd/mongo update projects '{"status":"Blocked"}' '{"status":"Paused"}'
@@ -224,9 +226,7 @@ Automated data pruning is executed by the `retention` Go binary (`cmd/retention/
 |---|---|---|
 | `money_transactions` | Flagged 10 days | **Soft delete** — `delete_transactions` flags rows with `deletedAt` (recoverable via `restore_transactions`); the `ttl_deleted_at` index removes flagged rows 10 days after flagging. Unflagged rows are permanent; the retention job itself is a no-op for money |
 | `money_budgets` | Permanent | **Never expires** — rows live until `delete_budget` removes them; money retention is a no-op |
-| `hc_meals` | > 30 days | Pruned when `date < today - 30d` |
-| `hc_days` | > 30 days | Pruned when `date < today - 30d` |
-| `hc_weight` | Permanent | **Never pruned** |
+| `hc_food_log` / `hc_days` / `hc_sleep` / `hc_workouts` / `hc_weight` | Permanent | **Never pruned** — fully permanent going forward; no TTL, no prune tool. Upgrading is gated: `EnsureSchema` refuses to boot with a non-empty frozen pre-v2 `hc_meals` (back it up or wipe it); an empty one is dropped quietly |
 | `cookbook_*` | Permanent | **Never pruned** |
 <!-- #584 TEMP-REMOVE (∃-Mail): reports retention row.
 | `reports` (#365) | > 7 days, conditional | Pruned when `createdAt < today - 7d AND read AND NOT starred` — unread/starred never pruned |
@@ -257,11 +257,13 @@ lives with the Sync card in Settings → Health sync (#588).
 Agento Android App ──POST /api/health/sync──► proxy (:8080 compose default) ──► health-api (:8000 container; :8001 direct-host default)
                                                         │
                                                         ▼
-                                       MongoDB: hc_days (one doc per date)
+                     MongoDB: hc_days (scalars) + hc_sleep + hc_workouts (one row per entry)
 ```
 
 1. **Agento** (`android/agento/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
 2. **`health-api` Endpoint** (compose default `:8001`, `HEALTH_HOST_PORT` remaps the host side): Authenticates requests via `Authorization: Bearer <PASSWORD>` and upserts metrics into MongoDB.
+
+   Bucketing: sleep sessions land on the wake date, workouts on the start date, scalars on the sync date. Batches are capped at 100 sleep sessions + 100 workouts — an oversized batch 422s with nothing written (over-cap counts in `sessions_over_cap`/`workouts_over_cap`, distinct from corrupt-entry `*_invalid`), so large backfills must be chunked. Unparseable entries are skipped and counted (`sessions_invalid`/`workouts_invalid` in the response, on both ok and 422); a bad batch date with no scalars still writes valid entries, but bad scalars 422 the whole payload. The response echoes `date` only when scalars were written — entries-only syncs omit it. Sleep hours are 2-decimal; food macros, active_kcal and workout kcal are 1-decimal; steps are ints; workout minutes are whole; weight kg is stored as-sent.
 
 > **Upgrading from Health Gateway?** Agento ships under a new `applicationId` (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway app — settings do not transfer automatically.
 > 1. Install Agento → re-enter the sync server URL/password by hand.

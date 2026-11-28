@@ -16,9 +16,9 @@ package agento_test
 //
 // Sensitivity record (what prompts): money writes, account lifecycle
 // (`create_account`/`archive_account`), every `delete_*`, destructive
-// rewrites (`edit_transaction`, plus health-check's `fix_last_meal` via the
-// surviving `*fix_last*` pattern), prunes that delete. The harness cannot
-// see arguments, so even a counting prune with dry_run=true prompts.
+// rewrites (`edit_transaction`, plus health-check's `correct_*` via the
+// `*correct_*` patterns). The harness cannot
+// see arguments, so even a dry_run=true delete reports prompts.
 //
 // Servers registered under `cmd/*` are not the whole agent surface: the
 // `workspace-mcp` entry in opencode.json runs an external Python server
@@ -42,16 +42,17 @@ import (
 var expectedAsk = []string{
 	"*archive_account*",
 	"*batch_modify_gmail_message_labels*",
+	"*correct_food*",
+	"*correct_sleep*",
+	"*correct_workout*",
 	"*create_account*",
 	"*create_budget*",
 	"*create_category*",
 	"*delete*",
 	"*edit_account*",
 	"*edit_transaction*",
-	"*fix_last*",
 	"*log_transaction*",
 	"*modify_gmail_message_labels*",
-	"*prune_old*",
 	"*restore_transactions*",
 	"*update_budget*",
 	"*update_category*",
@@ -78,8 +79,9 @@ var freeTools = map[string][]string{
 		"list_budgets", "list_categories"},
 	"cookbook": {"add_ingredient", "list_ingredients", "get_ingredient", "update_ingredient",
 		"add_recipe", "get_recipe", "list_recipes", "update_recipe"},
-	"health-check": {"log_meal", "query_meals", "log_weight", "log_sleep",
-		"log_workout", "daily_summary"},
+	"health-check": {"log_food", "list_food", "get_food", "log_weight",
+		"list_weight", "log_sleep", "list_sleep", "log_workout",
+		"list_workouts", "daily_summary"},
 	"task-manager": {"create_task", "list_tasks", "get_task", "update_task",
 		"complete_task", "skip_task", "reopen_task", "duplicate_task", "task_history"},
 	"project-manager": {"create_project", "list_projects", "get_project", "update_project"},

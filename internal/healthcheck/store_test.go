@@ -3,8 +3,14 @@ package healthcheck
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"agento/internal/mongo"
+
+	"go.mongodb.org/mongo-driver/bson"
+	mongoDrv "go.mongodb.org/mongo-driver/mongo"
 )
 
 func testStore(t *testing.T) *Store {
@@ -13,13 +19,7 @@ func testStore(t *testing.T) *Store {
 		t.Skip("MONGODB_URI not set")
 	}
 	// Its OWN throwaway database, not the shared `miser_test`. `go test ./...` runs
-	// packages in parallel and internal/money calls db.Drop(ctx) on `miser_test` — a
-	// wholesale drop, not a scoped delete. Sharing it made this suite fail whenever it
-	// happened to run alongside money: the collection was dropped between a write and
-	// the read that asserted it, and the test reported empty results with no error
-	// anywhere. A test that fails based on which package the scheduler paired it with is
-	// not a test. internal/tasks and internal/projects already have
-	// their own; this closes the last two.
+	// packages in parallel and internal/money drops `miser_test` — sharing it made this suite fail.
 	t.Setenv("MONGODB_DB", "healthcheck_test")
 	s, err := New()
 	if err != nil {
@@ -28,55 +28,588 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
-func TestMealWeightRoundTrip(t *testing.T) {
+func TestFoodRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	day := "2026-09-01"
+	cleanDay(t, s, ctx, day)
+	dt, _ := time.Parse(time.RFC3339, "2026-09-01T12:30:00Z")
 
-	if _, err := s.LogMeal(ctx, day, "test", nil); err == nil {
-		t.Fatal("expected empty-items error")
+	if _, err := s.LogFood(ctx, day, dt, "  ", "", nil, ""); err == nil {
+		t.Fatal("expected blank-what error")
 	}
-	meal, err := s.LogMeal(ctx, day, "lunch", []map[string]any{
-		{"name": "rice", "kcal": 200.0, "protein": 4.0, "carbs": 40.0, "fat": 1.0, "fiber": 2.0},
-	})
+	if _, err := s.LogFood(ctx, day, dt, "rice", "", map[string]float64{"kcal": -1}, ""); err == nil {
+		t.Fatal("expected negative-macro error")
+	}
+	if _, err := s.LogFood(ctx, day, dt, "rice", "", map[string]float64{"sugar": 1}, ""); err == nil {
+		t.Fatal("expected unknown-macro error")
+	}
+	row, err := s.LogFood(ctx, day, dt, "rice", "1 bowl", map[string]float64{"kcal": 200, "protein": 4}, "lunch")
 	if err != nil {
 		t.Fatalf("log: %v", err)
 	}
-	if meal["date"] != day {
-		t.Fatalf("got %v", meal)
+	id, _ := row["id"].(string)
+	if id == "" {
+		t.Fatalf("no _id: %v", row)
 	}
-	rows, err := s.QueryMeals(ctx, day, day)
+	if row["what_lc"] != nil {
+		t.Fatalf("what_lc must not leak: %v", row)
+	}
+	got, err := s.GetFood(ctx, id)
+	if err != nil || got["what"] != "rice" {
+		t.Fatalf("get %v %v", got, err)
+	}
+	if _, err := s.GetFood(ctx, "000000000000000000000000"); err == nil {
+		t.Fatal("expected unknown-id error")
+	}
+	rows, total, err := s.ListFood(ctx, day, day, "", "", "")
+	if err != nil || len(rows) != 1 || total != 1 {
+		t.Fatalf("list %v total=%d %v", rows, err, total)
+	}
+	// Round-trip: the listed datetime feeds straight back into correct.
+	dtStr, _ := rows[0]["datetime"].(string)
+	dtRT, err := time.Parse(time.RFC3339Nano, dtStr)
+	if err != nil {
+		t.Fatalf("listed datetime %q does not parse: %v", dtStr, err)
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil, &dtRT); err != nil {
+		t.Fatalf("round-trip correct %v", err)
+	}
+	// Desc comes back newest-first.
+	rows, _, err = s.ListFood(ctx, day, day, "", "desc", "")
 	if err != nil || len(rows) != 1 {
-		t.Fatalf("got %v %v", rows, err)
+		t.Fatalf("desc list %v %v", rows, err)
+	}
+	rows, total, err = s.ListFood(ctx, day, day, "", "", "noodles")
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("unmatched filter must be empty, got %v %v", rows, err)
+	}
+	if _, _, err := s.ListFood(ctx, day, day, "sugar", "", ""); err == nil {
+		t.Fatal("expected unknown sort_by error")
+	}
+	if _, _, err := s.ListFood(ctx, day, day, "", "up", ""); err == nil {
+		t.Fatal("expected unknown sort error")
+	}
+	qty := "2 bowls"
+	patched, err := s.CorrectFood(ctx, id, nil, &qty, nil, map[string]*float64{"kcal": fptr(210)}, nil, nil)
+	if err != nil || patched["qty"] != "2 bowls" {
+		t.Fatalf("correct %v %v", patched, err)
+	}
+	cleared, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, []string{"kcal", "protein"}, nil)
+	if err != nil {
+		t.Fatalf("clear %v", err)
+	}
+	if _, ok := cleared["kcal"]; ok {
+		t.Fatalf("kcal not cleared: %v", cleared)
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, []string{"sugar"}, nil); err == nil {
+		t.Fatal("expected unknown-macro error on clear")
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil,
+		map[string]*float64{"kcal": fptr(1e9)}, nil, nil); err == nil {
+		t.Fatal("expected absurd-macro error on correct")
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil,
+		map[string]*float64{"kcal": fptr(1)}, []string{"kcal"}, nil); err == nil {
+		t.Fatal("expected set+clear overlap error")
+	}
+	if _, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("expected empty-patch error")
+	}
+	dry, err := s.DeleteFood(ctx, id, true)
+	if err != nil || dry["would_delete"] != 1 {
+		t.Fatalf("dry run %v %v", dry, err)
+	}
+	if rows, _, _ := s.ListFood(ctx, day, day, "", "", ""); len(rows) != 1 {
+		t.Fatal("dry run must not delete")
+	}
+	live, err := s.DeleteFood(ctx, id, false)
+	if err != nil || live["deleted"] != 1 {
+		t.Fatalf("live delete %v %v", live, err)
+	}
+	if _, err := s.DeleteFood(ctx, id, false); err == nil {
+		t.Fatal("expected unknown-id error on second delete")
+	}
+	if _, _, err := s.ListFood(ctx, "bad-day", day, "", "", ""); err == nil {
+		t.Fatal("expected bad-date error")
+	}
+}
+
+func TestWeightRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	day := "2026-09-02"
+	cleanDay(t, s, ctx, day)
+
+	if _, err := s.LogWeight(ctx, day, 0); err == nil {
+		t.Fatal("expected implausible error")
 	}
 	if _, err := s.LogWeight(ctx, day, 70.5); err != nil {
 		t.Fatalf("weight: %v", err)
 	}
-	if _, err := s.LogWeight(ctx, day, 0); err == nil {
+	// Re-logging overwrites kg but keeps the original createdAt.
+	first, _ := s.LogWeight(ctx, day, 70.5)
+	if first["createdAt"] == nil || first["createdAt"] == "<nil>" {
+		t.Fatalf("weight missing createdAt: %v", first)
+	}
+	// Upsert is the correction: re-log overwrites.
+	if _, err := s.LogWeight(ctx, day, 71); err != nil {
+		t.Fatalf("re-log: %v", err)
+	}
+	rows, total, err := s.ListWeight(ctx, day, day, "", "")
+	if err != nil || len(rows) != 1 || rows[0]["kg"] != 71.0 || total != 1 {
+		t.Fatalf("list %v total=%d %v", rows, total, err)
+	}
+	dry, err := s.DeleteWeight(ctx, day, true)
+	if err != nil || dry["would_delete"] != 1 {
+		t.Fatalf("dry run %v %v", dry, err)
+	}
+	if w, _ := dry["weight"].(bson.M); w["createdAt"] == nil {
+		t.Fatalf("dry run should show createdAt: %v", dry)
+	}
+	live, err := s.DeleteWeight(ctx, day, false)
+	if err != nil || live["deleted"] != 1 {
+		t.Fatalf("live delete %v %v", live, err)
+	}
+	// Valid date, no row: empty, not error.
+	again, err := s.DeleteWeight(ctx, day, false)
+	if err != nil || again["deleted"] != 0 {
+		t.Fatalf("repeat delete %v %v", again, err)
+	}
+}
+
+func TestSleepWorkoutDedup(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	day := "2026-09-03"
+	cleanDay(t, s, ctx, day)
+
+	if _, err := s.LogSleep(ctx, day, 0); err == nil {
 		t.Fatal("expected implausible error")
 	}
 	if _, err := s.LogSleep(ctx, day, 7.5); err != nil {
 		t.Fatalf("sleep: %v", err)
 	}
-	if _, err := s.LogWorkout(ctx, day, "run", 30, 300); err != nil {
+	// Same manual entry twice: duplicate, not a second session.
+	if _, err := s.LogSleep(ctx, day, 7.5); err == nil {
+		t.Fatal("expected duplicate-sleep error")
+	}
+	days, total, err := s.ListSleep(ctx, day, day, "", "")
+	if err != nil || len(days) != 1 || days[0]["sleep_hours"] != 7.5 || total != 1 {
+		t.Fatalf("list %v total=%d %v", days, total, err)
+	}
+	sessArr, _ := days[0]["sessions"].([]bson.M)
+	if len(sessArr) != 1 {
+		t.Fatalf("sessions %v", days[0]["sessions"])
+	}
+	sessID, _ := sessArr[0]["id"].(string)
+
+	if _, err := s.CorrectSleep(ctx, sessID, 8*60); err != nil {
+		t.Fatalf("correct: %v", err)
+	}
+	corr, err := s.CorrectSleep(ctx, sessID, 8*60)
+	if err != nil || corr["createdAt"] == nil || corr["day"] != day {
+		t.Fatalf("correct should return the full session: %v %v", corr, err)
+	}
+	days, _, _ = s.ListSleep(ctx, day, day, "", "")
+	if days[0]["sleep_hours"] != 8.0 {
+		t.Fatalf("hours %v", days[0]["sleep_hours"])
+	}
+	if _, err := s.CorrectSleep(ctx, "nonexistent", 60); err == nil {
+		t.Fatal("expected unknown-id error")
+	}
+	if _, err := s.CorrectSleep(ctx, sessID, 25*60); err == nil {
+		t.Fatal("expected over-24h error")
+	}
+	dry, err := s.DeleteSleep(ctx, sessID, true)
+	if err != nil || dry["would_delete"] != 1 {
+		t.Fatalf("dry run %v %v", dry, err)
+	}
+	if live, err := s.DeleteSleep(ctx, sessID, false); err != nil || live["deleted"] != 1 {
+		t.Fatalf("live delete %v %v", live, err)
+	}
+
+	// Workouts: manual log, type normalized, duplicate rejected.
+	if _, err := s.LogWorkout(ctx, day, "Run", 30, fptr(300)); err != nil {
 		t.Fatalf("workout: %v", err)
+	}
+	if _, err := s.LogWorkout(ctx, day, "Run", 30.5, fptr(300)); err == nil {
+		t.Fatal("expected fractional-minutes error")
+	}
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("x", 61), 30, fptr(300)); err == nil {
+		t.Fatal("expected over-60 type error")
+	}
+	// Rune count, not bytes: 60 multibyte chars pass, 61 fail.
+	// kcal 0 keeps the passing row out of the later totals.
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("é", 60), 30, nil); err != nil {
+		t.Fatalf("60-char type should pass: %v", err)
+	}
+	if _, err := s.LogWorkout(ctx, day, strings.Repeat("é", 61), 30, nil); err == nil {
+		t.Fatal("expected over-61 type error")
+	}
+	if _, err := s.LogWorkout(ctx, day, "run", 30, fptr(300)); err == nil {
+		t.Fatal("expected duplicate-workout error (lowered type)")
+	}
+	wodays, wtotal, err := s.ListWorkouts(ctx, day, day, "", "", "RUN")
+	if err != nil || len(wodays) != 1 || wtotal != 1 {
+		t.Fatalf("type filter %v total=%d %v", wodays, wtotal, err)
+	}
+	wodays, _, err = s.ListWorkouts(ctx, day, day, "", "", "swim")
+	if err != nil || len(wodays) != 0 {
+		t.Fatalf("unmatched type must be empty, got %v %v", wodays, err)
+	}
+	// A day whose workouts carry no kcal reports null, not 0.
+	nokDay := "2026-09-15"
+	cleanDay(t, s, ctx, nokDay)
+	if _, err := s.LogWorkout(ctx, nokDay, "yoga", 20, nil); err != nil {
+		t.Fatal(err)
+	}
+	nokSum, err := s.DailySummary(ctx, nokDay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nokSum["workout_kcal"] != nil {
+		t.Fatalf("workout_kcal without kcal: %v", nokSum)
+	}
+	if wos, _ := nokSum["workouts"].([]bson.M); len(wos) != 1 {
+		t.Fatalf("workouts: %v", nokSum)
+	}
+	cleanDay(t, s, ctx, nokDay)
+	allDays, _, _ := s.ListWorkouts(ctx, day, day, "", "", "")
+	first := allDays[0]["workouts"].([]bson.M)[0]
+	if _, ok := first["kcal"]; !ok {
+		t.Fatalf("kcal should be present when provided: %v", first)
+	}
+	// No-kcal workout omits the key (unknown, never zero).
+	nokcal, err := s.LogWorkout(ctx, day, "yoga", 20, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := nokcal["kcal"]; ok {
+		t.Fatalf("absent kcal must not be stored as 0: %v", nokcal)
+	}
+	if _, err := s.DeleteWorkout(ctx, nokcal["id"].(string), false); err != nil {
+		t.Fatal(err)
+	}
+	woid, _ := first["id"].(string)
+	if _, err := s.CorrectWorkout(ctx, woid, nil, nil, nil, false); err == nil {
+		t.Fatal("expected empty-patch error")
+	}
+	empty := ""
+	if _, err := s.CorrectWorkout(ctx, woid, &empty, nil, nil, false); err == nil {
+		t.Fatal("expected empty-type error")
+	}
+	huge := 2000.0
+	if _, err := s.CorrectWorkout(ctx, woid, nil, &huge, nil, false); err == nil {
+		t.Fatal("expected over-24h error")
+	}
+	if _, err := s.CorrectWorkout(ctx, woid, strptr("lift"), nil, nil, false); err != nil {
+		t.Fatalf("correct: %v", err)
+	}
+	corrW, err := s.CorrectWorkout(ctx, woid, nil, nil, fptr(310), false)
+	if err != nil || corrW["createdAt"] == nil || corrW["day"] != day {
+		t.Fatalf("correct should return the full workout: %v %v", corrW, err)
+	}
+	clearedW, err := s.CorrectWorkout(ctx, woid, nil, nil, nil, true)
+	if err != nil {
+		t.Fatalf("clear kcal %v", err)
+	}
+	if _, ok := clearedW["kcal"]; ok {
+		t.Fatalf("kcal not cleared: %v", clearedW)
+	}
+	if _, err := s.CorrectWorkout(ctx, woid, nil, nil, fptr(1), true); err == nil {
+		t.Fatal("expected set+clear overlap error")
+	}
+	if _, err := s.CorrectWorkout(ctx, "nonexistent", nil, nil, nil, false); err == nil {
+		t.Fatal("expected unknown-id error")
+	}
+	if _, err := s.DeleteWorkout(ctx, woid, false); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// Sync path: steps overwrite, sessions dedup quietly, updatedAt is Date.
+	steps := 1000
+	kcal := 50.5
+	woKcal := 150.0
+	start, _ := time.Parse(time.RFC3339, "2026-09-03T22:00:00Z")
+	rec := SyncRecord{Date: day, Steps: &steps, ActiveKcal: &kcal,
+		Sleeps:   []SleepIn{{Day: day, Start: &start, Minutes: 400}},
+		Workouts: []WorkoutIn{{Day: day, Type: "cycle", Minutes: 20, Kcal: &woKcal}}}
+	res, err := s.RecordSync(ctx, rec)
+	if err != nil || res.SessionsAdded != 1 || res.WorkoutsAdded != 1 {
+		t.Fatalf("sync %v %v", res, err)
+	}
+	// Re-sent entries skip quietly (same content hashes) — Day is set by
+	// the caller, never defaulted by the store.
+	rec2 := SyncRecord{Date: day, Steps: &steps, ActiveKcal: &kcal,
+		Sleeps:   []SleepIn{{Day: day, Start: &start, Minutes: 400}},
+		Workouts: []WorkoutIn{{Day: day, Type: "cycle", Minutes: 20, Kcal: &woKcal}}}
+	res2, err := s.RecordSync(ctx, rec2)
+	if err != nil || res2.SessionsSkipped != 1 || res2.WorkoutsSkipped != 1 {
+		t.Fatalf("resync %v %v", res2, err)
+	}
+	// Sync validation tiers: bad scalars fail the batch (422, not 500);
+	// bad entries skip-and-count without blocking the rest.
+	negSteps := -5
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, Steps: &negSteps}); err == nil {
+		t.Fatal("expected negative-steps error")
+	}
+	negKcal := -1.0
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, ActiveKcal: &negKcal}); err == nil {
+		t.Fatal("expected negative-kcal error")
+	}
+	hugeSteps := 2000000000
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, Steps: &hugeSteps}); err == nil {
+		t.Fatal("expected absurd-steps error")
+	}
+	hugeKcal := 1e9
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: day, ActiveKcal: &hugeKcal}); err == nil {
+		t.Fatal("expected absurd-kcal error")
+	}
+	// Entry validation runs before scalar validation, so a 422 still
+	// carries the full invalid breakdown — a retry after fixing the
+	// scalar sees no new invalids.
+	badBoth, err := s.RecordSync(ctx, SyncRecord{Date: day, Steps: &negSteps,
+		Sleeps: []SleepIn{{Day: "bad-day", Minutes: 60}}})
+	if err == nil {
+		t.Fatal("expected negative-steps error")
+	}
+	if badBoth.SessionsInvalid != 1 {
+		t.Fatalf("scalar 422 must carry entry counts: %v", badBoth)
+	}
+	if _, err := s.LogFood(ctx, day, time.Now().UTC(), "oil", "", map[string]float64{"kcal": 1e9}, ""); err == nil {
+		t.Fatal("expected absurd-macro error")
+	}
+	skipRes, err := s.RecordSync(ctx, SyncRecord{Date: day,
+		Sleeps: []SleepIn{{Day: day, Minutes: 25 * 60}}})
+	if err != nil || skipRes.SessionsInvalid != 1 || skipRes.SessionsAdded != 0 {
+		t.Fatalf("invalid entry should skip, not fail: %v %v", skipRes, err)
+	}
+	// Empty Day is invalid, never silently re-bucketed onto the sync date.
+	emptyDay, err := s.RecordSync(ctx, SyncRecord{Date: day,
+		Sleeps: []SleepIn{{Minutes: 60}}})
+	if err != nil || emptyDay.SessionsInvalid != 1 || emptyDay.SessionsAdded != 0 {
+		t.Fatalf("empty Day should count invalid: %v %v", emptyDay, err)
+	}
+	// Entries-only sync with a valid date writes no day doc and echoes
+	// no date: there are no scalars to attribute it to.
+	entriesOnly, err := s.RecordSync(ctx, SyncRecord{Date: "2026-09-14",
+		Sleeps: []SleepIn{{Day: "2026-09-14", Minutes: 60}}})
+	if err != nil || entriesOnly.Date != "" || entriesOnly.SessionsAdded != 1 {
+		t.Fatalf("entries-only sync %v %v", entriesOnly, err)
+	}
+	if n := countDay(t, ctx, s.days, "date", "2026-09-14"); n != 0 {
+		t.Fatal("entries-only sync created a day doc")
+	}
+	cleanDay(t, s, ctx, "2026-09-14")
+	// Bad batch date with no scalars: entries still write on their own
+	// days instead of 422ing the whole payload.
+	badDate, err := s.RecordSync(ctx, SyncRecord{Date: "not-a-day",
+		Sleeps: []SleepIn{{Day: "2026-09-10", Minutes: 60}}})
+	if err != nil || badDate.SessionsAdded != 1 {
+		t.Fatalf("entries-only bad-date sync %v %v", badDate, err)
+	}
+	// Bad batch date WITH scalars stays a 422 (scalars are homeless).
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: "not-a-day",
+		Steps: &steps}); err == nil {
+		t.Fatal("expected bad-date error with scalars")
+	}
+	// Empty sync writes nothing — not even a bare day doc.
+	if _, err := s.RecordSync(ctx, SyncRecord{Date: "2026-09-13"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := countDay(t, ctx, s.days, "date", "2026-09-13"); n != 0 {
+		t.Fatal("empty sync created a day doc")
+	}
+	// Missing day: all scalars null (missing sync indistinguishable from
+	// nothing measured — never a fake zero on one line only).
+	ghost, err := s.DailySummary(ctx, "2026-09-30")
+	if err != nil {
+		t.Fatalf("ghost summary: %v", err)
+	}
+	if ghost["steps"] != nil || ghost["active_kcal"] != nil || ghost["weight"] != nil {
+		t.Fatalf("ghost scalars: %v", ghost)
+	}
+	if ghost["sleep_hours"] != nil || ghost["workout_kcal"] != nil {
+		t.Fatalf("ghost cal-out/sleep: %v", ghost)
+	}
+	if ghost["cal_in"] != nil || ghost["workout_kcal"] != nil || ghost["totals"] != nil || ghost["macro_counts"] != nil {
+		t.Fatalf("ghost totals: %v", ghost)
+	}
+	// Partial-macro day: foods exist but none carries kcal — cal_in and
+	// totals.kcal read null (unknown), not a measured zero.
+	teaDay := "2026-09-04"
+	cleanDay(t, s, ctx, teaDay)
+	teaDT, _ := time.Parse(time.RFC3339, "2026-09-04T08:00:00Z")
+	if _, err := s.LogFood(ctx, teaDay, teaDT, "tea", "", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	partial, err := s.DailySummary(ctx, teaDay)
+	if err != nil {
+		t.Fatalf("partial summary: %v", err)
+	}
+	if partial["cal_in"] != nil {
+		t.Fatalf("cal_in without kcal rows: %v", partial)
+	}
+	if pt, _ := partial["totals"].(map[string]any); pt["kcal"] != nil || pt["protein"] != nil {
+		t.Fatalf("totals without kcal rows: %v", pt)
+	}
+	cleanDay(t, s, ctx, teaDay)
+	dt, _ := time.Parse(time.RFC3339, "2026-09-03T08:00:00Z")
+	if _, err := s.LogFood(ctx, day, dt, "rice", "", map[string]float64{"kcal": 200}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LogFood(ctx, day, dt, "tea", "", nil, ""); err != nil {
+		t.Fatal(err)
 	}
 	sum, err := s.DailySummary(ctx, day)
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
-	if sum["meals"] != 1 || sum["cal_in"] != 200.0 {
-		t.Fatalf("got %v", sum)
+	if fval(sum["steps"]) != 1000 || sum["sleep_hours"] != 6.67 {
+		t.Fatalf("summary %v", sum)
 	}
-	if n, err := s.DeleteMeals(ctx, day); err != nil || n != 1 {
-		t.Fatalf("got %d %v", n, err)
+	if _, ok := sum["net"]; ok {
+		t.Fatalf("no single net: %v", sum)
 	}
-	// Cleanup weight/day rows created by this test.
-	if _, err := s.weight.DeleteMany(ctx, map[string]any{"date": day}); err != nil {
+	if sum["workout_kcal"] != 150.0 || sum["active_kcal"] != 50.5 {
+		t.Fatalf("split cal-out %v", sum)
+	}
+	mc, _ := sum["macro_counts"].(map[string]int64)
+	if mc["kcal"] != 1 || mc["protein"] != 0 {
+		t.Fatalf("macro_counts %v (rice had kcal only)", mc)
+	}
+
+	cleanDay(t, s, ctx, day)
+}
+
+func fptr(f float64) *float64 { return &f }
+
+func strptr(s string) *string { return &s }
+
+func countDay(t *testing.T, ctx context.Context, col *mongoDrv.Collection, key, day string) int {
+	t.Helper()
+	n, err := col.CountDocuments(ctx, bson.M{key: day})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.days.DeleteMany(ctx, map[string]any{"date": day}); err != nil {
+	return int(n)
+}
+
+// cleanDay wipes one test day from all four collections, before and
+// after. Aborted runs leave rows behind; without this a rerun trips the
+// very dedup the suite is asserting.
+func cleanDay(t *testing.T, s *Store, ctx context.Context, day string) {
+	t.Helper()
+	for _, c := range []struct {
+		col *mongoDrv.Collection
+		key string
+	}{
+		{s.days, "date"}, {s.sleep, "day"}, {s.workouts, "day"}, {s.food, "day"},
+	} {
+		if _, err := c.col.DeleteMany(ctx, bson.M{c.key: day}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Non-empty legacy hc_meals fails boot (fail-closed) instead of being
+// dropped; an empty one is cleaned quietly.
+func TestLegacyMealsGate(t *testing.T) {
+	if os.Getenv("MONGODB_URI") == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	t.Setenv("MONGODB_DB", "healthcheck_test")
+	d, err := mongo.DB()
+	if err != nil {
 		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := d.Collection("hc_meals").InsertOne(ctx, bson.M{"date": "2020-01-01"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(); err == nil {
+		t.Fatal("expected refusal with non-empty hc_meals")
+	} else if got := err.Error(); !strings.Contains(got, "hc_meals still holds") {
+		t.Fatalf("wrong error: %v", err)
+	}
+	if _, err := d.Collection("hc_meals").DeleteMany(ctx, bson.M{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(); err != nil {
+		t.Fatalf("empty hc_meals should boot: %v", err)
+	}
+}
+
+// A backfill's nights stay on their mornings: per-entry days survive
+// RecordSync, rec.Date covers only the scalars.
+func TestRecordSyncPreservesEntryDays(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, d := range []string{"2026-09-10", "2026-09-11", "2026-09-12", "2026-09-30"} {
+		cleanDay(t, s, ctx, d)
+	}
+	start1, _ := time.Parse(time.RFC3339, "2026-09-10T22:00:00Z")
+	start2, _ := time.Parse(time.RFC3339, "2026-09-11T22:00:00Z")
+	steps := 100
+	rec := SyncRecord{Date: "2026-09-12", Steps: &steps,
+		Sleeps: []SleepIn{
+			{Day: "2026-09-11", Start: &start1, Minutes: 400},
+			{Day: "2026-09-12", Start: &start2, Minutes: 300},
+		},
+		Workouts: []WorkoutIn{{Day: "2026-09-10", Type: "run", Minutes: 30, Kcal: fptr(300)}},
+	}
+	res, err := s.RecordSync(ctx, rec)
+	if err != nil || res.SessionsAdded != 2 || res.WorkoutsAdded != 1 {
+		t.Fatalf("sync %v %v", res, err)
+	}
+	if n := countDay(t, ctx, s.sleep, "day", "2026-09-11"); n != 1 {
+		t.Fatalf("2026-09-11 sessions: %d", n)
+	}
+	if n := countDay(t, ctx, s.sleep, "day", "2026-09-12"); n != 1 {
+		t.Fatalf("2026-09-12 sessions: %d", n)
+	}
+	if n := countDay(t, ctx, s.workouts, "day", "2026-09-10"); n != 1 {
+		t.Fatalf("2026-09-10 workouts: %d", n)
+	}
+	// Scalars land on rec.Date only.
+	var d bson.M
+	if err := s.days.FindOne(ctx, bson.M{"date": "2026-09-12"}).Decode(&d); err != nil {
+		t.Fatal(err)
+	}
+	if fval(d["steps"]) != 100 {
+		t.Fatalf("steps %v (%T)", d["steps"], d["steps"])
+	}
+	// CorrectFood datetime refresh moves the day.
+	dt, _ := time.Parse(time.RFC3339, "2026-09-10T08:00:00Z")
+	row, err := s.LogFood(ctx, "2026-09-11", dt, "oats", "", map[string]float64{"kcal": 150}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := row["id"].(string)
+	newDT, _ := time.Parse(time.RFC3339, "2026-09-12T08:00:00+05:30")
+	patched, err := s.CorrectFood(ctx, id, nil, nil, nil, nil, nil, &newDT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patched["day"] != "2026-09-12" {
+		t.Fatalf("day not refreshed: %v", patched)
+	}
+	// Cleanup.
+	for _, c := range []struct {
+		col *mongoDrv.Collection
+		key string
+	}{
+		{s.days, "date"}, {s.sleep, "day"}, {s.workouts, "day"}, {s.food, "day"},
+	} {
+		if _, err := c.col.DeleteMany(ctx, bson.M{c.key: bson.M{"$gte": "2026-09-10", "$lte": "2026-09-12"}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

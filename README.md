@@ -50,9 +50,9 @@ The agent does not run in this stack any more (#494). **T3/opencode runs on the 
 
 | Domain | Storage | Retention policy |
 |---|---|---|
-| Money | `money_transactions` | **Permanent** — rows never expire; only `delete_transactions` removes them |
+| Money | `money_transactions` | **Permanent until flagged** — unflagged rows never expire; `delete_transactions` flags (recoverable via `restore_transactions`), flagged rows TTL away 10 days after flagging |
 | Cookbook | `cookbook_*` | **Permanent** |
-| Health tracking | `hc_meals`, `hc_days`, `hc_weight` + Health Connect sync via `health-api` | `hc_meals`/`hc_days` >30d; `hc_weight` **never pruned** |
+| Health tracking | `hc_food_log`, `hc_days`, `hc_sleep`, `hc_workouts`, `hc_weight` + Health Connect sync via `health-api` | **Permanent** — no prune, no TTL (boot refuses a non-empty frozen pre-v2 `hc_meals`; wipe or back it up first) |
 | Tasks / projects | `tasks`, `projects` (+ `task_mutations`, `tasks_changes`) | Task TTL 3 days; history outlives it |
 <!-- #584 TEMP-REMOVE (∃-Mail): retention row.
 | ∃-Mail | `reports` | Read + unstarred >7d; unread and starred are never pruned |
@@ -143,7 +143,7 @@ All services read the same root `.env`, so a dev checkout just points `MONGODB_U
 ## Health Connect Ingestion
 
 1. **Agento Android App** (`android/agento/`): Reads steps, calories, sleep stages, and workout sessions from Health Connect. Syncs periodically or manually to `POST /api/health/sync` with Bearer auth (`PASSWORD`).
-2. **`health-api` Service**: Validates auth, upserts one doc per date in `hc_days` (steps, active kcal, sleep hours, workouts — same shape the health-check MCP writes).
+2. **`health-api` Service**: Validates auth, writes sync scalars to `hc_days` (steps, active kcal) plus sleep sessions to `hc_sleep` and workouts to `hc_workouts` — the same store (and shapes) the health-check MCP writes through.
 
 > **Upgrading from Health Gateway?** Agento is a new app listing (`com.vishnu.agento`), so it installs **alongside** the old Health Gateway build — no auto-update, no settings carry-over (Android sandboxes are per-package).
 > 1. Install Agento, then re-enter the sync server URL + password by hand.
@@ -186,9 +186,8 @@ go run ./cmd/mongo aggregate money_transactions '[{"$group":{"_id":"$category","
 ```
 
 Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`, `scripts/retention.sh run`):
-- `money_transactions`: **Permanent retention** (never expires; only `delete_transactions` removes rows).
-- `hc_meals`, `hc_days`: Purges records where `date < today - 30d`.
-- `hc_weight`: **Permanent retention** (never pruned).
+- `money_transactions`: **Permanent until flagged** (unflagged rows never expire; `delete_transactions` flags, flagged rows TTL away 10 days after flagging).
+- `hc_food_log`, `hc_days`, `hc_sleep`, `hc_workouts`, `hc_weight`: **Permanent retention** (never expires, never pruned; only explicit deletes remove rows — by id, except `delete_weight` by date).
 - `cookbook_ingredients`, `cookbook_recipes`, `cookbook_cook_log`: **Permanent retention** (never pruned).
 <!-- #584 TEMP-REMOVE (∃-Mail): reports retention bullet.
 - `reports` (∃-Mail): purges records where `createdAt < today - 7d AND read AND NOT starred` — unread and starred are never pruned.
@@ -217,7 +216,7 @@ Data lifecycle is governed by the `retention` Go binary (`cmd/retention/main.go`
 ├── mcps/
 │   ├── money/               # miser-money MCP (accounts + transactions; code in cmd/ + internal/)
 │   ├── cookbook/            # cookbook MCP (permanent recipe library; code in cmd/ + internal/)
-│   ├── health_check/        # health-check MCP (meals + days + weight; code in cmd/ + internal/)
+│   ├── health_check/        # health-check MCP (flat food log + weight + sleep + workouts; code in cmd/ + internal/)
 │   ├── task-manager/        # tasks MCP (code in cmd/ + internal/)
 │   └── project-manager/     # projects MCP (code in cmd/ + internal/)
 ├── cmd/                     # Go services (each builds to a static binary)

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -105,7 +107,16 @@ func TestLocalDate(t *testing.T) {
 	if d := localDate("2026-09-20T20:00:00Z"); d != "2026-09-21" {
 		t.Fatalf("got %s", d)
 	}
-	if d := localDate("not-a-date"); d != "not-a-date"[:10] {
+	// Garbage is invalid (""), never a guessed prefix: a corrupt
+	// timestamp must fail or count invalid downstream, not land on a date.
+	if d := localDate("not-a-date"); d != "" {
+		t.Fatalf("got %s", d)
+	}
+	if d := localDate("2026-11-27 oops"); d != "" {
+		t.Fatalf("got %s", d)
+	}
+	// Naive timestamps read as UTC: 08:00 naive = 13:30 IST same date.
+	if d := localDate("2026-11-27T08:00:00"); d != "2026-11-27" {
 		t.Fatalf("got %s", d)
 	}
 }
@@ -117,6 +128,14 @@ func TestMinutesBetween(t *testing.T) {
 	}
 	if _, ok := minutesBetween("bogus", "2026-09-20T08:30:00+05:30"); ok {
 		t.Fatal("expected failure")
+	}
+	if _, ok := minutesBetween("2026-09-20T08:30:00+05:30", "2026-09-20T08:00:00+05:30"); ok {
+		t.Fatal("expected failure on reversed interval, not a 1-minute workout")
+	}
+	// Sub-minute intervals are invalid, not rounded up: sync never invents
+	// a 1-minute workout from seconds of data.
+	if _, ok := minutesBetween("2026-09-20T08:00:00Z", "2026-09-20T08:00:30Z"); ok {
+		t.Fatal("expected sub-minute failure")
 	}
 }
 
@@ -382,6 +401,79 @@ func TestSyncInvalidJSONScrubbed(t *testing.T) {
 	}
 	if body := w.Body.String(); !strings.Contains(body, "invalid JSON") {
 		t.Fatalf("422 must name invalid JSON, got %s", body)
+	}
+}
+
+// A 422 still reports what was countable: timestamp skips are tallied
+// before validation fails, so the payload debugger sees invalid counts
+// instead of just a detail string. Needs MongoDB; skipped without it.
+func TestSync422CarriesSkipCounts(t *testing.T) {
+	if os.Getenv("MONGODB_URI") == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	t.Setenv("MONGODB_DB", "healthapi_sync_test")
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	body := `{"device":"test","syncedAtIso":"2026-11-27T10:00:00Z",` +
+		`"steps":-5,` +
+		`"sleep":[{"startIso":"2026-11-26T22:00:00Z","endIso":"not-a-date","totalMinutes":400},` +
+		`{"startIso":"bogus","endIso":"2026-11-26T07:00:00Z","totalMinutes":60}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/health/sync", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad scalars: got %d (%s), want 422", w.Code, w.Body.String())
+	}
+	// Bad end (unparseable) + bad start (unparseable) both count; the
+	// negative steps 422 the batch.
+	for _, want := range []string{`"sessions_invalid":2`, `"workouts_invalid":0`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("422 must carry skip counts, got %s", w.Body.String())
+		}
+	}
+}
+
+func TestSyncBatchCapCarriesCounts(t *testing.T) {
+	if os.Getenv("MONGODB_URI") == "" {
+		t.Skip("MONGODB_URI not set")
+	}
+	t.Setenv("MONGODB_DB", "healthapi_sync_test")
+	t.Setenv("PASSWORD", "test-secret-12345678")
+	var sessions []string
+	for i := 0; i < 101; i++ {
+		sessions = append(sessions, fmt.Sprintf(`{"startIso":"2026-11-26T22:00:00Z","endIso":"2026-11-27T06:00:00Z","totalMinutes":%d}`, 400+i))
+	}
+	body := `{"device":"test","syncedAtIso":"2026-11-27T10:00:00Z","sleep":[` + strings.Join(sessions, ",") + `]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/health/sync", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w := httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("oversize batch: got %d (%s), want 422", w.Code, w.Body.String())
+	}
+	for _, want := range []string{`"sessions_over_cap":101`, `"sessions_invalid":0`, `"workouts_over_cap":0`, `"workouts_invalid":0`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("batch-cap 422 must carry over-cap counts, got %s", w.Body.String())
+		}
+	}
+	// Both sides over cap: one 422 names both, not just the first.
+	var workouts []string
+	for i := 0; i < 101; i++ {
+		workouts = append(workouts, fmt.Sprintf(`{"startIso":"2026-11-26T10:00:00Z","endIso":"2026-11-26T10:30:00Z","title":"r%d"}`, i))
+	}
+	bodyBoth := `{"device":"test","syncedAtIso":"2026-11-27T10:00:00Z","sleep":[` + strings.Join(sessions, ",") +
+		`],"workouts":[` + strings.Join(workouts, ",") + `]}`
+	req = httptest.NewRequest(http.MethodPost, "/api/health/sync", strings.NewReader(bodyBoth))
+	req.Header.Set("Authorization", "Bearer test-secret-12345678")
+	w = httptest.NewRecorder()
+	sync(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("oversize batch: got %d (%s), want 422", w.Code, w.Body.String())
+	}
+	for _, want := range []string{`"sessions_over_cap":101`, `"workouts_over_cap":101`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("both-sides batch-cap 422 must name both sides, got %s", w.Body.String())
+		}
 	}
 }
 

@@ -30,9 +30,6 @@ import (
 // it the app's poll loop turns a config error into steady log spam.
 var passwordWarnOnce syncpkg.Once
 
-// IST is the user timezone (UTC+5:30, no DST) as a fixed offset.
-var IST = time.FixedZone("IST", 5*3600+30*60)
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	// nosniff on every JSON body: error text is scrubbed + bounded, but a

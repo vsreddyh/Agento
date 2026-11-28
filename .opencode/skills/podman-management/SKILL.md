@@ -27,13 +27,15 @@ Services: `health-api` (8001) · `proxy` (8080, app URL) · `retention`
 (one-shot). No agent service.
 
 ```bash
-podman-compose -f docker/docker-compose.yml ps
-podman-compose -f docker/docker-compose.yml logs --tail 50 health-api
-podman-compose -f docker/docker-compose.yml run --rm retention --dry-run  # safe; real run deletes data
+scripts/hermes.sh status
+podman-compose --env-file .env -f docker/docker-compose.yml logs --tail 50 health-api
+scripts/retention.sh --dry-run  # safe; real run deletes data
 ```
 
-Retention prunes `hc_meals`/`hc_days` > 30d, never `hc_weight` (miser-money
-has no retention — its rows are permanent).
+Retention is a no-op for health-check and cookbook (both fully permanent —
+health-check has no prune tool and no TTL; cookbook the same). Miser-money
+soft-deletes instead: flagged rows vanish from reads at once and TTL away
+10 days after flagging, unflagged rows are permanent.
 <!-- #584 TEMP-REMOVE (∃-Mail): reports retention disabled, data left as-is.
 `reports` (∃-Mail): read+unstarred pruned after 7d; unread/starred never touched.
 -->
@@ -44,7 +46,9 @@ has no retention — its rows are permanent).
   containers, editing live `.env` — ask first, every time, and never do
   them unannounced: this checkout may BE the live stack.
 - After compose changes, `up -d` alone does not recreate: `ps`, `podman rm -f
-  <container-name>`, `up -d <service>`. Keep the explicit `-f`.
+  <container-name>`, `up -d <service>`. Keep the explicit
+  `podman-compose --env-file .env -f docker/docker-compose.yml` spelling —
+  bare `-f` without `--env-file` runs every `${VAR}` empty.
 - `podman-compose` cannot parse `condition:` in `depends_on` — short list form only.
 - Never `cat`/`echo` `PASSWORD` or `OPENCODE_API_KEY`, never commit them.
   All env lives in the single git-ignored root `.env`.

@@ -4,14 +4,15 @@ package main
 
 import (
 	"agento/internal/crashlog"
-	"agento/internal/mongo"
+	"agento/internal/healthcheck"
 	"context"
 	"encoding/json"
+	"errors"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
 	"net/http"
 	"strings"
+	stdsync "sync"
 	"time"
 )
 
@@ -40,39 +41,41 @@ type HealthSyncPayload struct {
 	Workouts           []WorkoutEntry `json:"workouts"`
 }
 
-// localDate buckets an ISO timestamp into the user's (IST) calendar date.
-func localDate(iso string) string {
-	s := strings.TrimSpace(iso)
-	if t, err := time.Parse(time.RFC3339, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
-		return t.In(IST).Format("2006-01-02")
-	}
-	// Naive timestamps are UTC.
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC); err == nil {
-		return t.In(IST).Format("2006-01-02")
-	}
-	if len(s) >= 10 {
-		return s[:10]
-	}
-	return s
+// parseSyncTime parses a Health Connect ISO timestamp: fractional
+// seconds accepted, naive read as UTC — one rule, shared with the MCP
+// (healthcheck.ParseSyncTime), so a retried payload hashes identically
+// whether zoned or naive.
+func parseSyncTime(s string) (time.Time, bool) {
+	return healthcheck.ParseSyncTime(s)
 }
 
-// minutesBetween returns whole-minute duration; ok=false when unparseable.
-func minutesBetween(startISO, endISO string) (dur int, ok bool) {
-	p := func(s string) (time.Time, bool) {
-		s = strings.TrimSpace(s)
-		if t, err := time.Parse(time.RFC3339, strings.Replace(s, "Z", "+00:00", 1)); err == nil {
-			return t, true
-		}
-		return time.Time{}, false
+// localDate buckets an ISO timestamp into the user's (IST) calendar date.
+// Unparseable input is invalid (""), never a guessed prefix: a corrupt
+// timestamp must fail or count invalid downstream, not land on a date.
+func localDate(iso string) string {
+	s := strings.TrimSpace(iso)
+	if t, ok := parseSyncTime(s); ok {
+		return t.In(healthcheck.IST()).Format("2006-01-02")
 	}
-	s, ok1 := p(startISO)
-	e, ok2 := p(endISO)
+	return ""
+}
+
+// minutesBetween returns whole-minute duration; ok=false when unparseable
+// or under a minute. Sub-minute intervals are skipped, not stored.
+// Longer intervals truncate (floor) to whole minutes: 61s and 119s both
+// store 1. That differs deliberately from the manual path, which rejects
+// fractional input outright — a sync duration is measured (flooring never
+// overstates it), while a typed fraction claims a precision the store
+// does not keep.
+func minutesBetween(startISO, endISO string) (dur int, ok bool) {
+	s, ok1 := parseSyncTime(startISO)
+	e, ok2 := parseSyncTime(endISO)
 	if !ok1 || !ok2 {
 		return 0, false
 	}
 	m := int(e.Sub(s).Minutes())
 	if m < 1 {
-		m = 1
+		return 0, false
 	}
 	return m, true
 }
@@ -92,6 +95,22 @@ func health(w http.ResponseWriter, r *http.Request) {
 
 // exportsRoot is the VPS folder exposed for mobile downloads (#26).
 // Override with EXPORTS_DIR; served read-only, subfolders allowed.
+
+// hcStore is the shared healthcheck backend. Both the MCP server and this
+// sync endpoint write through it, so hc_days/hc_sleep/hc_workouts have one
+// write path and one updatedAt shape (BSON Date, never a string).
+var (
+	hcStore     *healthcheck.Store
+	hcStoreOnce stdsync.Once
+	hcStoreErr  error
+)
+
+func healthStore() (*healthcheck.Store, error) {
+	hcStoreOnce.Do(func() {
+		hcStore, hcStoreErr = healthcheck.FromEnv()
+	})
+	return hcStore, hcStoreErr
+}
 
 func sync(w http.ResponseWriter, r *http.Request) {
 	// Auth first, like every other authed verb in this binary (list,
@@ -114,86 +133,123 @@ func sync(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "invalid JSON: " + boundedDetail(err)})
 		return
 	}
+	sOverCap, wOverCap := 0, 0
 	if len(p.Sleep) > 100 {
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "sleep batch max 100"})
-		return
+		sOverCap = len(p.Sleep)
 	}
 	if len(p.Workouts) > 100 {
-		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "workouts batch max 100"})
+		wOverCap = len(p.Workouts)
+	}
+	if sOverCap > 0 || wOverCap > 0 {
+		writeJSON(w, http.StatusUnprocessableEntity, bson.M{"detail": "batch max 100 sleep sessions and 100 workouts — split the backfill and retry",
+			"sessions_added": 0, "sessions_skipped": 0, "sessions_invalid": 0, "sessions_over_cap": sOverCap,
+			"workouts_added": 0, "workouts_skipped": 0, "workouts_invalid": 0, "workouts_over_cap": wOverCap})
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	d, err := mongo.DB()
+	hcs, err := healthStore()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "MONGODB_URI not set"})
+		writeJSON(w, http.StatusInternalServerError, bson.M{"detail": "health store unavailable"})
 		return
 	}
-	days := d.Collection("hc_days")
-	now := time.Now().UTC().Format(time.RFC3339)
-	statsDate := localDate(p.SyncedAtISO)
+	now := time.Now().UTC()
 
-	update := bson.M{"updatedAt": now}
+	// Steps and active calories overwrite the day's scalars when present;
+	// a payload without them (sleep/workout-only backfill) leaves the
+	// scalars alone instead of zeroing the day.
+	rec := healthcheck.SyncRecord{Date: localDate(p.SyncedAtISO)}
 	if p.Steps != nil {
-		update["steps"] = *p.Steps
+		steps := *p.Steps
+		rec.Steps = &steps
 	}
 	if p.ActiveCaloriesKcal != nil {
-		update["active_kcal"] = *p.ActiveCaloriesKcal
-	}
-	if len(update) > 1 {
-		if _, err := days.UpdateOne(ctx, bson.M{"date": statsDate}, bson.M{"$set": update}, upsert()); err != nil {
-			// Scrubbed + bounded, never the raw driver text (topology/
-			// dial internals the app would render and triage would miss).
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
-			return
-		}
+		kcal := *p.ActiveCaloriesKcal
+		rec.ActiveKcal = &kcal
 	}
 
+	tsInvalidSleeps, tsInvalidWorkouts := 0, 0
 	for _, s := range p.Sleep {
-		wakeDate := localDate(s.EndISO)
-		var dup bson.M
-		if err := days.FindOne(ctx, bson.M{"date": wakeDate, "sleep_sessions.start": s.StartISO}).Decode(&dup); err == nil {
+		// Sessions bucket by wake date but carry their own start, so a
+		// night crossing midnight still attributes to the morning —
+		// while the dedup hash keys on the real start. Sleep uses the
+		// device-reported minutes (awake time excluded), NOT the
+		// start/end interval — workouts instead use the interval
+		// duration. An unparseable end OR start skips-and-counts as
+		// invalid: a corrupt start must not land on the manual key
+		// ("day|manual"), or a retried payload collides with a genuine
+		// manual log of the same minutes. Naive timestamps parse as UTC.
+		if _, ok := parseSyncTime(s.EndISO); !ok {
+			log.Printf("skipping sleep with unparseable end timestamp: %q (minutes=%d)", s.EndISO, s.TotalMinutes)
+			tsInvalidSleeps++
 			continue
 		}
-		hours := float64(s.TotalMinutes) / 60.0
-		hours = float64(int(hours*100+0.5)) / 100
-		if _, err := days.UpdateOne(ctx, bson.M{"date": wakeDate}, bson.M{
-			"$inc":  bson.M{"sleep_hours": hours},
-			"$push": bson.M{"sleep_sessions": bson.M{"start": s.StartISO, "minutes": s.TotalMinutes}},
-			"$set":  bson.M{"updatedAt": now},
-		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
-			return
+		day := localDate(s.EndISO)
+		start, ok := parseSyncTime(s.StartISO)
+		if !ok {
+			log.Printf("skipping sleep with unparseable start timestamp: %q (minutes=%d)", s.StartISO, s.TotalMinutes)
+			tsInvalidSleeps++
+			continue
 		}
+		rec.Sleeps = append(rec.Sleeps, healthcheck.SleepIn{
+			Day:     day,
+			Start:   &start,
+			Minutes: s.TotalMinutes,
+		})
 	}
 
 	for _, wo := range p.Workouts {
 		duration, ok := minutesBetween(wo.StartISO, wo.EndISO)
 		if !ok {
 			log.Printf("skipping workout with unparseable timestamps: %s -> %s", wo.StartISO, wo.EndISO)
+			tsInvalidWorkouts++
 			continue
 		}
-		var kcal float64
+		var kcal *float64
 		if wo.CaloriesKcal != nil {
-			kcal = *wo.CaloriesKcal
+			kcal = wo.CaloriesKcal
 		}
-		kcal = float64(int(kcal*10+0.5)) / 10
-		wdoc := bson.M{"type": wo.Type, "minutes": duration, "kcal": kcal}
-		var dup bson.M
-		if err := days.FindOne(ctx, bson.M{
-			"date":     localDate(wo.StartISO),
-			"workouts": bson.M{"$elemMatch": wdoc},
-		}).Decode(&dup); err == nil {
-			continue
+		// Title is the human name when Type is empty (Health Connect
+		// often sends one without the other); the store lowercases it
+		// like any other type.
+		typ := wo.Type
+		if strings.TrimSpace(typ) == "" {
+			typ = wo.Title
 		}
-		if _, err := days.UpdateOne(ctx, bson.M{"date": localDate(wo.StartISO)}, bson.M{
-			"$push": bson.M{"workouts": wdoc},
-			"$set":  bson.M{"updatedAt": now},
-		}, upsert()); err != nil {
-			writeJSON(w, http.StatusInternalServerError, bson.M{"detail": boundedDetail(err)})
-			return
+		rec.Workouts = append(rec.Workouts, healthcheck.WorkoutIn{
+			Day:     localDate(wo.StartISO),
+			Type:    typ,
+			Minutes: float64(duration),
+			Kcal:    kcal,
+		})
+	}
+
+	syncRes, err := hcs.RecordSync(ctx, rec)
+	syncRes.SessionsInvalid += tsInvalidSleeps
+	syncRes.WorkoutsInvalid += tsInvalidWorkouts
+	if err != nil {
+		// Domain errors (bad date, implausible minutes/kcal) are the
+		// client's malformed payload: 422 like the batch-size guards
+		// above, not a 500 server bug. Anything else is ours. Either way
+		// the skip/invalid breakdown rides along — a 422 with counts
+		// debugs like a 200.
+		body := bson.M{"sessions_added": syncRes.SessionsAdded, "sessions_skipped": syncRes.SessionsSkipped,
+			"sessions_invalid": syncRes.SessionsInvalid, "sessions_over_cap": 0,
+			"workouts_added": syncRes.WorkoutsAdded, "workouts_skipped": syncRes.WorkoutsSkipped,
+			"workouts_invalid": syncRes.WorkoutsInvalid, "workouts_over_cap": 0}
+		if syncRes.Date != "" {
+			body["date"] = syncRes.Date
 		}
+		var se *healthcheck.StoreError
+		if errors.As(err, &se) {
+			body["detail"] = se.Error()
+			writeJSON(w, http.StatusUnprocessableEntity, body)
+		} else {
+			body["detail"] = boundedDetail(err)
+			writeJSON(w, http.StatusInternalServerError, body)
+		}
+		return
 	}
 
 	steps, kcal := 0, 0.0
@@ -203,13 +259,21 @@ func sync(w http.ResponseWriter, r *http.Request) {
 	if p.ActiveCaloriesKcal != nil {
 		kcal = *p.ActiveCaloriesKcal
 	}
-	log.Printf("synced device=%s steps=%d calories=%v sleep=%d workouts=%d",
-		p.Device, steps, kcal, len(p.Sleep), len(p.Workouts))
-	writeJSON(w, http.StatusOK, bson.M{"status": "ok", "synced_at": now})
-}
-
-func upsert() *options.UpdateOptions {
-	return options.Update().SetUpsert(true)
+	log.Printf("synced device=%s steps=%d calories=%v sleep=%d workouts=%d (+%d sessions +%d workouts, %d+%d skipped, %d+%d invalid)",
+		p.Device, steps, kcal, len(p.Sleep), len(p.Workouts),
+		syncRes.SessionsAdded, syncRes.WorkoutsAdded, syncRes.SessionsSkipped, syncRes.WorkoutsSkipped,
+		syncRes.SessionsInvalid, syncRes.WorkoutsInvalid)
+	resp := bson.M{"status": "ok", "synced_at": now.Format(time.RFC3339),
+		"sessions_added": syncRes.SessionsAdded, "sessions_skipped": syncRes.SessionsSkipped,
+		"sessions_invalid": syncRes.SessionsInvalid, "sessions_over_cap": 0,
+		"workouts_added": syncRes.WorkoutsAdded, "workouts_skipped": syncRes.WorkoutsSkipped,
+		"workouts_invalid": syncRes.WorkoutsInvalid, "workouts_over_cap": 0}
+	// The batch date covers only the scalars; entries-only syncs (or a
+	// bad batch date) write no scalars, so no date is echoed.
+	if syncRes.Date != "" {
+		resp["date"] = syncRes.Date
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // registerHealth wires this domain's routes. One function per file so main stays a
