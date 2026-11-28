@@ -1374,17 +1374,29 @@ func (s *Store) DetectRecurring(ctx context.Context, start, end string, category
 		if order == "asc" {
 			return less
 		}
+		// desc flips value compares; the name key and every tie-break stay
+		// ascending, like every other category table. next keeps nulls last
+		// in both directions.
 		if sortBy == "next" {
-			// desc flips dates (nulls first would be wrong — keep nulls last).
 			if (a.NextExpectedDate == "") != (b.NextExpectedDate == "") {
 				return b.NextExpectedDate == ""
 			}
 			if a.NextExpectedDate != b.NextExpectedDate {
 				return a.NextExpectedDate > b.NextExpectedDate
 			}
-			return a.Category > b.Category
+			return a.Category < b.Category
 		}
-		return !less
+		switch sortBy {
+		case "amount":
+			if a.AmountPaise != b.AmountPaise {
+				return a.AmountPaise > b.AmountPaise
+			}
+		case "count":
+			if a.Count != b.Count {
+				return a.Count > b.Count
+			}
+		}
+		return a.Category < b.Category
 	})
 	total := len(out)
 	if len(out) > limit {
