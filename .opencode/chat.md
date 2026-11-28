@@ -47,12 +47,14 @@ instead of round-tripping one at a time.
   the next call); windowed tools need explicit bounds (`start`/`end`, or
   `start_a`/`end_a`/`start_b`/`end_b` for `money_compare`), and every
   response carries at most one table. `list_budgets` is unwindowed
-  (optional `month_from`/`month_to`/`category`; blank `category` means all
+  (optional `month_from`/`month_to`/`category`; blank/whitespace-only `category` means all
   budgets, an unknown one matches nothing and returns the empty list). Budgets live in `money_budgets`
   keyed by (category, month) as dated versions. `query_transactions` orders
   by `sort_by` (date|amount, default date) + `sort` (asc|desc, default asc),
   both echoed back in range mode (a by-id fetch returns one row and carries no sort keys). Omit a sort field to default it over MCP — the schema enum is exact, so a blank string is rejected before the handler. Reads fail closed on `type`/`sort_by`/`sort`/ids, but an
-  unknown account/category filter returns the empty page — typo protection
+  unknown account/category filter returns the empty page (exception:
+  `money_breakdown` by=account always lists every account — an unknown
+  categories[] only zeroes the flow columns) — typo protection
   lives on the write path (`log`/`edit` still reject unknown names); a live
   delete of an empty filter reports `deleted:0`, so check the dry run first.
 - **cookbook** (10, permanent): `add_ingredient`, `get_ingredient`,
