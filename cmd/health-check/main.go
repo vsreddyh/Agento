@@ -214,7 +214,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "get_food",
-		Description: "Fetch one food entry by id. Unknown ids fail."},
+		Description: "Fetch one food entry by id (trimmed — a padded hex works). Unknown ids fail."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in foodIDInput) (*mcp.CallToolResult, map[string]any, error) {
 			row, err := store.GetFood(ctx, in.ID)
 			if err != nil {
@@ -242,7 +242,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_food",
-		Description: "Patch one food entry by id: supplied fields replace, omitted keep; an empty or whitespace-only string clears qty/note (whitespace-only what fails like empty); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC; whitespace-only counts as absent — no change, like omitted). Ask-gated like edit_transaction."},
+		Description: "Patch one food entry by trimmed id: supplied fields replace, omitted keep; an empty or whitespace-only string clears qty/note (whitespace-only what fails like empty); clear_macros names macros to remove (JSON null and omitted both decode absent, so null cannot clear). datetime is RFC3339 (naive read as UTC; whitespace-only counts as absent — no change, like omitted). Ask-gated like edit_transaction."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			macros := map[string]*float64{}
 			for k, v := range map[string]*float64{"kcal": in.Kcal, "protein": in.Protein, "carbs": in.Carbs, "fat": in.Fat, "fiber": in.Fiber} {
@@ -268,7 +268,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_food",
-		Description: "Hard-delete one food entry by id. Dry-runs by default: reports the row, deletes nothing unless dry_run=false. Permanent, no restore."},
+		Description: "Hard-delete one food entry by trimmed id. Dry-runs by default: reports the row, deletes nothing unless dry_run=false. Permanent, no restore."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteFoodInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteFood(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {
@@ -349,7 +349,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_sleep",
-		Description: "Patch one sleep session: minutes or hours (one of the two — both-set fails), max 1440 minutes / 24 hours. Ask-gated."},
+		Description: "Patch one sleep session by trimmed id: minutes or hours (one of the two — both-set fails), max 1440 minutes / 24 hours. Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			if in.Minutes != nil && in.Hours != nil {
 				return fail(fmt.Errorf("correct_sleep takes minutes or hours, not both"))
@@ -370,7 +370,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_sleep",
-		Description: "Hard-delete one sleep session by entry id. Dry-runs by default."},
+		Description: "Hard-delete one sleep session by trimmed entry id. Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteSleepInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteSleep(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {
@@ -410,7 +410,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "correct_workout",
-		Description: "Patch one workout by entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty (whitespace-only fails like empty); minutes must be whole, max 1440; kcal max 100000, clear with clear_kcal:true (setting both fails). Ask-gated."},
+		Description: "Patch one workout by trimmed entry id: supplied fields replace, omitted keep; type capped at 60 chars and cannot be cleared to empty (whitespace-only fails like empty); minutes must be whole, max 1440; kcal max 100000, clear with clear_kcal:true (setting both fails). Ask-gated."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in correctWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			row, err := store.CorrectWorkout(ctx, in.ID, in.Type, in.Minutes, in.Kcal, in.ClearKcal != nil && *in.ClearKcal)
 			if err != nil {
@@ -420,7 +420,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_workout",
-		Description: "Hard-delete one workout by entry id. Dry-runs by default."},
+		Description: "Hard-delete one workout by trimmed entry id. Dry-runs by default."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in deleteWorkoutInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := store.DeleteWorkout(ctx, in.ID, dryRun(in.DryRun))
 			if err != nil {

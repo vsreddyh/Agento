@@ -162,7 +162,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_ingredient",
-		Description: "Patch an ingredient (by exact name or id, case-sensitive, trimmed) — new name or note, at least one required. Names/notes are trimmed (whitespace-only counts as empty); empty args are left unchanged, notes cannot be cleared to empty. Renames to an existing name error; unknown targets return ok:false. Over-cap notes are truncated UTF-8-safe."},
+		Description: "Patch an ingredient (by exact name or id, case-sensitive, trimmed) — new name or note, at least one required. Names/notes are trimmed (whitespace-only counts as empty); empty args are left unchanged (a patch with only empty args fails with nothing to update), notes cannot be cleared to empty. Renames to an existing name error; unknown targets return ok:false. Over-cap notes are truncated UTF-8-safe."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateIngredientInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
@@ -232,7 +232,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "update_recipe",
-		Description: "Patch a recipe (by exact name or id, case-sensitive, trimmed) — new name, note or tags, at least one required (tags replace the whole list, not merged). Names/notes/tags are trimmed (whitespace-only counts as empty); empty args are left unchanged, note/tags cannot be cleared to empty. Renames to an existing name error; unknown targets return ok:false. Over-cap values are truncated UTF-8-safe."},
+		Description: "Patch a recipe (by exact name or id, case-sensitive, trimmed) — new name, note or tags, at least one required (tags replace the whole list, not merged). Names/notes/tags are trimmed (whitespace-only counts as empty); empty args are left unchanged (a patch with only empty args fails with nothing to update), note/tags cannot be cleared to empty. Renames to an existing name error; unknown targets return ok:false. Over-cap values are truncated UTF-8-safe."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in updateRecipeInput) (*mcp.CallToolResult, map[string]any, error) {
 			patch := map[string]any{}
 			if in.Name != "" {
