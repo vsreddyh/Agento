@@ -875,18 +875,34 @@ func dayStrings(vals []any, asc bool) []string {
 }
 
 // sortDaysByFloat orders day rows by a numeric key, same direction as the
-// requested sort. Ties keep date order.
+// requested sort. A missing key means unknown, not zero: unknown rows sort
+// first in asc and last in desc, like the Mongo missing-first convention the
+// food lists get natively. Remaining ties keep date order.
 func sortDaysByFloat(rows []bson.M, key string, asc bool) {
+	dayTie := func(i, j int) bool {
+		di, _ := rows[i]["day"].(string)
+		dj, _ := rows[j]["day"].(string)
+		if asc {
+			return di < dj
+		}
+		return di > dj
+	}
 	sort.SliceStable(rows, func(i, j int) bool {
 		fi, _ := validate.ToFloat(rows[i][key])
 		fj, _ := validate.ToFloat(rows[j][key])
+		_, iok := rows[i][key]
+		_, jok := rows[j][key]
+		if !iok && !jok {
+			return dayTie(i, j)
+		}
+		if !iok {
+			return asc
+		}
+		if !jok {
+			return !asc
+		}
 		if fi == fj {
-			di, _ := rows[i]["day"].(string)
-			dj, _ := rows[j]["day"].(string)
-			if asc {
-				return di < dj
-			}
-			return di > dj
+			return dayTie(i, j)
 		}
 		if asc {
 			return fi < fj
@@ -1073,11 +1089,6 @@ func workoutOut(doc bson.M) bson.M {
 	return out
 }
 
-func workoutKcal(wos []bson.M) float64 {
-	total, _ := workoutKcalTotal(wos)
-	return total
-}
-
 // workoutKcalTotal sums kcal over rows that carry it; the bool reports
 // whether any row did — absent everywhere means unknown, not zero.
 func workoutKcalTotal(wos []bson.M) (float64, bool) {
@@ -1182,7 +1193,11 @@ func (s *Store) ListWorkouts(ctx context.Context, start, end, sortBy, dir, typ s
 		if sortBy == "minutes" {
 			row["_sort"] = workoutMinutes(wos)
 		} else if sortBy == "kcal" {
-			row["_sort"] = workoutKcal(wos)
+			// Unknown stays missing (not zero): sortDaysByFloat orders
+			// unknown first in asc, distinct from a measured 0.
+			if k, ok := workoutKcalTotal(wos); ok {
+				row["_sort"] = k
+			}
 		}
 		out = append(out, row)
 	}

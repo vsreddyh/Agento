@@ -41,7 +41,7 @@ func registerAnalysisTools(s *mcp.Server) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "money_series",
-		Description: "Bucketed trend for a window: one row per day, week (Monday-start, keyed by Monday date) or month. Required: start, end, bucket day|week|month. Optional: category, account (single; narrow values, not the grid — empty buckets stay; an unknown name matches no rows, so every bucket reads zero — not an error), order asc|desc default asc. Sort args are validated in the handler only (no schema enum — the valid sets depend on the mode) and match case-insensitively after trimming. Zero-filled: buckets with no rows appear as zeros. From/to clip to the window; days counts clipped days. Day grids over 500 buckets are rejected (use week/month). Carries no period totals — that is money_totals' answer."},
+		Description: "Bucketed trend for a window: one row per day, week (Monday-start, keyed by Monday date) or month. Required: start, end, bucket day|week|month. Optional: category, account (single; narrow values, not the grid — empty buckets stay; an unknown name matches no rows, so every bucket reads zero — not an error), order asc|desc default asc (order only — there is no sort_by; a sort_by argument is ignored, not applied). Order is validated in the handler only (no schema enum) and matches case-insensitively after trimming. Zero-filled: buckets with no rows appear as zeros. From/to clip to the window; days counts clipped days. Day grids over 500 buckets are rejected (use week/month). Carries no period totals — that is money_totals' answer."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in moneySeriesInput) (*mcp.CallToolResult, map[string]any, error) {
 			out, err := handleMoneySeries(ctx, in)
 			if err != nil {

@@ -287,7 +287,29 @@ func TestSleepWorkoutDedup(t *testing.T) {
 	if wos, _ := nokSum["workouts"].([]bson.M); len(wos) != 1 {
 		t.Fatalf("workouts: %v", nokSum)
 	}
+	// Unknown kcal sorts first in asc, distinct from a measured 0: a day
+	// with an explicit 0-kcal workout reads after the unknown day.
+	zeroDay := "2026-09-16"
+	cleanDay(t, s, ctx, zeroDay)
+	if _, err := s.LogWorkout(ctx, zeroDay, "walk", 10, fptr(0)); err != nil {
+		t.Fatal(err)
+	}
+	kdays, _, err := s.ListWorkouts(ctx, nokDay, zeroDay, "kcal", "asc", "")
+	if err != nil || len(kdays) != 2 {
+		t.Fatalf("kcal sort %v %v", kdays, err)
+	}
+	if kdays[0]["day"] != nokDay || kdays[1]["day"] != zeroDay {
+		t.Fatalf("unknown kcal did not sort first-distinct: %v then %v", kdays[0]["day"], kdays[1]["day"])
+	}
+	kdays, _, err = s.ListWorkouts(ctx, nokDay, zeroDay, "kcal", "desc", "")
+	if err != nil || len(kdays) != 2 {
+		t.Fatalf("kcal desc sort %v %v", kdays, err)
+	}
+	if kdays[0]["day"] != zeroDay || kdays[1]["day"] != nokDay {
+		t.Fatalf("unknown kcal did not sort last in desc: %v then %v", kdays[0]["day"], kdays[1]["day"])
+	}
 	cleanDay(t, s, ctx, nokDay)
+	cleanDay(t, s, ctx, zeroDay)
 	allDays, _, _ := s.ListWorkouts(ctx, day, day, "", "", "")
 	first := allDays[0]["workouts"].([]bson.M)[0]
 	if _, ok := first["kcal"]; !ok {

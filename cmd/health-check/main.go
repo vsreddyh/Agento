@@ -222,7 +222,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_food",
-		Description: "List food entries between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). Sort_by names the field, sort the direction; rows without the sort field sort first in asc (unknown, not zero). Blank/whitespace-only means the defaults and the applied pair is echoed; sort_by is case-sensitive, sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values. What is exact match on the lowercased entry text. No match returns the empty page.",
+		Description: "List food entries between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). Sort_by names the field, sort the direction; rows without the sort field sort first in asc (unknown, not zero). Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers, and the applied pair is echoed. sort_by is case-sensitive, sort case-insensitive. What is exact match on the lowercased entry text. No match returns the empty page.",
 		InputSchema: enumSchema(listFoodInput{},
 			map[string][]string{"sort_by": healthcheck.FoodSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listFoodInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -286,7 +286,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_weight",
-		Description: "List weights between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). sort_by names the field (date|kg, default date), sort the direction (asc|desc, default asc). Blank/whitespace-only means the defaults and the applied pair is echoed; sort_by is case-sensitive, sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values. No match returns the empty page.",
+		Description: "List weights between start/end dates (YYYY-MM-DD inclusive), capped at 500 rows (total echoed; truncated means narrow the dates). sort_by names the field (date|kg, default date), sort the direction (asc|desc, default asc). Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers, and the applied pair is echoed. sort_by is case-sensitive, sort case-insensitive. No match returns the empty page.",
 		InputSchema: enumSchema(listWeightInput{},
 			map[string][]string{"sort_by": healthcheck.WeightSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWeightInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -327,7 +327,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_sleep",
-		Description: "List per-day sleep (derived hours + full sessions) between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all sessions; value sorts apply within the page). sort_by names the field (day|sleep_hours, default day), sort the direction (asc|desc, default asc). Blank/whitespace-only means the defaults and the applied pair is echoed; sort_by is case-sensitive, sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values. No match returns the empty page.",
+		Description: "List per-day sleep (derived hours + full sessions) between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all sessions; value sorts apply within the page). sort_by names the field (day|sleep_hours, default day), sort the direction (asc|desc, default asc). Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers, and the applied pair is echoed. sort_by is case-sensitive, sort case-insensitive. No match returns the empty page.",
 		InputSchema: enumSchema(listSleepInput{},
 			map[string][]string{"sort_by": healthcheck.SleepSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listSleepInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -388,7 +388,7 @@ func main() {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_workouts",
-		Description: "List per-day workouts between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all workouts; value sorts apply within the page). Sort_by names the field, sort the direction; days without the sort field sort first in asc (unknown, not zero). Blank/whitespace-only means the defaults and the applied pair is echoed; sort_by is case-sensitive, sort case-insensitive. The published schema enum is exact, so MCP callers must send the exact values. Type is exact match on the lowered type (max 60 chars, empty means no filter). No match returns the empty page.",
+		Description: "List per-day workouts between start/end dates, capped at 500 day-docs (total echoed; a returned day always carries all workouts; value sorts apply within the page). Sort_by names the field, sort the direction; days without the sort field sort first in asc (unknown, not zero). Omit a field to default it over MCP — the published schema enum is exact, so a blank string is rejected before the handler; blank/whitespace-only means the defaults for direct store callers, and the applied pair is echoed. sort_by is case-sensitive, sort case-insensitive. Type is exact match on the lowered type (max 60 chars, empty means no filter). No match returns the empty page.",
 		InputSchema: enumSchema(listWorkoutsInput{},
 			map[string][]string{"sort_by": healthcheck.WorkoutSortFields, "sort": sortEnum})},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listWorkoutsInput) (*mcp.CallToolResult, map[string]any, error) {
