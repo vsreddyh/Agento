@@ -383,9 +383,9 @@ func TestMCPRunGitIgnoresTestOnlyCommit(t *testing.T) {
 var wantWatch = map[string][]string{
 	"task-manager":    {"mongo", "mongostore", "tasks", "validate"},
 	"project-manager": {"mongo", "mongostore", "projects"},
-	"miser-money":     {"money", "mongo", "mongostore", "validate"},
-	"cookbook":        {"cookbook", "mongo"},
-	"health-check":    {"healthcheck", "mongo", "validate"},
+	"miser-money":     {"mcpschema", "money", "mongo", "mongostore", "validate"},
+	"cookbook":        {"cookbook", "mcpschema", "mongo"},
+	"health-check":    {"healthcheck", "mcpschema", "mongo", "validate"},
 	// #584 TEMP-REMOVE (∃-Mail): "reports": {"mongo", "reports"},
 }
 
